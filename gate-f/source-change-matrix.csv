@@ -1,0 +1,7 @@
+change,behavior,permanent_qr_changed
+reference_image_changed,recognition jobs rerun,false
+video_changed,video probe rerun,false
+algorithm_version_changed,recognition regeneration,false
+qr_style_changed,qr asset regeneration,false
+qr_destination_changed,requires explicit authorized identity action,not through retry
+pipeline_version_changed,new idempotency keys,false

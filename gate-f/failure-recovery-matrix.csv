@@ -1,0 +1,8 @@
+scenario,behavior,previous_good_output
+bad_image,needs_attention,preserved
+bad_video,needs_attention,preserved
+recognition_failure,needs_attention,preserved
+qr_failure,needs_attention,preserved
+worker_crash,lease_reclaim,preserved
+max_attempts,failed_terminal,preserved
+stale_source,failed_terminal_old_job,newer_output_protected

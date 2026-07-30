@@ -1077,6 +1077,27 @@ class ProcessingJob(db.Model):
         return value
 
 
+class ProcessingEvent(db.Model):
+    __tablename__ = "processing_events"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspaces.id"), nullable=True, index=True)
+    experience_id = db.Column(db.Integer, db.ForeignKey("experiences.id"), nullable=True, index=True)
+    trigger_id = db.Column(db.Integer, db.ForeignKey("triggers.id"), nullable=True, index=True)
+    job_id = db.Column(db.Integer, db.ForeignKey("processing_jobs.id"), nullable=True, index=True)
+    event_type = db.Column(db.String(80), nullable=False, index=True)
+    actor = db.Column(db.String(120), nullable=True)
+    creator_message = db.Column(db.Text, nullable=True)
+    diagnostic_code = db.Column(db.String(80), nullable=True)
+    diagnostic_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+
+    workspace = db.relationship("Workspace", lazy=True)
+    experience = db.relationship("Experience", lazy=True)
+    trigger = db.relationship("Trigger", lazy=True)
+    job = db.relationship("ProcessingJob", lazy=True)
+
+
 class MigrationCheckpoint(db.Model):
     __tablename__ = "migration_checkpoints"
 

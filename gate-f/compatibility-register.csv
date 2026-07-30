@@ -1,0 +1,11 @@
+surface,status
+legacy_qr,unchanged
+scanner_contract,unchanged
+authentication,unchanged
+payment,unchanged
+project_creation,unchanged
+project_pair_persistence,unchanged
+real_database,not_migrated
+real_media,not_moved
+real_qr,not_replaced
+real_npz,not_regenerated
