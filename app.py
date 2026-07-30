@@ -45,6 +45,7 @@ from flask import render_template, abort
 # --------------------------------------------------------------------------------------------
 load_dotenv()
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+SCANSTORY_TESTING = os.environ.get("SCANSTORY_TESTING") == "1"
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
@@ -59,10 +60,10 @@ app.config['WTF_CSRF_CHECK_DEFAULT'] = False
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
 
 # ✅ ADD DATABASE CONFIGURATION HERE
-app.config.update(
-    SQLALCHEMY_DATABASE_URI=os.environ.get("DATABASE_URL", ""),
-    SQLALCHEMY_TRACK_MODIFICATIONS=False,
-    SQLALCHEMY_ENGINE_OPTIONS={
+database_uri = os.environ.get("TEST_DATABASE_URL") if SCANSTORY_TESTING else os.environ.get("DATABASE_URL", "")
+engine_options = {}
+if database_uri and not database_uri.startswith("sqlite"):
+    engine_options = {
         'pool_size': 10,
         'max_overflow': 20,
         'pool_recycle': 3600,
@@ -73,6 +74,13 @@ app.config.update(
             'charset': 'utf8mb4'
         }
     }
+
+app.config.update(
+    TESTING=SCANSTORY_TESTING,
+    DEBUG=False if SCANSTORY_TESTING else app.debug,
+    SQLALCHEMY_DATABASE_URI=database_uri,
+    SQLALCHEMY_TRACK_MODIFICATIONS=False,
+    SQLALCHEMY_ENGINE_OPTIONS=engine_options
 )
 
 # ✅ Initialize SQLAlchemy ONLY ONCE
@@ -211,12 +219,12 @@ except Exception as e:
 # --------------------------------------------------------------------------------------------
 # Storage paths
 # --------------------------------------------------------------------------------------------
-DATA_DIR = "data"
+DATA_DIR = os.environ.get("SCANSTORY_DATA_DIR", "data")
 IMAGES_DIR = os.path.join(DATA_DIR, "images")
 VIDEOS_DIR = os.path.join(DATA_DIR, "videos")
 FEATURES_DIR = os.path.join(DATA_DIR, "features")
 QR_DIR = os.path.join(DATA_DIR, "qr_codes")
-STATIC_UPLOADS_DIR = os.path.join("static", "uploads")
+STATIC_UPLOADS_DIR = os.environ.get("SCANSTORY_STATIC_UPLOADS_DIR", os.path.join("static", "uploads"))
 STATIC_JS_DIR = os.path.join("static", "js")
 LOGOS_DIR = os.path.join(STATIC_UPLOADS_DIR, "logos")
 ADMIN_UPLOADS_DIR = os.path.join(STATIC_UPLOADS_DIR, "admin")
@@ -224,7 +232,7 @@ ADMIN_UPLOADS_DIR = os.path.join(STATIC_UPLOADS_DIR, "admin")
 for d in (DATA_DIR, IMAGES_DIR, VIDEOS_DIR, FEATURES_DIR, QR_DIR, STATIC_UPLOADS_DIR, STATIC_JS_DIR, LOGOS_DIR, ADMIN_UPLOADS_DIR):
     os.makedirs(d, exist_ok=True)
 
-ADMIN_DATA_DIR = os.path.join(BASE_DIR, "data_admin")
+ADMIN_DATA_DIR = os.environ.get("SCANSTORY_ADMIN_DATA_DIR", os.path.join(BASE_DIR, "data_admin"))
 ADMIN_IMAGES_DIR = os.path.join(ADMIN_DATA_DIR, "images")
 ADMIN_VIDEOS_DIR = os.path.join(ADMIN_DATA_DIR, "videos")
 ADMIN_FEATURES_DIR = os.path.join(ADMIN_DATA_DIR, "features")

@@ -1,0 +1,84 @@
+{
+  "legacy_contract": true,
+  "scanner_route": "/scanner/<project_id>",
+  "detect_init": {
+    "method": "POST",
+    "content_type": "multipart/form-data",
+    "required_fields": [
+      "project_id",
+      "test_image"
+    ],
+    "optional_fields": [
+      "scan_session_id"
+    ],
+    "success_fields": [
+      "detected",
+      "matched_pair_id",
+      "video_url",
+      "corners",
+      "init_points",
+      "frame_width",
+      "frame_height",
+      "variant",
+      "inliers",
+      "top_checked",
+      "scan_session_id",
+      "ready_pairs",
+      "total_pairs",
+      "is_admin_project"
+    ],
+    "invalid_input": {
+      "status": 400,
+      "fields": [
+        "detected",
+        "reason"
+      ]
+    },
+    "missing_project": {
+      "status": 404,
+      "fields": [
+        "detected",
+        "reason"
+      ]
+    }
+  },
+  "detect_track": {
+    "method": "POST",
+    "content_type": "multipart/form-data",
+    "required_fields": [
+      "project_id",
+      "pair_id",
+      "test_image"
+    ],
+    "optional_fields": [
+      "scan_session_id"
+    ],
+    "success_fields": [
+      "ok",
+      "corners",
+      "frame_width",
+      "frame_height",
+      "variant",
+      "inliers"
+    ],
+    "invalid_input": {
+      "status": 400,
+      "fields": [
+        "ok",
+        "reason"
+      ]
+    }
+  },
+  "session_end": {
+    "route": "/api/scanner/session/end",
+    "method": "POST",
+    "required_fields": [
+      "project_id",
+      "session_id"
+    ],
+    "success_fields": [
+      "ok",
+      "counted"
+    ]
+  }
+}
