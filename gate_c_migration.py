@@ -3,6 +3,7 @@ from datetime import datetime
 
 from public_keys import generate_unique_public_key
 from models import (
+    Admin,
     Asset,
     Experience,
     MigrationCheckpoint,
@@ -122,7 +123,13 @@ def backfill_default_workspaces(dry_run=True):
     return result
 
 
-def map_projects_to_experiences(dry_run=True):
+def _admin_resolution_for(project, ownership_resolutions):
+    if not ownership_resolutions:
+        return None
+    return ownership_resolutions.get(project.id) or ownership_resolutions.get(str(project.id))
+
+
+def map_projects_to_experiences(dry_run=True, ownership_resolutions=None):
     result = MigrationResult(dry_run=dry_run)
     for project in Project.query.order_by(Project.id.asc()).all():
         existing = Experience.query.filter_by(legacy_project_id=project.id).first()
@@ -132,15 +139,28 @@ def map_projects_to_experiences(dry_run=True):
                 _checkpoint("project", project.id, existing.id, "completed")
             continue
 
-        if project.owner_admin_id and not project.owner_user_id:
-            message = "admin-owned project requires explicit workspace resolution"
-            result.errors.append({"entity": "project", "legacy_id": project.id, "error": message})
-            result.inc("skipped", "projects")
-            if not dry_run:
-                _checkpoint("project", project.id, None, "failed", message)
-            continue
+        target_workspace = None
+        created_by_user_id = project.owner_user_id
 
-        if not project.owner_user_id:
+        if project.owner_admin_id and not project.owner_user_id:
+            resolution = _admin_resolution_for(project, ownership_resolutions)
+            if not resolution:
+                message = "admin-owned project requires explicit workspace resolution"
+                result.errors.append({"entity": "project", "legacy_id": project.id, "error": message})
+                result.inc("skipped", "projects")
+                if not dry_run:
+                    _checkpoint("project", project.id, None, "failed", message)
+                continue
+            target_workspace = Workspace.query.get(resolution["target_workspace_id"])
+            if not target_workspace:
+                message = "ownership mapping references unknown workspace"
+                result.errors.append({"entity": "project", "legacy_id": project.id, "error": message})
+                result.inc("skipped", "projects")
+                if not dry_run:
+                    _checkpoint("project", project.id, None, "failed", message)
+                continue
+
+        elif not project.owner_user_id:
             message = "project has no user owner"
             result.errors.append({"entity": "project", "legacy_id": project.id, "error": message})
             result.inc("skipped", "projects")
@@ -148,14 +168,14 @@ def map_projects_to_experiences(dry_run=True):
                 _checkpoint("project", project.id, None, "failed", message)
             continue
 
-        workspace = _first_owner_workspace(project.owner_user_id)
-        if not workspace:
-            message = "owner has no personal workspace"
-            result.errors.append({"entity": "project", "legacy_id": project.id, "error": message})
-            result.inc("skipped", "projects")
-            if not dry_run:
+        else:
+            target_workspace = _first_owner_workspace(project.owner_user_id)
+            if not target_workspace and not dry_run:
+                message = "owner has no personal workspace"
+                result.errors.append({"entity": "project", "legacy_id": project.id, "error": message})
+                result.inc("skipped", "projects")
                 _checkpoint("project", project.id, None, "failed", message)
-            continue
+                continue
 
         if dry_run:
             result.inc("created", "experiences")
@@ -163,12 +183,12 @@ def map_projects_to_experiences(dry_run=True):
 
         experience = Experience(
             public_key=generate_unique_public_key(db.session, Experience, "exp"),
-            workspace_id=workspace.id,
+            workspace_id=target_workspace.id,
             legacy_project_id=project.id,
             name=project.name,
             description=project.description,
             status="draft",
-            created_by_user_id=project.owner_user_id,
+            created_by_user_id=created_by_user_id,
         )
         db.session.add(experience)
         db.session.flush()
@@ -217,6 +237,28 @@ def map_pairs_to_triggers(dry_run=True, media_exists=None):
 
         experience = Experience.query.filter_by(legacy_project_id=pair.project_id).first()
         if not experience:
+            if dry_run:
+                project = Project.query.get(pair.project_id)
+                if project and project.owner_user_id and not project.owner_admin_id:
+                    experience = True
+                else:
+                    message = "missing mapped experience"
+                    result.errors.append({"entity": "project_pair", "legacy_id": pair.id, "error": message})
+                    result.inc("skipped", "project_pairs")
+                    continue
+            else:
+                message = "missing mapped experience"
+                result.errors.append({"entity": "project_pair", "legacy_id": pair.id, "error": message})
+                result.inc("skipped", "project_pairs")
+                _checkpoint("project_pair", pair.id, None, "failed", message)
+                continue
+
+        if experience is True:
+            workspace_id = None
+        else:
+            workspace_id = experience.workspace_id
+
+        if not experience:
             message = "missing mapped experience"
             result.errors.append({"entity": "project_pair", "legacy_id": pair.id, "error": message})
             result.inc("skipped", "project_pairs")
@@ -254,8 +296,8 @@ def map_pairs_to_triggers(dry_run=True, media_exists=None):
         db.session.add(trigger)
         db.session.flush()
 
-        image_asset, image_created = _asset_for(experience.workspace_id, "image", pair.image_filename, pair.original_image_name)
-        video_asset, video_created = _asset_for(experience.workspace_id, "video", pair.video_filename, pair.original_video_name)
+        image_asset, image_created = _asset_for(workspace_id, "image", pair.image_filename, pair.original_image_name)
+        video_asset, video_created = _asset_for(workspace_id, "video", pair.video_filename, pair.original_video_name)
         _attach_asset(trigger, image_asset, "reference_image")
         _attach_asset(trigger, video_asset, "video")
         artifact = RecognitionArtifact(
@@ -279,11 +321,11 @@ def map_pairs_to_triggers(dry_run=True, media_exists=None):
     return result
 
 
-def run_gate_c_migration(dry_run=True, media_exists=None):
+def run_gate_c_migration(dry_run=True, media_exists=None, ownership_resolutions=None):
     result = MigrationResult(dry_run=dry_run)
     for step in (
         backfill_default_workspaces(dry_run=dry_run),
-        map_projects_to_experiences(dry_run=dry_run),
+        map_projects_to_experiences(dry_run=dry_run, ownership_resolutions=ownership_resolutions),
         map_pairs_to_triggers(dry_run=dry_run, media_exists=media_exists),
     ):
         for bucket in ("created", "existing", "skipped"):

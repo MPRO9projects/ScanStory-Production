@@ -1,0 +1,5 @@
+entity,condition,count,severity,policy
+Project,admin-owned without mapping,2,requires manual resolution,skip and checkpoint failure
+Project,missing user/admin owner,1,requires manual resolution,skip and checkpoint failure
+ProjectPair,parent project skipped,7,requires automatic resolution after project policy,skip and checkpoint failure
+ProjectPair,missing image path,3,warning,migrate with warning when parent mapping is valid

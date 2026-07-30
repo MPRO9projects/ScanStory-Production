@@ -1,0 +1,14 @@
+metric,value,severity
+users,10,clean
+admins,1,clean
+projects,20,clean
+project_pairs,50,clean
+scan_logs,50,clean
+payments,2,clean
+trials,10,clean
+user_owned_projects,17,clean
+admin_owned_projects,2,requires manual resolution
+missing_owner_projects,1,requires manual resolution
+pairs_missing_image_path,3,warning
+duplicate_emails,0,clean
+malformed_emails,0,clean

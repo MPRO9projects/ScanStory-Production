@@ -1,0 +1,15 @@
+item,status,blocking
+backup verified,not applicable to synthetic rehearsal,true
+dry-run zero-write,passed,true
+apply rehearsal,passed,true
+idempotent rerun,passed,true
+reconciliation,passed for eligible records,true
+ownership exceptions visible,passed,true
+rollback rehearsed,passed,true
+QR regression,passed,true
+scanner contract regression,passed,true
+auth regression,passed,true
+payment regression,passed,true
+real media altered,no,true
+legacy data modified unexpectedly,no,true
+real production migration authorized,no,true
