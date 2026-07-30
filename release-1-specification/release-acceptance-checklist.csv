@@ -1,0 +1,20 @@
+Area,Acceptance Criterion,Status
+Auth,Registration OTP login logout password reset work,Open
+Workspace,Members roles and billing context work,Open
+Entitlements,Plan gates enforce creation upload publish and analytics,Open
+Creation,Creator can create Experience and triggers,Open
+Uploads,Image and video validation works,Open
+Processing,Durable jobs produce media variants and recognition artifacts,Open
+Quality,Marker quality classes and warnings display,Open
+Testing,Creator can preview/test before publish,Open
+Publishing,Stable QR/link points to immutable version,Open
+Rollback,Previous published version can be restored,Open
+Viewer,Public scanner launches from QR/link,Open
+Scanner,Capability modes and diagnostics work,Open
+Recognition,Supported targets trigger correct video overlay,Open
+Fallback,Unsupported/denied/not-found paths show useful fallback,Open
+Analytics,Views recognitions fallback and errors are recorded,Open
+Admin,Support can diagnose processing scanner and billing issues,Open
+Security,Upload auth CSRF rate limits tenant isolation pass,Open
+Performance,Budgets measured and regressions blocked,Open
+Migration,Existing projects URLs and QR remain compatible,Open

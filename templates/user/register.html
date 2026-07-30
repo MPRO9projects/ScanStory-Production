@@ -1,0 +1,1552 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Start Free — Create AR Experiences with ScanStory | No Download Required</title>
+    <meta name="description" content="Create your free ScanStory account and start building web-based AR experiences. Upload photos and videos, generate QR scan codes, and launch interactive AR stories without app downloads.">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://myscanstory.com/register">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://myscanstory.com/register">
+    <meta property="og:title" content="Start Free — Create AR Experiences with ScanStory">
+    <meta property="og:description" content="Create interactive AR stories using photos, videos, and QR scan codes. No app download required.">
+    <meta property="og:image" content="https://myscanstory.com/static/uploads/og/scanstory-og.jpg">
+
+    <!-- Schema JSON-LD -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      "name": "Create a Free ScanStory Account",
+      "url": "https://myscanstory.com/register",
+      "description": "Sign up for ScanStory to create WebAR experiences — upload photo and video pairs, generate QR scan codes, and launch AR stories in any mobile browser.",
+      "potentialAction": {
+        "@type": "RegisterAction",
+        "name": "Create a free ScanStory account",
+        "target": "https://myscanstory.com/register"
+      },
+      "isPartOf": {
+        "@type": "WebSite",
+        "name": "ScanStory",
+        "url": "https://myscanstory.com/"
+      }
+    }
+    </script>
+
+    <!-- External Libraries -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+
+        :root {
+            --primary: #ff007a;
+            --secondary: #7000ff;
+            --accent: #00d4ff;
+            --bg-dark: #050505;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+        }
+
+        body,
+        html {
+            height: 100%;
+            width: 100%;
+            overflow-x: hidden;
+            background: var(--bg-dark);
+        }
+
+        .container-fluid {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        /* LEFT PANEL */
+        .left-panel {
+            flex: 1;
+            background: #0a0a0a;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            position: relative;
+            overflow-y: auto;
+            scrollbar-width: none;
+        }
+
+        .left-panel::-webkit-scrollbar {
+            display: none;
+        }
+
+        /* RIGHT PANEL - Loading Animation */
+        .right-panel {
+            flex: 1;
+            background:
+                linear-gradient(rgba(5, 5, 5, 0.7), rgba(5, 5, 5, 0.7)),
+                url("../static/assets/logos/r1.png");
+            background-size: cover;
+            background-position: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            color: white;
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            opacity: 0;
+            animation: fadeInImage 1.5s ease forwards;
+            animation-delay: 0.5s;
+        }
+
+        .right-panel::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, transparent, rgba(255, 0, 122, 0.1), transparent);
+            animation: shimmer 3s infinite;
+            z-index: 1;
+        }
+
+        @keyframes fadeInImage {
+            from {
+                opacity: 0;
+                transform: scale(1.05);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        @keyframes shimmer {
+            0% {
+                transform: translateX(-100%);
+            }
+
+            100% {
+                transform: translateX(100%);
+            }
+        }
+
+        .right-panel h2 {
+            font-size: 42px;
+            font-weight: 800;
+            text-align: center;
+            text-transform: uppercase;
+            letter-spacing: -1px;
+            line-height: 1.1;
+            text-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Ambient Blobs */
+        .blob {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(100px);
+            z-index: -1;
+            opacity: 0.2;
+            pointer-events: none;
+        }
+
+        .blob-1 {
+            width: 600px;
+            height: 600px;
+            background: var(--secondary);
+            top: -15%;
+            left: -10%;
+            animation: float 25s infinite ease-in-out;
+        }
+
+        .blob-2 {
+            width: 500px;
+            height: 500px;
+            background: var(--primary);
+            bottom: -15%;
+            right: -5%;
+            animation: float 20s infinite ease-in-out reverse;
+        }
+
+        @keyframes float {
+
+            0%,
+            100% {
+                transform: translate(0, 0) scale(1);
+            }
+
+            33% {
+                transform: translate(30px, -50px) scale(1.05);
+            }
+
+            66% {
+                transform: translate(-20px, 20px) scale(0.95);
+            }
+        }
+
+        /* Improved Back Button - UPDATED COLOR TO SUIT WEBSITE */
+        .back-btn {
+            position: absolute;
+            top: 30px;
+            left: 30px;
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.25em;
+            color: var(--accent);
+            /* Changed to accent color */
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 20;
+            padding: 10px 20px;
+            background: rgba(0, 212, 255, 0.1);
+            /* Accent color background */
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            /* Accent color border */
+            border-radius: 20px;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .back-btn:hover {
+            color: white;
+            background: rgba(0, 212, 255, 0.2);
+            border-color: var(--accent);
+            transform: translateX(-5px);
+            box-shadow: 0 10px 30px rgba(0, 212, 255, 0.3);
+        }
+
+        .back-btn i {
+            font-size: 12px;
+            transition: transform 0.3s ease;
+        }
+
+        .back-btn:hover i {
+            transform: translateX(-3px);
+        }
+
+        /* Form Container */
+        .form-section {
+            width: 100%;
+            max-width: 420px;
+            padding: 0 15px;
+        }
+
+        /* Logo Branding - Better Spacing */
+        .logo-branding {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        .logo {
+            font-size: 40px;
+            font-weight: 900;
+            color: #ffffff;
+            font-style: italic;
+            letter-spacing: -2px;
+            margin-bottom: 5px;
+        }
+
+        .logo span {
+            color: var(--primary);
+        }
+
+        h1 {
+            font-size: 30px;
+            font-weight: 800;
+            color: #ffffff;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+            letter-spacing: -0.5px;
+        }
+
+        .subtitle {
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 10px;
+            letter-spacing: 3px;
+            font-weight: 800;
+            text-transform: uppercase;
+        }
+
+        /* Improved Form Spacing */
+        .form-container {
+            width: 100%;
+        }
+
+        /* Better Input Group Spacing */
+        .input-group {
+            margin-bottom: 25px;
+        }
+
+        /* Name Grid - Better Spacing */
+        .name-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 10px;
+        }
+
+        /* Label Style - Consistent Spacing */
+        .label-style {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-left: 2px;
+        }
+
+        /* Input Gloss - VISIBLE BORDERS BY DEFAULT */
+        .input-gloss {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1.5px solid rgba(0, 212, 255, 0.6);
+            /* Visible border by default */
+            border-radius: 16px;
+            padding: 14px 18px;
+            color: white;
+            font-size: 14px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            outline: none;
+            box-shadow: 0 0 12px rgba(0, 212, 255, 0.1);
+            /* Subtle glow */
+        }
+
+        .input-gloss:focus {
+            border-color: var(--primary);
+            /* Changes to primary color on focus */
+            border-width: 2px;
+            background: rgba(255, 255, 255, 0.05);
+            box-shadow: 0 0 25px rgba(255, 0, 122, 0.25);
+            /* Enhanced glow */
+            transform: translateY(-2px);
+        }
+
+        .input-gloss:hover:not(:focus) {
+            border-color: #00e5ff;
+            /* Brighter accent on hover */
+            box-shadow: 0 0 18px rgba(0, 212, 255, 0.15);
+        }
+
+        /* Password Wrapper */
+        .password-wrapper {
+            position: relative;
+        }
+
+        .toggle-password {
+            position: absolute;
+            right: 18px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: var(--primary);
+            cursor: pointer;
+            font-size: 14px;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 10;
+            opacity: 0.7;
+        }
+
+        .toggle-password:hover {
+            color: var(--primary);
+            opacity: 1;
+            transform: translateY(-50%) scale(1.1);
+        }
+
+        .password-wrapper .input-gloss {
+            padding-right: 50px;
+        }
+
+        /* Button - Better Spacing */
+        .glow-action {
+            width: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            padding: 16px;
+            border-radius: 18px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.3em;
+            font-size: 13px;
+            transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            margin-top: 20px;
+            cursor: pointer;
+        }
+
+        .glow-action:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px rgba(255, 0, 122, 0.3);
+            filter: brightness(1.1);
+        }
+
+        /* Terms Checkbox - REMOVED CONTAINER, SIMPLE STYLING */
+        .terms-checkbox {
+            display: flex;
+            align-items: center;
+            margin: 30px 0;
+        }
+
+        .terms-checkbox input[type="checkbox"] {
+            margin-right: 12px;
+            accent-color: var(--primary);
+            width: 16px;
+            height: 16px;
+        }
+
+        .terms-checkbox label {
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.6);
+            line-height: 1.5;
+        }
+
+        .terms-checkbox a {
+            color: var(--accent);
+            text-decoration: none;
+            transition: all 0.3s ease;
+        }
+
+        .terms-checkbox a:hover {
+            color: white;
+            text-decoration: underline;
+        }
+
+        /* Footer Text - Better Spacing */
+        .footer-text {
+            margin-top: 35px;
+            text-align: center;
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.5);
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .footer-text a {
+            color: var(--primary);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            margin-left: 8px;
+        }
+
+        .footer-text a:hover {
+            color: var(--accent);
+        }
+
+        /* Flash Messages */
+        .flash-message {
+            padding: 14px 18px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            animation: slideIn 0.4s ease;
+            border: 1.5px solid;
+            /* Added visible border */
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .flash-success {
+            background: rgba(34, 197, 94, 0.1);
+            border-color: rgba(34, 197, 94, 0.5);
+            /* Visible border */
+            color: #4ade80;
+        }
+
+        .flash-error {
+            background: rgba(239, 68, 68, 0.1);
+            border-color: rgba(239, 68, 68, 0.5);
+            /* Visible border */
+            color: #f87171;
+        }
+
+        /* Section Spacing */
+        .form-section>*:not(:last-child) {
+            margin-bottom: 25px;
+        }
+
+        /* Typing Animation */
+        .typing-container {
+            text-align: center;
+            min-height: 200px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            position: relative;
+        }
+
+        .typing-text {
+            font-size: 42px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: -1px;
+            line-height: 1.1;
+            text-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .typing-line {
+            display: block;
+            height: 55px;
+            overflow: hidden;
+            white-space: nowrap;
+            margin: 0 auto;
+            position: relative;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 3px;
+            margin-left: 2px;
+            background-color: var(--accent);
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0;
+            }
+        }
+
+        .typing-highlight {
+            color: var(--primary);
+        }
+
+        .dots {
+            display: inline-block;
+            width: 30px;
+            text-align: left;
+        }
+
+        .dot {
+            opacity: 0;
+            animation: dotPulse 1.5s infinite;
+        }
+
+        .dot:nth-child(1) {
+            animation-delay: 0s;
+        }
+
+        .dot:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+
+        .dot:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+
+        @keyframes dotPulse {
+
+            0%,
+            100% {
+                opacity: 0;
+            }
+
+            50% {
+                opacity: 1;
+            }
+        }
+
+        /* Responsive Design - FIXED FOR MOBILE */
+        @media (max-width: 1024px) {
+            .right-panel {
+                display: none;
+            }
+
+            .container-fluid {
+                display: block;
+                height: auto;
+                min-height: 100vh;
+                overflow-y: auto;
+            }
+
+            .left-panel {
+                width: 100%;
+                min-height: 100vh;
+                height: auto;
+                padding: 40px 20px;
+                display: block;
+                justify-content: flex-start;
+                align-items: center;
+            }
+
+            .form-section {
+                max-width: 500px;
+                margin: 0 auto;
+                padding: 20px 0;
+            }
+
+            .back-btn {
+                top: 20px;
+                left: 20px;
+                padding: 8px 16px;
+            }
+
+            .logo-branding {
+                margin-top: 60px;
+                margin-bottom: 40px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .container-fluid {
+                display: block;
+                height: auto;
+                min-height: 100vh;
+            }
+
+            .left-panel {
+                padding: 30px 20px;
+                min-height: 100vh;
+                height: auto;
+                display: flex;
+                flex-direction: column;
+                justify-content: flex-start;
+                align-items: center;
+            }
+
+            .form-section {
+                max-width: 100%;
+                padding: 20px 15px;
+                margin-top: 50px;
+            }
+
+            .logo {
+                font-size: 36px;
+            }
+
+            h1 {
+                font-size: 26px;
+                margin-bottom: 8px;
+            }
+
+            .subtitle {
+                font-size: 10px;
+                letter-spacing: 2.5px;
+            }
+
+            .name-grid {
+                grid-template-columns: 1fr;
+                gap: 15px;
+                margin-bottom: 20px;
+            }
+
+            .back-btn {
+                top: 20px;
+                left: 20px;
+                font-size: 9px;
+                padding: 8px 15px;
+                background: rgba(0, 212, 255, 0.15);
+                border: 1px solid rgba(0, 212, 255, 0.4);
+            }
+
+            .input-gloss {
+                padding: 14px 16px;
+                font-size: 14px;
+                border-width: 1.5px;
+            }
+
+            .glow-action {
+                padding: 16px;
+                font-size: 12px;
+                letter-spacing: 0.25em;
+            }
+
+            .terms-checkbox {
+                margin: 25px 0;
+            }
+
+            .terms-checkbox label {
+                font-size: 11px;
+                line-height: 1.5;
+            }
+
+            .blob {
+                display: none;
+            }
+
+            .logo-branding {
+                margin-bottom: 40px;
+                margin-top: 40px;
+            }
+        }
+
+        @media (max-width: 480px) {
+
+            body,
+            html {
+                overflow-y: auto;
+            }
+
+            .left-panel {
+                padding: 25px 15px;
+                justify-content: flex-start;
+            }
+
+            .form-section {
+                padding: 15px 10px;
+                margin-top: 40px;
+            }
+
+            .logo {
+                font-size: 32px;
+                margin-bottom: 8px;
+            }
+
+            h1 {
+                font-size: 24px;
+                margin-bottom: 6px;
+            }
+
+            .subtitle {
+                font-size: 9px;
+                letter-spacing: 2px;
+            }
+
+            .back-btn {
+                top: 15px;
+                left: 15px;
+                padding: 7px 12px;
+                font-size: 8px;
+                gap: 8px;
+            }
+
+            .input-gloss {
+                padding: 13px 16px;
+                font-size: 14px;
+                border-width: 1.5px;
+            }
+
+            .glow-action {
+                padding: 15px;
+                font-size: 11px;
+                letter-spacing: 0.2em;
+            }
+
+            .terms-checkbox {
+                margin: 20px 0;
+            }
+
+            .terms-checkbox label {
+                font-size: 10px;
+            }
+
+            .footer-text {
+                font-size: 10px;
+                margin-top: 30px;
+                padding-top: 15px;
+            }
+
+            .flash-message {
+                padding: 12px 15px;
+                font-size: 10px;
+                margin-bottom: 20px;
+            }
+
+            .input-group {
+                margin-bottom: 20px;
+            }
+
+            .logo-branding {
+                margin-bottom: 35px;
+                margin-top: 40px;
+            }
+        }
+
+        @media (max-width: 360px) {
+            .left-panel {
+                padding: 20px 12px;
+            }
+
+            .form-section {
+                padding: 12px 8px;
+                margin-top: 35px;
+            }
+
+            .logo {
+                font-size: 28px;
+            }
+
+            h1 {
+                font-size: 22px;
+            }
+
+            .subtitle {
+                font-size: 8px;
+                letter-spacing: 1.5px;
+            }
+
+            .back-btn {
+                top: 12px;
+                left: 12px;
+                padding: 6px 10px;
+                font-size: 7px;
+                gap: 6px;
+            }
+
+            .input-gloss {
+                padding: 12px 14px;
+                font-size: 13px;
+                border-width: 1.5px;
+            }
+
+            .glow-action {
+                padding: 14px;
+                font-size: 10px;
+                letter-spacing: 0.15em;
+            }
+
+            .terms-checkbox label {
+                font-size: 9px;
+            }
+
+            .footer-text {
+                font-size: 9px;
+                margin-top: 25px;
+                padding-top: 12px;
+            }
+
+            .logo-branding {
+                margin-bottom: 30px;
+                margin-top: 35px;
+            }
+        }
+
+        /* Trust signals section */
+        .trust-section {
+            margin-bottom: 20px;
+        }
+
+        .trust-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 7px;
+            margin-bottom: 13px;
+        }
+
+        .trust-badge {
+            font-size: 9px;
+            font-weight: 800;
+            padding: 5px 11px;
+            border-radius: 30px;
+            border: 1px solid rgba(0, 212, 255, 0.22);
+            background: rgba(0, 212, 255, 0.05);
+            color: rgba(255, 255, 255, 0.65);
+            white-space: nowrap;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+        }
+
+        .reassurance-text {
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.4);
+            line-height: 1.6;
+            margin-bottom: 5px;
+        }
+
+        .content-note {
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.27);
+            line-height: 1.5;
+        }
+
+        .trust-links {
+            margin-top: 14px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 6px 14px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .trust-links a {
+            color: rgba(255, 255, 255, 0.35);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .trust-links a:hover { color: var(--accent); }
+
+        /* Mobile-specific fixes */
+        @media (max-width: 768px) and (orientation: portrait) {
+            .left-panel {
+                padding-top: 70px;
+                /* Extra space for back button */
+            }
+        }
+
+        @media (max-width: 768px) and (orientation: landscape) {
+            .left-panel {
+                min-height: auto;
+                height: auto;
+                padding: 20px;
+            }
+
+            .form-section {
+                max-width: 90%;
+                margin-top: 20px;
+            }
+
+            .logo-branding {
+                margin-top: 20px;
+                margin-bottom: 25px;
+            }
+
+            .back-btn {
+                top: 15px;
+                left: 15px;
+            }
+        }
+
+        .flash-stack {
+            position: fixed;
+            top: 25px;
+            right: 25px;
+            width: min(420px, calc(100vw - 40px));
+            max-height: 260px;
+            overflow-y: auto;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding-right: 4px;
+        }
+
+        .flash-stack::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        .flash-stack::-webkit-scrollbar-thumb {
+            background: rgba(255, 0, 122, 0.7);
+            border-radius: 10px;
+        }
+
+        .flash-stack .flash-message {
+            margin-bottom: 0;
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+        }
+
+        .flash-message.fade-out {
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: all 0.4s ease;
+        }
+
+        .flash-warning {
+            background: rgba(245, 158, 11, 0.14);
+            border-color: rgba(245, 158, 11, 0.55);
+            color: #fbbf24;
+        }
+
+        .flash-info {
+            background: rgba(0, 212, 255, 0.12);
+            border-color: rgba(0, 212, 255, 0.5);
+            color: #67e8f9;
+        }
+
+        @media (max-width: 768px) {
+            .flash-stack {
+                top: 80px;
+                left: 16px;
+                right: 16px;
+                width: auto;
+                max-height: 220px;
+            }
+        }
+
+        .flash-stack {
+            position: fixed;
+            top: 25px;
+            right: 25px;
+            width: min(420px, calc(100vw - 32px));
+            z-index: 99999;
+        }
+
+        .flash-message {
+            padding: 14px 18px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            animation: slideIn 0.4s ease;
+            border: 1.5px solid;
+            margin-bottom: 0;
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+        }
+
+        .flash-message.fade-out {
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: all 0.4s ease;
+        }
+
+        .flash-success {
+            background: rgba(34, 197, 94, 0.14);
+            border-color: rgba(34, 197, 94, 0.5);
+            color: #4ade80;
+        }
+
+        .flash-error {
+            background: rgba(239, 68, 68, 0.14);
+            border-color: rgba(239, 68, 68, 0.5);
+            color: #f87171;
+        }
+
+        .flash-warning {
+            background: rgba(245, 158, 11, 0.14);
+            border-color: rgba(245, 158, 11, 0.55);
+            color: #fbbf24;
+        }
+
+        .flash-info {
+            background: rgba(0, 212, 255, 0.12);
+            border-color: rgba(0, 212, 255, 0.5);
+            color: #67e8f9;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .flash-stack {
+                top: 80px;
+                left: 16px;
+                right: 16px;
+                width: auto;
+            }
+        }
+    </style>
+
+
+    <!-- Google reCAPTCHA v3 -->
+    {% if RECAPTCHA_SITE_KEY %}
+    <script src="https://www.google.com/recaptcha/api.js?render={{ RECAPTCHA_SITE_KEY }}"></script>
+    {% endif %}
+</head>
+
+<body>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% set latest_category, latest_message = messages[-1] %}
+    <div class="flash-stack" id="flashStack">
+        <div class="flash-message {% if latest_category == 'success' %}flash-success{% elif latest_category == 'warning' %}flash-warning{% elif latest_category == 'info' %}flash-info{% else %}flash-error{% endif %}">
+            <i class="fas {% if latest_category == 'success' %}fa-check-circle{% elif latest_category == 'warning' %}fa-triangle-exclamation{% elif latest_category == 'info' %}fa-circle-info{% else %}fa-exclamation-circle{% endif %}"></i>
+            <span>{{ latest_message }}</span>
+        </div>
+    </div>
+    {% endif %}
+    {% endwith %}
+
+
+    <!-- Ambient Blobs -->
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+
+    <div class="container-fluid">
+        <!-- LEFT PANEL - Registration Form -->
+        <div class="left-panel">
+            <!-- Updated Back Button with Accent Color -->
+            <a href="{{ url_for('landing') }}" class="back-btn" data-aos="fade-right">
+                <i class="fas fa-arrow-left"></i> BACK TO HOME
+            </a>
+
+            <div class="form-section" data-aos="fade-up" data-aos-duration="1000">
+                <!-- Logo and Title -->
+                <div class="logo-branding">
+                    <div class="logo">SCAN<span>STORY</span></div>
+                    <h1>Create Your Free Account</h1>
+                    <p class="subtitle">Start Building AR Experiences</p>
+                </div>
+
+               
+
+                <!-- Form -->
+                <form method="POST" class="form-container" id="registerForm">
+                    <!-- Email Field -->
+                    <div class="input-group">
+                        <label class="label-style">IDENTITY (EMAIL)</label>
+                        <input type="email" name="email" class="input-gloss" placeholder="@gmail.com" required>
+                    </div>
+
+                    <!-- Name Fields -->
+                    <div class="name-grid">
+                        <div class="input-group">
+                            <label class="label-style">FIRST NAME</label>
+                            <input type="text" name="first_name" class="input-gloss" placeholder="Enter Your First Name"
+                                required>
+                        </div>
+                        <div class="input-group">
+                            <label class="label-style">LAST NAME</label>
+                            <input type="text" name="last_name" class="input-gloss" placeholder="Enter Your Last Name"
+                                required>
+                        </div>
+                    </div>
+
+                    <!-- Password Field -->
+                    <div class="input-group">
+                        <label class="label-style">SECURE KEY (PASSWORD)</label>
+                        <div class="password-wrapper">
+                            <input type="password" name="password1" id="password1" class="input-gloss"
+                                placeholder="Enter Your Password" required>
+                            <button type="button" class="toggle-password"
+                                onclick="togglePasswordVisibility('password1', 'eye1')">
+                                <i id="eye1" class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Confirm Password Field -->
+                    <div class="input-group">
+                        <label class="label-style">CONFIRM PASSWORD</label>
+                        <div class="password-wrapper">
+                            <input type="password" name="password2" id="password2" class="input-gloss"
+                                placeholder="Confirm Password" required>
+                            <button type="button" class="toggle-password"
+                                onclick="togglePasswordVisibility('password2', 'eye2')">
+                                <i id="eye2" class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Phone Field -->
+                    <div class="input-group">
+                        <label class="label-style">PHONE</label>
+                        <input type="text" name="phone" class="input-gloss" placeholder="+91">
+                    </div>
+
+                    <!-- Terms Checkbox - SIMPLE STYLE WITHOUT CONTAINER -->
+                    <div class="terms-checkbox">
+                        <input id="terms" type="checkbox" required />
+                        <label for="terms">
+                            I agree to the <a href="/terms" class="text-accent hover:text-white">Terms and Conditions</a>
+                            and <a href="/privacy" class="text-accent hover:text-white">Privacy Policy</a>
+                        </label>
+                    </div>
+
+                    <!-- Google reCAPTCHA v3 Token -->
+                    <input type="hidden" name="g-recaptcha-response" id="registerRecaptchaToken">
+
+                    <!-- Submit Button -->
+                    <button type="submit" class="glow-action">REGISTER ACCOUNT</button>
+
+                    <!-- Login Link -->
+                    <p class="footer-text">
+                        EXISTING USER? <a href="{{ url_for('login') }}">LOGIN HERE</a>
+                    </p>
+                </form>
+
+                
+            </div>
+        </div>
+
+        <!-- RIGHT PANEL - AR Visual Section with Typing Animation -->
+        <div class="right-panel">
+            <div class="typing-container" data-aos="zoom-out" data-aos-duration="1200">
+                <div class="typing-text">
+                    <div class="typing-line" id="line1"></div>
+                    <div class="typing-line" id="line2"></div>
+                    <div class="typing-line" id="line3"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Initialize AOS -->
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script>
+        AOS.init({
+            once: true,
+            offset: 20,
+            duration: 800
+        });
+
+        // Mobile detection
+        if (window.innerWidth < 768) {
+            document.querySelectorAll('[data-aos]').forEach(el => {
+                el.removeAttribute('data-aos');
+            });
+        }
+
+        // Password visibility toggle
+        function togglePasswordVisibility(passwordFieldId, eyeIconId) {
+            const passwordField = document.getElementById(passwordFieldId);
+            const eyeIcon = document.getElementById(eyeIconId);
+
+            if (passwordField.type === 'password') {
+                passwordField.type = 'text';
+                eyeIcon.classList.remove('fa-eye');
+                eyeIcon.classList.add('fa-eye-slash');
+                eyeIcon.style.color = 'var(--primary)';
+                eyeIcon.style.opacity = '1';
+            } else {
+                passwordField.type = 'password';
+                eyeIcon.classList.remove('fa-eye-slash');
+                eyeIcon.classList.add('fa-eye');
+                eyeIcon.style.color = 'var(--primary)';
+                eyeIcon.style.opacity = '0.7';
+            }
+
+            passwordField.focus();
+        }
+
+        // Typing Animation Function
+        function typeWriter(elementId, text, speed, delay = 0) {
+            return new Promise(resolve => {
+                setTimeout(() => {
+                    const element = document.getElementById(elementId);
+                    element.innerHTML = '';
+                    let i = 0;
+
+                    function typeChar() {
+                        if (i < text.length) {
+                            // Check if we're at the word to highlight
+                            if (text.substring(i).startsWith('<span class="typing-highlight">')) {
+                                // Handle the highlight span
+                                const spanEnd = text.indexOf('</span>', i);
+                                const spanContent = text.substring(i + '<span class="typing-highlight">'.length, spanEnd);
+                                element.innerHTML += `<span class="typing-highlight">${spanContent}</span>`;
+                                i = spanEnd + '</span>'.length;
+                            } else {
+                                element.innerHTML += text.charAt(i);
+                                i++;
+                            }
+                            setTimeout(typeChar, speed);
+                        } else {
+                            // Add blinking cursor at the end of the line
+                            element.innerHTML += '<span class="cursor"></span>';
+                            resolve();
+                        }
+                    }
+
+                    typeChar();
+                }, delay);
+            });
+        }
+
+        // Continuous Typing Animation Loop
+        class TypingAnimation {
+            constructor() {
+                this.isAnimating = false;
+                this.currentCycle = 0;
+                this.maxCycles = 100; // Set a high number for continuous loop
+            }
+
+            async typeText() {
+                if (this.isAnimating) return;
+
+                this.isAnimating = true;
+                this.currentCycle++;
+
+                try {
+                    // Type each line with delays
+                    await this.typeLine('line1', 'Augmented', 80);
+                    await this.typeLine('line2', '<span class="typing-highlight">Realities</span>', 80, 300);
+                    await this.typeLine('line3', 'Wait Inside', 80, 300);
+
+                    // Add three dots with animation
+                    await this.addDots();
+
+                    // Pause before deleting
+                    await this.sleep(1500);
+
+                    // Delete text
+                    await this.deleteText();
+
+                    // Short pause before next cycle
+                    await this.sleep(500);
+
+                } catch (error) {
+                    console.error('Animation error:', error);
+                } finally {
+                    this.isAnimating = false;
+
+                    // Start next cycle immediately for continuous loop
+                    if (this.currentCycle < this.maxCycles) {
+                        this.typeText();
+                    }
+                }
+            }
+
+            async typeLine(lineId, text, speed, delay = 0) {
+                await this.sleep(delay);
+
+                const element = document.getElementById(lineId);
+                element.innerHTML = '';
+
+                // Remove highlight tags for typing
+                const cleanText = text.replace(/<[^>]*>/g, '');
+                let i = 0;
+
+                return new Promise(resolve => {
+                    function typeChar() {
+                        if (i < cleanText.length) {
+                            // Re-add highlight for "Realities"
+                            if (lineId === 'line2') {
+                                element.innerHTML = `<span class="typing-highlight">${cleanText.substring(0, i + 1)}</span>`;
+                            } else {
+                                element.innerHTML = cleanText.substring(0, i + 1);
+                            }
+
+                            // Add cursor
+                            element.innerHTML += '<span class="cursor"></span>';
+                            i++;
+                            setTimeout(typeChar, speed);
+                        } else {
+                            resolve();
+                        }
+                    }
+                    typeChar();
+                });
+            }
+
+            async addDots() {
+                const line3 = document.getElementById('line3');
+                const currentText = line3.innerHTML.replace('<span class="cursor"></span>', '');
+
+                return new Promise(resolve => {
+                    let dots = 0;
+                    const maxDots = 3;
+
+                    function addDot() {
+                        if (dots < maxDots) {
+                            line3.innerHTML = currentText +
+                                '<span class="dots">' +
+                                '<span class="dot">.</span>'.repeat(dots + 1) +
+                                '</span>' +
+                                '<span class="cursor"></span>';
+                            dots++;
+                            setTimeout(addDot, 300);
+                        } else {
+                            resolve();
+                        }
+                    }
+
+                    addDot();
+                });
+            }
+
+            async deleteText() {
+                const lines = ['line3', 'line2', 'line1'];
+
+                for (const lineId of lines) {
+                    await this.deleteLine(lineId);
+                    await this.sleep(200);
+                }
+            }
+
+            async deleteLine(lineId) {
+                const element = document.getElementById(lineId);
+                let text = element.innerHTML.replace('<span class="cursor"></span>', '');
+                text = text.replace(/<span class="dots">.*?<\/span>/, '');
+
+                return new Promise(resolve => {
+                    function deleteChar() {
+                        if (text.length > 0) {
+                            text = text.slice(0, -1);
+
+                            // Keep highlight for line2 while deleting
+                            if (lineId === 'line2' && text.length > 0) {
+                                element.innerHTML = `<span class="typing-highlight">${text}</span>` + '<span class="cursor"></span>';
+                            } else {
+                                element.innerHTML = text + '<span class="cursor"></span>';
+                            }
+
+                            setTimeout(deleteChar, 50);
+                        } else {
+                            resolve();
+                        }
+                    }
+                    deleteChar();
+                });
+            }
+
+            sleep(ms) {
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }
+        }
+
+        // Add hover effect for eye icons
+        document.addEventListener('DOMContentLoaded', function () {
+
+            const FLASH_HIDE_DELAY = 5000;
+            // 5000 = 5 seconds
+            // If you really want 5 minutes, change 5000 to 300000
+
+            const flashStack = document.getElementById('flashStack');
+
+            if (flashStack) {
+                const flashMessage = flashStack.querySelector('.flash-message');
+
+                if (flashMessage) {
+                    setTimeout(() => {
+                        flashMessage.classList.add('fade-out');
+
+                        setTimeout(() => {
+                            flashMessage.remove();
+
+                            if (flashStack.children.length === 0) {
+                                flashStack.remove();
+                            }
+                        }, 400);
+                    }, FLASH_HIDE_DELAY);
+                }
+            }
+            
+            const eyeButtons = document.querySelectorAll('.toggle-password');
+            eyeButtons.forEach(button => {
+                button.addEventListener('mouseenter', function () {
+                    const icon = this.querySelector('i');
+                    icon.style.opacity = '1';
+                });
+
+                button.addEventListener('mouseleave', function () {
+                    const icon = this.querySelector('i');
+                    if (!icon.classList.contains('fa-eye-slash')) {
+                        icon.style.opacity = '0.7';
+                    }
+                });
+            });
+
+            // Form validation
+            const form = document.querySelector('form');
+            form.addEventListener('submit', function (e) {
+                const requiredFields = form.querySelectorAll('[required]');
+                let valid = true;
+
+                requiredFields.forEach(field => {
+                    if (!field.value.trim()) {
+                        field.style.borderColor = '#ff4757';
+                        valid = false;
+                    }
+                });
+
+                const password1 = document.getElementById('password1');
+                const password2 = document.getElementById('password2');
+
+                if (password1.value && password2.value && password1.value !== password2.value) {
+                    password2.style.borderColor = '#ff4757';
+                    valid = false;
+                }
+
+                if (!valid) {
+                    e.preventDefault();
+
+                    setTimeout(() => {
+                        requiredFields.forEach(field => {
+                            field.style.borderColor = 'rgba(0, 212, 255, 0.6)'; // Reset to default visible border
+                        });
+                    }, 2000);
+                }
+            });
+
+            // Google reCAPTCHA v3 submit token
+            const registerForm = document.getElementById('registerForm');
+            if (registerForm) {
+                registerForm.addEventListener('submit', function (e) {
+                    if (e.defaultPrevented) {
+                        return;
+                    }
+
+                    {% if RECAPTCHA_SITE_KEY %}
+                    e.preventDefault();
+
+                    const submitBtn = registerForm.querySelector('button[type="submit"]');
+                    const originalText = submitBtn ? submitBtn.innerHTML : '';
+
+                    if (submitBtn) {
+                        submitBtn.disabled = true;
+                        submitBtn.innerHTML = 'VERIFYING...';
+                    }
+
+                    grecaptcha.ready(function () {
+                        grecaptcha.execute('{{ RECAPTCHA_SITE_KEY }}', { action: 'register' })
+                            .then(function (token) {
+                                document.getElementById('registerRecaptchaToken').value = token;
+                                registerForm.submit();
+                            })
+                            .catch(function () {
+                                if (submitBtn) {
+                                    submitBtn.disabled = false;
+                                    submitBtn.innerHTML = originalText;
+                                }
+                                alert('Security verification failed. Please refresh and try again.');
+                            });
+                    });
+                    {% endif %}
+                });
+            }
+
+            // Start continuous typing animation only if right panel exists
+            if (document.querySelector('.right-panel')) {
+                const typingAnimation = new TypingAnimation();
+                typingAnimation.typeText();
+            }
+        });
+    </script>
+</body>
+
+</html>

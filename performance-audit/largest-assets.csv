@@ -1,0 +1,22 @@
+path,bytes,mb,notes
+static/videos/demo.mp4,59863653,57.09,largest landing demo video
+static/videos/art.mp4,12801066,12.21,landing use-case video
+static/js/opencv.js,10963655,10.46,scanner client dependency
+static/videos/educ.mp4,7888004,7.52,landing use-case video
+static/videos/card.mp4,5474725,5.22,landing use-case video
+static/js/opencv_js.wasm,3338276,3.18,scanner wasm
+static/assets/logos/step2.png,1012637,0.97,large PNG
+static/assets/logos/step3.png,985448,0.94,large PNG
+static/assets/logos/steeep1.png,903412,0.86,large PNG
+static/assets/logos/login.png,784802,0.75,large PNG
+static/assets/logos/r1.png,773018,0.74,large PNG
+static/assets/logos/step4.png,673966,0.64,large PNG
+static/assets/landing/hand_phone1.webp,347155,0.33,landing image
+static/assets/logos/logo.png,220678,0.21,logo PNG
+static/assets/landing/artist.jpg,180193,0.17,JPEG duplicate has WebP pair
+static/assets/landing/artist.webp,147974,0.14,WebP
+static/assets/landing/photographer.jpg,136850,0.13,JPEG duplicate has WebP pair
+static/assets/landing/hotel.webp,106402,0.10,WebP
+static/assets/landing/realestate.jpg,100234,0.10,JPEG duplicate has WebP pair
+static/assets/landing/photographer.webp,87848,0.08,WebP
+

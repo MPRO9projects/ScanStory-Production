@@ -1,0 +1,19 @@
+template,route,styles_scripts,api_calls,media
+templates/user/landing.html,/,Tailwind CDN FontAwesome VanillaTilt AOS inline JS,none,/media demo educ art card; static/assets/landing
+templates/user/scanner.html,/scanner/<project_id>,inline CSS OpenCV.js camera/optical-flow JS,/detect_init;/api/scanner/session/end,overlay video URL returned by API
+templates/user/subscribe.html,/pricing and /subscribe,inline/CDN page scripts Razorpay checkout,/create-razorpay-order;/verify-payment,none
+templates/user/contact.html,/contact,reCAPTCHA script inline fetch JS,/send-contact-email,map iframe
+templates/user/dashboard.html,/dashboard,Tailwind FontAwesome AOS inline scroll JS,none,project thumbnails/QR references
+templates/user/user_create_project.html,/create-project and /admin/projects/create,upload form scripts,/upload or /admin/projects/upload,user selected image/video files
+templates/user/success.html,/success and /admin/success,QR/project display scripts,QR download route,generated QR and pair media
+templates/user/projects.html,/projects,project action forms,delete/edit/reprocess routes,project QR/image/video references
+templates/user/edit_project.html,/projects/<id>/edit,edit form scripts,POST same route,uploaded replacement image/video
+templates/user/register.html,/register,reCAPTCHA script,POST /register,none
+templates/user/login.html,/login,form scripts,POST /login,none
+templates/admin/base.html,admin pages,admin navigation/base styles,various admin POST routes,none
+templates/admin/dashboard.html,/admin/dashboard,admin base,page links,none
+templates/admin/users.html,/admin/users,admin base,admin user action POSTs,none
+templates/admin/projects.html,/admin/projects,admin base,admin project action POSTs,project media/QR links
+templates/admin/payments.html,/admin/payments,admin base,filters,none
+templates/admin/settings.html,/admin/settings,admin base,POST /admin/settings,none
+

@@ -1,0 +1,364 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Edit Admin - {{ target_admin.name or target_admin.email }}{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-3 mb-3 border-bottom">
+    <h1 class="h2">
+        <i class="fas fa-user-edit me-2"></i>Edit Admin: {{ target_admin.name or target_admin.email }}
+    </h1>
+    <div class="btn-toolbar mb-2 mb-md-0">
+        <a href="{{ url_for('admin_manage_admins') }}" class="btn btn-sm btn-outline-secondary">
+            <i class="fas fa-arrow-left me-1"></i>Back to Admins
+        </a>
+    </div>
+</div>
+
+<!-- Flash Messages -->
+{% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+        {% for category, message in messages %}
+            <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-admin alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        {% endfor %}
+    {% endif %}
+{% endwith %}
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="m-0">Edit Admin Details</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('admin_edit_admin', admin_id=target_admin.id) }}">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="name" class="form-label">Full Name *</label>
+                            <input type="text" class="form-control" id="name" name="name" required 
+                                   value="{{ target_admin.name or '' }}" placeholder="Enter admin's full name">
+                            <div class="form-text">Admin's display name.</div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <label class="form-label">Email Address</label>
+                            <input type="text" class="form-control" value="{{ target_admin.email }}" readonly disabled>
+                            <div class="form-text">Email cannot be changed.</div>
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="phone" class="form-label">Phone Number</label>
+                            <input type="text" class="form-control" id="phone" name="phone" 
+                                   value="{{ target_admin.phone or '' }}" placeholder="+91 1234567890">
+                            <div class="form-text">Optional contact number.</div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <label for="role" class="form-label">Admin Role *</label>
+                            <select class="form-select" id="role" name="role" required>
+                                <option value="admin" {% if target_admin.role == 'admin' %}selected{% endif %}>Admin</option>
+                                <option value="superadmin" {% if target_admin.role == 'superadmin' %}selected{% endif %}>Super Admin</option>
+                            </select>
+                            <div class="form-text">
+                                <strong>Super Admin:</strong> Full system access, can manage other admins.<br>
+                                <strong>Admin:</strong> Standard admin privileges.
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <div class="form-check form-switch">
+                                <input class="form-check-input" type="checkbox" id="is_active" name="is_active" 
+                                       {% if target_admin.is_active %}checked{% endif %}>
+                                <label class="form-check-label" for="is_active">Account Active</label>
+                                <div class="form-text">Deactivate to prevent login.</div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <div class="mb-2">
+                                <label class="form-label">Last Login</label>
+                                <div>
+                                    {% if target_admin.last_login_at %}
+                                        <span class="badge bg-info">{{ target_admin.last_login_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">Never</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <hr class="my-4">
+                    
+                    <h5 class="mb-3">
+                        <i class="fas fa-key me-2"></i>Change Password (Optional)
+                    </h5>
+                    
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <label for="new_password" class="form-label">New Password</label>
+                            <div class="input-group">
+                                <input type="password" class="form-control" id="new_password" name="new_password" 
+                                       placeholder="Leave blank to keep current">
+                                <button class="btn btn-outline-secondary" type="button" id="toggleNewPassword">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                            <div class="form-text">Minimum 8 characters. Leave empty to keep current password.</div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <label for="confirm_new_password" class="form-label">Confirm New Password</label>
+                            <div class="input-group">
+                                <input type="password" class="form-control" id="confirm_new_password" name="confirm_new_password" 
+                                       placeholder="Re-enter new password">
+                                <button class="btn btn-outline-secondary" type="button" id="toggleConfirmNewPassword">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                            <div class="form-text">Re-enter the new password for verification.</div>
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-warning">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        <strong>Note:</strong> If you change the password, the admin will need to use the new password for future logins.
+                    </div>
+                    
+                    <div class="d-flex justify-content-between mt-4">
+                        <a href="{{ url_for('admin_manage_admins') }}" class="btn btn-secondary">
+                            <i class="fas fa-times me-1"></i>Cancel
+                        </a>
+                        <div>
+                            {% if target_admin.id != admin.id and target_admin.is_active %}
+                                <a href="{{ url_for('admin_toggle_admin_status', admin_id=target_admin.id) }}" 
+                                   class="btn btn-warning me-2" 
+                                   onclick="return confirm('Are you sure you want to deactivate this admin?')">
+                                    <i class="fas fa-user-slash me-1"></i>Deactivate
+                                </a>
+                            {% elif target_admin.id != admin.id and not target_admin.is_active %}
+                                <a href="{{ url_for('admin_toggle_admin_status', admin_id=target_admin.id) }}" 
+                                   class="btn btn-success me-2">
+                                    <i class="fas fa-user-check me-1"></i>Activate
+                                </a>
+                            {% endif %}
+                            
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-save me-1"></i>Update Admin
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="m-0">
+                    <i class="fas fa-user-circle me-2"></i>Admin Information
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="text-center mb-4">
+                    <div class="mb-3">
+                        <div class="icon-circle bg-primary" style="width: 80px; height: 80px; margin: 0 auto;">
+                            <i class="fas fa-user fa-2x text-white" style="line-height: 80px;"></i>
+                        </div>
+                    </div>
+                    <h5>{{ target_admin.name or 'No Name' }}</h5>
+                    <p class="text-muted">{{ target_admin.email }}</p>
+                </div>
+                
+                <div class="mb-3">
+                    <h6><i class="fas fa-info-circle me-2"></i>Account Details</h6>
+                    <ul class="list-group list-group-flush">
+                        <li class="list-group-item d-flex justify-content-between px-0">
+                            <span>Role:</span>
+                            <span class="badge bg-{{ 'danger' if target_admin.role == 'superadmin' else 'primary' }}">
+                                {{ target_admin.role|title }}
+                            </span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between px-0">
+                            <span>Status:</span>
+                            <span class="badge bg-{{ 'success' if target_admin.is_active else 'danger' }}">
+                                {{ 'Active' if target_admin.is_active else 'Inactive' }}
+                            </span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between px-0">
+                            <span>Login Count:</span>
+                            <span>{{ target_admin.login_count or 0 }}</span>
+                        </li>
+                        <li class="list-group-item d-flex justify-content-between px-0">
+                            <span>Created:</span>
+                            <span>{{ target_admin.created_at.strftime('%Y-%m-%d') }}</span>
+                        </li>
+                        {% if target_admin.created_by_admin %}
+                        <li class="list-group-item d-flex justify-content-between px-0">
+                            <span>Created By:</span>
+                            <span>{{ target_admin.created_by_admin.name or target_admin.created_by_admin.email }}</span>
+                        </li>
+                        {% endif %}
+                    </ul>
+                </div>
+                
+                {% if target_admin.id == admin.id %}
+                <div class="alert alert-info">
+                    <i class="fas fa-user me-2"></i>
+                    <strong>This is your account.</strong> You cannot deactivate or delete your own account.
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="m-0">
+                    <i class="fas fa-shield-alt me-2"></i>Permissions
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <h6>Current Permissions:</h6>
+                    <div class="d-flex flex-wrap gap-2">
+                        {% for perm, has_perm in target_admin.permissions.items() %}
+                            {% if has_perm %}
+                                <span class="badge bg-success">{{ perm.replace('_', ' ').title() }}</span>
+                            {% endif %}
+                        {% endfor %}
+                    </div>
+                </div>
+                
+                <div class="alert alert-warning">
+                    <i class="fas fa-exclamation-triangle me-2"></i>
+                    <strong>Note:</strong> Super Admin has all permissions automatically.
+                </div>
+            </div>
+        </div>
+        
+        {% if target_admin.id != admin.id %}
+        <div class="card mt-4 border-danger">
+            <div class="card-header bg-danger text-white">
+                <h5 class="m-0">
+                    <i class="fas fa-trash-alt me-2"></i>Danger Zone
+                </h5>
+            </div>
+            <div class="card-body">
+                <p class="small text-muted">Once deleted, this admin account cannot be recovered.</p>
+                <form method="POST" action="{{ url_for('admin_delete_admin', admin_id=target_admin.id) }}" 
+                      onsubmit="return confirmDelete()">
+                    <button type="submit" class="btn btn-danger w-100">
+                        <i class="fas fa-trash-alt me-1"></i>Delete Admin Account
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Toggle password visibility
+    document.getElementById('toggleNewPassword').addEventListener('click', function() {
+        const passwordInput = document.getElementById('new_password');
+        const icon = this.querySelector('i');
+        
+        if (passwordInput.type === 'password') {
+            passwordInput.type = 'text';
+            icon.classList.remove('fa-eye');
+            icon.classList.add('fa-eye-slash');
+        } else {
+            passwordInput.type = 'password';
+            icon.classList.remove('fa-eye-slash');
+            icon.classList.add('fa-eye');
+        }
+    });
+    
+    // Toggle confirm password visibility
+    document.getElementById('toggleConfirmNewPassword').addEventListener('click', function() {
+        const confirmInput = document.getElementById('confirm_new_password');
+        const icon = this.querySelector('i');
+        
+        if (confirmInput.type === 'password') {
+            confirmInput.type = 'text';
+            icon.classList.remove('fa-eye');
+            icon.classList.add('fa-eye-slash');
+        } else {
+            confirmInput.type = 'password';
+            icon.classList.remove('fa-eye-slash');
+            icon.classList.add('fa-eye');
+        }
+    });
+    
+    // Form validation
+    document.querySelector('form').addEventListener('submit', function(e) {
+        const newPassword = document.getElementById('new_password').value;
+        const confirmPassword = document.getElementById('confirm_new_password').value;
+        
+        // If new password is provided, validate it
+        if (newPassword) {
+            // Check password length
+            if (newPassword.length < 8) {
+                e.preventDefault();
+                alert('New password must be at least 8 characters long.');
+                return false;
+            }
+            
+            // Check password match
+            if (newPassword !== confirmPassword) {
+                e.preventDefault();
+                alert('New passwords do not match. Please re-enter.');
+                return false;
+            }
+        }
+        
+        return true;
+    });
+    
+    // Delete confirmation
+    function confirmDelete() {
+        const adminName = "{{ target_admin.name or target_admin.email }}";
+        return confirm(`Are you sure you want to permanently delete admin "${adminName}"? This action cannot be undone.`);
+    }
+    
+    // Auto-generate password suggestion
+    document.addEventListener('DOMContentLoaded', function() {
+        const generatePasswordBtn = document.createElement('button');
+        generatePasswordBtn.type = 'button';
+        generatePasswordBtn.className = 'btn btn-sm btn-outline-info mt-2';
+        generatePasswordBtn.innerHTML = '<i class="fas fa-key me-1"></i>Generate Strong Password';
+        
+        generatePasswordBtn.addEventListener('click', function() {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
+            let password = '';
+            for (let i = 0; i < 12; i++) {
+                password += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            
+            document.getElementById('new_password').value = password;
+            document.getElementById('confirm_new_password').value = password;
+            
+            // Show password briefly
+            document.getElementById('new_password').type = 'text';
+            document.getElementById('confirm_new_password').type = 'text';
+            
+            setTimeout(() => {
+                document.getElementById('new_password').type = 'password';
+                document.getElementById('confirm_new_password').type = 'password';
+            }, 2000);
+        });
+        
+        document.getElementById('new_password').parentNode.parentNode.appendChild(generatePasswordBtn);
+    });
+</script>
+{% endblock %}

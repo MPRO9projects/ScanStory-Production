@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Management - Admin Panel</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background-color: #f8fafc;
+            color: #334155;
+        }
+        
+        .navbar {
+            background: linear-gradient(to right, #4f46e5, #7c3aed);
+            color: white;
+            padding: 0 20px;
+            height: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+        }
+        
+        .navbar-brand {
+            font-size: 24px;
+            font-weight: bold;
+            text-decoration: none;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .navbar-menu {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .nav-link {
+            color: rgba(255, 255, 255, 0.9);
+            text-decoration: none;
+            padding: 8px 15px;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        
+        .nav-link:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+        
+        .nav-link.active {
+            background: rgba(255, 255, 255, 0.15);
+            color: white;
+        }
+        
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            position: relative;
+        }
+        
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        
+        .dropdown-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            min-width: 200px;
+            display: none;
+            overflow: hidden;
+            z-index: 1001;
+        }
+        
+        .dropdown-menu.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 12px 20px;
+            color: #334155;
+            text-decoration: none;
+            transition: all 0.3s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f1f5f9;
+        }
+        
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 70px;
+            bottom: 0;
+            width: 250px;
+            background: white;
+            border-right: 1px solid #e2e8f0;
+            padding: 20px 0;
+            overflow-y: auto;
+            z-index: 999;
+        }
+        
+        .sidebar-section {
+            margin-bottom: 25px;
+        }
+        
+        .sidebar-title {
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 0 20px;
+            margin-bottom: 10px;
+        }
+        
+        .sidebar-link {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 20px;
+            color: #475569;
+            text-decoration: none;
+            transition: all 0.3s;
+            border-left: 3px solid transparent;
+        }
+        
+        .sidebar-link:hover {
+            background: #f1f5f9;
+            color: #4f46e5;
+        }
+        
+        .sidebar-link.active {
+            background: #e0e7ff;
+            color: #4f46e5;
+            border-left-color: #4f46e5;
+        }
+        
+        .sidebar-link i {
+            width: 20px;
+            text-align: center;
+        }
+        
+        .main-content {
+            margin-left: 250px;
+            margin-top: 70px;
+            padding: 30px;
+            min-height: calc(100vh - 70px);
+        }
+        
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        
+        .page-title {
+            font-size: 28px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: none;
+        }
+        
+        .btn-primary {
+            background: #4f46e5;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #4338ca;
+        }
+        
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+        
+        .btn-sm {
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+        
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+        
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #059669;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+        
+        .filter-card {
+            margin-bottom: 20px;
+        }
+        
+        .filter-form {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            align-items: end;
+        }
+        
+        .form-group {
+            margin-bottom: 0;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        .form-control:focus {
+            outline: none;
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+        
+        .table-container {
+            overflow-x: auto;
+        }
+        
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .table th {
+            background: #f8fafc;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #64748b;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .table td {
+            padding: 15px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #475569;
+        }
+        
+        .table tbody tr:hover {
+            background: #f8fafc;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .badge-success { background: #d1fae5; color: #065f46; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        .badge-info { background: #dbeafe; color: #1e40af; }
+        .badge-secondary { background: #f3f4f6; color: #6b7280; }
+        
+        .action-buttons {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .status-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .status-tab {
+            padding: 8px 20px;
+            border-radius: 20px;
+            background: #f1f5f9;
+            color: #64748b;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        
+        .status-tab:hover {
+            background: #e2e8f0;
+        }
+        
+        .status-tab.active {
+            background: #4f46e5;
+            color: white;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        
+        .alert-success {
+            background-color: #d1fae5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
+        
+        .alert-error {
+            background-color: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+        
+        .user-avatar-small {
+            width: 36px;
+            height: 36px;
+            background: #4f46e5;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        @media (max-width: 992px) {
+            .sidebar {
+                width: 70px;
+            }
+            
+            .sidebar .sidebar-title,
+            .sidebar .sidebar-link span {
+                display: none;
+            }
+            
+            .sidebar-link {
+                justify-content: center;
+                padding: 15px;
+            }
+            
+            .main-content {
+                margin-left: 70px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .navbar-menu {
+                display: none;
+            }
+            
+            .main-content {
+                padding: 20px;
+            }
+            
+            .filter-form {
+                grid-template-columns: 1fr;
+            }
+            
+            .page-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <a href="/admin/dashboard" class="navbar-brand">
+            <span>ScanStory Admin</span>
+        </a>
+        
+        <div class="navbar-menu">
+            <span class="nav-link">Welcome, {{ admin.name }}</span>
+        </div>
+        
+        <div class="user-menu">
+            <div class="user-avatar">
+                {{ admin.name[0] if admin.name else 'A' }}
+            </div>
+            <div class="dropdown-menu" id="userDropdown">
+                <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
+                <a href="/admin/settings" class="dropdown-item">Settings</a>
+                <div class="dropdown-divider"></div>
+                <a href="/admin/logout" class="dropdown-item">Logout</a>
+            </div>
+            <span onclick="toggleDropdown()" style="cursor: pointer;">▼</span>
+        </div>
+    </nav>
+    
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-section">
+            <div class="sidebar-title">Dashboard</div>
+            <a href="/admin/dashboard" class="sidebar-link">
+                <i>📊</i>
+                <span>Overview</span>
+            </a>
+        </div>
+        
+        <div class="sidebar-section">
+            <div class="sidebar-title">User Management</div>
+            <a href="/admin/users" class="sidebar-link active">
+                <i>👥</i>
+                <span>Users</span>
+            </a>
+        </div>
+        
+        <div class="sidebar-section">
+            <div class="sidebar-title">Content</div>
+            <a href="/admin/projects" class="sidebar-link">
+                <i>📁</i>
+                <span>Projects</span>
+            </a>
+        </div>
+        
+        <div class="sidebar-section">
+            <div class="sidebar-title">System</div>
+            <a href="/admin/plans" class="sidebar-link">
+                <i>📋</i>
+                <span>Plans</span>
+            </a>
+            <a href="/admin/payments" class="sidebar-link">
+                <i>💳</i>
+                <span>Payments</span>
+            </a>
+            {% if admin.role == 'superadmin' %}
+            <a href="/admin/admins" class="sidebar-link">
+                <i>🛡️</i>
+                <span>Admins</span>
+            </a>
+            {% endif %}
+            <a href="/admin/settings" class="sidebar-link">
+                <i>⚙️</i>
+                <span>Settings</span>
+            </a>
+        </div>
+    </div>
+    
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">User Management</h1>
+            <div>
+                Total Users: {{ users|length }}
+                {% if status == 'active' %}
+                | Active: {{ users|selectattr('is_blocked', 'equalto', false)|list|length }}
+                {% elif status == 'blocked' %}
+                | Blocked: {{ users|selectattr('is_blocked', 'equalto', true)|list|length }}
+                {% endif %}
+            </div>
+        </div>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        <!-- Status Tabs -->
+        <div class="status-tabs">
+            <a href="/admin/users" class="status-tab {% if status == 'all' %}active{% endif %}">All Users</a>
+            <a href="/admin/users?status=active" class="status-tab {% if status == 'active' %}active{% endif %}">Active</a>
+            <a href="/admin/users?status=blocked" class="status-tab {% if status == 'blocked' %}active{% endif %}">Blocked</a>
+            <a href="/admin/users?status=unverified" class="status-tab {% if status == 'unverified' %}active{% endif %}">Unverified</a>
+        </div>
+        
+        <!-- Filters -->
+        <div class="card filter-card">
+            <form method="GET" action="/admin/users" class="filter-form">
+                <div class="form-group">
+                    <label for="search">Search</label>
+                    <input type="text" id="search" name="search" class="form-control" placeholder="Search by name, email or phone" value="{{ search }}">
+                </div>
+                
+                <div class="form-group">
+                    <label for="plan_id">Plan</label>
+                    <select id="plan_id" name="plan_id" class="form-control">
+                        <option value="">All Plans</option>
+                        {% for plan in plans %}
+                        <option value="{{ plan.id }}" {% if selected_plan_id == plan.id %}selected{% endif %}>
+                            {{ plan.plan_name }}
+                        </option>
+                        {% endfor %}
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <button type="submit" class="btn btn-primary" style="height: 42px;">Apply Filters</button>
+                    <a href="/admin/users" class="btn btn-secondary" style="height: 42px;">Clear</a>
+                </div>
+            </form>
+        </div>
+        
+        <!-- Users Table -->
+        <div class="card">
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Contact</th>
+                            <th>Plan</th>
+                            <th>Usage</th>
+                            <th>Status</th>
+                            <th>Joined</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for user in users %}
+                        <tr>
+                            <td>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <div class="user-avatar-small">
+                                        {{ user.first_name[0] if user.first_name else user.email[0]|upper }}
+                                    </div>
+                                    <div>
+                                        <strong>{{ user.full_name or 'No Name' }}</strong><br>
+                                        <small style="color: #6b7280;">ID: {{ user.id }}</small>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
+                                <div>{{ user.email }}</div>
+                                <small style="color: #6b7280;">{{ user.phone or 'No phone' }}</small>
+                            </td>
+                            <td>
+                                <strong>{{ user.current_plan_name }}</strong><br>
+                                <small style="color: #6b7280;">{{ user.plan_duration }}</small>
+                            </td>
+                            <td>
+                                <div>Projects: {{ user.projects_used }}/{{ user.subscribed_project_limit }}</div>
+                                <div>Scans: {{ user.scans_used }}/{{ user.subscribed_scan_limit }}</div>
+                            </td>
+                            <td>
+                                {% if user.is_blocked %}
+                                <span class="badge badge-danger">Blocked</span>
+                                {% elif not user.is_verified %}
+                                <span class="badge badge-warning">Unverified</span>
+                                {% elif user.subscription_status == 'active' %}
+                                <span class="badge badge-success">Active</span>
+                                {% elif user.subscription_status == 'trial' %}
+                                <span class="badge badge-info">Trial</span>
+                                {% elif user.subscription_status == 'expired' %}
+                                <span class="badge badge-secondary">Expired</span>
+                                {% else %}
+                                <span class="badge badge-warning">{{ user.subscription_status }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {{ user.created_at.strftime('%d %b %Y') }}<br>
+                                <small style="color: #6b7280;">{{ user.created_at.strftime('%I:%M %p') }}</small>
+                            </td>
+                            <td>
+                                <div class="action-buttons">
+                                    <a href="/admin/users/{{ user.id }}" class="btn btn-primary btn-sm">View</a>
+                                    {% if user.is_blocked %}
+                                    <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
+                                        <button type="submit" class="btn btn-success btn-sm">Unblock</button>
+                                    </form>
+                                    {% else %}
+                                    <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
+                                        <button type="submit" class="btn btn-danger btn-sm">Block</button>
+                                    </form>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="7" style="text-align: center; padding: 40px;">
+                                No users found
+                                {% if search or status != 'all' or selected_plan_id %}
+                                with current filters. <a href="/admin/users">Clear filters</a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- User Stats -->
+        <div class="card">
+            <h3 style="margin-bottom: 15px;">User Statistics</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #4f46e5;">{{ users|length }}</div>
+                    <div style="color: #6b7280;">Total Users</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #10b981;">{{ users|selectattr('is_verified', 'equalto', true)|list|length }}</div>
+                    <div style="color: #6b7280;">Verified</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #ef4444;">{{ users|selectattr('is_blocked', 'equalto', true)|list|length }}</div>
+                    <div style="color: #6b7280;">Blocked</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #f59e0b;">{{ users|selectattr('subscription_status', 'equalto', 'trial')|list|length }}</div>
+                    <div style="color: #6b7280;">On Trial</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function toggleDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+        
+        // Close dropdown when clicking outside
+        window.onclick = function(event) {
+            if (!event.target.matches('.user-menu span')) {
+                const dropdowns = document.querySelectorAll('.dropdown-menu');
+                dropdowns.forEach(dropdown => {
+                    if (dropdown.classList.contains('show')) {
+                        dropdown.classList.remove('show');
+                    }
+                });
+            }
+        };
+        
+        // Auto remove alerts after 5 seconds
+        document.addEventListener('DOMContentLoaded', function() {
+            const alerts = document.querySelectorAll('.alert');
+            alerts.forEach(alert => {
+                setTimeout(() => {
+                    alert.style.transition = 'opacity 0.5s';
+                    alert.style.opacity = '0';
+                    setTimeout(() => alert.remove(), 500);
+                }, 5000);
+            });
+            
+            // Set active sidebar link
+            const currentPath = window.location.pathname;
+            const sidebarLinks = document.querySelectorAll('.sidebar-link');
+            sidebarLinks.forEach(link => {
+                link.classList.remove('active');
+                if (link.getAttribute('href') === currentPath) {
+                    link.classList.add('active');
+                }
+            });
+            
+            // Confirm before blocking/unblocking
+            const blockForms = document.querySelectorAll('form[action*="toggle-block"]');
+            blockForms.forEach(form => {
+                form.addEventListener('submit', function(e) {
+                    const action = this.querySelector('button').textContent.toLowerCase();
+                    if (!confirm(`Are you sure you want to ${action} this user?`)) {
+                        e.preventDefault();
+                    }
+                });
+            });
+        });
+    </script>
+</body>
+</html>

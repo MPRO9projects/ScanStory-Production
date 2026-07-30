@@ -1,0 +1,425 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-3 mb-3 border-bottom">
+    <h1 class="h2"><i class="fas fa-tachometer-alt me-2"></i>Admin Dashboard</h1>
+    <div class="btn-toolbar mb-2 mb-md-0">
+        <div class="btn-group me-2">
+            <span class="btn btn-sm btn-outline-secondary">
+                <i class="fas fa-calendar me-1"></i> <span id="currentDate"></span>
+
+                <script>
+                    // Show current date using JavaScript
+                    document.addEventListener('DOMContentLoaded', function () {
+                        const now = new Date();
+                        const options = { year: 'numeric', month: 'long', day: 'numeric' };
+                        document.getElementById('currentDate').textContent = now.toLocaleDateString('en-US', options);
+                    });
+                </script>
+            </span>
+        </div>
+    </div>
+</div>
+
+<!-- Stats Cards -->
+<div class="row mb-4">
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card stat-card border-primary h-100">
+            <div class="card-body">
+                <div class="row no-gutters align-items-center">
+                    <div class="col mr-2">
+                        <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">
+                            Total Users
+                        </div>
+                        <div class="h5 mb-0 font-weight-bold text-gray-800">{{ total_users }}</div>
+                        <div class="mt-2">
+                            <span class="text-success">
+                                <i class="fas fa-user-check me-1"></i> {{ active_users }} Active
+                            </span>
+                            <span class="text-danger ms-2">
+                                <i class="fas fa-user-slash me-1"></i> {{ blocked_users }} Blocked
+                            </span>
+                        </div>
+                    </div>
+                    <div class="col-auto">
+                        <i class="fas fa-users fa-2x text-primary"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card stat-card border-success h-100">
+            <div class="card-body">
+                <div class="row no-gutters align-items-center">
+                    <div class="col mr-2">
+                        <div class="text-xs font-weight-bold text-success text-uppercase mb-1">
+                            Total Revenue
+                        </div>
+                        <div class="h5 mb-0 font-weight-bold text-gray-800">₹{{ "%.2f"|format(total_revenue) }}</div>
+                        <div class="mt-2">
+                            <span class="text-success">
+                                <i class="fas fa-id-card me-1"></i> {{ active_subscriptions }} Active Subs
+                            </span>
+                        </div>
+                    </div>
+                    <div class="col-auto">
+                        <i class="fas fa-rupee-sign fa-2x text-success"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card stat-card border-info h-100">
+            <div class="card-body">
+                <div class="row no-gutters align-items-center">
+                    <div class="col mr-2">
+                        <div class="text-xs font-weight-bold text-info text-uppercase mb-1">
+                            Total Projects
+                        </div>
+                        <div class="h5 mb-0 font-weight-bold text-gray-800">{{ total_projects }}</div>
+                        <div class="mt-2">
+                            <span class="text-info">
+                                <i class="fas fa-qrcode me-1"></i> {{ total_projects }} Created
+                            </span>
+                        </div>
+                    </div>
+                    <div class="col-auto">
+                        <i class="fas fa-project-diagram fa-2x text-info"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-3 col-md-6 mb-4">
+        <div class="card stat-card border-warning h-100">
+            <div class="card-body">
+                <div class="row no-gutters align-items-center">
+                    <div class="col mr-2">
+                        <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">
+                            Total Scans
+                        </div>
+                        <div class="h5 mb-0 font-weight-bold text-gray-800">{{ total_scans }}</div>
+                        <div class="mt-2">
+                            <span class="text-warning">
+                                <i class="fas fa-search me-1"></i> {{ total_scans }} Performed
+                            </span>
+                        </div>
+                    </div>
+                    <div class="col-auto">
+                        <i class="fas fa-search fa-2x text-warning"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Two Column Layout -->
+<div class="row">
+    <!-- Recent Users -->
+    <div class="col-lg-6 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="m-0 font-weight-bold text-primary">
+                    <i class="fas fa-users me-2"></i>Recent Users
+                </h6>
+                <a href="{{ url_for('admin_users') }}" class="btn btn-sm btn-primary">View All</a>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Name</th>
+                                <th>Email</th>
+                                <th>Status</th>
+                                <th>Joined</th>
+                            </thead>
+                        <tbody>
+                            {% for user in recent_users[:5] %}
+                             
+                                <td>
+                                    <a href="{{ url_for('admin_view_user', user_id=user.id) }}"
+                                        class="text-decoration-none">
+                                        {{ user.full_name or 'No Name' }}
+                                    </a>
+                                </td>
+                                <td>{{ user.email }}</td>
+                                <td>
+                                    {% if user.is_blocked %}
+                                    <span class="badge bg-danger badge-admin">Blocked</span>
+                                    {% elif not user.is_verified %}
+                                    <span class="badge bg-warning badge-admin">Unverified</span>
+                                    {% elif user.subscription_status == 'active' %}
+                                    <span class="badge bg-success badge-admin">Active</span>
+                                    {% elif user.subscription_status == 'trial' %}
+                                    <span class="badge bg-info badge-admin">Trial</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary badge-admin">{{ user.subscription_status }}</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ user.created_at.strftime('%Y-%m-%d') }}</td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="4" class="text-center">No users found</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Payments -->
+    <div class="col-lg-6 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h6 class="m-0 font-weight-bold text-success">
+                    <i class="fas fa-credit-card me-2"></i>Recent Payments
+                </h6>
+                <a href="{{ url_for('admin_payments') }}" class="btn btn-sm btn-success">View All</a>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Order ID</th>
+                                <th>User</th>
+                                <th>Amount</th>
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for payment in recent_payments[:5] %}
+                            <tr>
+                                <td>
+                                    <a href="{{ url_for('admin_view_payment', payment_id=payment.id) }}"
+                                        class="text-decoration-none">
+                                        {{ payment.order_id[:8] }}...
+                                    </a>
+                                </td>
+                                <td>
+                                    {% if payment.user %}
+                                    {{ payment.user.email }}
+                                    {% else %}
+                                    User {{ payment.user_id }}
+                                    {% endif %}
+                                </td>
+                                <td>₹{{ "%.2f"|format(payment.total_amount) }}</td>
+                                <td>{{ payment.created_at.strftime('%Y-%m-%d') }}</td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="4" class="text-center">No payments found</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Plan Statistics -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="m-0 font-weight-bold text-primary">
+                    <i class="fas fa-chart-pie me-2"></i>Plan Distribution
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    {% for stat in plan_stats %}
+                    <div class="col-md-3 col-sm-6 mb-3">
+                        <div class="d-flex align-items-center p-3 border rounded">
+                            <div class="me-3">
+                                <div class="icon-circle bg-{{ stat.color }}">
+                                    <i class="fas fa-list-alt text-white"></i>
+                                </div>
+                            </div>
+                            <div>
+                                <div class="small text-gray-500">{{ stat.plan_name }}</div>
+                                <div class="fw-bold">{{ stat.user_count }} Users</div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<!-- Quick Actions -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h6 class="m-0 font-weight-bold text-primary">
+                    <i class="fas fa-bolt me-2"></i>Quick Actions
+                </h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-3 col-sm-6 mb-3">
+                        <a href="{{ url_for('admin_create_project_page') }}" class="btn btn-primary w-100">
+                            <i class="fas fa-plus-circle me-2"></i>Create Project
+                        </a>
+                    </div>
+                    <div class="col-md-3 col-sm-6 mb-3">
+                        <a href="{{ url_for('admin_add_plan') }}" class="btn btn-primary w-100">
+                            <i class="fas fa-plus me-2"></i>Add New Plan
+                        </a>
+                    </div>
+                    <div class="col-md-3 col-sm-6 mb-3">
+                        <a href="{{ url_for('admin_my_projects') }}" class="btn btn-info w-100">
+                            <i class="fas fa-project-diagram me-2"></i>My Projects
+                        </a>
+                    </div>
+                    
+                    <!-- ✅ ADD ADMIN BUTTON - Only visible to Super Admin -->
+                    {% if admin.role == 'superadmin' %}
+                    <div class="col-md-3 col-sm-6 mb-3">
+                        <a href="{{ url_for('admin_add_admin') }}" class="btn btn-danger w-100">
+                            <i class="fas fa-user-plus me-2"></i>Add Admin
+                        </a>
+                    </div>
+                    {% endif %}
+                    
+                    <div class="col-md-3 col-sm-6 mb-3">
+                        <a href="{{ url_for('admin_scans') }}" class="btn btn-warning w-100">
+                            <i class="fas fa-search me-2"></i>Scan Reports
+                        </a>
+                    </div>
+                    <div class="col-md-3 col-sm-6 mb-3">
+                        <a href="{{ url_for('admin_settings') }}" class="btn btn-secondary w-100">
+                            <i class="fas fa-cog me-2"></i>System Settings
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<!-- ============================================= -->
+<!-- ✅ ADMIN PROJECTS SECTION - WITH CORRECT "VIEW ALL PROJECTS" BUTTON -->
+<!-- ============================================= -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card" style="background-color: #0a0c0f !important; border: 1px solid #2a2a35 !important;">
+            <div class="card-header d-flex justify-content-between align-items-center" style="background-color: #14161b !important; border-bottom: 1px solid #2a2a35 !important;">
+                <h6 class="m-0 font-weight-bold" style="color: #00d4ff !important;">
+                    <i class="fas fa-project-diagram me-2"></i>Your Projects
+                </h6>
+                <!-- ✅ FIXED: Now links to admin_my_projects (admin's own projects) -->
+                <a href="{{ url_for('admin_my_projects') }}" class="btn btn-sm" style="background-color: rgba(0,212,255,0.1) !important; border: 1px solid rgba(0,212,255,0.3) !important; color: #00d4ff !important; border-radius: 20px; padding: 8px 18px;">
+                    <i class="fas fa-folder-open me-1"></i> View All Projects
+                </a>
+            </div>
+            <div class="card-body" style="background-color: #0a0c0f !important;">
+                {% if admin_projects %}
+                <div class="row">
+                    {% for project in admin_projects[:6] %}
+                    <div class="col-md-6 col-lg-4 mb-4">
+                        <div class="card h-100" style="background-color: #14161b !important; border: 1px solid #2a2a35 !important; border-radius: 20px; box-shadow: 0 8px 20px rgba(0,0,0,0.3);">
+                            <div class="card-body p-4">
+                                <div class="d-flex justify-content-between align-items-start mb-3">
+                                    <div class="flex-grow-1">
+                                        <h5 class="card-title fw-bold mb-1" style="color: white !important; font-size: 1.2rem;">Project {{ project.display_number }}: {{ project.name }}</h5>
+                                        <p class="small mb-0" style="color: #a0a0b0 !important;">
+                                            <i class="fas fa-calendar me-1" style="color: #00d4ff;"></i> Created: {{ project.created_at.strftime('%d %b %Y') }}
+                                        </p>
+                                    </div>
+                                    <div style="background-color: rgba(255,255,255,0.05) !important; border-radius: 50%; padding: 10px; border: 1px solid rgba(255,255,255,0.1);">
+                                        <i class="fas fa-qrcode" style="color: #00d4ff; font-size: 1.2rem;"></i>
+                                    </div>
+                                </div>
+                                
+                                <!-- Project Stats - PAIRS and SCANS -->
+                                <div class="d-flex gap-4 my-3">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <i class="fas fa-images" style="color: #00d4ff;"></i>
+                                        <span style="color: #c0c0cc !important; font-size: 0.9rem;">{{ project.pairs_count }} pairs</span>
+                                    </div>
+                                    <div class="d-flex align-items-center gap-2">
+                                        <i class="fas fa-eye" style="color: #00d4ff;"></i>
+                                        <span style="color: #c0c0cc !important; font-size: 0.9rem;">{{ project.scan_count or 0 }} scans</span>
+                                    </div>
+                                </div>
+                                
+                                <!-- Action Buttons - VIEW and QR DOWNLOAD -->
+                                <div class="d-flex gap-2 mt-3">
+                                   <a href="{{ url_for('admin_project_preview', project_id=project.id) }}" 
+                                       class="btn btn-sm flex-grow-1 d-flex align-items-center justify-content-center gap-2"
+                                       style="border-radius: 30px; padding: 0.6rem; background-color: rgba(0,212,255,0.1) !important; border: 1px solid rgba(0,212,255,0.3) !important; color: #00d4ff !important; text-decoration: none; font-weight: 700; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em;">
+                                        <i class="fas fa-eye"></i>
+                                        <span>View</span>
+                                    </a>
+                                    <a href="{{ url_for('admin_download_project_qr', project_id=project.id) }}" 
+                                       class="btn btn-sm d-flex align-items-center justify-content-center gap-2"
+                                       style="border-radius: 30px; padding: 0.6rem 1.2rem; background-color: rgba(255,255,255,0.03) !important; border: 1px solid rgba(255,255,255,0.2) !important; color: white !important; text-decoration: none; font-weight: 700; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.1em;">
+                                        <i class="fas fa-download" style="color: #00d4ff;"></i>
+                                        <span>QR</span>
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                
+                {% if admin_projects|length > 6 %}
+                <div class="text-center mt-4">
+                    <!-- ✅ FIXED: Now links to admin_my_projects (admin's own projects) -->
+                    <a href="{{ url_for('admin_my_projects') }}" class="btn btn-sm" style="background-color: rgba(255,255,255,0.03) !important; border: 1px solid rgba(255,255,255,0.2) !important; color: white !important; border-radius: 30px; padding: 10px 30px;">
+                        <i class="fas fa-arrow-right me-1"></i> View All Projects
+                    </a>
+                </div>
+                {% endif %}
+                
+                {% else %}
+                <!-- Empty State - DARK THEME MATCHING -->
+                <div class="text-center py-5">
+                    <div class="mb-4">
+                        <i class="fas fa-folder-open fa-4x" style="color: rgba(255,255,255,0.2);"></i>
+                    </div>
+                    <h5 style="color: white !important; font-weight: 700; margin-bottom: 15px; font-size: 1.5rem;">No Projects Yet</h5>
+                    <p style="color: #a0a0b0 !important; max-width: 500px; margin: 0 auto 30px auto; font-size: 1rem;">
+                        You haven't created any projects yet. Create your first AR experience by uploading image/video pairs.
+                    </p>
+                    <a href="{{ url_for('admin_create_project_page') }}" 
+                       class="btn btn-primary px-5 py-3 d-inline-flex align-items-center gap-3"
+                       style="border-radius: 40px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.18em; font-size: 12px; background: linear-gradient(90deg, #ff007a, #7000ff); border: none; padding: 15px 40px;">
+                        <i class="fas fa-plus-circle fa-lg"></i>
+                        <span>Create Your First Project</span>
+                    </a>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        console.log('Admin Dashboard loaded');
+    });
+</script>
+{% endblock %}

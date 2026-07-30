@@ -1,0 +1,134 @@
+v<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Successful</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+            border-radius: 10px 10px 0 0;
+        }
+        .content {
+            background: white;
+            padding: 30px;
+            border: 1px solid #e5e7eb;
+            border-top: none;
+            border-radius: 0 0 10px 10px;
+        }
+        .success-icon {
+            font-size: 48px;
+            color: #10b981;
+            margin-bottom: 20px;
+        }
+        .plan-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin: 20px 0;
+        }
+        .detail-item {
+            padding: 10px;
+            background: #f1f5f9;
+            border-radius: 6px;
+        }
+        .button {
+            display: inline-block;
+            background: #3b82f6;
+            color: white;
+            text-decoration: none;
+            padding: 12px 30px;
+            border-radius: 6px;
+            font-weight: bold;
+            margin: 10px 5px;
+        }
+        .button:hover {
+            background: #2563eb;
+        }
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e5e7eb;
+            font-size: 12px;
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="success-icon">✓</div>
+        <h1>Payment Successful!</h1>
+        <p>Your SCANSTORY subscription has been activated</p>
+    </div>
+    
+    <div class="content">
+        <p>Hello {{ user.first_name or user.email.split('@')[0] }},</p>
+        
+        <p>Thank you for subscribing to <strong>{{ plan.plan_name }}</strong> plan. Your payment has been processed successfully.</p>
+        
+        <div class="plan-card">
+            <h3>Plan Details</h3>
+            <div class="details-grid">
+                <div class="detail-item">
+                    <strong>Plan:</strong><br>
+                    {{ plan.plan_name }}
+                </div>
+                <div class="detail-item">
+                    <strong>Amount:</strong><br>
+                    ₹{{ order.total_amount }}
+                </div>
+                <div class="detail-item">
+                    <strong>Order ID:</strong><br>
+                    {{ order.order_id }}
+                </div>
+                <div class="detail-item">
+                    <strong>Date:</strong><br>
+                    {{ order.payment_at.strftime('%d %b %Y') }}
+                </div>
+            </div>
+        </div>
+        
+        <div class="plan-card">
+            <h3>Your New Limits</h3>
+            <p><strong>Projects:</strong> {{ plan.total_project_limit }} total projects</p>
+            <p><strong>Scans:</strong> {{ plan.total_scan_limit }} total scans</p>
+            <p><strong>Validity:</strong> {{ order.subscription_start.strftime('%d %b %Y') }} to {{ order.subscription_end.strftime('%d %b %Y') }}</p>
+        </div>
+        
+        <p>You can now create up to {{ plan.total_project_limit }} projects and perform {{ plan.total_scan_limit }} scans.</p>
+        
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="{{ url_for('dashboard', _external=True) }}" class="button">Go to Dashboard</a>
+            <a href="{{ url_for('user_create_project_page', _external=True) }}" class="button" style="background: #10b981;">Create Project</a>
+        </div>
+        
+        <div class="footer">
+            <p><strong>Transaction Details:</strong></p>
+            <p>Transaction ID: {{ order.razorpay_payment_id }}</p>
+            <p>Payment Method: {{ order.payment_method|default('Online Payment')|title }}</p>
+            <p>Bank: {{ order.bank_name|default('N/A') }}</p>
+            <br>
+            <p>If you have any questions, please contact our support team at support@scanstory.com</p>
+            <p>&copy; {{ year }} SCANSTORY. All rights reserved.</p>
+        </div>
+    </div>
+</body>
+</html>

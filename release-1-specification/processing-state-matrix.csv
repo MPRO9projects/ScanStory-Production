@@ -1,0 +1,12 @@
+State,Meaning,Retryable,Creator Visible,Diagnostics Required
+Draft,Trigger exists before upload,No,Yes,No
+Uploading,Asset transfer active,Yes,Yes,Upload ID
+Uploaded,Asset received,Yes,Yes,Asset checksum
+Validating,File and policy checks running,Yes,Yes,Validation category
+Optimizing,Media variants being created,Yes,Yes,Codec/timing data
+Extracting Features,Recognition artifacts being generated,Yes,Yes,Algorithm version
+Testing,Robustness tests running,Yes,Yes,Quality scores
+Ready,Trigger can be published,No,Yes,Artifact versions
+Failed,Processing failed,Yes,Yes,Failure category
+Retry Scheduled,Retry queued,No,Yes,Next attempt time
+Retrying,Retry active,Yes,Yes,Attempt count

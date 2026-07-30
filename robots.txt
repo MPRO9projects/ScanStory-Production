@@ -1,0 +1,26 @@
+User-agent: *
+Allow: /
+
+# Private admin pages
+Disallow: /admin/
+Disallow: /admin/login
+
+# Private/system files and APIs
+Disallow: /data/
+Disallow: /api/
+
+# Dynamic app pages not useful for Google indexing
+Disallow: /scanner/
+Disallow: /video/
+Disallow: /image/
+Disallow: /qr/
+Disallow: /success/
+Disallow: /dashboard
+Disallow: /projects
+Disallow: /profile
+Disallow: /subscribe
+Disallow: /payment-success
+Disallow: /payment-failed
+
+# Sitemap location
+Sitemap: https://myscanstory.com/sitemap.xml

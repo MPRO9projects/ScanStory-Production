@@ -1,0 +1,13 @@
+service,purpose,called_from,required_credentials,failure_impact,fallback
+MySQL-compatible DB,persistent app data,SQLAlchemy app config,DATABASE_URL,app cannot persist/read core records,none
+Razorpay,payment checkout and verification,create_razorpay_order verify_payment,RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET,paid upgrades fail,returns JSON error when client missing
+SMTP,email OTP/payment/contact,send_email_smtp,SMTP_HOST SMTP_PORT SMTP_USER SMTP_PASS MAIL_FROM,verification/reset/contact email fail,registration OTP may still exist with flash error
+Google reCAPTCHA v3,bot protection,verify_recaptcha_v3,RECAPTCHA_SITE_KEY RECAPTCHA_SECRET_KEY,registration/contact may fail,bypasses if keys missing
+Tailwind CDN,runtime CSS,templates,none,page styling depends CDN,none evident
+Font Awesome CDN,icons,templates,none,icons may fail,none evident
+Vanilla Tilt CDN,pointer animation,landing/blog,none,animation fails,noncritical
+AOS CDN,scroll animation,landing/blog/dashboard,none,animation fails,noncritical
+Browser Camera,camera scanner,scanner.html,HTTPS permission,scanner cannot work,error message
+OpenCV.js/WASM,browser tracking,scanner.html,static files,scanner tracking unavailable,retry load attempts
+ffmpeg binary,video processing helper,compress_video,system executable,video compression helper fails,returns original path
+

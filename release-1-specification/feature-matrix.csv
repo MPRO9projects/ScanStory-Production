@@ -1,0 +1,18 @@
+Feature,Release 1 Status,Primary Module,Entitlement Gate,Notes
+Image-triggered video Experiences,Included,Experiences,Plan active,Core product
+Multiple triggers per Experience,Included,Triggers,max_triggers_per_experience,Plan-limited
+Workspace members,Included,Workspaces,workspace_members,Role-aware
+Plan entitlements,Included,Billing,Plan active,Config-driven
+Async processing jobs,Included,Media Processing,media_processing_minutes,Durable queue required
+Marker quality scoring,Included,Computer Vision,Plan active,Creator-facing warnings
+Media variants,Included,Assets,storage_bytes,Device-appropriate delivery
+Scanner modes,Included,Scanner,Plan active,Full/Standard/Lightweight/Unsupported
+Fallback Experiences,Included,Public Viewer,Plan active,Required for publish
+Permanent QR/public links,Included,Publishing,Plan active,Stable public keys
+Trigger QR links,Optional,Publishing,Plan active,May ship API-first
+Creator analytics,Included,Analytics,analytics_retention_days,Privacy-safe
+Admin diagnostics,Included,Admin,Support role,Sanitized
+Bulk upload foundation,Foundation,Integrations,bulk_upload,No full importer required
+Managed service workflow,Foundation,Managed Services,managed_service_access,Staff-audited
+Future 3D add-on,Excluded,Add-ons,future_3d,Interface placeholder only
+Future WebXR add-on,Excluded,Add-ons,future_webxr,Interface placeholder only

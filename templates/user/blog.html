@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+    <title>ScanStory Blog | AR, QR Code, WebAR and Interactive Experience Guides</title>
+    <meta name="title" content="ScanStory Blog | AR, QR Code, WebAR and Interactive Experience Guides">
+    <meta name="description"
+        content="Read ScanStory blogs on augmented reality marketing, interactive QR codes, smart packaging, WebAR, AR education, AI-powered experiences, and no-code AR content creation.">
+    <meta name="keywords"
+        content="ScanStory blog, AR marketing, WebAR guides, QR code AR, interactive QR codes, smart packaging AR, AR education, AI AR QR codes, no-code AR, image to video AR">
+    <meta name="author" content="ScanStory">
+    <meta name="robots" content="index, follow">
+
+    <link rel="canonical" href="https://myscanstory.com/blog">
+
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://myscanstory.com/blog">
+    <meta property="og:title" content="ScanStory Blog | AR and QR Code Experience Guides">
+    <meta property="og:description"
+        content="Explore ScanStory guides on AR marketing, WebAR, smart packaging, interactive QR codes, AR education, and AI-powered brand experiences.">
+    <meta property="og:image" content="https://myscanstory.com/static/uploads/og/scanstory-og.jpg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+
+    <script type="application/ld+json">
+    [
+      {
+        "@context": "https://schema.org",
+        "@type": "Organization",
+        "@id": "https://myscanstory.com/#organization",
+        "name": "ScanStory",
+        "url": "https://myscanstory.com/",
+        "logo": "https://myscanstory.com/static/assets/logos/logo1.png",
+        "email": "contact@myscanstory.com",
+        "telephone": "+91 73385 44142",
+        "description": "ScanStory is a WebAR experience platform for creating image-to-video augmented reality content using QR scan codes."
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "WebPage",
+        "@id": "https://myscanstory.com/blog#webpage",
+        "url": "https://myscanstory.com/blog",
+        "name": "ScanStory Blog | AR, QR Code, WebAR and Interactive Experience Guides",
+        "description": "Read ScanStory blogs on augmented reality marketing, interactive QR codes, smart packaging, WebAR, AR education, AI-powered experiences, and no-code AR content creation.",
+        "isPartOf": {
+          "@type": "WebSite",
+          "@id": "https://myscanstory.com/#website",
+          "name": "ScanStory",
+          "url": "https://myscanstory.com/"
+        },
+        "about": {
+          "@id": "https://myscanstory.com/#organization"
+        }
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "Blog",
+        "@id": "https://myscanstory.com/blog#blog",
+        "name": "ScanStory AR Knowledge Hub",
+        "url": "https://myscanstory.com/blog",
+        "description": "Guides about augmented reality marketing, QR code AR, WebAR, smart packaging, AR education and AI-powered interactive experiences.",
+        "publisher": {
+          "@id": "https://myscanstory.com/#organization"
+        }
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        "@id": "https://myscanstory.com/blog#breadcrumb",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "name": "Home",
+            "item": "https://myscanstory.com/"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "name": "Blog",
+            "item": "https://myscanstory.com/blog"
+          }
+        ]
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "ItemList",
+        "@id": "https://myscanstory.com/blog#itemlist",
+        "name": "ScanStory Blog Articles",
+        "itemListElement": [
+          {
+            "@type": "ListItem",
+            "position": 1,
+            "url": "https://myscanstory.com/blog/augmented-reality-transforming-marketing-customer-engagement",
+            "name": "How Augmented Reality Is Transforming Marketing and Customer Engagement"
+          },
+          {
+            "@type": "ListItem",
+            "position": 2,
+            "url": "https://myscanstory.com/blog/interactive-qr-codes-future-digital-brand-experiences",
+            "name": "Interactive QR Codes: The Future of Digital Brand Experiences"
+          },
+          {
+            "@type": "ListItem",
+            "position": 3,
+            "url": "https://myscanstory.com/blog/smart-packaging-ar-product-communication",
+            "name": "Smart Packaging and AR: The Next Evolution of Product Communication"
+          },
+          {
+            "@type": "ListItem",
+            "position": 4,
+            "url": "https://myscanstory.com/blog/ar-revolutionizing-education-training-knowledge-sharing",
+            "name": "How AR Is Revolutionizing Education, Training, and Knowledge Sharing"
+          },
+          {
+            "@type": "ListItem",
+            "position": 5,
+            "url": "https://myscanstory.com/blog/ai-ar-qr-codes-future-interactive-experiences",
+            "name": "AI + AR + QR Codes: Building the Future of Interactive Experiences"
+          }
+        ]
+      }
+    ]
+    </script>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vanilla-tilt/1.7.0/vanilla-tilt.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800;900&display=swap');
+
+        :root {
+            --primary: #ff007a;
+            --secondary: #7000ff;
+            --accent: #00d4ff;
+            --bg-dark: #050505;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--bg-dark);
+            color: #ffffff;
+            overflow-x: hidden;
+            scroll-behavior: smooth;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 4px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            border-radius: 10px;
+        }
+
+        .navbar {
+            height: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: relative;
+            padding: 0 1.5rem;
+            background: rgba(5, 5, 5, 0.95);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .center-menu {
+            position: absolute;
+            left: 50%;
+            transform: translateX(-50%);
+        }
+
+        .nav-logo {
+            width: 140px;
+            height: 100px;
+            object-fit: contain;
+        }
+
+        .blob {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(80px);
+            z-index: -1;
+            opacity: 0.18;
+            transition: transform 0.08s linear;
+            pointer-events: none;
+            will-change: transform;
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.01);
+            backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            transition: all 0.4s ease;
+        }
+
+        .glass:hover {
+            border-color: rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .animated-gradient-text {
+            background: linear-gradient(to right, #fff, var(--accent), var(--primary), #fff);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: textFlow 5s linear infinite;
+        }
+
+        @keyframes textFlow {
+            to {
+                background-position: 200% center;
+            }
+        }
+
+        .glow-btn {
+            transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .glow-btn:hover {
+            box-shadow: 0 0 50px rgba(255, 0, 122, 0.5);
+            transform: scale(1.05);
+            background: #fff;
+            color: #000;
+        }
+
+        .scan-line-decor {
+            position: absolute;
+            left: 0;
+            width: 100%;
+            height: 1px;
+            background: linear-gradient(90deg, var(--primary), transparent);
+            opacity: 0.3;
+        }
+
+        .footer-logo {
+            height: 100px;
+            width: auto;
+            max-width: 140px;
+        }
+
+        .footer-link {
+            transition: all 0.3s ease;
+            color: #94a3b8;
+        }
+
+        .footer-link:hover {
+            color: #ff007a;
+            padding-left: 8px;
+        }
+
+        .social-icon {
+            width: 38px;
+            height: 38px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            color: white;
+            text-decoration: none;
+        }
+
+        .social-icon:hover {
+            background: var(--primary);
+            border-color: var(--primary);
+            transform: translateY(-5px);
+            box-shadow: 0 10px 20px rgba(255, 0, 122, 0.3);
+        }
+
+        .mobile-menu {
+            position: fixed;
+            inset: 0;
+            background: rgba(5, 5, 5, 0.98);
+            backdrop-filter: blur(20px);
+            z-index: 9999;
+            transform: translateY(-100%);
+            transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .mobile-menu.active {
+            transform: translateY(0);
+        }
+
+        .menu-item {
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .mobile-menu.active .menu-item {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        section {
+            scroll-margin-top: 70px;
+        }
+
+        #blog-hero-section {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            padding-top: 6rem;
+            padding-bottom: 4rem;
+        }
+
+        #blog-hero-section>div {
+            transform: translateY(-1rem);
+        }
+
+        .blog-kicker {
+            display: inline-block;
+            color: var(--primary);
+            font-size: 10px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.35em;
+            margin-bottom: 1.25rem;
+        }
+
+        .blog-subtitle {
+            max-width: 850px;
+            color: #64748b;
+            font-size: clamp(1.05rem, 2vw, 1.5rem);
+            font-weight: 300;
+            line-height: 1.7;
+            margin: 0 auto 2rem;
+        }
+
+        .blog-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 2rem;
+        }
+
+        .blog-chip,
+        .topic-pill {
+            padding: 9px 16px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: rgba(255, 255, 255, 0.78);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            transition: all 0.3s ease;
+        }
+
+        .blog-chip:hover,
+        .topic-pill:hover {
+            background: #ff007a;
+            border-color: #ff007a;
+            color: #ffffff;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(255, 0, 122, 0.3);
+        }
+
+        .featured-blog-card {
+            position: relative;
+            overflow: hidden;
+            border-radius: 28px;
+            padding: 34px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01));
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.4s ease;
+        }
+
+        .featured-blog-card::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(circle at top left, rgba(255, 0, 122, 0.12), transparent 35%),
+                radial-gradient(circle at bottom right, rgba(0, 212, 255, 0.10), transparent 35%);
+            pointer-events: none;
+        }
+
+        .featured-blog-card:hover {
+            transform: translateY(-8px);
+            border-color: rgba(255, 0, 122, 0.35);
+            box-shadow: 0 25px 50px -12px rgba(255, 0, 122, 0.18);
+        }
+
+        .featured-blog-inner {
+            position: relative;
+            z-index: 2;
+        }
+
+        .featured-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 0, 122, 0.14);
+            border: 1px solid rgba(255, 0, 122, 0.25);
+            color: #ff75b6;
+            padding: 8px 14px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 900;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+            margin-bottom: 20px;
+        }
+
+        .blog-card-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 24px;
+        }
+
+        .blog-card {
+            position: relative;
+            width: 100%;
+            min-height: 390px;
+            border-radius: 24px;
+            overflow: hidden;
+            cursor: pointer;
+            background: #0a0a0a;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .blog-card:hover {
+            transform: translateY(-8px) scale(1.02);
+            border-color: rgba(255, 0, 122, 0.5);
+            box-shadow: 0 20px 35px rgba(255, 0, 122, 0.15);
+        }
+
+        .blog-card-content {
+            padding: 28px 22px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01));
+            backdrop-filter: blur(10px);
+            min-height: 390px;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            position: relative;
+            z-index: 2;
+            height: 100%;
+        }
+
+        .blog-card-category {
+            display: inline-block;
+            width: fit-content;
+            color: var(--accent);
+            font-size: 10px;
+            font-weight: 900;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+            margin-bottom: 16px;
+        }
+
+        .blog-card-content h3 {
+            font-size: 21px;
+            font-weight: 900;
+            color: white;
+            margin-bottom: 14px;
+            line-height: 1.25;
+        }
+
+        .blog-card-content p {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.7);
+            line-height: 1.7;
+            margin-bottom: 18px;
+            text-align: justify;
+        }
+
+        .blog-card-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: auto;
+            margin-bottom: 18px;
+        }
+
+        .blog-meta-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 20px;
+            font-size: 10px;
+            font-weight: 700;
+            color: #94a3b8;
+        }
+
+        .blog-read-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            width: fit-content;
+            padding: 11px 16px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: #ffffff;
+            font-size: 11px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            transition: all 0.3s ease;
+        }
+
+        .blog-read-link:hover {
+            background: var(--primary);
+            border-color: var(--primary);
+            box-shadow: 0 10px 24px rgba(255, 0, 122, 0.26);
+            transform: translateY(-2px);
+        }
+
+        .blog-card-number {
+            position: absolute;
+            bottom: 15px;
+            right: 20px;
+            font-size: 32px;
+            font-weight: 900;
+            color: rgba(255, 255, 255, 0.08);
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        .blog-card:hover .blog-card-number {
+            color: rgba(255, 255, 255, 0.15);
+            transform: scale(1.05);
+        }
+
+        .topic-cloud {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 12px;
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        .seo-content-card {
+            border-radius: 28px;
+            padding: 34px;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01));
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .seo-content-card p {
+            color: #94a3b8;
+            line-height: 1.8;
+            font-size: 15px;
+            text-align: justify;
+            margin-bottom: 16px;
+        }
+
+        footer .grid {
+            text-align: center;
+        }
+
+        @media (min-width: 768px) {
+            footer .grid {
+                text-align: left;
+            }
+        }
+
+        @media (max-width: 1024px) {
+            .blog-card-grid {
+                grid-template-columns: 1fr;
+                gap: 18px;
+            }
+
+            .center-menu {
+                position: static;
+                transform: none;
+            }
+        }
+
+        @media (max-width: 768px) {
+            #blog-hero-section {
+                padding-top: 7rem;
+                padding-bottom: 4rem;
+                text-align: center;
+            }
+
+            #blog-hero-section>div {
+                transform: translateY(-1rem);
+            }
+
+            h1 {
+                font-size: clamp(2.8rem, 12vw, 5rem) !important;
+            }
+
+            .featured-blog-card,
+            .seo-content-card {
+                padding: 24px 18px;
+                border-radius: 22px;
+            }
+
+            .blog-card {
+                min-height: auto;
+            }
+
+            .blog-card-content {
+                min-height: auto;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="blob1" class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]"></div>
+    <div id="blob2" class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]"></div>
+    <div id="blob3" class="blob w-72 h-72 bg-cyan-500" style="top:40%;right:5%;opacity:0.09;"></div>
+
+    <div id="cursorGlow" style="
+        position:fixed;
+        width:480px;height:480px;
+        border-radius:50%;
+        background:radial-gradient(circle,rgba(255,0,122,0.09) 0%,rgba(112,0,255,0.07) 40%,transparent 70%);
+        pointer-events:none;
+        transform:translate(-50%,-50%);
+        transition:opacity 0.4s ease;
+        opacity:0;
+        z-index:0;
+        will-change:transform;
+    "></div>
+
+    
+
+    <section id="blog-hero-section" class="px-6 text-center">
+        <div class="max-w-6xl mx-auto">
+            <span class="blog-kicker" data-aos="fade-up">ScanStory Resources</span>
+
+            <h1 class="text-[clamp(2.8rem,10vw,7rem)] font-black leading-[0.9] uppercase mb-6" data-aos="zoom-in-up">
+                ScanStory AR <br>
+                <span class="animated-gradient-text italic">Knowledge Hub</span>
+            </h1>
+
+            <p class="blog-subtitle" data-aos="fade-up" data-aos-delay="100">
+                Explore practical guides on augmented reality marketing, QR code AR, WebAR, smart packaging,
+                AR education, AI-powered experiences, and no-code interactive storytelling.
+            </p>
+
+            <div class="flex flex-wrap gap-4 justify-center" data-aos="fade-up" data-aos-delay="200">
+                <a href="/register/"
+                    class="glow-btn bg-pink-600 px-8 py-3 sm:px-10 sm:py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-2xl inline-block">
+                    Start Free Trial
+                </a>
+                <a href="/pricing"
+                    class="glow-btn px-8 py-3 sm:px-10 sm:py-4 rounded-2xl border border-white/10 bg-white/5 font-black uppercase tracking-widest text-xs inline-block">
+                    View Pricing
+                </a>
+            </div>
+
+            <div class="blog-chip-row" data-aos="fade-up" data-aos-delay="300">
+                <span class="blog-chip">WebAR</span>
+                <span class="blog-chip">QR Codes</span>
+                <span class="blog-chip">AR Marketing</span>
+                <span class="blog-chip">Smart Packaging</span>
+                <span class="blog-chip">AI + AR</span>
+                <span class="blog-chip">Education</span>
+                <span class="blog-chip">No-Code AR</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-16 px-6 lg:px-20 relative overflow-hidden">
+        <div class="scan-line-decor top-0"></div>
+
+        <div class="max-w-6xl mx-auto">
+            <div class="featured-blog-card" data-aos="fade-up" data-tilt>
+                <div class="featured-blog-inner">
+                    <span class="featured-badge">
+                        <i class="fas fa-star"></i> Featured Strategy
+                    </span>
+
+                    <h2 class="text-4xl md:text-5xl font-black uppercase italic mb-5">
+                        SEO, AEO & GEO Strategy for <span class="animated-gradient-text">AR and QR-Based
+                            Experiences</span>
+                    </h2>
+
+                    <p class="text-slate-400 text-base md:text-lg max-w-3xl leading-relaxed mb-8 text-justify">
+                        A complete growth strategy for building search visibility across Google, Bing, ChatGPT,
+                        Gemini, Perplexity, and AI-powered search engines.
+                    </p>
+
+                    <div class="flex flex-wrap gap-4 items-center">
+                        <a href="/blog/myscanstory-seo-aeo-geo-strategy"
+                            class="glow-btn bg-pink-600 px-8 py-3 rounded-2xl font-black uppercase tracking-widest text-xs inline-flex items-center gap-2">
+                            Read Strategy <i class="fas fa-arrow-right"></i>
+                        </a>
+
+                        <span class="limit-badge">
+                            <i class="fas fa-search"></i> SEO + AEO + GEO
+                        </span>
+                        <span class="limit-badge">
+                            <i class="fas fa-layer-group"></i> Pillar Cluster
+                        </span>
+                        <span class="limit-badge">
+                            <i class="fas fa-key"></i> 100 Keywords
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-16 px-6 lg:px-20 relative overflow-hidden">
+        <div class="scan-line-decor top-0"></div>
+
+        <div class="text-center mb-14" data-aos="fade-up">
+            <span class="inline-block text-[10px] font-black uppercase tracking-[0.35em] text-pink-500 mb-4">
+                Latest Guides
+            </span>
+            <h2 class="text-4xl md:text-5xl font-black uppercase italic mb-4">
+                AR, QR Code and <span class="animated-gradient-text">WebAR Guides</span>
+            </h2>
+            <p class="text-slate-400 text-base max-w-2xl mx-auto font-light">
+                Learn how ScanStory connects physical materials with browser-based augmented reality experiences.
+            </p>
+        </div>
+
+        <div class="max-w-6xl mx-auto">
+            <div class="blog-card-grid">
+
+                <article class="blog-card" data-aos="fade-up" data-aos-delay="100">
+                    <div class="blog-card-content">
+                        <span class="blog-card-category">AR Marketing</span>
+                        <h3>How Augmented Reality Is Transforming Marketing and Customer Engagement</h3>
+                        <p>
+                            Learn how AR marketing turns static ads, packaging, cards, and print materials into
+                            interactive customer experiences.
+                        </p>
+
+                        <div class="blog-card-meta">
+                            <span class="blog-meta-pill"><i class="fas fa-key"></i> Augmented reality marketing</span>
+                            <span class="blog-meta-pill"><i class="fas fa-clock"></i> 12 min read</span>
+                        </div>
+
+                        <a href="/blog/augmented-reality-transforming-marketing-customer-engagement"
+                            class="blog-read-link">
+                            Read Article <i class="fas fa-arrow-right"></i>
+                        </a>
+
+                        <div class="blog-card-number">01</div>
+                    </div>
+                </article>
+
+                <article class="blog-card" data-aos="fade-up" data-aos-delay="150">
+                    <div class="blog-card-content">
+                        <span class="blog-card-category">Interactive QR Codes</span>
+                        <h3>Interactive QR Codes: The Future of Digital Brand Experiences</h3>
+                        <p>
+                            Understand how QR codes are evolving from simple links into AR-powered brand experience
+                            gateways.
+                        </p>
+
+                        <div class="blog-card-meta">
+                            <span class="blog-meta-pill"><i class="fas fa-key"></i> Interactive QR codes</span>
+                            <span class="blog-meta-pill"><i class="fas fa-clock"></i> 11 min read</span>
+                        </div>
+
+                        <a href="/blog/interactive-qr-codes-future-digital-brand-experiences" class="blog-read-link">
+                            Read Article <i class="fas fa-arrow-right"></i>
+                        </a>
+
+                        <div class="blog-card-number">02</div>
+                    </div>
+                </article>
+
+                <article class="blog-card" data-aos="fade-up" data-aos-delay="200">
+                    <div class="blog-card-content">
+                        <span class="blog-card-category">Smart Packaging</span>
+                        <h3>Smart Packaging and AR: The Next Evolution of Product Communication</h3>
+                        <p>
+                            Discover how product labels, boxes, and packaging can become interactive AR communication
+                            channels.
+                        </p>
+
+                        <div class="blog-card-meta">
+                            <span class="blog-meta-pill"><i class="fas fa-key"></i> Smart packaging AR</span>
+                            <span class="blog-meta-pill"><i class="fas fa-clock"></i> 11 min read</span>
+                        </div>
+
+                        <a href="/blog/smart-packaging-ar-product-communication" class="blog-read-link">
+                            Read Article <i class="fas fa-arrow-right"></i>
+                        </a>
+
+                        <div class="blog-card-number">03</div>
+                    </div>
+                </article>
+
+                <article class="blog-card" data-aos="fade-up" data-aos-delay="250">
+                    <div class="blog-card-content">
+                        <span class="blog-card-category">AR in Education</span>
+                        <h3>How AR Is Revolutionizing Education, Training, and Knowledge Sharing</h3>
+                        <p>
+                            See how AR can turn textbooks, manuals, training materials, and posters into scan-to-learn
+                            experiences.
+                        </p>
+
+                        <div class="blog-card-meta">
+                            <span class="blog-meta-pill"><i class="fas fa-key"></i> AR in education</span>
+                            <span class="blog-meta-pill"><i class="fas fa-clock"></i> 10 min read</span>
+                        </div>
+
+                        <a href="/blog/ar-revolutionizing-education-training-knowledge-sharing" class="blog-read-link">
+                            Read Article <i class="fas fa-arrow-right"></i>
+                        </a>
+
+                        <div class="blog-card-number">04</div>
+                    </div>
+                </article>
+
+                <article class="blog-card" data-aos="fade-up" data-aos-delay="300">
+                    <div class="blog-card-content">
+                        <span class="blog-card-category">AI + AR + QR</span>
+                        <h3>AI + AR + QR Codes: Building the Future of Interactive Experiences</h3>
+                        <p>
+                            Explore how AI, AR, and QR codes are coming together to create intelligent interactive
+                            experiences.
+                        </p>
+
+                        <div class="blog-card-meta">
+                            <span class="blog-meta-pill"><i class="fas fa-key"></i> AI AR QR technology</span>
+                            <span class="blog-meta-pill"><i class="fas fa-clock"></i> 10 min read</span>
+                        </div>
+
+                        <a href="/blog/ai-ar-qr-codes-future-interactive-experiences" class="blog-read-link">
+                            Read Article <i class="fas fa-arrow-right"></i>
+                        </a>
+
+                        <div class="blog-card-number">05</div>
+                    </div>
+                </article>
+
+            </div>
+        </div>
+    </section>
+
+    <section class="py-16 px-6 lg:px-20 relative overflow-hidden bg-[#080808]/30">
+        <div class="scan-line-decor top-0"></div>
+
+        <div class="text-center mb-10" data-aos="fade-up">
+            <span class="inline-block text-[10px] font-black uppercase tracking-[0.35em] text-pink-500 mb-4">
+                Topic Cluster
+            </span>
+            <h2 class="text-4xl md:text-5xl font-black uppercase italic mb-4">
+                Explore <span class="animated-gradient-text">ScanStory Topics</span>
+            </h2>
+            <p class="text-slate-400 text-base max-w-2xl mx-auto font-light">
+                Follow the connected content ecosystem around AR, QR codes, WebAR, smart packaging, education, and
+                AI-powered interactive experiences.
+            </p>
+        </div>
+
+        <div class="topic-cloud" data-aos="fade-up" data-aos-delay="100">
+            <a href="/blog" class="topic-pill">AR Marketing</a>
+            <a href="/blog" class="topic-pill">QR Code Experiences</a>
+            <a href="/blog" class="topic-pill">Smart Packaging</a>
+            <a href="/blog" class="topic-pill">Education and Training</a>
+            <a href="/blog" class="topic-pill">AI + AR Future</a>
+            <a href="/blog" class="topic-pill">WebAR Without App</a>
+            <a href="/blog" class="topic-pill">No-Code AR</a>
+            <a href="/blog" class="topic-pill">Interactive Print</a>
+            <a href="/blog" class="topic-pill">AR Business Cards</a>
+            <a href="/blog" class="topic-pill">AR Product Packaging</a>
+        </div>
+    </section>
+
+    <section class="py-16 px-6 lg:px-20 relative overflow-hidden">
+        <div class="scan-line-decor top-0"></div>
+
+        <div class="max-w-6xl mx-auto">
+            <div class="seo-content-card" data-aos="fade-up">
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-10 items-start">
+                    <div>
+                        <span
+                            class="inline-block text-[10px] font-black uppercase tracking-[0.35em] text-pink-500 mb-4">
+                            Learn and Build
+                        </span>
+                        <h2 class="text-4xl md:text-5xl font-black uppercase italic mb-4">
+                            Learn How AR, QR Codes and <span class="animated-gradient-text">WebAR Are Changing</span>
+                            Digital Experiences
+                        </h2>
+                    </div>
+
+                    <div>
+                        <p>
+                            ScanStory’s blog helps marketers, educators, creators, business owners, print shops,
+                            event planners, and product brands understand how augmented reality can be used without
+                            complex app development.
+                        </p>
+
+                        <p>
+                            These guides explain how QR-based AR experiences work, how WebAR removes app-download
+                            friction,
+                            and how image-to-video AR can turn printed materials into interactive digital moments.
+                        </p>
+
+                        <p>
+                            The content covers augmented reality platforms, WebAR platforms, QR code AR scanners,
+                            interactive print,
+                            smart packaging, AR marketing, AR education, no-code AR, and image-to-video AR use cases.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="py-16 px-6 text-center relative overflow-hidden">
+        <div class="absolute inset-0"
+            style="background:radial-gradient(ellipse at center, rgba(255,0,122,0.07) 0%, transparent 70%);pointer-events:none;">
+        </div>
+
+        <div class="max-w-3xl mx-auto relative" data-aos="zoom-in-up" data-aos-duration="800">
+            <h2 class="text-5xl md:text-7xl font-black uppercase italic leading-[0.88] mb-6">
+                Ready to Create<br>
+                Your Own <span class="animated-gradient-text">AR Experience?</span>
+            </h2>
+
+            <p class="text-slate-400 text-xl font-light mb-8 max-w-xl mx-auto">
+                Upload a photo and video, generate a QR code, and turn any printed material into a scannable AR story.
+            </p>
+
+            <div class="flex flex-wrap gap-4 justify-center">
+                <a href="/register/"
+                    class="glow-btn bg-pink-600 px-10 py-4 rounded-2xl font-black uppercase tracking-widest text-sm shadow-2xl inline-block">
+                    Start Free Trial →
+                </a>
+                <a href="/pricing"
+                    class="glow-btn px-10 py-4 rounded-2xl border border-white/10 bg-white/5 font-black uppercase tracking-widest text-sm inline-block">
+                    View Pricing
+                </a>
+                <a href="/contact"
+                    class="glow-btn px-10 py-4 rounded-2xl border border-white/10 bg-white/5 font-black uppercase tracking-widest text-sm inline-block">
+                    Contact Sales
+                </a>
+            </div>
+        </div>
+    </section>
+
+    <footer class="pt-12 pb-8 px-6 lg:px-20 relative overflow-hidden border-t border-white/5 glass">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 md:gap-12 mb-12">
+            <div class="space-y-4">
+                <div class="text-2xl font-black italic tracking-tighter">
+                    <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" alt="SCANSTORY"
+                        class="footer-logo brightness-200 mb-2">
+                </div>
+
+                <p class="text-slate-400 text-sm leading-relaxed max-w-xs text-justify">
+                    A simple way to bring your memories, marketing materials, packaging, and learning content to life —
+                    right from your browser.
+                </p>
+
+                <div class="flex gap-3 justify-center md:justify-start">
+                    <a href="https://www.linkedin.com/company/m-pro9-pvt-ltd/" target="_blank" class="social-icon">
+                        <i class="fab fa-linkedin-in text-xs"></i>
+                    </a>
+                    <a href="https://www.instagram.com/mpro9official/" target="_blank" class="social-icon">
+                        <i class="fab fa-instagram text-xs"></i>
+                    </a>
+                </div>
+            </div>
+
+            <div class="space-y-4">
+                <h4 class="text-white font-black uppercase tracking-[0.2em] text-[10px] text-center md:text-left">
+                    Explore
+                </h4>
+                <ul class="space-y-2 text-sm text-center md:text-left">
+                    <li><a href="/" class="footer-link block">Home</a></li>
+                    <li><a href="/pricing" class="footer-link block">Pricing</a></li>
+                    <li><a href="/blog" class="footer-link block">Blog</a></li>
+                    <li><a href="/contact" class="footer-link block">Contact</a></li>
+                </ul>
+            </div>
+
+            <div class="space-y-4">
+                <h4 class="text-white font-black uppercase tracking-[0.2em] text-[10px] text-center md:text-left">
+                    Blog Topics
+                </h4>
+                <div class="space-y-3 text-center md:text-left">
+                    <div class="border-l-2 border-pink-500/30 pl-3 text-center md:text-left">
+                        <h5 class="text-white text-xs font-bold uppercase mb-1">AR Marketing</h5>
+                        <p class="text-slate-500 text-[10px]">Customer engagement with WebAR.</p>
+                    </div>
+                    <div class="border-l-2 border-cyan-500/30 pl-3 text-center md:text-left">
+                        <h5 class="text-white text-xs font-bold uppercase mb-1">QR Codes</h5>
+                        <p class="text-slate-500 text-[10px]">Interactive scan-to-experience content.</p>
+                    </div>
+                    <div class="border-l-2 border-purple-500/30 pl-3 text-center md:text-left">
+                        <h5 class="text-white text-xs font-bold uppercase mb-1">Smart Packaging</h5>
+                        <p class="text-slate-500 text-[10px]">Product stories through AR overlays.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-4">
+                <h4 class="text-white font-black uppercase tracking-[0.2em] text-[10px] text-center md:text-left">
+                    Resources
+                </h4>
+                <ul class="space-y-2 text-sm text-center md:text-left">
+                    <li><a href="/contact" class="footer-link block">Contact Support</a></li>
+                    <li><a href="/terms" class="footer-link block">Terms of Service</a></li>
+                    <li><a href="/privacy" class="footer-link block">Privacy Policy</a></li>
+                    <li><a href="/cancellation-refund" class="footer-link block">Cancellation & Refund</a></li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="pt-6 border-t border-white/5 text-center">
+            <p class="text-[9px] font-black uppercase tracking-[0.5em] text-slate-600">
+                © 2026 <span class="text-white/40 hover:text-pink-500 transition-colors">SCANSTORY</span>.
+                All Rights Reserved. Powered by Namma Mysore Foundation
+            </p>
+        </div>
+    </footer>
+
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+
+    <script>
+        AOS.init({
+            duration: 1000,
+            once: true,
+            mirror: false
+        });
+
+        VanillaTilt.init(document.querySelectorAll("[data-tilt]"), {
+            max: 3,
+            speed: 300,
+            glare: false
+        });
+
+        const b1 = document.getElementById('blob1');
+        const b2 = document.getElementById('blob2');
+        const b3 = document.getElementById('blob3');
+
+        window.addEventListener('scroll', () => {
+            const s = window.pageYOffset;
+            if (b1) b1.style.transform = `translate(${s * 0.04}px, ${s * 0.18}px)`;
+            if (b2) b2.style.transform = `translate(${s * -0.04}px, ${s * -0.18}px)`;
+            if (b3) b3.style.transform = `translate(${s * 0.02}px, ${s * -0.10}px)`;
+        }, { passive: true });
+
+        const cursorGlow = document.getElementById('cursorGlow');
+        const isFinePointer = window.matchMedia('(pointer: fine)').matches;
+
+        if (isFinePointer) {
+            let mx = window.innerWidth / 2;
+            let my = window.innerHeight / 2;
+            let glowX = mx;
+            let glowY = my;
+            let rafId;
+
+            document.addEventListener('mousemove', (e) => {
+                mx = e.clientX;
+                my = e.clientY;
+
+                if (!rafId) {
+                    rafId = requestAnimationFrame(function tick() {
+                        glowX += (mx - glowX) * 0.12;
+                        glowY += (my - glowY) * 0.12;
+
+                        if (cursorGlow) {
+                            cursorGlow.style.left = glowX + 'px';
+                            cursorGlow.style.top = glowY + 'px';
+                            cursorGlow.style.opacity = '1';
+                        }
+
+                        const cx = (mx / window.innerWidth - 0.5) * 2;
+                        const cy = (my / window.innerHeight - 0.5) * 2;
+                        const scroll = window.pageYOffset;
+
+                        if (b1) b1.style.transform = `translate(${scroll * 0.04 + cx * 28}px, ${scroll * 0.18 + cy * 22}px)`;
+                        if (b2) b2.style.transform = `translate(${scroll * -0.04 - cx * 22}px, ${scroll * -0.18 - cy * 28}px)`;
+                        if (b3) b3.style.transform = `translate(${scroll * 0.02 + cx * 16}px, ${scroll * -0.10 + cy * 12}px)`;
+
+                        rafId = requestAnimationFrame(tick);
+                    });
+                }
+            }, { passive: true });
+
+            document.addEventListener('mouseleave', () => {
+                if (cursorGlow) cursorGlow.style.opacity = '0';
+            });
+        }
+
+        const menuToggle = document.getElementById('menu-toggle');
+        const menuClose = document.getElementById('menu-close');
+        const mobileMenu = document.getElementById('mobile-menu');
+
+        if (menuToggle && menuClose && mobileMenu) {
+            menuToggle.addEventListener('click', () => {
+                mobileMenu.classList.add('active');
+                document.body.style.overflow = 'hidden';
+            });
+
+            menuClose.addEventListener('click', () => {
+                mobileMenu.classList.remove('active');
+                document.body.style.overflow = '';
+            });
+
+            mobileMenu.querySelectorAll('a').forEach(link => {
+                link.addEventListener('click', () => {
+                    mobileMenu.classList.remove('active');
+                    document.body.style.overflow = '';
+                });
+            });
+        }
+
+        function scrollToSection(id) {
+            const el = document.querySelector(id);
+            if (!el) return;
+
+            const navbarHeight = 70;
+            const top = el.getBoundingClientRect().top + window.pageYOffset - navbarHeight;
+
+            window.scrollTo({
+                top: top,
+                behavior: 'smooth'
+            });
+
+            history.replaceState(null, '', window.location.pathname + window.location.search);
+        }
+
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                const targetId = this.getAttribute('href');
+
+                if (targetId === '#') return;
+
+                e.preventDefault();
+                scrollToSection(targetId);
+
+                const mobileMenu = document.getElementById('mobile-menu');
+                if (mobileMenu && mobileMenu.classList.contains('active')) {
+                    mobileMenu.classList.remove('active');
+                    document.body.style.overflow = '';
+                }
+            });
+        });
+
+        (function () {
+            const hash = window.location.hash;
+            if (hash && hash.length > 1) {
+                setTimeout(function () {
+                    scrollToSection(hash);
+                }, 120);
+            }
+        })();
+    </script>
+</body>
+
+</html>

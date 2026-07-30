@@ -1,0 +1,13 @@
+Current Model,Target Model,Migration Note
+User,Workspace Member,User joins one or more workspaces
+Project,Experience,Preserve existing public behavior
+ProjectPair,Trigger,Each pair becomes image/video trigger
+Image file,Reference Asset,Attach metadata and validation result
+Video file,Content Asset,Generate optimized variants
+.npz feature,Recognition Artifact,Version by algorithm and processing version
+Project QR,Permanent Experience Link and QR,Existing QR remains valid
+ScanLog,Experience Session,Session-level launch and device data
+ScanLog,Recognition Event,Recognition attempts and results
+Admin,Admin or Workspace Role,Separate platform admin from workspace role
+SubscriptionPlan,Plan and Entitlements,Move limits to config-driven keys
+PaymentOrder,Billing Event,Use idempotent payment records

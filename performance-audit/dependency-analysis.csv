@@ -1,0 +1,16 @@
+dependency,source,role,risk
+Flask,requirements.txt,web framework,monolith app
+Flask-SQLAlchemy,requirements.txt,ORM,lazy loading and startup create_all risk
+pymysql,requirements.txt,MySQL driver,DB latency depends on server/database placement
+opencv-python,requirements.txt,server image matching,CPU-heavy request path
+numpy,requirements.txt,array processing,CPU/RAM during scanner and feature extraction
+Pillow,requirements.txt,image processing,upload processing CPU/RAM
+ffmpeg-python,requirements.txt,video processing,requires ffmpeg binary and can be CPU-heavy
+razorpay,requirements.txt,payments,external API latency and secrets handling
+gunicorn,requirements.txt,production WSGI server,installed but no repo command found
+Tailwind CDN,templates/user/landing.html:216,runtime CSS,production performance risk
+AOS CDN,templates/user/landing.html:2361,scroll animation,main-thread work risk
+Vanilla Tilt CDN,templates/user/landing.html:218,pointer animation,main-thread work risk
+Font Awesome CDN,templates/user/landing.html:219,icons,extra render-blocking CSS
+OpenCV.js,templates/user/scanner.html:753,browser CV dependency,13.64 MB with wasm
+

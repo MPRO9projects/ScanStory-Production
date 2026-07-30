@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy | ScanStory AR</title>
+
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --primary: #ff007a;
+            --primary-dark: #cc0062;
+            --secondary: #7000ff;
+            --accent: #00d4ff;
+            --bg-dark: #0a0a0f;
+            --bg-card: rgba(20,20,30,0.7);
+            --text-primary: #ffffff;
+            --text-secondary: #b0b0c0;
+            --text-muted: #808090;
+            --border-color: rgba(255,255,255,0.08);
+            --gradient-1: linear-gradient(135deg, #ff007a, #7000ff);
+            --gradient-2: linear-gradient(135deg, rgba(255,0,122,0.1), rgba(112,0,255,0.1));
+            --shadow-sm: 0 4px 20px rgba(0,0,0,0.3);
+            --shadow-lg: 0 10px 40px rgba(255,0,122,0.15);
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.7;
+            overflow-x: hidden;
+            min-height: 100vh;
+        }
+
+        .bg-gradient {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -2;
+            background:
+                radial-gradient(circle at 20% 30%, rgba(112,0,255,0.15) 0%, transparent 30%),
+                radial-gradient(circle at 80% 70%, rgba(255,0,122,0.15) 0%, transparent 30%),
+                radial-gradient(circle at 40% 80%, rgba(0,212,255,0.1) 0%, transparent 40%);
+        }
+
+        .noise {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.02;
+            background-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzMDAiIGhlaWdodD0iMzAwIj48ZmlsdGVyIGlkPSJmIj48ZmVUdXJidWxlbmNlIHR5cGU9ImZyYWN0YWxOb2lzZSIgYmFzZUZyZXF1ZW5jeT0iLjc0IiBudW1PY3RhdmVzPSIzIiAvPjwvZmlsdGVyPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIGZpbHRlcj0idXJsKCNmKSIgb3BhY2l0eT0iMC40IiAvPjwvc3ZnPg==');
+        }
+
+        /* Navbar — matches terms/landing */
+        .navbar {
+            height: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 100;
+            padding: 0 1.5rem;
+            background: rgba(10,10,15,0.7);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .nav-logo { width: 140px; height: 100px; object-fit: contain; }
+
+        .back-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 24px;
+            border-radius: 50px;
+            background: var(--gradient-1);
+            color: white;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 4px 15px rgba(255,0,122,0.3);
+        }
+
+        .back-btn:hover {
+            transform: translateX(-5px);
+            box-shadow: 0 8px 25px rgba(255,0,122,0.5);
+            background: linear-gradient(135deg, var(--secondary), var(--primary));
+        }
+
+        .main-content {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 8rem 2rem 4rem;
+        }
+
+        /* Header */
+        .terms-header {
+            text-align: center;
+            margin-bottom: 4rem;
+        }
+
+        .terms-header h1 {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 4.5rem;
+            font-weight: 700;
+            line-height: 1.1;
+            margin-bottom: 1rem;
+            letter-spacing: -1px;
+            background: linear-gradient(135deg, #ffffff, #00d4ff, #7000ff, #ffffff);
+            background-size: 300% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: gradientFlow 8s ease infinite;
+        }
+
+        @keyframes gradientFlow {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .header-decoration {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+
+        .decoration-line {
+            width: 60px;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, var(--accent), var(--secondary), transparent);
+        }
+
+        .decoration-icon {
+            color: var(--accent);
+            font-size: 1.2rem;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 0.6; }
+            50% { opacity: 1; }
+        }
+
+        .last-updated {
+            display: inline-block;
+            padding: 0.5rem 1.5rem;
+            background: rgba(0,212,255,0.1);
+            border: 1px solid rgba(0,212,255,0.3);
+            border-radius: 50px;
+            color: var(--accent);
+            font-size: 0.9rem;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            backdrop-filter: blur(5px);
+        }
+
+        /* Cards */
+        .terms-container { position: relative; }
+
+        .terms-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border-color);
+            border-radius: 2rem;
+            padding: 3rem;
+            margin-bottom: 2rem;
+            transition: all 0.4s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .terms-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0;
+            width: 4px; height: 0;
+            background: linear-gradient(180deg, var(--accent), var(--secondary));
+            transition: height 0.4s ease;
+        }
+
+        .terms-card:hover {
+            border-color: rgba(0,212,255,0.3);
+            transform: translateY(-5px);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .terms-card:hover::before { height: 100%; }
+
+        .card-icon {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, rgba(0,212,255,0.1), rgba(112,0,255,0.1));
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1.5rem;
+            color: var(--accent);
+            font-size: 1.2rem;
+            border: 1px solid rgba(0,212,255,0.3);
+        }
+
+        .terms-card h2 {
+            font-family: 'Cormorant Garamond', serif;
+            font-size: 2.2rem;
+            font-weight: 700;
+            margin-bottom: 1.5rem;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #ffffff, var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .terms-card h3 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin: 1.8rem 0 0.8rem;
+            color: var(--accent);
+        }
+
+        .terms-card p {
+            color: var(--text-secondary);
+            margin-bottom: 1.2rem;
+            font-size: 1rem;
+            line-height: 1.8;
+        }
+
+        .terms-list {
+            list-style: none;
+            margin: 1.2rem 0;
+        }
+
+        .terms-list li {
+            color: var(--text-secondary);
+            margin-bottom: 0.8rem;
+            padding-left: 1.8rem;
+            position: relative;
+            line-height: 1.7;
+        }
+
+        .terms-list li::before {
+            content: '▹';
+            position: absolute;
+            left: 0;
+            color: var(--accent);
+            font-size: 1.1rem;
+        }
+
+        .highlight { color: var(--accent); font-weight: 600; }
+
+        .contact-info {
+            display: flex;
+            flex-direction: column;
+            gap: 0.8rem;
+            margin-top: 1.5rem;
+        }
+
+        .contact-item {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            color: var(--text-secondary);
+        }
+
+        .contact-item i { width: 24px; color: var(--accent); }
+
+        .quote-block {
+            background: rgba(255,255,255,0.02);
+            border-left: 3px solid var(--accent);
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+            border-radius: 0 1rem 1rem 0;
+            font-style: italic;
+            color: var(--text-secondary);
+        }
+
+        /* Footer link */
+        .footer-note {
+            text-align: center;
+            padding: 3rem 2rem;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .footer-note a {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .footer-note a:hover { text-decoration: underline; }
+
+        @media (max-width: 768px) {
+            .terms-header h1 { font-size: 2.8rem; }
+            .terms-card { padding: 1.8rem; border-radius: 1.5rem; }
+            .main-content { padding: 6rem 1rem 3rem; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="bg-gradient"></div>
+    <div class="noise"></div>
+
+    <nav class="navbar">
+        <div>
+            <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" class="nav-logo" alt="ScanStory">
+        </div>
+        <a href="/" class="back-btn">
+            <i class="fas fa-arrow-left"></i>
+            <span>Back to Home</span>
+        </a>
+    </nav>
+
+    <main class="main-content">
+
+        <!-- Header -->
+        <div class="terms-header" data-aos="fade-up" data-aos-duration="1000">
+            <h1>Privacy Policy</h1>
+            <div class="header-decoration">
+                <span class="decoration-line"></span>
+                <span class="decoration-icon"><i class="fas fa-shield-halved"></i></span>
+                <span class="decoration-line"></span>
+            </div>
+            <span class="last-updated">Last updated: April 2026</span>
+        </div>
+
+        <div class="terms-container">
+
+            <!-- 1. Introduction -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="100">
+                <div class="card-icon"><i class="fas fa-eye"></i></div>
+                <h2>Introduction</h2>
+                <p>ScanStory ("we", "our", or "us") operates the augmented reality platform at <span class="highlight">myscanstory.com</span>. This Privacy Policy explains what personal information we collect, how we use it, who we share it with, and the rights you have over your data.</p>
+                <p>By registering for or using ScanStory, you agree to the collection and use of information as described in this policy. If you do not agree, please do not use the platform.</p>
+            </div>
+
+            <!-- 2. Information We Collect -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="150">
+                <div class="card-icon"><i class="fas fa-database"></i></div>
+                <h2>Information We Collect</h2>
+
+                <h3>Account & Identity</h3>
+                <ul class="terms-list">
+                    <li>Full name, email address, and phone number provided during registration.</li>
+                    <li>Password stored as a cryptographic hash — we never store your plain-text password.</li>
+                    <li>Email verification status and the date your account was created.</li>
+                </ul>
+
+                <h3>Content You Upload</h3>
+                <ul class="terms-list">
+                    <li>Images and videos you upload to create Your Story.</li>
+                    <li>Computed AR feature data derived from your images (stored server-side for detection).</li>
+                    <li>QR codes generated for your Story.</li>
+                </ul>
+
+                <h3>Usage & Scan Data</h3>
+                <ul class="terms-list">
+                    <li>Timestamps and counts of successful AR scan events.</li>
+                    <li>Project creation, update, and deletion events.</li>
+                    <li>Scanner session durations (no video or camera footage is ever stored).</li>
+                </ul>
+
+                <h3>Payment Information</h3>
+                <ul class="terms-list">
+                    <li>Subscription plan, payment status, and transaction references.</li>
+                    <li>Payment processing is handled entirely by Razorpay. We do not store card numbers, CVV, or any raw financial data on our servers.</li>
+                </ul>
+
+                <h3>Technical Data</h3>
+                <ul class="terms-list">
+                    <li>IP address and browser/device type collected during login and scanner sessions.</li>
+                    <li>Session cookies used to keep you logged in — these expire when you log out or close the browser.</li>
+                </ul>
+            </div>
+
+            <!-- 3. How We Use Your Information -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="200">
+                <div class="card-icon"><i class="fas fa-gears"></i></div>
+                <h2>How We Use Your Information</h2>
+                <ul class="terms-list">
+                    <li>To create and manage your account and authenticate your identity.</li>
+                    <li>To process, store, and serve your uploaded images, videos, and AR feature data.</li>
+                    <li>To generate QR codes and deliver AR scanner experiences to your end-users.</li>
+                    <li>To manage your subscription, process payments, and send billing confirmation emails.</li>
+                    <li>To enforce your plan limits (project count, scan count).</li>
+                    <li>To send transactional emails: email verification, password reset, and payment receipts.</li>
+                    <li>To detect and prevent fraud, abuse, or violations of our Terms of Service.</li>
+                    <li>To improve platform performance, stability, and features using aggregated analytics.</li>
+                </ul>
+                <div class="quote-block">
+                    We do not sell, rent, or trade your personal information to third parties for marketing purposes — ever.
+                </div>
+            </div>
+
+            <!-- 4. Camera & Microphone -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="250">
+                <div class="card-icon"><i class="fas fa-camera"></i></div>
+                <h2>Camera & Device Access</h2>
+                <p>The ScanStory scanner requires access to your device camera to detect AR markers in real time. Important facts about this access:</p>
+                <ul class="terms-list">
+                    <li>Camera access is requested only when the scanner page is open — never in the background.</li>
+                    <li>No camera frames, images, or video are transmitted to our servers during a scan session.</li>
+                    <li>All AR detection processing happens entirely on your device using WebAssembly (OpenCV.js).</li>
+                    <li>The browser will always prompt you to grant or deny camera permission before any access occurs.</li>
+                    <li>You can revoke camera permission at any time through your browser settings.</li>
+                </ul>
+            </div>
+
+            <!-- 5. Cookies & Local Storage -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="300">
+                <div class="card-icon"><i class="fas fa-cookie-bite"></i></div>
+                <h2>Cookies & Local Storage</h2>
+                <ul class="terms-list">
+                    <li><span class="highlight">Session cookies</span>: Used to keep you logged in. Deleted when you log out or your session expires.</li>
+                    <li><span class="highlight">Service Worker cache</span>: We cache the AR engine files (opencv.js, ~14 MB) in your browser's local cache so the scanner loads faster on repeat visits. This data stays on your device and is never transmitted to us.</li>
+                    <li>We do not use advertising cookies, cross-site tracking cookies, or third-party analytics cookies.</li>
+                </ul>
+            </div>
+
+            <!-- 6. Data Sharing -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="350">
+                <div class="card-icon"><i class="fas fa-share-nodes"></i></div>
+                <h2>Data Sharing & Third Parties</h2>
+                <p>We share your information only where necessary to operate the platform:</p>
+                <ul class="terms-list">
+                    <li><span class="highlight">Razorpay</span>: Payment processor for subscription transactions. Subject to their own Privacy Policy. We only receive payment status and transaction IDs.</li>
+                    <li><span class="highlight">Email provider (SMTP)</span>: Used to send transactional emails (verification, reset, receipts). Only your email address and the message content are transmitted.</li>
+                    <li><span class="highlight">Hosting / cloud infrastructure</span>: Your data is stored on servers used to run the platform. These providers are contractually obligated to protect your data.</li>
+                    <li>We may disclose information if required by law, court order, or to protect the rights and safety of our users or the public.</li>
+                </ul>
+            </div>
+
+            <!-- 7. Data Retention -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="400">
+                <div class="card-icon"><i class="fas fa-clock-rotate-left"></i></div>
+                <h2>Data Retention</h2>
+                <ul class="terms-list">
+                    <li>Your account data is retained for as long as your account is active.</li>
+                    <li>When you delete a project, all associated images, videos, and AR feature files are permanently deleted from our servers.</li>
+                    <li>When you delete your account, all personal data, uploaded content, and scan logs are permanently erased within 30 days.</li>
+                    <li>Payment transaction records may be retained for up to 7 years as required by Indian financial regulations.</li>
+                    <li>Anonymised, aggregated scan statistics (no personal identifiers) may be retained indefinitely for platform analytics.</li>
+                </ul>
+            </div>
+
+            <!-- 8. Your Rights -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="450">
+                <div class="card-icon"><i class="fas fa-scale-balanced"></i></div>
+                <h2>Your Rights</h2>
+                <p>You have the following rights over your personal data:</p>
+                <ul class="terms-list">
+                    <li><span class="highlight">Access</span>: Request a copy of the personal data we hold about you.</li>
+                    <li><span class="highlight">Correction</span>: Update or correct inaccurate personal information via your profile settings.</li>
+                    <li><span class="highlight">Deletion</span>: Request permanent deletion of your account and all associated data.</li>
+                    <li><span class="highlight">Portability</span>: Request your uploaded content and account data in a portable format.</li>
+                    <li><span class="highlight">Objection</span>: Object to how we process your data where processing is based on legitimate interest.</li>
+                    <li><span class="highlight">Withdraw consent</span>: Revoke camera permission at any time via your browser settings without affecting your account.</li>
+                </ul>
+                <p>To exercise any of these rights, contact us at the address below. We will respond within 30 days.</p>
+            </div>
+
+            <!-- 9. Data Security -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="500">
+                <div class="card-icon"><i class="fas fa-lock"></i></div>
+                <h2>Data Security</h2>
+                <ul class="terms-list">
+                    <li>Passwords are hashed using industry-standard algorithms — plain-text passwords are never stored.</li>
+                    <li>All data transmitted between your browser and our servers is encrypted via HTTPS/TLS.</li>
+                    <li>Payment data is handled exclusively by Razorpay's PCI-DSS compliant infrastructure.</li>
+                    <li>Access to production data is restricted to authorised personnel only.</li>
+                    <li>We review our security practices regularly and update them as the threat landscape evolves.</li>
+                </ul>
+                <p>While we take all reasonable steps to protect your data, no system is 100% secure. In the event of a data breach that affects your personal information, we will notify you as required by applicable law.</p>
+            </div>
+
+            <!-- 10. Children's Privacy -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="550">
+                <div class="card-icon"><i class="fas fa-child"></i></div>
+                <h2>Children's Privacy</h2>
+                <p>ScanStory is not directed at children under the age of 13. We do not knowingly collect personal information from children under 13. If you believe a child under 13 has created an account, please contact us immediately and we will delete the account and all associated data.</p>
+            </div>
+
+            <!-- 11. Changes to this Policy -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="600">
+                <div class="card-icon"><i class="fas fa-file-pen"></i></div>
+                <h2>Changes to This Policy</h2>
+                <p>We may update this Privacy Policy from time to time. When we do, we will revise the "Last updated" date at the top of this page. For significant changes, we will notify registered users via email. Your continued use of the platform after changes are posted constitutes acceptance of the updated policy.</p>
+            </div>
+
+            <!-- 12. Contact -->
+            <div class="terms-card" data-aos="fade-up" data-aos-delay="650">
+                <div class="card-icon"><i class="fas fa-envelope"></i></div>
+                <h2>Contact Us</h2>
+                <p>For any privacy-related questions, requests to exercise your rights, or data deletion requests, please contact us:</p>
+                <div class="contact-info">
+                    <div class="contact-item">
+                        <i class="fas fa-globe"></i>
+                        <span>myscanstory.com</span>
+                    </div>
+                    <div class="contact-item">
+                        <i class="fas fa-envelope"></i>
+                        <span>contact@myscanstory.com</span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <div class="footer-note" data-aos="fade-up">
+            Also read our <a href="{{ url_for('terms_page') }}">Terms &amp; Conditions</a> &nbsp;·&nbsp;
+            <a href="/">Back to Home</a>
+        </div>
+
+    </main>
+
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script>
+        AOS.init({ duration: 800, easing: 'ease-out-cubic', once: true });
+    </script>
+</body>
+</html>

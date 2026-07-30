@@ -1,0 +1,15 @@
+file_type,location,created_when,must_persist,regeneratable,user_private_or_public
+bundled landing videos,static/videos,repo bundle,yes for site media,from originals if available,public
+OpenCV JS/WASM,static/js,repo bundle,yes,from OpenCV build,public
+landing/logo assets,static/assets,repo bundle,yes,from design assets,public
+user uploaded images,data/images,user upload/edit,yes,only from user originals if retained,public through image route
+user uploaded videos,data/videos,user upload/edit,yes,no unless user reuploads,public through video route
+user feature files,data/features,background feature extraction,yes for scanner operation,yes from uploaded images,internal
+user QR codes,data/qr_codes,project creation,yes but regeneratable,yes from scanner_url/project,public/downloadable
+admin uploaded images,data_admin/images,admin upload,yes,only from admin originals if retained,public through admin image route
+admin uploaded videos,data_admin/videos,admin upload,yes,no unless admin reuploads,public through admin video route
+admin feature files,data_admin/features,admin background processing,yes for scanner operation,yes from admin images,internal
+admin QR codes,data_admin/qr_codes,admin project creation,yes but regeneratable,yes from scanner_url/project,public/downloadable
+temporary work JPEGs,data/images or data_admin/images,feature extraction,no,yes,internal temporary
+Codex logs,.codex/logs,tooling,no,no,internal
+

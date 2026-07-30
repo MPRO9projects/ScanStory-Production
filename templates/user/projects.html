@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Story | ScanStory</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+
+        :root {
+            --primary: #ff007a;
+            --secondary: #7000ff;
+            --accent: #00d4ff;
+            --bg-dark: #050505;
+            --glass-bg: rgba(255,255,255,0.02);
+            --glass-border: rgba(255,255,255,0.07);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--bg-dark);
+            color: #fff;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Ambient blobs */
+        .blob {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(90px);
+            z-index: -1;
+            opacity: 0.14;
+            pointer-events: none;
+        }
+
+        /* Navbar */
+        .navbar {
+            height: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 2rem;
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 100;
+            background: rgba(5,5,5,0.7);
+            backdrop-filter: blur(30px);
+            -webkit-backdrop-filter: blur(30px);
+            border-bottom: 1px solid var(--glass-border);
+        }
+
+        .nav-logo {
+            height: 52px;
+            width: auto;
+            object-fit: contain;
+        }
+
+        .nav-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .nav-btn {
+            padding: 8px 20px;
+            border-radius: 50px;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+            border: none;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        .nav-btn-ghost {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            color: rgba(255,255,255,0.7);
+        }
+
+        .nav-btn-ghost:hover {
+            background: rgba(255,255,255,0.06);
+            border-color: rgba(255,255,255,0.15);
+            color: #fff;
+        }
+
+        .nav-btn-danger {
+            background: rgba(255,60,60,0.08);
+            border: 1px solid rgba(255,60,60,0.2);
+            color: #ff4444;
+        }
+
+        .nav-btn-danger:hover {
+            background: rgba(255,60,60,0.18);
+            border-color: rgba(255,60,60,0.4);
+        }
+
+        /* Page wrapper */
+        .page {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 100px 24px 60px;
+        }
+
+        /* Page header */
+        .page-header {
+            margin-bottom: 40px;
+        }
+
+        .page-header-top {
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 12px;
+        }
+
+        .page-title {
+            font-size: clamp(2rem, 5vw, 3rem);
+            font-weight: 800;
+            letter-spacing: -1px;
+            background: linear-gradient(to right, #fff, var(--accent), var(--primary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .project-count-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
+            background: rgba(255,0,122,0.1);
+            border: 1px solid rgba(255,0,122,0.25);
+            border-radius: 50px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--primary);
+        }
+
+        .page-subtitle {
+            font-size: 14px;
+            color: rgba(255,255,255,0.35);
+            font-weight: 400;
+            letter-spacing: 0.02em;
+        }
+
+        /* Alert banner */
+        .alert-banner {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 20px;
+            border-radius: 16px;
+            margin-bottom: 28px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .alert-warning {
+            background: rgba(255,180,0,0.08);
+            border: 1px solid rgba(255,180,0,0.2);
+            color: #ffc947;
+        }
+
+        .alert-banner a {
+            color: inherit;
+            font-weight: 700;
+            text-decoration: underline;
+            text-underline-offset: 3px;
+        }
+
+        /* Projects grid */
+        .projects-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        /* Project card */
+        .project-card {
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 24px;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.4s cubic-bezier(0.23,1,0.32,1), border-color 0.3s ease, box-shadow 0.4s ease;
+        }
+
+        .project-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary), var(--secondary), var(--accent));
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .project-card:hover {
+            transform: translateY(-6px);
+            border-color: rgba(255,0,122,0.25);
+            box-shadow: 0 24px 60px rgba(0,0,0,0.4), 0 0 30px rgba(255,0,122,0.06);
+        }
+
+        .project-card:hover::before {
+            opacity: 1;
+        }
+
+        /* Card number badge */
+        .card-number {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid var(--glass-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: rgba(255,255,255,0.3);
+        }
+
+        /* Card icon */
+        .card-icon-wrap {
+            width: 44px;
+            height: 44px;
+            border-radius: 14px;
+            background: linear-gradient(135deg, rgba(255,0,122,0.15), rgba(112,0,255,0.15));
+            border: 1px solid rgba(255,0,122,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 16px;
+            color: var(--primary);
+            font-size: 16px;
+            transition: transform 0.3s ease;
+        }
+
+        .project-card:hover .card-icon-wrap {
+            transform: scale(1.1) rotate(5deg);
+        }
+
+        .card-title {
+            font-size: 17px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            color: #fff;
+            letter-spacing: -0.3px;
+            padding-right: 40px;
+            line-height: 1.3;
+        }
+
+        .card-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .meta-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 12px;
+            border-radius: 50px;
+            font-size: 11px;
+            font-weight: 600;
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.07);
+            color: rgba(255,255,255,0.5);
+        }
+
+        .meta-pill i {
+            font-size: 9px;
+            opacity: 0.7;
+        }
+
+        /* Card actions */
+        .card-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .action-btn {
+            flex: 1;
+            min-width: 60px;
+            padding: 9px 14px;
+            border-radius: 12px;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-size: 12px;
+            font-weight: 700;
+            text-decoration: none;
+            text-align: center;
+            cursor: pointer;
+            border: 1px solid transparent;
+            transition: all 0.25s ease;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 5px;
+            white-space: nowrap;
+        }
+
+        .btn-view {
+            background: rgba(0,212,255,0.08);
+            border-color: rgba(0,212,255,0.2);
+            color: var(--accent);
+        }
+
+        .btn-view:hover {
+            background: rgba(0,212,255,0.16);
+            border-color: rgba(0,212,255,0.4);
+            transform: translateY(-2px);
+        }
+
+        .btn-qr {
+            background: rgba(112,0,255,0.08);
+            border-color: rgba(112,0,255,0.2);
+            color: #a855f7;
+        }
+
+        .btn-qr:hover {
+            background: rgba(112,0,255,0.16);
+            border-color: rgba(112,0,255,0.4);
+            transform: translateY(-2px);
+        }
+
+        .btn-delete {
+            background: rgba(255,60,60,0.06);
+            border-color: rgba(255,60,60,0.15);
+            color: #ff6666;
+        }
+
+        .btn-delete:hover {
+            background: rgba(255,60,60,0.15);
+            border-color: rgba(255,60,60,0.35);
+            transform: translateY(-2px);
+        }
+
+        .btn-edit {
+            background: rgba(255,190,0,0.08);
+            border-color: rgba(255,190,0,0.2);
+            color: #fbbf24;
+        }
+
+        .btn-edit:hover {
+            background: rgba(255,190,0,0.16);
+            border-color: rgba(255,190,0,0.4);
+            transform: translateY(-2px);
+        }
+
+        .btn-reprocess {
+            background: rgba(0,255,170,0.06);
+            border-color: rgba(0,255,170,0.15);
+            color: #34d399;
+        }
+
+        .btn-reprocess:hover {
+            background: rgba(0,255,170,0.14);
+            border-color: rgba(0,255,170,0.35);
+            transform: translateY(-2px);
+        }
+
+        /* Empty state */
+        .empty-state {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 80px 20px;
+        }
+
+        .empty-icon {
+            width: 80px;
+            height: 80px;
+            border-radius: 24px;
+            background: linear-gradient(135deg, rgba(255,0,122,0.1), rgba(112,0,255,0.1));
+            border: 1px solid rgba(255,0,122,0.2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 24px;
+            font-size: 28px;
+            color: var(--primary);
+        }
+
+        .empty-state h3 {
+            font-size: 22px;
+            font-weight: 700;
+            margin-bottom: 10px;
+            color: rgba(255,255,255,0.7);
+        }
+
+        .empty-state p {
+            font-size: 14px;
+            color: rgba(255,255,255,0.3);
+            max-width: 300px;
+            margin: 0 auto 28px;
+            line-height: 1.6;
+        }
+
+        .empty-cta {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 13px 28px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 14px;
+            color: #fff;
+            font-weight: 700;
+            font-size: 14px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 30px rgba(255,0,122,0.3);
+        }
+
+        .empty-cta:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 16px 40px rgba(255,0,122,0.4);
+        }
+
+        /* Scan pulse dot */
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(0.85); }
+        }
+
+        .live-dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #00ffaa;
+            display: inline-block;
+            animation: pulse-dot 1.8s ease infinite;
+        }
+
+        /* Mobile responsive */
+        @media (max-width: 640px) {
+            .page { padding: 88px 16px 48px; }
+            .navbar { padding: 0 1rem; }
+            .nav-btn span { display: none; }
+            .projects-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Ambient Blobs -->
+    <div class="blob w-96 h-96 bg-purple-600" style="width:380px;height:380px;background:#7000ff;top:-8%;left:-5%;"></div>
+    <div class="blob" style="width:420px;height:420px;background:#ff007a;bottom:-10%;right:-5%;"></div>
+
+    <!-- Navbar -->
+    <nav class="navbar">
+        <a href="{{ url_for('landing') }}">
+            <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" class="nav-logo" alt="ScanStory">
+        </a>
+        <div class="nav-actions">
+            <a href="{{ url_for('dashboard') }}" class="nav-btn nav-btn-ghost">
+                <i class="fas fa-gauge-high"></i>
+                <span>Dashboard</span>
+            </a>
+            <a href="{{ url_for('user_profile') }}" class="nav-btn nav-btn-ghost">
+                <i class="fas fa-user"></i>
+                <span>Profile</span>
+            </a>
+            <a href="{{ url_for('logout') }}" class="nav-btn nav-btn-danger">
+                <i class="fas fa-right-from-bracket"></i>
+                <span>Logout</span>
+            </a>
+        </div>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="page">
+
+        <!-- Flash messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        {% for category, message in messages %}
+        <div class="alert-banner alert-{{ 'warning' if category == 'error' else category }}" data-aos="fade-down" style="margin-bottom:20px;">
+            <i class="fas fa-{{ 'triangle-exclamation' if category == 'error' else 'circle-check' }}"></i>
+            {{ message }}
+        </div>
+        {% endfor %}
+        {% endif %}
+        {% endwith %}
+
+        <!-- Limit banner -->
+        {% if user.subscription_status == 'limit_reached' %}
+        <div class="alert-banner alert-warning" data-aos="fade-down">
+            <i class="fas fa-triangle-exclamation"></i>
+            <span>You've reached your plan limit.
+                <a href="{{ url_for('subscribe_page') }}">Upgrade to create more Story →</a>
+            </span>
+        </div>
+        {% endif %}
+
+        <!-- Header -->
+        <div class="page-header" data-aos="fade-up">
+            <div class="page-header-top">
+                <h1 class="page-title">My Stories</h1>
+                {% if projects %}
+                <span class="project-count-badge">
+                    <span class="live-dot"></span>
+                    {{ projects|length }} story{{ 's' if projects|length != 1 else '' }}
+                </span>
+                {% endif %}
+            </div>
+            <p class="page-subtitle">Each story is a live AR experience tied to a unique QR code.</p>
+        </div>
+
+        <!-- Grid -->
+        <div class="projects-grid">
+            {% if projects %}
+                {% for project in projects %}
+                <div class="project-card" data-aos="fade-up" data-aos-delay="{{ loop.index0 * 60 }}">
+                    <span class="card-number">{{ project.display_number }}</span>
+
+                    <div class="card-icon-wrap">
+                        <i class="fas fa-cube"></i>
+                    </div>
+
+                    <div class="card-title">{{ project.name }}</div>
+
+                    <div class="card-meta">
+                        <span class="meta-pill">
+                            <i class="fas fa-calendar"></i>
+                            {{ project.created_at.strftime('%d %b %Y') }}
+                        </span>
+                        <span class="meta-pill">
+                            <i class="fas fa-layer-group"></i>
+                            {{ project.pairs_count }} pair{{ 's' if project.pairs_count != 1 else '' }}
+                        </span>
+                        {% if project.scan_count is defined %}
+                        <span class="meta-pill">
+                            <i class="fas fa-eye"></i>
+                            {{ project.scan_count }} scan{{ 's' if project.scan_count != 1 else '' }}
+                        </span>
+                        {% endif %}
+                    </div>
+
+                    <div class="card-actions">
+                        <a href="{{ url_for('project_view', project_id=project.id) }}" class="action-btn btn-view">
+                            <i class="fas fa-eye"></i> View
+                        </a>
+                        <a href="{{ url_for('download_project_qr', project_id=project.id) }}" class="action-btn btn-qr">
+                            <i class="fas fa-qrcode"></i> QR
+                        </a>
+                        <a href="{{ url_for('user_edit_project_page', project_id=project.id) }}" class="action-btn btn-edit">
+                            <i class="fas fa-pen"></i> Edit
+                        </a>
+                        <form method="POST" action="{{ url_for('user_reprocess_project', project_id=project.id) }}"
+                            onsubmit="return confirm('Fix this ScanStory? Your QR code will not change.');"
+                            style="flex:1; min-width:60px;">
+                            <button type="submit" class="action-btn btn-reprocess" style="width:100%;">
+                                <i class="fas fa-rotate"></i> Fix
+                            </button>
+                        </form>
+                        <form method="POST" action="{{ url_for('user_delete_project', project_id=project.id) }}"
+                            onsubmit="return confirm('Delete \'{{ project.name }}\'? This cannot be undone.');"
+                            style="flex:1; min-width:60px;">
+                            <button type="submit" class="action-btn btn-delete" style="width:100%;">
+                                <i class="fas fa-trash"></i> Delete
+                            </button>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty-state" data-aos="fade-up">
+                    <div class="empty-icon">
+                        <i class="fas fa-cube"></i>
+                    </div>
+                    <h3>No Stories yet</h3>
+                    <p>Create your first AR Story and start turning print into interactive experiences.</p>
+                    <a href="{{ url_for('dashboard') }}" class="empty-cta">
+                        <i class="fas fa-plus"></i>
+                        Create First Story
+                    </a>
+                </div>
+            {% endif %}
+        </div>
+
+    </main>
+
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script>
+        AOS.init({ duration: 600, easing: 'ease-out-cubic', once: true });
+    </script>
+</body>
+</html>

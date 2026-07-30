@@ -1,0 +1,13 @@
+Permission,Owner,Workspace Admin,Creator,Reviewer,Publisher,Analyst,Billing Admin,Viewer
+Manage workspace,Yes,Yes,No,No,No,No,No,No
+Manage members,Yes,Yes,No,No,No,No,No,No
+Manage billing,Yes,No,No,No,No,No,Yes,No
+Create draft Experience,Yes,Yes,Yes,No,No,No,No,No
+Upload assets,Yes,Yes,Yes,No,No,No,No,No
+Review quality,Yes,Yes,Yes,Yes,Yes,No,No,No
+Approve Experience,Yes,Yes,No,Yes,Yes,No,No,No
+Publish Experience,Yes,Yes,No,No,Yes,No,No,No
+Pause Experience,Yes,Yes,No,No,Yes,No,No,No
+View analytics,Yes,Yes,No,No,No,Yes,No,No
+View public Experience,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes
+Access admin diagnostics,Yes,Yes,No,No,No,No,No,No

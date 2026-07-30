@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Contact ScanStory | AR Platform Support &amp; Sales — Get in Touch</title>
+    <meta name="description" content="Reach the ScanStory team for support, sales enquiries, or partnerships. Call +91 73385 44142 or email us — response within 24 hours.">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://myscanstory.com/contact">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://myscanstory.com/contact">
+    <meta property="og:title" content="Contact ScanStory | AR Platform Support &amp; Sales">
+    <meta property="og:description" content="Reach the ScanStory team for support, sales enquiries, or partnerships. Call +91 73385 44142 or email us — response within 24 hours.">
+    <meta property="og:image" content="https://myscanstory.com/static/uploads/og/scanstory-og.jpg">
+
+    <!-- Schema JSON-LD -->
+    <script type="application/ld+json">
+    [
+      {
+        "@context": "https://schema.org",
+        "@type": "ContactPage",
+        "name": "Contact ScanStory",
+        "url": "https://myscanstory.com/contact",
+        "description": "Contact the ScanStory team for AR platform support, sales enquiries, demo requests, and partnerships."
+      },
+      {
+        "@context": "https://schema.org",
+        "@type": "LocalBusiness",
+        "name": "ScanStory — AR Experience Platform",
+        "url": "https://myscanstory.com/",
+        "telephone": "+917338544142",
+        "email": "contact@myscanstory.com",
+        "address": {
+          "@type": "PostalAddress",
+          "streetAddress": "#957/1A, New No. CH 29/1A, 3rd Main, Sheshadri Iyer Road, Lakshmipuram",
+          "addressLocality": "Mysuru",
+          "addressRegion": "Karnataka",
+          "postalCode": "570004",
+          "addressCountry": "IN"
+        },
+        "openingHoursSpecification": [
+          {
+            "@type": "OpeningHoursSpecification",
+            "dayOfWeek": ["Monday","Tuesday","Wednesday","Thursday","Friday"],
+            "opens": "09:00",
+            "closes": "18:00"
+          }
+        ],
+        "sameAs": [
+          "https://www.linkedin.com/company/m-pro9-pvt-ltd/",
+          "https://www.instagram.com/mpro9official/"
+        ]
+      }
+    ]
+    </script>
+
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800;900&display=swap');
+
+        :root {
+            --primary: #ff007a;
+            --secondary: #7000ff;
+            --accent: #00d4ff;
+            --bg-dark: #050505;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--bg-dark);
+            color: #fff;
+            overflow-x: hidden;
+            min-height: 100vh;
+        }
+
+        .blob {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(120px);
+            z-index: -1;
+            opacity: 0.18;
+            animation: blobMove 20s infinite alternate ease-in-out;
+            pointer-events: none;
+        }
+
+        @keyframes blobMove {
+            0%   { transform: translate(0, 0) scale(1); }
+            100% { transform: translate(100px, 80px) scale(1.25); }
+        }
+
+        .blob-1 { width: 600px; height: 600px; background: var(--secondary); top: -10%; left: -5%; }
+        .blob-2 { width: 500px; height: 500px; background: var(--primary); bottom: -10%; right: -5%; }
+
+        .glass {
+            background: rgba(255,255,255,0.03);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.08);
+            transition: all 0.4s ease;
+        }
+
+        .nav-logo { width: 120px; height: 80px; object-fit: contain; transition: transform 0.3s ease; }
+        .nav-logo:hover { transform: scale(1.05); }
+
+        .back-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 22px;
+            border-radius: 50px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: white;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(255,0,122,0.3);
+        }
+        .back-btn:hover { transform: translateX(-4px); box-shadow: 0 8px 25px rgba(255,0,122,0.5); }
+
+        /* Intent chips */
+        .intent-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 18px;
+            border-radius: 50px;
+            border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.04);
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            color: rgba(255,255,255,0.7);
+            white-space: nowrap;
+        }
+        .intent-chip:hover, .intent-chip.active {
+            background: rgba(255,0,122,0.15);
+            border-color: rgba(255,0,122,0.5);
+            color: #ff007a;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(255,0,122,0.2);
+        }
+
+        /* Info cards */
+        .info-card {
+            background: rgba(255,255,255,0.03);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 20px;
+            padding: 22px;
+            transition: all 0.4s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .info-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 2px;
+            background: linear-gradient(90deg, var(--primary), var(--accent), var(--secondary));
+            opacity: 0;
+            transition: opacity 0.4s ease;
+        }
+        .info-card:hover { transform: translateY(-6px); border-color: var(--primary); box-shadow: 0 20px 40px rgba(255,0,122,0.15); }
+        .info-card:hover::before { opacity: 1; }
+
+        .info-icon {
+            width: 50px; height: 50px;
+            background: linear-gradient(135deg, rgba(255,0,122,0.15), rgba(0,212,255,0.15));
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 16px;
+            color: var(--primary);
+            font-size: 22px;
+            border: 1px solid rgba(255,255,255,0.1);
+            transition: all 0.3s ease;
+        }
+        .info-card:hover .info-icon { transform: scale(1.1) rotate(5deg); background: linear-gradient(135deg, var(--primary), var(--secondary)); color: white; }
+
+        .contact-link {
+            color: var(--primary);
+            font-weight: 700;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            display: inline-block;
+        }
+        .contact-link:hover { color: var(--accent); transform: translateX(4px); }
+
+        /* Form */
+        .form-group { margin-bottom: 20px; }
+
+        .form-label {
+            display: flex;
+            align-items: center;
+            font-size: 13px;
+            font-weight: 800;
+            letter-spacing: 0.1em;
+            margin-bottom: 9px;
+            color: #fff;
+        }
+        .form-label i { color: var(--primary); font-size: 16px; margin-right: 9px; }
+
+        .form-input {
+            width: 100%;
+            background: rgba(25,25,35,0.95);
+            border: 2px solid rgba(255,255,255,0.2);
+            border-radius: 14px;
+            padding: 14px 18px;
+            color: #fff;
+            font-size: 15px;
+            font-weight: 500;
+            outline: none;
+            transition: all 0.3s ease;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+        }
+        .form-input:focus { border-color: var(--primary); background: rgba(35,35,45,1); box-shadow: 0 0 0 4px rgba(255,0,122,0.2); }
+        .form-input::placeholder { color: rgba(255,255,255,0.3); font-style: italic; }
+        .form-input:not(:placeholder-shown) { border-color: rgba(255,0,122,0.4); }
+        textarea.form-input { min-height: 130px; resize: vertical; line-height: 1.6; }
+        select.form-input { cursor: pointer; }
+        select.form-input option { background: #111; }
+
+        /* Submit button */
+        .submit-btn {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border: none;
+            border-radius: 14px;
+            padding: 16px 28px;
+            font-weight: 800;
+            letter-spacing: 0.12em;
+            color: white;
+            cursor: pointer;
+            width: 100%;
+            font-size: 15px;
+            transition: all 0.4s ease;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 10px 25px rgba(255,0,122,0.3);
+            text-transform: uppercase;
+        }
+        .submit-btn::before {
+            content: '';
+            position: absolute;
+            top: 0; left: -100%;
+            width: 100%; height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.18), transparent);
+            transition: left 0.6s ease;
+        }
+        .submit-btn:hover { transform: translateY(-3px); box-shadow: 0 18px 35px rgba(255,0,122,0.45); }
+        .submit-btn:hover::before { left: 100%; }
+        .submit-btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none; box-shadow: none; }
+
+        /* Quick action buttons */
+        .quick-btn {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 18px;
+            border-radius: 16px;
+            font-weight: 700;
+            font-size: 13px;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .quick-btn-wa {
+            background: rgba(37,211,102,0.1);
+            border-color: rgba(37,211,102,0.3);
+            color: #25d366;
+        }
+        .quick-btn-wa:hover { background: rgba(37,211,102,0.2); transform: translateY(-3px); box-shadow: 0 10px 25px rgba(37,211,102,0.2); }
+        .quick-btn-demo {
+            background: rgba(255,0,122,0.08);
+            border-color: rgba(255,0,122,0.3);
+            color: #ff007a;
+        }
+        .quick-btn-demo:hover { background: rgba(255,0,122,0.18); transform: translateY(-3px); box-shadow: 0 10px 25px rgba(255,0,122,0.2); }
+
+        /* FAQ accordion */
+        .faq-item { border-radius: 16px; border: 1px solid rgba(255,255,255,0.07); background: rgba(255,255,255,0.02); overflow: hidden; }
+        .faq-q {
+            width: 100%;
+            text-align: left;
+            padding: 18px 22px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            font-weight: 700;
+            font-size: 14px;
+            color: white;
+            background: none;
+            border: none;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        .faq-q:hover { color: #ff007a; }
+        .faq-ans { padding: 0 22px 18px; color: rgba(255,255,255,0.6); font-size: 13px; line-height: 1.7; }
+
+        /* Toast */
+        .toast-message {
+            position: fixed;
+            top: 20px; right: 20px;
+            padding: 14px 22px;
+            border-radius: 14px;
+            color: white;
+            font-weight: 600;
+            z-index: 9999;
+            max-width: 340px;
+            animation: slideIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+            border-left: 4px solid;
+            font-size: 14px;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(120%) scale(0.85); opacity: 0; }
+            to   { transform: translateX(0) scale(1); opacity: 1; }
+        }
+        .toast-success { background: linear-gradient(135deg,#10b981,#059669); border-left-color: #34d399; }
+        .toast-error   { background: linear-gradient(135deg,#ef4444,#dc2626); border-left-color: #f87171; }
+
+        /* Map */
+        .map-container { border-radius: 20px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); }
+
+        /* Hours badge */
+        .hours-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,0.05); font-size: 12px; }
+        .hours-row:last-child { border-bottom: none; }
+
+        @media (max-width: 768px) {
+            .nav-logo { width: 100px; height: 60px; }
+            .back-btn { padding: 8px 14px; font-size: 11px; }
+            .toast-message { left: 16px; right: 16px; max-width: none; }
+        }
+    </style>
+
+
+    <!-- Google reCAPTCHA v3 -->
+    {% if RECAPTCHA_SITE_KEY %}
+    <script src="https://www.google.com/recaptcha/api.js?render={{ RECAPTCHA_SITE_KEY }}"></script>
+    {% endif %}
+</head>
+
+<body>
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+    <div id="toastContainer"></div>
+
+    <!-- Navbar -->
+    <nav class="fixed top-0 w-full glass px-4 md:px-8 py-4 z-50">
+        <div class="max-w-7xl mx-auto flex items-center justify-between">
+            <a href="/" class="transition-transform hover:scale-105">
+                <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" class="nav-logo" alt="ScanStory Logo">
+            </a>
+            <a href="/" class="back-btn"><i class="fas fa-arrow-left"></i> Back to Home</a>
+        </div>
+    </nav>
+
+    <main class="pt-28 pb-16 px-4 md:px-6 max-w-7xl mx-auto">
+
+        <!-- Hero Header -->
+        <div class="text-center mb-10 md:mb-14" data-aos="fade-up">
+            <span class="inline-block text-[10px] font-black uppercase tracking-[0.35em] text-pink-500 mb-3">Get in Touch</span>
+            <h1 class="text-4xl md:text-5xl lg:text-6xl font-black uppercase mb-4 leading-tight">
+                Talk to the <span class="text-pink-500">ScanStory</span> Team
+            </h1>
+            <p class="text-slate-400 text-sm md:text-base max-w-2xl mx-auto mb-8">
+                Whether you need support, want a product demo, or are exploring a custom plan — we respond within <strong class="text-white">24 hours</strong>.
+            </p>
+
+            <!-- Intent chips -->
+            <div class="flex flex-wrap gap-3 justify-center" id="intentChips">
+                <button class="intent-chip active" data-value="support" onclick="setIntent(this,'support')">
+                    <i class="fas fa-life-ring"></i> Need Support
+                </button>
+                <button class="intent-chip" data-value="demo" onclick="setIntent(this,'demo')">
+                    <i class="fas fa-play-circle"></i> Request a Demo
+                </button>
+                <button class="intent-chip" data-value="custom_plan" onclick="setIntent(this,'custom_plan')">
+                    <i class="fas fa-layer-group"></i> Custom Plan
+                </button>
+                <button class="intent-chip" data-value="partnership" onclick="setIntent(this,'partnership')">
+                    <i class="fas fa-handshake"></i> Partnership / Bulk
+                </button>
+            </div>
+        </div>
+
+        <!-- Main grid: info + form -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8 mb-10">
+
+            <!-- LEFT: Contact info -->
+            <div class="lg:col-span-1 space-y-4" data-aos="fade-right">
+
+                <!-- Phone -->
+                <div class="info-card">
+                    <div class="info-icon"><i class="fas fa-phone-alt"></i></div>
+                    <h3 class="text-sm font-black uppercase tracking-wider mb-1">Call Us</h3>
+                    <p class="text-slate-500 text-xs mb-3">Mon–Fri, 9 AM – 6 PM IST</p>
+                    <a href="tel:+917338544142" class="contact-link text-lg">+91 73385 44142</a>
+                </div>
+
+                <!-- Email -->
+                <div class="info-card">
+                    <div class="info-icon"><i class="fas fa-envelope"></i></div>
+                    <h3 class="text-sm font-black uppercase tracking-wider mb-1">Email Us</h3>
+                    <p class="text-slate-500 text-xs mb-3">Response within 24 hours</p>
+                    <a href="mailto:contact@myscanstory.com" class="contact-link text-sm break-all">contact@myscanstory.com</a>
+                </div>
+
+                <!-- Office -->
+                <div class="info-card">
+                    <div class="info-icon"><i class="fas fa-map-marker-alt"></i></div>
+                    <h3 class="text-sm font-black uppercase tracking-wider mb-1">Mysuru Office</h3>
+                    <p class="text-slate-400 text-xs leading-relaxed">
+                        Namma Mysore Foundation<br>
+                        #957/1A, New No. CH 29/1A<br>
+                        3rd Main, Sheshadri Iyer Road<br>
+                        Lakshmipuram<br>
+                        Mysuru – 570004, India
+                    </p>
+                </div>
+
+                <!-- Business Hours -->
+                <!-- <div class="info-card">
+                    <div class="info-icon"><i class="fas fa-clock"></i></div>
+                    <h3 class="text-sm font-black uppercase tracking-wider mb-3">Business Hours</h3>
+                    <div class="space-y-1">
+                        <div class="hours-row"><span class="text-slate-400">Monday – Friday</span><span class="text-white font-bold">9 AM – 6 PM IST</span></div>
+                        <div class="hours-row"><span class="text-slate-400">Saturday</span><span class="text-slate-500">10 AM – 2 PM IST</span></div>
+                        <div class="hours-row"><span class="text-slate-400">Sunday</span><span class="text-pink-500 font-bold">Closed</span></div>
+                    </div>
+                </div> -->
+
+                <!-- Quick actions -->
+                <div class="space-y-3">
+                    <a href="https://api.whatsapp.com/send?phone=917338544142&text=Hi%20ScanStory%20team%2C%20I%20have%20an%20enquiry." target="_blank" rel="noopener" class="quick-btn quick-btn-wa w-full">
+                        <div class="w-8 h-8 rounded-full bg-green-500/20 flex items-center justify-center flex-shrink-0">
+                            <i class="fab fa-whatsapp text-lg"></i>
+                        </div>
+                        <div>
+                            <div class="font-black text-sm">Chat on WhatsApp</div>
+                            <div class="text-xs text-green-400/70 font-normal normal-case">Fastest response</div>
+                        </div>
+                    </a>
+                    <a href="/register/" class="quick-btn quick-btn-demo w-full">
+                        <div class="w-8 h-8 rounded-full bg-pink-500/20 flex items-center justify-center flex-shrink-0">
+                            <i class="fas fa-play text-sm"></i>
+                        </div>
+                        <div>
+                            <div class="font-black text-sm">Request a Demo</div>
+                            <div class="text-xs text-pink-400/70 font-normal normal-case">Start free trial now</div>
+                        </div>
+                    </a>
+                </div>
+
+                <!-- Social links -->
+                <div class="info-card">
+                    <h3 class="text-xs font-black uppercase tracking-wider mb-4 text-slate-400">Follow ScanStory</h3>
+                    <div class="flex gap-3">
+                        <a href="https://www.linkedin.com/company/m-pro9-pvt-ltd/" target="_blank" rel="noopener"
+                           class="flex items-center gap-2 px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-xs font-bold text-slate-300 hover:text-blue-400 hover:border-blue-400/40 transition-all">
+                            <i class="fab fa-linkedin-in"></i> LinkedIn
+                        </a>
+                        <a href="https://www.instagram.com/mpro9official/" target="_blank" rel="noopener"
+                           class="flex items-center gap-2 px-4 py-2 rounded-xl border border-white/10 bg-white/5 text-xs font-bold text-slate-300 hover:text-pink-400 hover:border-pink-400/40 transition-all">
+                            <i class="fab fa-instagram"></i> Instagram
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- RIGHT: Contact form -->
+            <div class="lg:col-span-2" data-aos="fade-left">
+                <div class="glass p-6 md:p-8 lg:p-10 rounded-3xl h-full">
+
+                    <!-- Support category heading -->
+                    <div class="mb-6">
+                        <h2 class="text-lg font-black uppercase tracking-wide mb-1" id="formHeading">Need Support?</h2>
+                        <p class="text-slate-500 text-xs" id="formSubheading">Fill in the form and we will get back to you within 24 hours.</p>
+                    </div>
+
+                    <form id="contactForm">
+                        <!-- Hidden enquiry type -->
+                        <input type="hidden" id="enquiryType" name="enquiry_type" value="support">
+                        <!-- Google reCAPTCHA v3 Token -->
+                        <input type="hidden" name="g-recaptcha-response" id="contactRecaptchaToken">
+
+
+                        <!-- Enquiry type select (visible) -->
+                        <div class="form-group">
+                            <label class="form-label"><i class="fas fa-tag"></i> Enquiry Type</label>
+                            <select id="enquirySelect" name="enquiry_type_display" class="form-input" onchange="syncEnquiryType(this.value)">
+                                <option value="support"> Technical Support</option>
+                                <option value="demo">Request a Demo</option>
+                                <option value="custom_plan"> Custom Plan / Enterprise</option>
+                                <option value="partnership"> Partnership / Bulk Enquiry</option>
+                                <option value="sales"> Sales Enquiry</option>
+                                <option value="other"> General Enquiry</option>
+                            </select>
+                        </div>
+
+                        <!-- Name + Phone row -->
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                            <div class="form-group mb-0">
+                                <label class="form-label"><i class="fas fa-user"></i> Your Name</label>
+                                <input type="text" id="name" name="name" class="form-input" placeholder="Full Name" required>
+                            </div>
+                            <div class="form-group mb-0">
+                                <label class="form-label"><i class="fas fa-phone"></i> Phone Number</label>
+                                <input type="tel" id="phone" name="phone" class="form-input" placeholder="10 digit mobile number" pattern="[0-9]{10}" maxlength="10" required>
+                            </div>
+                        </div>
+                        <div class="mt-4"></div>
+
+                        <!-- Email -->
+                        <div class="form-group">
+                            <label class="form-label"><i class="fas fa-envelope"></i> Email Address</label>
+                            <input type="email" id="email" name="email" class="form-input" placeholder="name@example.com" required>
+                        </div>
+
+                        <!-- Project / Company -->
+                        <div class="form-group">
+                            <label class="form-label"><i class="fas fa-building"></i> Company / Project Name</label>
+                            <input type="text" id="project" name="project" class="form-input" placeholder="Your company or project name (optional)">
+                        </div>
+
+                        <!-- Message -->
+                        <div class="form-group">
+                            <label class="form-label"><i class="fas fa-comment-dots"></i> Your Message</label>
+                            <textarea id="message" name="message" rows="5" class="form-input"
+                                placeholder="Describe your requirement, issue, or question in detail..." required></textarea>
+                        </div>
+
+                        <!-- Submit -->
+                        <button type="submit" class="submit-btn" id="submitBtn">
+                            <i class="fas fa-paper-plane mr-2"></i> Send Message
+                        </button>
+
+                        <p class="text-center text-slate-600 text-xs mt-4 flex items-center justify-center gap-2">
+                            <i class="fas fa-shield-alt text-pink-500"></i>
+                            Your information is secure and will only be used to respond to your enquiry
+                        </p>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Map Section -->
+        <div class="mb-10" data-aos="fade-up">
+            <div class="mb-4 flex items-center gap-3">
+                <div class="w-1 h-6 bg-gradient-to-b from-pink-500 to-purple-500 rounded-full"></div>
+                <h2 class="text-sm font-black uppercase tracking-[0.3em] text-slate-300">Our Location — Mysuru, India</h2>
+            </div>
+            <div class="map-container" style="height:320px;">
+                <iframe
+                    src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3898.529!2d76.6394!3d12.3052!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3baf70219d925f5b%3A0x3e5b0e789cf6e3b2!2sLakshmipuram%2C%20Mysuru%2C%20Karnataka%20570004!5e0!3m2!1sen!2sin!4v1717600000001!5m2!1sen!2sin"
+                    width="100%" height="320" style="border:0;" allowfullscreen="" loading="lazy"
+                    referrerpolicy="no-referrer-when-downgrade" title="ScanStory Mysuru office location">
+                </iframe>
+            </div>
+        </div>
+
+        <!-- Sales / Demo CTA Banner -->
+        <div class="mb-10 rounded-3xl overflow-hidden relative" data-aos="fade-up">
+            <div class="absolute inset-0 bg-gradient-to-br from-pink-600/20 via-purple-600/10 to-cyan-600/15 blur-2xl"></div>
+            <div class="absolute inset-0 bg-black/60 backdrop-blur-sm rounded-3xl border border-white/8"></div>
+            <div class="relative z-10 p-8 md:p-10 flex flex-col md:flex-row items-center justify-between gap-6">
+                <div>
+                    <h2 class="text-xl md:text-2xl font-black uppercase mb-2">Want to See ScanStory in Action?</h2>
+                    <p class="text-slate-400 text-sm max-w-lg">Book a live demo with our team. We will walk you through creating your first AR experience — from image upload to video overlay in minutes.</p>
+                </div>
+                <div class="flex flex-wrap gap-3 flex-shrink-0">
+                    <a href="/register/" class="inline-flex items-center gap-2 px-7 py-3 rounded-2xl bg-pink-600 font-black text-xs uppercase tracking-widest text-white hover:bg-pink-500 transition-all shadow-lg shadow-pink-500/30 hover:shadow-pink-500/50 hover:-translate-y-1">
+                        <i class="fas fa-play"></i> Start Free Trial
+                    </a>
+                    <a href="https://api.whatsapp.com/send?phone=917338544142&text=Hi%2C%20I%20would%20like%20to%20book%20a%20demo%20of%20ScanStory." target="_blank" rel="noopener"
+                       class="inline-flex items-center gap-2 px-7 py-3 rounded-2xl border border-white/15 bg-white/5 font-black text-xs uppercase tracking-widest text-white hover:border-green-400/50 hover:text-green-400 transition-all hover:-translate-y-1">
+                        <i class="fab fa-whatsapp"></i> Book via WhatsApp
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Contact FAQ -->
+        <div class="max-w-3xl mx-auto mb-10" data-aos="fade-up">
+            <div class="text-center mb-8">
+                <h2 class="text-2xl md:text-3xl font-black uppercase mb-2">Quick Answers</h2>
+                <p class="text-slate-500 text-sm">Common questions before reaching out.</p>
+            </div>
+            <div class="space-y-3" id="contactFaqList">
+                <div class="faq-item">
+                    <button class="faq-q" aria-expanded="false">
+                        <span>What is the fastest way to reach ScanStory?</span>
+                        <i class="fas fa-plus text-pink-500 faq-icon transition-transform duration-200"></i>
+                    </button>
+                    <div class="faq-ans hidden">WhatsApp at +91 73385 44142 is the fastest channel. For detailed support or billing queries, use the contact form or email us at contact@myscanstory.com.</div>
+                </div>
+                <div class="faq-item">
+                    <button class="faq-q" aria-expanded="false">
+                        <span>How long does it take to get a reply?</span>
+                        <i class="fas fa-plus text-pink-500 faq-icon transition-transform duration-200"></i>
+                    </button>
+                    <div class="faq-ans hidden">We respond to all messages within 24 hours on business days (Mon–Fri, 9 AM – 6 PM IST). WhatsApp messages are typically answered within a few hours.</div>
+                </div>
+                <div class="faq-item">
+                    <button class="faq-q" aria-expanded="false">
+                        <span>Can I request a live demo of ScanStory?</span>
+                        <i class="fas fa-plus text-pink-500 faq-icon transition-transform duration-200"></i>
+                    </button>
+                    <div class="faq-ans hidden">Yes. Select "Request a Demo" in the enquiry type, fill in the form, and our team will schedule a walkthrough. You can also WhatsApp us to book directly.</div>
+                </div>
+                <div class="faq-item">
+                    <button class="faq-q" aria-expanded="false">
+                        <span>Do you offer custom or enterprise plans?</span>
+                        <i class="fas fa-plus text-pink-500 faq-icon transition-transform duration-200"></i>
+                    </button>
+                    <div class="faq-ans hidden">Yes. We offer custom plans for agencies, bulk print businesses, educational institutions, and enterprises. Select "Custom Plan / Enterprise" in the form and describe your requirements.</div>
+                </div>
+                <div class="faq-item">
+                    <button class="faq-q" aria-expanded="false">
+                        <span>I am a reseller or print shop — who should I contact?</span>
+                        <i class="fas fa-plus text-pink-500 faq-icon transition-transform duration-200"></i>
+                    </button>
+                    <div class="faq-ans hidden">Choose "Partnership / Bulk Enquiry" in the form or reach out via WhatsApp. We have partnership programmes for print shops, marketing agencies, and resellers looking to offer AR as a value-added service.</div>
+                </div>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script>
+        AOS.init({ duration: 900, once: true });
+
+        // Toast
+        function showToast(message, type) {
+            var container = document.getElementById('toastContainer');
+            var toast = document.createElement('div');
+            toast.className = 'toast-message toast-' + (type || 'success');
+            toast.innerHTML = '<div style="display:flex;align-items:center;gap:10px;"><i class="fas fa-' + (type === 'success' ? 'check-circle' : 'exclamation-circle') + '" style="font-size:18px;"></i><div><div style="font-weight:800;margin-bottom:3px;">' + (type === 'success' ? 'Sent!' : 'Error') + '</div><div style="font-size:13px;">' + message + '</div></div></div>';
+            container.appendChild(toast);
+            setTimeout(function () {
+                toast.style.opacity = '0';
+                toast.style.transition = 'opacity 0.3s';
+                setTimeout(function () { toast.remove(); }, 300);
+            }, 4500);
+        }
+
+        // Intent chip → update form heading and select
+        var intentLabels = {
+            support:     { heading: 'Need Support?',            sub: 'Describe your issue and we will help resolve it within 24 hours.' },
+            demo:        { heading: 'Request a Demo',           sub: 'Tell us about your use case and we will schedule a walkthrough.' },
+            custom_plan: { heading: 'Custom Plan Enquiry',      sub: 'Tell us your requirements and we will build the right plan for you.' },
+            partnership: { heading: 'Partnership / Bulk Enquiry', sub: 'Reach out to explore reseller, agency, or enterprise partnerships.' }
+        };
+
+        function setIntent(el, value) {
+            document.querySelectorAll('.intent-chip').forEach(function (c) { c.classList.remove('active'); });
+            el.classList.add('active');
+            document.getElementById('enquiryType').value = value;
+            var sel = document.getElementById('enquirySelect');
+            if (sel.querySelector('option[value="' + value + '"]')) sel.value = value;
+            var lbl = intentLabels[value];
+            if (lbl) {
+                document.getElementById('formHeading').textContent = lbl.heading;
+                document.getElementById('formSubheading').textContent = lbl.sub;
+            }
+            document.getElementById('contactForm').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function syncEnquiryType(value) {
+            document.getElementById('enquiryType').value = value;
+            var chip = document.querySelector('.intent-chip[data-value="' + value + '"]');
+            if (chip) {
+                document.querySelectorAll('.intent-chip').forEach(function (c) { c.classList.remove('active'); });
+                chip.classList.add('active');
+            }
+            var lbl = intentLabels[value];
+            if (lbl) {
+                document.getElementById('formHeading').textContent = lbl.heading;
+                document.getElementById('formSubheading').textContent = lbl.sub;
+            }
+        }
+
+        // Phone digits only
+        document.getElementById('phone').addEventListener('input', function () {
+            this.value = this.value.replace(/[^0-9]/g, '').slice(0, 10);
+        });
+
+        // Form submit
+        document.getElementById('contactForm').addEventListener('submit', async function (e) {
+            e.preventDefault();
+
+            var email = document.getElementById('email').value.trim();
+            var phone = document.getElementById('phone').value.trim();
+
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                showToast('Please enter a valid email address', 'error'); return;
+            }
+            if (!/^[0-9]{10}$/.test(phone)) {
+                showToast('Please enter a valid 10-digit phone number', 'error'); return;
+            }
+
+            var btn = document.getElementById('submitBtn');
+            var orig = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Sending...';
+            btn.disabled = true;
+
+            try {
+                {% if RECAPTCHA_SITE_KEY %}
+                await new Promise(function (resolve) {
+                    grecaptcha.ready(resolve);
+                });
+                var recaptchaToken = await grecaptcha.execute('{{ RECAPTCHA_SITE_KEY }}', { action: 'contact' });
+                document.getElementById('contactRecaptchaToken').value = recaptchaToken;
+                {% endif %}
+
+                var fd = new FormData(this);
+                var res = await fetch('/send-contact-email', { method: 'POST', body: fd });
+                var data = await res.json();
+                if (res.ok) {
+                    showToast('Message sent! We will get back to you within 24 hours.', 'success');
+                    this.reset();
+                    document.getElementById('enquiryType').value = 'support';
+                    document.getElementById('enquirySelect').value = 'support';
+                } else {
+                    showToast(data.error || 'Failed to send. Please try again.', 'error');
+                }
+            } catch (err) {
+                showToast('Network error. Please check your connection.', 'error');
+            } finally {
+                btn.innerHTML = orig;
+                btn.disabled = false;
+            }
+        });
+
+        // FAQ accordion
+        document.querySelectorAll('#contactFaqList .faq-q').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var ans = btn.nextElementSibling;
+                var icon = btn.querySelector('.faq-icon');
+                var open = !ans.classList.contains('hidden');
+                document.querySelectorAll('#contactFaqList .faq-ans').forEach(function (a) { a.classList.add('hidden'); });
+                document.querySelectorAll('#contactFaqList .faq-icon').forEach(function (i) { i.classList.remove('fa-minus'); i.classList.add('fa-plus'); i.style.transform = 'rotate(0deg)'; });
+                document.querySelectorAll('#contactFaqList .faq-q').forEach(function (b) { b.setAttribute('aria-expanded', 'false'); });
+                if (!open) {
+                    ans.classList.remove('hidden');
+                    btn.setAttribute('aria-expanded', 'true');
+                    if (icon) { icon.classList.remove('fa-plus'); icon.classList.add('fa-minus'); icon.style.transform = 'rotate(45deg)'; }
+                }
+            });
+        });
+    </script>
+</body>
+</html>

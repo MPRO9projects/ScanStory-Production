@@ -1,0 +1,1430 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ScanStory Pricing | AR Experience Platform Plans &amp; Scan Limits</title>
+    <meta name="description"
+        content="Compare ScanStory pricing plans for creating WebAR experiences. View project limits, scan limits, QR-based AR features, and choose the right AR platform plan for your needs.">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://myscanstory.com/pricing">
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://myscanstory.com/pricing">
+    <meta property="og:title" content="ScanStory Pricing | AR Experience Platform Plans">
+    <meta property="og:description"
+        content="Compare ScanStory plans with project limits, scan limits, QR-based AR features, and secure online payment.">
+    <meta property="og:image" content="https://myscanstory.com/static/uploads/og/scanstory-og.jpg">
+
+    <!-- Schema JSON-LD -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebPage",
+      "name": "ScanStory Pricing Plans",
+      "url": "https://myscanstory.com/pricing",
+      "description": "Compare ScanStory pricing plans for WebAR experiences — project limits, scan limits, QR-based AR scanner, and Razorpay secure payment.",
+      "isPartOf": {
+        "@type": "WebApplication",
+        "name": "ScanStory",
+        "url": "https://myscanstory.com/",
+        "applicationCategory": "MultimediaApplication",
+        "operatingSystem": "Any",
+        "description": "ScanStory is a WebAR platform for creating image-to-video AR experiences using QR scan codes — no app download required."
+      }
+    }
+    </script>
+
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+
+        :root {
+            --primary: #ff007a;
+            --secondary: #7000ff;
+            --accent: #00d4ff;
+            --bg-dark: #050505;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--bg-dark);
+            color: #ffffff;
+            margin: 0;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Enable scrolling */
+        html,
+        body {
+            height: auto;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* Ambient Background Blobs */
+        .blob {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(100px);
+            z-index: -1;
+            opacity: 0.2;
+            pointer-events: none;
+        }
+
+        .blob-1 {
+            width: 300px;
+            height: 300px;
+            background: var(--secondary);
+            top: -10%;
+            left: -10%;
+        }
+
+        .blob-2 {
+            width: 250px;
+            height: 250px;
+            background: var(--primary);
+            bottom: -10%;
+            right: -5%;
+        }
+
+        /* Mobile blob adjustments */
+        @media (max-width: 768px) {
+            .blob-1 {
+                width: 200px;
+                height: 200px;
+                top: -5%;
+                left: -5%;
+            }
+
+            .blob-2 {
+                width: 150px;
+                height: 150px;
+                bottom: -5%;
+                right: -5%;
+            }
+        }
+
+        /* Navigation */
+        nav {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01));
+            backdrop-filter: blur(50px);
+            -webkit-backdrop-filter: blur(50px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            width: 100%;
+        }
+
+        .nav-container {
+            max-width: 100%;
+            padding: 0 1rem;
+        }
+
+        /* Mobile menu styles */
+        .mobile-menu-btn {
+            display: none;
+        }
+
+        .mobile-menu {
+            display: none;
+            position: fixed;
+            top: 64px;
+            left: 0;
+            right: 0;
+            background: rgba(5, 5, 5, 0.95);
+            backdrop-filter: blur(50px);
+            -webkit-backdrop-filter: blur(50px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+            padding: 1rem;
+            z-index: 99;
+        }
+
+        .mobile-menu.active {
+            display: block;
+        }
+
+        @media (max-width: 768px) {
+            .desktop-menu {
+                display: none !important;
+            }
+
+            .mobile-menu-btn {
+                display: block;
+            }
+
+            .mobile-menu a {
+                display: block;
+                padding: 0.75rem 0;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            }
+
+            .mobile-menu a:last-child {
+                border-bottom: none;
+            }
+        }
+
+        .plan-card {
+            transition: all 0.3s ease;
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01));
+            backdrop-filter: blur(50px);
+            -webkit-backdrop-filter: blur(50px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 30px;
+            position: relative;
+            overflow: hidden;
+            height: 100%;
+        }
+
+        .plan-card::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(45deg,
+                    transparent 45%,
+                    rgba(255, 255, 255, 0.08) 50%,
+                    transparent 55%);
+            pointer-events: none;
+            transform: rotate(-20deg);
+            animation: glossSweep 8s infinite linear;
+            z-index: -1;
+        }
+
+        @keyframes glossSweep {
+            0% {
+                transform: translateX(-10%) rotate(-20deg);
+            }
+
+            100% {
+                transform: translateX(10%) rotate(-20deg);
+            }
+        }
+
+        .plan-card:hover {
+            transform: translateY(-10px) scale(1.02);
+            border-color: var(--primary);
+            box-shadow:
+                0 40px 100px rgba(0, 0, 0, 0.7),
+                0 0 0 1px rgba(255, 0, 122, 0.2);
+        }
+
+        .plan-card.popular {
+            border-color: var(--primary);
+            position: relative;
+        }
+
+        .popular-badge {
+            position: absolute;
+            top: -12px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            color: white;
+            padding: 8px 24px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            white-space: nowrap;
+            z-index: 10;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .feature-check {
+            color: var(--accent);
+        }
+
+        .progress-bar {
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            border-radius: 4px;
+        }
+
+        .label-style {
+            display: block;
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.25em;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 10px;
+        }
+
+        /* Content wrapper */
+        .content-wrapper {
+            width: 100%;
+            max-width: 100vw;
+            overflow-x: hidden;
+            position: relative;
+        }
+
+        .main-content {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px 1rem;
+        }
+
+        /* Glass effect for containers */
+        .glass-container {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01));
+            backdrop-filter: blur(50px);
+            -webkit-backdrop-filter: blur(50px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 30px;
+            position: relative;
+            overflow: hidden;
+            width: 100%;
+        }
+
+        .glass-container::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(45deg,
+                    transparent 45%,
+                    rgba(255, 255, 255, 0.03) 50%,
+                    transparent 55%);
+            pointer-events: none;
+            transform: rotate(-20deg);
+            animation: glossSweep 12s infinite linear;
+            z-index: -1;
+        }
+
+        /* Button styles */
+        .action-btn {
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            color: white;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.3em;
+            font-size: 13px;
+            transition: all 0.5s cubic-bezier(0.23, 1, 0.32, 1);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            cursor: pointer;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            width: 100%;
+            padding: 1.25rem;
+            border-radius: 22px;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-5px) scale(1.02);
+            box-shadow: 0 20px 40px rgba(255, 0, 122, 0.4);
+            background: #fff;
+            color: #000;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(90deg, var(--accent), #0077ff);
+        }
+
+        .btn-secondary:hover {
+            background: #fff;
+            color: #000;
+        }
+
+        /* Info items */
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .info-item:last-child {
+            border-bottom: none;
+        }
+
+        .info-label {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .info-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        /* Payment modal */
+        .payment-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(5, 5, 5, 0.95);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            backdrop-filter: blur(10px);
+            padding: 1rem;
+            overflow-y: auto;
+        }
+
+        .payment-modal-content {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.03));
+            backdrop-filter: blur(50px);
+            -webkit-backdrop-filter: blur(50px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 30px;
+            padding: 2rem;
+            max-width: 500px;
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+            margin: auto;
+        }
+
+        /* Responsive design */
+        @media (max-width: 1024px) {
+            .plan-card {
+                padding: 1.5rem !important;
+            }
+
+            .glass-container {
+                padding: 1.5rem !important;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                padding: 10px 0.5rem;
+            }
+
+            h1 {
+                font-size: 2rem !important;
+            }
+
+            .plan-card {
+                margin: 0 0 1.5rem 0 !important;
+                padding: 1.25rem !important;
+            }
+
+            .glass-container {
+                margin: 0.5rem 0 !important;
+                padding: 1.25rem !important;
+            }
+
+            .plans-grid {
+                grid-template-columns: 1fr !important;
+                gap: 1.5rem !important;
+            }
+
+            .payment-modal-content {
+                padding: 1.5rem !important;
+                margin: 1rem;
+            }
+
+            .action-btn {
+                padding: 1rem !important;
+                font-size: 12px !important;
+            }
+
+            .popular-badge {
+                padding: 6px 16px !important;
+                font-size: 10px !important;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .main-content {
+                padding: 5px 0.25rem;
+            }
+
+            h1 {
+                font-size: 1.75rem !important;
+            }
+
+            .plan-card {
+                padding: 1rem !important;
+                border-radius: 20px !important;
+            }
+
+            .glass-container {
+                padding: 1rem !important;
+                border-radius: 20px !important;
+            }
+
+            .label-style {
+                font-size: 9px !important;
+            }
+
+            .info-label {
+                font-size: 10px !important;
+            }
+
+            .info-value {
+                font-size: 13px !important;
+            }
+
+            .payment-modal-content {
+                padding: 1rem !important;
+                border-radius: 20px !important;
+            }
+        }
+
+        /* Ensure text doesn't overflow */
+        .text-truncate {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Mobile touch improvements */
+        @media (hover: none) and (pointer: coarse) {
+            .action-btn:hover {
+                transform: none;
+            }
+
+            .plan-card:hover {
+                transform: none;
+            }
+        }
+
+        /* Fix for iOS Safari */
+        @supports (-webkit-touch-callout: none) {
+            .content-wrapper {
+                -webkit-overflow-scrolling: touch;
+            }
+        }
+
+        /* Trust block */
+        .trust-block {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: center;
+            margin: 16px 0 24px;
+        }
+
+        .trust-pill {
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.07em;
+            padding: 6px 14px;
+            border-radius: 30px;
+            border: 1px solid rgba(0, 212, 255, 0.2);
+            background: rgba(0, 212, 255, 0.05);
+            color: rgba(255, 255, 255, 0.65);
+            white-space: nowrap;
+        }
+
+        /* Intro text */
+        .pricing-intro {
+            color: rgba(255, 255, 255, 0.5);
+            font-size: 13px;
+            max-width: 640px;
+            margin: 0 auto 8px;
+            line-height: 1.65;
+            text-align: center;
+        }
+
+        /* Best for label */
+        .best-for {
+            font-size: 9px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: rgba(0, 212, 255, 0.7);
+            display: block;
+            margin-top: 4px;
+        }
+
+        /* Public guest CTAs */
+        .guest-cta-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .guest-btn {
+            width: 100%;
+            padding: 14px;
+            border-radius: 22px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            font-size: 12px;
+            text-align: center;
+            text-decoration: none;
+            display: block;
+            transition: all 0.3s ease;
+        }
+
+        .guest-btn-primary {
+            background: linear-gradient(90deg, #ff007a, #7000ff);
+            color: white;
+        }
+
+        .guest-btn-primary:hover {
+            opacity: 0.9;
+            transform: translateY(-2px);
+        }
+
+        .guest-btn-secondary {
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.05);
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .guest-btn-secondary:hover {
+            border-color: rgba(0, 212, 255, 0.4);
+            color: #00d4ff;
+        }
+
+        /* Legal links */
+        .legal-links {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 6px 14px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+        }
+
+        .legal-links a {
+            color: rgba(255, 255, 255, 0.3);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .legal-links a:hover {
+            color: #00d4ff;
+        }
+    
+
+        /* Currency Toggle Styles */
+        .currency-toggle-wrap {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 10px;
+            margin: 0 auto 30px;
+            flex-wrap: wrap;
+        }
+
+        .currency-toggle-label {
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.45);
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.22em;
+            margin-bottom: 2px;
+        }
+
+        .currency-btn {
+            padding: 10px 22px;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.18);
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.75);
+            font-size: 12px;
+            font-weight: 900;
+            letter-spacing: 0.12em;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            text-transform: uppercase;
+        }
+
+        .currency-btn.active {
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            color: #fff;
+            border-color: transparent;
+            box-shadow: 0 10px 25px rgba(255,0,122,0.28);
+        }
+
+        .currency-btn:hover {
+            color: #fff;
+            border-color: rgba(255,255,255,0.35);
+        }
+
+        .currency-note {
+            width: 100%;
+            text-align: center;
+            color: rgba(255,255,255,0.35);
+            font-size: 10px;
+            margin-top: 2px;
+        }
+</style>
+</head>
+
+<body>
+    <!-- Background Blobs -->
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+
+    <!-- Navigation -->
+    <nav>
+        <div class="nav-container mx-auto">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center">
+                    <a href="{{ url_for('landing') }}" class="flex items-center">
+                        <div class="text-2xl md:text-3xl font-black italic tracking-tighter">
+                            SCAN<span class="text-pink-500">STORY</span>
+                        </div>
+                    </a>
+                </div>
+
+                <!-- Desktop Menu -->
+                <div class="desktop-menu flex items-center space-x-2 md:space-x-4">
+                    {% if user %}
+                    <a href="{{ url_for('dashboard') }}"
+                        class="text-gray-300 hover:text-white px-2 md:px-3 py-2 rounded-md transition-all duration-300 text-xs md:text-sm font-bold uppercase tracking-widest whitespace-nowrap">
+                        <i class="fas fa-home mr-1 md:mr-2"></i> <span class="hidden sm:inline">Dashboard</span>
+                    </a>
+                    <a href="{{ url_for('user_profile') }}"
+                        class="text-gray-300 hover:text-white px-2 md:px-3 py-2 rounded-md transition-all duration-300 text-xs md:text-sm font-bold uppercase tracking-widest whitespace-nowrap">
+                        <i class="fas fa-user mr-1 md:mr-2"></i> <span class="hidden sm:inline">Profile</span>
+                    </a>
+                    <a href="{{ url_for('logout') }}"
+                        class="text-gray-300 hover:text-white px-2 md:px-3 py-2 rounded-md transition-all duration-300 text-xs md:text-sm font-bold uppercase tracking-widest whitespace-nowrap">
+                        <i class="fas fa-sign-out-alt mr-1 md:mr-2"></i> <span class="hidden sm:inline">Logout</span>
+                    </a>
+                    {% else %}
+                    <a href="{{ url_for('login') }}"
+                        class="text-gray-300 hover:text-white px-2 md:px-3 py-2 rounded-md transition-all duration-300 text-xs md:text-sm font-bold uppercase tracking-widest whitespace-nowrap">
+                        <i class="fas fa-sign-in-alt mr-1 md:mr-2"></i> <span class="hidden sm:inline">Login</span>
+                    </a>
+                    <a href="{{ url_for('register') }}"
+                        class="text-white bg-pink-600 hover:bg-pink-500 px-3 md:px-4 py-2 rounded-xl transition-all duration-300 text-xs md:text-sm font-bold uppercase tracking-widest whitespace-nowrap">
+                        <i class="fas fa-user-plus mr-1 md:mr-2"></i> <span class="hidden sm:inline">Register
+                            Free</span>
+                    </a>
+                    {% endif %}
+                </div>
+
+                <!-- Mobile Menu Button -->
+                <button class="mobile-menu-btn text-gray-300 hover:text-white p-2 md:hidden">
+                    <i class="fas fa-bars text-xl"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Mobile Menu (hidden by default) -->
+        <div class="mobile-menu" id="mobileMenu">
+            {% if user %}
+            <a href="{{ url_for('dashboard') }}"
+                class="text-gray-300 hover:text-white transition-all duration-300 text-sm font-bold uppercase tracking-widest">
+                <i class="fas fa-home mr-2"></i> Dashboard
+            </a>
+            <a href="{{ url_for('user_profile') }}"
+                class="text-gray-300 hover:text-white transition-all duration-300 text-sm font-bold uppercase tracking-widest">
+                <i class="fas fa-user mr-2"></i> Profile
+            </a>
+            <a href="{{ url_for('logout') }}"
+                class="text-gray-300 hover:text-white transition-all duration-300 text-sm font-bold uppercase tracking-widest">
+                <i class="fas fa-sign-out-alt mr-2"></i> Logout
+            </a>
+            {% else %}
+            <a href="{{ url_for('landing') }}"
+                class="text-gray-300 hover:text-white transition-all duration-300 text-sm font-bold uppercase tracking-widest">
+                <i class="fas fa-home mr-2"></i> Home
+            </a>
+            <a href="{{ url_for('login') }}"
+                class="text-gray-300 hover:text-white transition-all duration-300 text-sm font-bold uppercase tracking-widest">
+                <i class="fas fa-sign-in-alt mr-2"></i> Login
+            </a>
+            <a href="{{ url_for('register') }}"
+                class="text-pink-400 hover:text-white transition-all duration-300 text-sm font-bold uppercase tracking-widest">
+                <i class="fas fa-user-plus mr-2"></i> Register Free
+            </a>
+            {% endif %}
+        </div>
+    </nav>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="main-content">
+        {% for category, message in messages %}
+        <div class="glass-container p-4 mb-4">
+            <div class="flex items-center">
+                <div class="flex-shrink-0">
+                    <i
+                        class="fas fa-{% if category == 'error' %}exclamation-circle text-red-400{% else %}check-circle text-green-400{% endif %} text-xl"></i>
+                </div>
+                <div class="ml-3">
+                    <p
+                        class="text-sm font-medium {% if category == 'error' %}text-red-300{% else %}text-green-300{% endif %}">
+                        {{ message }}
+                    </p>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <!-- Main Content -->
+    <div class="content-wrapper">
+        <div class="main-content">
+            <!-- Header -->
+            <div class="text-center mb-6 md:mb-10">
+                <h1 class="text-3xl md:text-4xl font-black uppercase tracking-tight mb-3 md:mb-4">
+                    {% if user %}Choose Your ScanStory AR Plan{% else %}ScanStory Pricing Plans for WebAR Experiences{%
+                    endif %}
+                </h1>
+                <p class="pricing-intro px-2">
+                    Create QR-based AR experiences by uploading photo and video pairs. Choose a plan based on your
+                    project limit, scan limit, and usage needs.
+                </p>
+                <p class="pricing-intro text-xs px-2">
+                    Start with a free trial, upgrade when you need more projects, and manage your AR stories from your
+                    dashboard.
+                </p>
+
+                <!-- Trust badges -->
+                <div class="trust-block">
+                    <span class="trust-pill">🆓 Free Trial Available</span>
+                    <span class="trust-pill">📱 No App Download</span>
+                    <span class="trust-pill">🔒 Secure Payment · Razorpay</span>
+                    <span class="trust-pill">📸 QR-Based WebAR Scanner</span>
+                    <span class="trust-pill">⬆️ Upgrade Anytime</span>
+                    <span class="trust-pill">📦 Custom Plans Available</span>
+                </div>
+
+                <!-- Current Plan Status — logged-in users only -->
+                {% if user %}
+                <div class="mt-4 md:mt-6 inline-block">
+                    <div class="glass-container px-4 md:px-6 py-2 md:py-3">
+                        <div class="flex items-center justify-center">
+                            <i
+                                class="fas fa-{% if user.subscription_status == 'trial' %}star{% elif user.subscription_status == 'active' %}check-circle{% else %}exclamation-triangle{% endif %} mr-2 md:mr-3 text-{% if user.subscription_status == 'trial' %}yellow{% elif user.subscription_status == 'active' %}green{% else %}red{% endif %}-400"></i>
+                            <div class="text-center md:text-left">
+                                <span
+                                    class="text-xs md:text-sm font-bold uppercase tracking-widest text-gray-300">Status:</span>
+                                <span class="ml-1 md:ml-2 font-bold text-white">{{ user.subscription_status|title
+                                    }}</span>
+                                {% if user.subscription_status == 'trial' and trial %}
+                                <span class="ml-1 md:ml-2 text-gray-400 text-xs md:text-sm">({{
+                                    trial.remaining_trial_days }} days)</span>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+
+            <!-- Current Usage Stats — logged-in users only -->
+            {% if user %}
+            <div class="glass-container p-4 md:p-8 mb-6 md:mb-8">
+                <label class="label-style">Your Current Usage</label>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
+                    <!-- Projects Usage -->
+                    <div>
+                        <div class="info-item">
+                            <span class="info-label">Projects</span>
+                            <span class="info-value">
+                                {{ user.projects_used }} /
+                                {% if user.subscribed_project_limit == 999999 or user.subscribed_project_limit is none
+                                %}
+                                ∞ Unlimited
+                                {% else %}
+                                {{ user.subscribed_project_limit }}
+                                {% endif %}
+                            </span>
+                        </div>
+                        <div class="progress-bar mt-2">
+                            <div class="progress-fill"
+                                style="width: {{ (user.projects_used / user.subscribed_project_limit * 100) if user.subscribed_project_limit and user.subscribed_project_limit > 0 and user.subscribed_project_limit != 999999 else 0 }}%">
+                            </div>
+                        </div>
+                        <div class="flex justify-between mt-2">
+                            <span class="text-xs text-gray-500">{{ user.projects_used }} used</span>
+                            <span class="text-xs text-gray-500">{{ user.remaining_projects }} remaining</span>
+                        </div>
+                    </div>
+
+                    <!-- Scans Usage -->
+                    <div>
+                        <div class="info-item">
+                            <span class="info-label">Scans</span>
+                            <span class="info-value">
+                                {{ user.scans_used }} /
+                                {% if user.subscribed_scan_limit == 999999 or user.subscribed_scan_limit is none %}
+                                ∞ Unlimited
+                                {% else %}
+                                {{ user.subscribed_scan_limit }}
+                                {% endif %}
+                            </span>
+                        </div>
+                        <div class="progress-bar mt-2">
+                            <div class="progress-fill"
+                                style="width: {{ (user.scans_used / user.subscribed_scan_limit * 100) if user.subscribed_scan_limit and user.subscribed_scan_limit > 0 and user.subscribed_scan_limit != 999999 else 0 }}%">
+                            </div>
+                        </div>
+                        <div class="flex justify-between mt-2">
+                            <span class="text-xs text-gray-500">{{ user.scans_used }} used</span>
+                            <span class="text-xs text-gray-500">{{ user.remaining_scans }} remaining</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Status Alert -->
+                {% if user.subscription_status in ['expired', 'limit_reached'] %}
+                <div class="mt-4 md:mt-6 glass-container p-3 md:p-4 border border-red-400/30">
+                    <div class="flex items-start">
+                        <div class="flex-shrink-0 mt-0.5">
+                            <i class="fas fa-exclamation-circle text-red-400 text-lg md:text-xl"></i>
+                        </div>
+                        <div class="ml-3">
+                            <p class="text-xs md:text-sm text-red-300">
+                                {% if user.subscription_status == 'expired' %}
+                                Your subscription has expired. Please upgrade to continue.
+                                {% else %}
+                                You've reached your plan limits. Upgrade to continue.
+                                {% endif %}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+
+            <div class="currency-toggle-wrap" aria-label="Currency selector">
+                <div class="currency-toggle-label">Display Pricing In</div>
+                <button type="button" class="currency-btn active" data-currency="inr">INR ₹</button>
+                <button type="button" class="currency-btn" data-currency="usd">USD $</button>
+                <div class="currency-note">USD is shown for reference. Final payment is processed in INR.</div>
+            </div>
+
+            <!-- Plans Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 md:gap-8 mb-8 md:mb-12 plans-grid">
+                {% for plan in plans %}
+                <div class="plan-card p-4 md:p-8 {% if plan.is_popular %}popular{% endif %}">
+                    {% if plan.is_popular %}
+                    <div class="popular-badge">MOST POPULAR</div>
+                    {% endif %}
+
+                    <!-- Plan Header -->
+                    <div class="text-center mb-6 md:mb-8">
+                        <h3 class="text-xl md:text-2xl font-black uppercase tracking-tight mb-1 md:mb-2">{{
+                            plan.plan_name }}</h3>
+                        {%- set pname = plan.plan_name | lower -%}
+                        <span class="best-for">
+                            {%- if 'trial' in pname or 'free' in pname -%}Best for testing ScanStory
+                            {%- elif 'basic' in pname or 'starter' in pname -%}Best for individuals &amp; small
+                            campaigns
+                            {%- elif 'pro' in pname or 'professional' in pname or 'business' in pname -%}Best for
+                            businesses, events &amp; agencies
+                            {%- elif 'enterprise' in pname or 'custom' in pname or 'bulk' in pname -%}Best for bulk AR
+                            projects &amp; enterprise
+                            {%- else -%}Best for growing your AR projects
+                            {%- endif -%}
+                        </span>
+                        <p class="text-gray-400 text-xs md:text-sm mb-4 md:mb-6 uppercase tracking-widest mt-2">{{
+                            plan.plan_description }}</p>
+
+                        <!-- Pricing -->
+                        <div class="mb-4 md:mb-6">
+                            {% if plan.offer_price %}
+                            <div class="flex items-center justify-center mb-2">
+                                <span class="text-2xl md:text-4xl font-black text-white currency-price"
+                                    data-inr="₹{{ '%.0f'|format(plan.offer_price) }}"
+                                    data-usd="${{ '%.2f'|format(plan.offer_price|inr_to_usd) }}">₹{{ '%.0f'|format(plan.offer_price) }}</span>
+                                <span class="text-sm md:text-lg text-gray-500 line-through ml-2 md:ml-3 currency-price"
+                                    data-inr="₹{{ '%.0f'|format(plan.plan_amount) }}"
+                                    data-usd="${{ '%.2f'|format(plan.plan_amount|inr_to_usd) }}">₹{{ '%.0f'|format(plan.plan_amount) }}</span>
+                            </div>
+                            {% else %}
+                            <span class="text-2xl md:text-4xl font-black text-white currency-price"
+                                data-inr="₹{{ '%.0f'|format(plan.plan_amount) }}"
+                                data-usd="${{ '%.2f'|format(plan.plan_amount|inr_to_usd) }}">₹{{ '%.0f'|format(plan.plan_amount) }}</span>
+                            {% endif %}
+
+                            <!-- Duration -->
+                            <div class="text-gray-400 mt-2 md:mt-3 text-xs md:text-sm uppercase tracking-widest">
+                                {% if plan.duration_type == 'time' %}
+                                {% if plan.duration_value == 6 %}
+                                6 Months
+                                {% elif plan.duration_value == 12 %}
+                                1 Year
+                                {% elif plan.duration_value %}
+                                {{ plan.duration_value }} Months
+                                {% else %}
+                                -
+                                {% endif %}
+                                {% elif plan.duration_type == 'count' %}
+                                {% if plan.duration_value %}
+                                {{ plan.duration_value }} Projects
+                                {% else %}
+                                -
+                                {% endif %}
+                                {% else %}
+                                -
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Plan Limits -->
+                    <div class="mb-6 md:mb-8 p-3 md:p-6 glass-container">
+                        <label class="label-style mb-3 md:mb-4 text-center">Plan Limits</label>
+                        <div class="space-y-3 md:space-y-4">
+                            <div class="info-item">
+                                <span class="info-label">Projects</span>
+                                <span class="info-value font-bold">
+                                    {% if plan.total_project_limit == 999999 or plan.total_project_limit is none %}
+                                    ∞ Unlimited
+                                    {% else %}
+                                    {{ plan.total_project_limit }}
+                                    {% endif %}
+                                </span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Scans</span>
+                                <span class="info-value font-bold">
+                                    {% if plan.total_scan_limit == 999999 or plan.total_scan_limit is none %}
+                                    ∞ Unlimited
+                                    {% else %}
+                                    {{ plan.total_scan_limit }}
+                                    {% endif %}
+                                </span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Pairs / Project</span>
+                                <span class="info-value font-bold">
+                                    {% if plan.max_pairs_per_project %}
+                                    {{ plan.max_pairs_per_project }}
+                                    {% else %}
+                                    Not configured
+                                    {% endif %}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Features -->
+                    <div class="mb-6 md:mb-8">
+                        <label class="label-style mb-3 md:mb-4">Features</label>
+                        <ul class="space-y-2 md:space-y-3">
+                            {% for feature in plan.features_list %}
+                            <li class="flex items-start">
+                                <i
+                                    class="fas fa-check feature-check mt-0.5 md:mt-1 mr-2 md:mr-3 text-sm md:text-base"></i>
+                                <span class="text-gray-300 text-xs md:text-sm">{{ feature }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+
+                    <!-- Action Button -->
+                    {% if user %}
+                    {% if plan.is_trial_plan %}
+                    <button class="action-btn bg-gray-800 text-gray-400 cursor-not-allowed text-xs md:text-sm" disabled>
+                        <i class="fas fa-check-circle mr-1 md:mr-2"></i> Current Plan
+                    </button>
+                    {% else %}
+                    <button onclick="subscribeToPlan({{ plan.id }}, '{{ plan.plan_name }}', {{ plan.effective_price }})"
+                        class="action-btn text-xs md:text-sm {% if plan.is_popular %}bg-gradient-to-r from-pink-500 to-purple-600{% endif %}">
+                        <i
+                            class="fas fa-{% if user.subscription_status == 'trial' %}arrow-up{% else %}check{% endif %} mr-1 md:mr-2"></i>
+                        {% if user.subscription_status == 'trial' %}Upgrade Now{% else %}Choose Plan{% endif %}
+                    </button>
+                    {% endif %}
+                    {% else %}
+                    <!-- Guest: no Razorpay, direct to register/contact -->
+                    <div class="guest-cta-wrap">
+                        {% if plan.is_trial_plan %}
+                        <a href="{{ url_for('register') }}" class="guest-btn guest-btn-primary">
+                            <i class="fas fa-user-plus mr-2"></i> Start Free Trial
+                        </a>
+                        {% else %}
+                        <a href="{{ url_for('register') }}" class="guest-btn guest-btn-primary">
+                            <i class="fas fa-arrow-right mr-2"></i> Get Started
+                        </a>
+                        <a href="{{ url_for('login') }}" class="guest-btn guest-btn-secondary">
+                            <i class="fas fa-sign-in-alt mr-2"></i> Login to Subscribe
+                        </a>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- FAQ Section -->
+            <div class="glass-container p-4 md:p-8">
+                <label class="label-style text-center mb-6 md:mb-8">Frequently Asked Questions</label>
+                <div class="space-y-4 md:space-y-8">
+                    <div>
+                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
+                            <i class="fas fa-question-circle text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                            <span class="text-sm md:text-base">Can I cancel my subscription?</span>
+                        </h3>
+                        <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">Yes, you can cancel your subscription
+                            at any time. Your access will continue until the end of your current billing period.</p>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
+                            <i class="fas fa-credit-card text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                            <span class="text-sm md:text-base">What payment methods are accepted?</span>
+                        </h3>
+                        <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">We accept all major credit/debit cards,
+                            UPI, net banking, and wallets through Razorpay.</p>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
+                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                            <span class="text-sm md:text-base">Can I change my plan later?</span>
+                        </h3>
+                        <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">Yes, you can upgrade or downgrade your
+                            plan at any time. Changes take effect immediately.</p>
+                    </div>
+
+                    <div>
+                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
+                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                            <span class="text-sm md:text-base">What is a scan limit?</span>
+                        </h3>
+                        <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">A scan limit is the number of
+                            successful AR views allowed under a plan. Each time a viewer scans a QR code and opens an AR
+                            experience, it can count toward the scan usage depending on the plan rules.
+                        </p>
+                    </div>
+
+                    <div>
+                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
+                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                            <span class="text-sm md:text-base">What is a photo-video pair?</span>
+                        </h3>
+                        <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">A photo-video pair is one target image
+                            connected to one video. The image is used for AR detection, and the video appears as an
+                            overlay when the viewer scans the QR code and points the camera at that image.
+                        </p>
+                    </div>
+
+                    <div>
+                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
+                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                            <span class="text-sm md:text-base"> Is ScanStory a free augmented reality QR code maker?</span>
+                        </h3>
+                        <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">ScanStory offers a free trial plan that
+                            lets users create a QR-based AR experience, generate a scan code, and test WebAR without
+                            installing an app. Paid plans are available for higher project limits and scan usage.
+                        </p>
+                    </div>
+
+
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="mt-8 md:mt-12 py-4 md:py-8 border-t border-white/10">
+        <div class="main-content">
+            <div class="text-center">
+                <p class="text-gray-500 text-[10px] uppercase tracking-[0.2em] font-bold mb-3">
+                    Need help? <a href="mailto:contact@myscanstory.com"
+                        class="text-accent hover:text-white transition-all ml-1">contact@myscanstory.com</a>
+                    {% if user %} | <a href="{{ url_for('user_profile') }}"
+                        class="text-accent hover:text-white transition-all ml-1">View Profile</a>{% endif %}
+                </p>
+                <div class="legal-links mb-3">
+                    <a href="/terms">Terms &amp; Conditions</a>
+                    <span style="color:rgba(255,255,255,0.15);">·</span>
+                    <a href="/privacy">Privacy Policy</a>
+                    <span style="color:rgba(255,255,255,0.15);">·</span>
+                    
+                    <span style="color:rgba(255,255,255,0.15);">·</span>
+                    <a href="/contact">Contact Support</a>
+                </div>
+                <p class="text-gray-500 text-xs uppercase tracking-widest">
+                    &copy; 2026 ScanStory. All rights reserved.
+                </p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Payment Modal -->
+    <div id="paymentModal" class="payment-modal">
+        <div class="payment-modal-content">
+            <div class="flex justify-between items-center mb-4 md:mb-6">
+                <h3 class="text-base md:text-lg font-black uppercase tracking-tight">Complete Payment</h3>
+                <button onclick="closePaymentModal()" class="text-gray-400 hover:text-white transition-all">
+                    <i class="fas fa-times text-lg md:text-xl"></i>
+                </button>
+            </div>
+            <div id="paymentStatus" class="text-center py-4 md:py-8">
+                <div
+                    class="animate-spin rounded-full h-12 md:h-16 w-12 md:w-16 border-b-2 border-accent mx-auto mb-4 md:mb-6">
+                </div>
+                <p class="text-gray-400 text-xs md:text-sm uppercase tracking-widest">Processing payment...</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentPlanId = null;
+        let currentPlanName = '';
+        let currentPlanPrice = 0;
+        let isMobileMenuOpen = false;
+
+        // Mobile menu toggle
+        document.querySelector('.mobile-menu-btn').addEventListener('click', function () {
+            isMobileMenuOpen = !isMobileMenuOpen;
+            document.getElementById('mobileMenu').classList.toggle('active', isMobileMenuOpen);
+        });
+
+        // Close mobile menu when clicking outside
+        document.addEventListener('click', function (event) {
+            const mobileMenu = document.getElementById('mobileMenu');
+            const mobileMenuBtn = document.querySelector('.mobile-menu-btn');
+
+            if (isMobileMenuOpen &&
+                !mobileMenu.contains(event.target) &&
+                !mobileMenuBtn.contains(event.target)) {
+                isMobileMenuOpen = false;
+                mobileMenu.classList.remove('active');
+            }
+        });
+
+        // Close mobile menu when clicking a link
+        document.querySelectorAll('.mobile-menu a').forEach(link => {
+            link.addEventListener('click', function () {
+                isMobileMenuOpen = false;
+                document.getElementById('mobileMenu').classList.remove('active');
+            });
+        });
+
+        function subscribeToPlan(planId, planName, price) {
+            currentPlanId = planId;
+            currentPlanName = planName;
+            currentPlanPrice = price;
+
+            showPaymentModal();
+
+            // Create Razorpay order via AJAX
+            fetch('/create-razorpay-order', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `plan_id=${planId}`
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Configure Razorpay options
+                        const options = {
+                            key: data.key,
+                            amount: data.amount,
+                            currency: data.currency,
+                            name: data.name,
+                            description: data.description,
+                            order_id: data.order_id,
+                            handler: function (response) {
+                                verifyPayment(response);
+                            },
+                            prefill: data.prefill,
+                            notes: data.notes,
+                            theme: {
+                                color: '#ff007a'
+                            },
+                            modal: {
+                                ondismiss: function () {
+                                    closePaymentModal();
+                                }
+                            }
+                        };
+
+                        // Open Razorpay checkout
+                        const rzp = new Razorpay(options);
+                        rzp.open();
+                    } else {
+                        showPaymentError(data.error || 'Failed to create payment order');
+                    }
+                })
+                .catch(error => {
+                    showPaymentError('Network error. Please check your connection and try again.');
+                    console.error('Payment error:', error);
+                });
+        }
+
+        function verifyPayment(response) {
+            updatePaymentStatus('Verifying payment...');
+
+            fetch('/verify-payment', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: `razorpay_payment_id=${response.razorpay_payment_id}&razorpay_order_id=${response.razorpay_order_id}&razorpay_signature=${response.razorpay_signature}`
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Show success message
+                        document.getElementById('paymentStatus').innerHTML = `
+                        <div class="text-accent mb-4 md:mb-6">
+                            <i class="fas fa-check-circle text-4xl md:text-6xl"></i>
+                        </div>
+                        <h4 class="text-lg md:text-xl font-black uppercase tracking-tight mb-3 md:mb-4">Payment Successful!</h4>
+                        <p class="text-gray-400 mb-4 md:mb-6 text-xs md:text-sm uppercase tracking-widest">${currentPlanName} plan activated successfully.</p>
+                        <button onclick="redirectToSuccess('${data.order_id}')" 
+                                class="action-btn text-xs md:text-sm">
+                            <i class="fas fa-arrow-right mr-1 md:mr-2"></i> Continue to Dashboard
+                        </button>
+                    `;
+                    } else {
+                        showPaymentError(data.error || 'Payment verification failed');
+                    }
+                })
+                .catch(error => {
+                    showPaymentError('Verification failed. Please contact support.');
+                    console.error('Verification error:', error);
+                });
+        }
+
+        function showPaymentModal() {
+            document.getElementById('paymentModal').style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+            document.getElementById('paymentStatus').innerHTML = `
+                <div class="animate-spin rounded-full h-12 md:h-16 w-12 md:w-16 border-b-2 border-accent mx-auto mb-4 md:mb-6"></div>
+                <p class="text-gray-400 text-xs md:text-sm uppercase tracking-widest">Processing payment...</p>
+            `;
+        }
+
+        function closePaymentModal() {
+            document.getElementById('paymentModal').style.display = 'none';
+            document.body.style.overflow = 'auto';
+        }
+
+        function updatePaymentStatus(message) {
+            document.getElementById('paymentStatus').innerHTML = `
+                <div class="animate-spin rounded-full h-12 md:h-16 w-12 md:w-16 border-b-2 border-accent mx-auto mb-4 md:mb-6"></div>
+                <p class="text-gray-400 text-xs md:text-sm uppercase tracking-widest">${message}</p>
+            `;
+        }
+
+        function showPaymentError(message) {
+            document.getElementById('paymentStatus').innerHTML = `
+                <div class="text-red-400 mb-4 md:mb-6">
+                    <i class="fas fa-times-circle text-4xl md:text-6xl"></i>
+                </div>
+                <h4 class="text-lg md:text-xl font-black uppercase tracking-tight mb-3 md:mb-4">Payment Failed</h4>
+                <p class="text-gray-400 mb-4 md:mb-6 text-xs md:text-sm uppercase tracking-widest">${message}</p>
+                <button onclick="closePaymentModal()" 
+                        class="action-btn text-xs md:text-sm bg-gradient-to-r from-gray-800 to-gray-900">
+                    <i class="fas fa-redo mr-1 md:mr-2"></i> Try Again
+                </button>
+            `;
+        }
+
+        function redirectToSuccess(orderId) {
+            window.location.href = `/payment-success?order_id=${orderId}`;
+        }
+
+        // Handle Razorpay payment failure
+        document.addEventListener('DOMContentLoaded', function () {
+            if (typeof Razorpay !== 'undefined') {
+                Razorpay.on('payment.failed', function (response) {
+                    showPaymentError(response.error.description || 'Payment failed. Please try again.');
+                });
+            }
+
+            // Prevent body scroll when modal is open
+            const observer = new MutationObserver(function (mutations) {
+                mutations.forEach(function (mutation) {
+                    if (mutation.attributeName === 'style') {
+                        const modal = document.getElementById('paymentModal');
+                        if (modal.style.display === 'flex') {
+                            document.body.style.overflow = 'hidden';
+                        } else {
+                            document.body.style.overflow = 'auto';
+                        }
+                    }
+                });
+            });
+
+            observer.observe(document.getElementById('paymentModal'), {
+                attributes: true,
+                attributeFilter: ['style']
+            });
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', function () {
+            if (window.innerWidth > 768) {
+                isMobileMenuOpen = false;
+                document.getElementById('mobileMenu').classList.remove('active');
+            }
+        });
+    
+
+        // Currency toggle for frontend display only. Payment/admin pricing remains INR.
+        document.addEventListener("DOMContentLoaded", function () {
+            const currencyButtons = document.querySelectorAll(".currency-btn");
+            const currencyPrices = document.querySelectorAll(".currency-price");
+
+            function setCurrency(currency) {
+                currencyPrices.forEach(function (price) {
+                    if (currency === "usd") {
+                        price.textContent = price.dataset.usd || price.textContent;
+                    } else {
+                        price.textContent = price.dataset.inr || price.textContent;
+                    }
+                });
+
+                currencyButtons.forEach(function (btn) {
+                    btn.classList.toggle("active", btn.dataset.currency === currency);
+                });
+
+                localStorage.setItem("scanstorySelectedCurrency", currency);
+            }
+
+            currencyButtons.forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                    setCurrency(btn.dataset.currency);
+                });
+            });
+
+            setCurrency(localStorage.getItem("scanstorySelectedCurrency") || "inr");
+        });
+</script>
+</body>
+
+</html>

@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
+    <title>ScanStory | Profile</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" />
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+
+        :root {
+            --primary: #ff007a;
+            --secondary: #7000ff;
+            --accent: #00d4ff;
+            --bg-dark: #050505;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--bg-dark);
+            color: #ffffff;
+            margin: 0;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Enable scrolling */
+        html, body {
+            height: auto;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .page-wrapper {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 100vw;
+            overflow-x: hidden;
+        }
+
+        .blob {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(90px);
+            z-index: -1;
+            opacity: 0.16;
+            pointer-events: none;
+        }
+
+        /* Mobile blob adjustments */
+        @media (max-width: 768px) {
+            .blob {
+                filter: blur(60px);
+                opacity: 0.12;
+            }
+            
+            .blob.w-96 {
+                width: 200px !important;
+                height: 200px !important;
+                top: -5% !important;
+                left: -5% !important;
+            }
+            
+            .blob.w-\[500px\] {
+                width: 250px !important;
+                height: 250px !important;
+                bottom: -5% !important;
+                right: -5% !important;
+            }
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.01);
+            backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            transition: all 0.4s ease;
+        }
+
+        .glass:hover {
+            border-color: rgba(255, 255, 255, 0.18);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        @media (hover: none) and (pointer: coarse) {
+            .glass:hover {
+                transform: none;
+                border-color: rgba(255, 255, 255, 0.06);
+                background: rgba(255, 255, 255, 0.01);
+            }
+        }
+
+        .btn-neo {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 0.75rem 1rem;
+            border-radius: 16px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            font-size: 11px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.03);
+            transition: all 0.35s ease;
+            white-space: nowrap;
+            cursor: pointer;
+            text-decoration: none;
+            color: white;
+        }
+
+        .btn-neo:hover {
+            border-color: rgba(0, 212, 255, 0.35);
+            box-shadow: 0 0 30px rgba(0, 212, 255, 0.12);
+            transform: translateY(-2px);
+        }
+
+        .glow-btn:hover {
+            box-shadow: 0 0 50px rgba(255, 0, 122, 0.45);
+            transform: translateY(-3px) scale(1.02);
+            background: #fff;
+            color: #000;
+        }
+
+        @media (hover: none) and (pointer: coarse) {
+            .btn-neo:hover, .glow-btn:hover {
+                transform: none;
+                box-shadow: none;
+            }
+        }
+
+        .topbar {
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 1rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            width: 100%;
+        }
+
+        @media (max-width: 640px) {
+            .topbar {
+                height: 60px;
+                padding: 0 0.75rem;
+            }
+            
+            .topbar .btn-neo {
+                padding: 0.5rem 0.75rem;
+                font-size: 10px;
+            }
+        }
+        
+        /* Progress bars */
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 8px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.5s ease;
+        }
+        
+        .projects-progress {
+            background: linear-gradient(90deg, #7000ff, #a855f7);
+        }
+        
+        .scans-progress {
+            background: linear-gradient(90deg, #00d4ff, #22d3ee);
+        }
+        
+        /* Status badges */
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 10px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            display: inline-flex;
+            align-items: center;
+        }
+        
+        .status-active {
+            background: rgba(34, 197, 94, 0.15);
+            color: #22c55e;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+        
+        .status-trial {
+            background: rgba(251, 191, 36, 0.15);
+            color: #fbbf24;
+            border: 1px solid rgba(251, 191, 36, 0.3);
+        }
+        
+        .status-expired {
+            background: rgba(239, 68, 68, 0.15);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+        
+        .status-limit {
+            background: rgba(249, 115, 22, 0.15);
+            color: #f97316;
+            border: 1px solid rgba(249, 115, 22, 0.3);
+        }
+        
+        /* Divider */
+        .divider-line {
+            height: 1px;
+            width: 100%;
+            background: linear-gradient(90deg, rgba(255, 0, 122, 0.8), transparent);
+            opacity: 0.25;
+            margin: 1.5rem 0;
+        }
+        
+        /* Stats cards */
+        .stat-number {
+            font-size: 1.75rem;
+            font-weight: 900;
+            line-height: 1;
+        }
+        
+        .stat-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            opacity: 0.7;
+            margin-top: 0.5rem;
+        }
+        
+        @media (min-width: 768px) {
+            .stat-number {
+                font-size: 2.5rem;
+            }
+            
+            .stat-label {
+                font-size: 0.75rem;
+            }
+        }
+        
+        /* Subscription info styling */
+        .subscription-info-card {
+            background: linear-gradient(135deg, rgba(255, 215, 0, 0.05), rgba(255, 165, 0, 0.05));
+            border: 1px solid rgba(255, 215, 0, 0.1);
+        }
+
+        /* Content wrapper */
+        .content-wrapper {
+            flex: 1;
+            width: 100%;
+            padding: 16px 0.75rem;
+            max-width: 100vw;
+            overflow-x: hidden;
+        }
+
+        .main-container {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .content-wrapper {
+                padding: 12px 0.5rem;
+            }
+            
+            .glass {
+                margin: 0.75rem 0;
+                padding: 1.25rem;
+                border-radius: 20px !important;
+            }
+            
+            .divider-line {
+                margin: 1rem 0;
+            }
+            
+            h1.text-4xl {
+                font-size: 2rem !important;
+            }
+            
+            h1.text-6xl {
+                font-size: 2.5rem !important;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .content-wrapper {
+                padding: 8px 0.25rem;
+            }
+            
+            .glass {
+                margin: 0.5rem 0;
+                padding: 1rem;
+                border-radius: 16px !important;
+            }
+            
+            .btn-neo {
+                padding: 0.5rem 0.75rem;
+                font-size: 10px;
+            }
+            
+            .stat-number {
+                font-size: 1.5rem;
+            }
+            
+            .status-badge {
+                font-size: 9px;
+                padding: 3px 8px;
+            }
+        }
+
+        /* Mobile grid fixes */
+        @media (max-width: 480px) {
+            .grid.grid-cols-1.md\:grid-cols-4 {
+                grid-template-columns: repeat(2, 1fr) !important;
+                gap: 0.5rem;
+            }
+            
+            .grid.grid-cols-1.md\:grid-cols-4 > div {
+                padding: 0.75rem !important;
+            }
+            
+            .grid.grid-cols-1.lg\:grid-cols-3 {
+                gap: 0.75rem;
+            }
+            
+            .glass.rounded-\[28px\] {
+                padding: 1rem !important;
+            }
+        }
+
+        /* Text overflow protection */
+        .text-truncate {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Flash messages responsive */
+        @media (max-width: 640px) {
+            .max-w-6xl.mx-auto {
+                padding-left: 0.5rem !important;
+                padding-right: 0.5rem !important;
+            }
+        }
+
+        /* Fix for iOS Safari */
+        @supports (-webkit-touch-callout: none) {
+            .content-wrapper {
+                -webkit-overflow-scrolling: touch;
+            }
+        }
+
+        /* Prevent content overflow */
+        .no-overflow {
+            max-width: 100%;
+            overflow: hidden;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="page-wrapper">
+        <div class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]"></div>
+        <div class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]"></div>
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+            <div class="main-container px-4 md:px-6 mt-3">
+                {% for category, message in messages %}
+                <div class="bg-{% if category == 'error' %}red{% elif category == 'warning' %}yellow{% else %}green{% endif %}-500/10 border border-{% if category == 'error' %}red{% elif category == 'warning' %}yellow{% else %}green{% endif %}-500/20 text-{% if category == 'error' %}red{% elif category == 'warning' %}yellow{% else %}green{% endif %}-300 px-4 py-3 rounded-xl mb-3 text-sm" role="alert">
+                    <div class="flex items-center">
+                        <i class="fas fa-{% if category == 'error' %}exclamation-circle{% elif category == 'warning' %}exclamation-triangle{% else %}check-circle{% endif %} mr-2 text-sm"></i>
+                        <span class="text-sm">{{ message }}</span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        {% endwith %}
+
+        <header class="topbar glass">
+            <a class="btn-neo" href="{{ url_for('dashboard') }}">
+                <i class="fa-solid fa-chevron-left text-xs"></i> 
+                <span class="hidden sm:inline">Back to Dashboard</span>
+                <span class="sm:hidden">Dashboard</span>
+            </a>
+
+            <div class="font-black italic tracking-tight text-lg md:text-xl">
+                SCAN<span class="text-pink-500">STORY</span>
+            </div>
+
+            <div class="flex gap-2">
+                <a class="btn-neo hidden sm:flex" href="{{ url_for('subscribe_page') }}">
+                    <i class="fas fa-crown"></i> <span class="hidden md:inline">Upgrade</span>
+                </a>
+                <a class="btn-neo sm:hidden" href="{{ url_for('subscribe_page') }}" title="Upgrade">
+                    <i class="fas fa-crown"></i>
+                </a>
+                <a class="btn-neo glow-btn" href="{{ url_for('logout') }}">
+                    <i class="fa-solid fa-right-from-bracket"></i> <span class="hidden sm:inline">Logout</span>
+                </a>
+            </div>
+        </header>
+
+        <div class="content-wrapper">
+            <div class="main-container">
+                <div class="mb-6 md:mb-10 px-3 md:px-0" data-aos="fade-up">
+                    <h1 class="text-3xl md:text-4xl lg:text-6xl font-black uppercase leading-[0.9]">
+                        User <span class="text-pink-500 italic">Profile</span>
+                    </h1>
+                    <p class="text-slate-500 mt-2 md:mt-4 text-sm md:text-base">
+                        Manage your account and subscription details.
+                    </p>
+                </div>
+
+                <!-- Quick Stats -->
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-6 md:mb-8 px-3 md:px-0" data-aos="fade-up" data-aos-delay="100">
+                    <div class="glass rounded-2xl p-4 md:p-6 text-center">
+                        <div class="stat-number text-cyan-400">{{ user.projects_used }}</div>
+                        <div class="stat-label">Story Used</div>
+                    </div>
+                    <div class="glass rounded-2xl p-4 md:p-6 text-center">
+                        <div class="stat-number text-purple-400">{{ user.scans_used }}</div>
+                        <div class="stat-label">Scans Used</div>
+                    </div>
+                    <div class="glass rounded-2xl p-4 md:p-6 text-center">
+                        <div class="stat-number text-green-400">{{ user.login_count or 0 }}</div>
+                        <div class="stat-label">Total Logins</div>
+                    </div>
+                    <div class="glass rounded-2xl p-4 md:p-6 text-center">
+                        <div class="stat-number">
+                            {% if user.subscription_status == 'active' %}
+                            <span class="text-yellow-400 text-lg md:text-2xl">PAID</span>
+                            {% else %}
+                            <span class="text-pink-400 text-lg md:text-2xl">TRIAL</span>
+                            {% endif %}
+                        </div>
+                        <div class="stat-label">Plan Type</div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 px-3 md:px-0">
+                    <!-- Profile Details -->
+                    <div class="glass rounded-[20px] md:rounded-[28px] p-4 md:p-6 lg:col-span-2" data-aos="fade-up" data-aos-delay="60">
+                        <div class="flex items-center justify-between mb-4 md:mb-6">
+                            <h2 class="text-[11px] md:text-[12px] font-black uppercase tracking-widest text-white/70">Account Details</h2>
+                            <i class="fa-solid fa-id-card text-cyan-400 text-lg md:text-xl"></i>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 text-sm">
+                            <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4">
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">First Name</div>
+                                <div class="font-bold md:font-black mt-1 text-sm md:text-base">{{ user.first_name or "-" }}</div>
+                            </div>
+
+                            <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4">
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">Last Name</div>
+                                <div class="font-bold md:font-black mt-1 text-sm md:text-base">{{ user.last_name or "-" }}</div>
+                            </div>
+
+                            <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4 md:col-span-2">
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">Email</div>
+                                <div class="font-bold md:font-black mt-1 text-sm md:text-base text-truncate">{{ user.email }}</div>
+                                <div class="mt-2 md:mt-3">
+                                    {% if user.is_verified %}
+                                    <span class="status-badge status-active text-xs md:text-sm">
+                                        <i class="fas fa-check-circle mr-1 text-xs"></i> Verified
+                                    </span>
+                                    {% else %}
+                                    <span class="status-badge status-expired text-xs md:text-sm">
+                                        <i class="fas fa-exclamation-circle mr-1 text-xs"></i> Not Verified
+                                    </span>
+                                    {% endif %}
+                                </div>
+                            </div>
+
+                            <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4">
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">Phone</div>
+                                <div class="font-bold md:font-black mt-1 text-sm md:text-base">{{ user.phone or "-" }}</div>
+                            </div>
+
+                            <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4 md:col-span-2">
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">Member Since</div>
+                                <div class="font-bold md:font-black mt-1 text-sm md:text-base">
+                                    {% if user.created_at %}
+                                        {{ user.created_at.strftime('%d %b %Y') }}
+                                    {% else %}
+                                        -
+                                    {% endif %}
+                                </div>
+                                <div class="text-white/50 text-xs uppercase font-bold md:font-black tracking-widest mt-1 md:mt-2">
+                                    Last Login: 
+                                    {% if user.last_login_at %}
+                                        {{ user.last_login_at.strftime('%d %b %Y, %I:%M %p') }}
+                                    {% else %}
+                                        Never
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Subscription Information -->
+                    <div class="glass subscription-info-card rounded-[20px] md:rounded-[28px] p-4 md:p-6" data-aos="fade-up" data-aos-delay="120">
+                        <div class="flex items-center justify-between mb-4 md:mb-6">
+                            <h2 class="text-[11px] md:text-[12px] font-black uppercase tracking-widest text-white/70">Subscription Details</h2>
+                            <i class="fa-solid fa-crown text-yellow-400 text-lg md:text-xl"></i>
+                        </div>
+
+                        <div class="space-y-3 md:space-y-4">
+                            <!-- Current Plan -->
+                            <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4">
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">Current Plan</div>
+                                <div class="font-bold md:font-black mt-1 text-base md:text-lg">{{ user.current_plan_name or "Free Trial" }}</div>
+                                <div class="mt-1 md:mt-2">
+                                    <span class="status-badge text-xs md:text-sm" id="subscriptionStatusBadge">
+                                        {{ user.subscription_status|replace('_', ' ')|title }}
+                                    </span>
+                                </div>
+                            </div>
+
+                            <!-- Plan Duration -->
+                            <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4">
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">Plan Duration</div>
+                                <div class="font-bold md:font-black mt-1 text-sm md:text-base">{{ user.plan_duration or "7 Days Trial" }}</div>
+                                {% if user.subscription_status == 'active' and user.subscription_expires_at %}
+                                <div class="text-green-400 text-xs mt-1 md:mt-2">
+                                    <i class="far fa-calendar-alt mr-1"></i>
+                                    Expires: {{ user.subscription_expires_at.strftime('%d %b %Y') }}
+                                </div>
+                                {% elif user.subscription_status == 'trial' and trial %}
+                                <div class="text-yellow-400 text-xs mt-1 md:mt-2">
+                                    <i class="fas fa-clock mr-1"></i>
+                                    Trial ends: {{ trial.trial_end.strftime('%d %b %Y') }}
+                                </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Usage Statistics -->
+                            <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4">
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest mb-2 md:mb-3">Usage Statistics</div>
+                                
+                                <!-- Projects -->
+                                <div class="mb-3 md:mb-4">
+                                    <div class="flex justify-between text-xs md:text-sm mb-1">
+                                        <span class="text-white/70">Story</span>
+                                        <span class="font-bold">
+                                            {{ user.projects_used }} /
+                                            {% if user.subscribed_project_limit == 999999 or user.subscribed_project_limit == 0 %}
+                                            ∞
+                                            {% else %}
+                                            {{ user.subscribed_project_limit }}
+                                            {% endif %}
+                                        </span>
+                                    </div>
+                                    <div class="progress-bar">
+                                        <div class="progress-fill projects-progress" 
+                                             style="width: {{ (user.projects_used / user.subscribed_project_limit * 100) if user.subscribed_project_limit is not none and user.subscribed_project_limit > 0 and user.subscribed_project_limit != 999999 else 0 }}%"></div>
+                                    </div>
+                                    <div class="flex justify-between text-xs text-white/50 mt-1">
+                                        <span>{{ user.projects_used }} used</span>
+                                        <span>
+                                            {% if user.subscribed_project_limit == 999999 or user.subscribed_project_limit == 0 %}
+                                            Unlimited
+                                            {% else %}
+                                            {{ user.remaining_projects }}
+                                            {% endif %}
+                                            remaining
+                                        </span>
+                                    </div>
+                                </div>
+                                
+                                <!-- Scans -->
+                                <div>
+                                    <div class="flex justify-between text-xs md:text-sm mb-1">
+                                        <span class="text-white/70">Scans</span>
+                                        <span class="font-bold">
+                                            {{ user.scans_used }} /
+                                            {% if user.subscribed_scan_limit == 999999 or user.subscribed_scan_limit == 0 %}
+                                            ∞
+                                            {% else %}
+                                            {{ user.subscribed_scan_limit }}
+                                            {% endif %}
+                                        </span>
+                                    </div>
+                                    <div class="progress-bar">
+                                        <div class="progress-fill scans-progress" 
+                                             style="width: {{ (user.scans_used / user.subscribed_scan_limit * 100) if user.subscribed_scan_limit is not none and user.subscribed_scan_limit > 0 and user.subscribed_scan_limit != 999999 else 0 }}%"></div>
+                                    </div>
+                                    <div class="flex justify-between text-xs text-white/50 mt-1">
+                                        <span>{{ user.scans_used }} used</span>
+                                        <span>
+                                            {% if user.subscribed_scan_limit == 999999 or user.subscribed_scan_limit == 0 %}
+                                            Unlimited
+                                            {% else %}
+                                            {{ user.remaining_scans }}
+                                            {% endif %}
+                                            remaining
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Action Buttons -->
+                            <div class="space-y-2 md:space-y-3">
+                                {% if user.subscription_status in ['trial', 'expired', 'limit_reached'] %}
+                                <a href="{{ url_for('subscribe_page') }}" class="btn-neo w-full justify-center bg-yellow-500/20 border-yellow-400/30 text-yellow-300 hover:bg-yellow-500/30 hover:border-yellow-400/50 text-xs md:text-sm">
+                                    <i class="fas fa-crown mr-1 md:mr-2"></i> Upgrade Subscription
+                                </a>
+                                {% endif %}
+                                
+                                <a href="{{ url_for('dashboard') }}" class="btn-neo w-full justify-center bg-cyan-500/10 border-cyan-500/20 text-cyan-300 hover:bg-cyan-500/20 text-xs md:text-sm">
+                                    <i class="fas fa-home mr-1 md:mr-2"></i> Go to Dashboard
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="divider-line"></div>
+
+                <!-- Trial Information (if applicable) -->
+                {% if user.subscription_status == 'trial' and trial %}
+                <div class="glass rounded-xl md:rounded-2xl p-4 md:p-8 border border-yellow-500/30 bg-gradient-to-r from-yellow-500/5 to-pink-500/5 mt-4 md:mt-6 mx-3 md:mx-0" 
+                     data-aos="fade-up" data-aos-delay="200">
+                    <div class="flex items-start md:items-center mb-4 md:mb-6">
+                        <div class="bg-yellow-500/20 rounded-full p-3 md:p-4 mr-3 md:mr-4">
+                            <i class="fas fa-star text-yellow-400 text-xl md:text-2xl"></i>
+                        </div>
+                        <div class="flex-1">
+                            <h3 class="text-lg md:text-xl font-bold text-yellow-300">Free Trial Active</h3>
+                            <p class="text-yellow-200/80 text-sm md:text-base">
+                                You're enjoying the free trial of ScanStory
+                            </p>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-6 mb-4 md:mb-6">
+                        <div class="glass rounded-lg md:rounded-xl p-3 md:p-4">
+                            <div class="text-yellow-300 font-bold mb-1 md:mb-2 text-sm md:text-base">Trial Period</div>
+                            <div class="text-white text-sm md:text-base">
+                                {{ trial.trial_start.strftime('%d %b %Y') }} - {{ trial.trial_end.strftime('%d %b %Y') }}
+                            </div>
+                        </div>
+                        <div class="glass rounded-lg md:rounded-xl p-3 md:p-4">
+                            <div class="text-yellow-300 font-bold mb-1 md:mb-2 text-sm md:text-base">Days Remaining</div>
+                            <div class="text-xl md:text-2xl font-bold text-white">{{ trial.remaining_trial_days }} days</div>
+                        </div>
+                        <div class="glass rounded-lg md:rounded-xl p-3 md:p-4">
+                            <div class="text-yellow-300 font-bold mb-1 md:mb-2 text-sm md:text-base">Trial Limits</div>
+                            <div class="text-white text-sm md:text-base">
+                                {{ get_system_config('free_trial_projects', 1) }} Stories • 
+                                {{ get_system_config('free_trial_scans', 50) }} scans
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <a href="{{ url_for('subscribe_page') }}" class="btn-neo bg-yellow-500/20 border-yellow-400/30 text-yellow-300 hover:bg-yellow-500/30 hover:border-yellow-400/50 justify-center text-xs md:text-sm py-2 md:py-3">
+                            <i class="fas fa-crown mr-1 md:mr-2"></i> Upgrade to Premium
+                        </a>
+                        <a href="{{ url_for('dashboard') }}" class="btn-neo glow-btn justify-center text-xs md:text-sm py-2 md:py-3">
+                            <i class="fas fa-home mr-1 md:mr-2"></i> Go to Dashboard
+                        </a>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Bottom spacer for scrolling -->
+        <div class="h-8 md:h-12"></div>
+    </div>
+
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script>
+        // Initialize AOS animations
+        AOS.init({ 
+            duration: 800, 
+            once: true,
+            offset: 100,
+            delay: 50
+        });
+        
+        // Update status badge colors based on subscription status
+        document.addEventListener('DOMContentLoaded', function() {
+            const statusElement = document.getElementById('subscriptionStatusBadge');
+            if (statusElement) {
+                const status = '{{ user.subscription_status }}'.toLowerCase();
+                
+                // Remove any existing status classes
+                statusElement.classList.remove('status-active', 'status-trial', 'status-expired', 'status-limit');
+                
+                // Add appropriate class
+                if (status === 'active') {
+                    statusElement.classList.add('status-active');
+                } else if (status === 'trial') {
+                    statusElement.classList.add('status-trial');
+                } else if (status === 'expired') {
+                    statusElement.classList.add('status-expired');
+                } else if (status === 'limit_reached') {
+                    statusElement.classList.add('status-limit');
+                }
+            }
+            
+            // Fix for mobile touch scrolling
+            let touchStartY = 0;
+            let touchEndY = 0;
+            
+            document.addEventListener('touchstart', function(e) {
+                touchStartY = e.touches[0].clientY;
+            }, { passive: true });
+            
+            document.addEventListener('touchmove', function(e) {
+                touchEndY = e.touches[0].clientY;
+                
+                // Get scrollable elements
+                const scrollableElements = document.querySelectorAll('.content-wrapper, .main-container');
+                let isScrollable = false;
+                
+                scrollableElements.forEach(el => {
+                    if (el.scrollHeight > el.clientHeight) {
+                        isScrollable = true;
+                    }
+                });
+                
+                // Prevent default only if we're trying to scroll past boundaries
+                if (!isScrollable && Math.abs(touchEndY - touchStartY) > 10) {
+                    e.preventDefault();
+                }
+            }, { passive: false });
+            
+            // Handle window resize
+            window.addEventListener('resize', function() {
+                // Re-initialize AOS on resize
+                AOS.refresh();
+            });
+        });
+
+        // Fix for iOS Safari viewport height
+        function setViewportHeight() {
+            let vh = window.innerHeight * 0.01;
+            document.documentElement.style.setProperty('--vh', `${vh}px`);
+        }
+        
+        window.addEventListener('resize', setViewportHeight);
+        window.addEventListener('orientationchange', setViewportHeight);
+        setViewportHeight();
+    </script>
+</body>
+</html>

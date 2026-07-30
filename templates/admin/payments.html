@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Management - Admin Panel</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background-color: #f8fafc;
+            color: #334155;
+        }
+        
+        .navbar {
+            background: linear-gradient(to right, #4f46e5, #7c3aed);
+            color: white;
+            padding: 0 20px;
+            height: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+        }
+        
+        .navbar-brand {
+            font-size: 24px;
+            font-weight: bold;
+            text-decoration: none;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .navbar-menu {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .nav-link {
+            color: rgba(255, 255, 255, 0.9);
+            text-decoration: none;
+            padding: 8px 15px;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        
+        .nav-link:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+        
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            position: relative;
+        }
+        
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        
+        .dropdown-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            min-width: 200px;
+            display: none;
+            overflow: hidden;
+            z-index: 1001;
+        }
+        
+        .dropdown-menu.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 12px 20px;
+            color: #334155;
+            text-decoration: none;
+            transition: all 0.3s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f1f5f9;
+        }
+        
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 70px;
+            bottom: 0;
+            width: 250px;
+            background: white;
+            border-right: 1px solid #e2e8f0;
+            padding: 20px 0;
+            overflow-y: auto;
+            z-index: 999;
+        }
+        
+        .sidebar-section {
+            margin-bottom: 25px;
+        }
+        
+        .sidebar-title {
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 0 20px;
+            margin-bottom: 10px;
+        }
+        
+        .sidebar-link {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 20px;
+            color: #475569;
+            text-decoration: none;
+            transition: all 0.3s;
+            border-left: 3px solid transparent;
+        }
+        
+        .sidebar-link:hover {
+            background: #f1f5f9;
+            color: #4f46e5;
+        }
+        
+        .sidebar-link.active {
+            background: #e0e7ff;
+            color: #4f46e5;
+            border-left-color: #4f46e5;
+        }
+        
+        .sidebar-link i {
+            width: 20px;
+            text-align: center;
+        }
+        
+        .main-content {
+            margin-left: 250px;
+            margin-top: 70px;
+            padding: 30px;
+            min-height: calc(100vh - 70px);
+        }
+        
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        
+        .page-title {
+            font-size: 28px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+        
+        .stats-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #f8fafc;
+            padding: 8px 15px;
+            border-radius: 20px;
+            font-weight: 500;
+        }
+        
+        .stats-badge.success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: none;
+        }
+        
+        .btn-primary {
+            background: #4f46e5;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #4338ca;
+        }
+        
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+        
+        .btn-sm {
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+        
+        .filter-card {
+            margin-bottom: 20px;
+        }
+        
+        .filter-form {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            align-items: end;
+        }
+        
+        .form-group {
+            margin-bottom: 0;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 500;
+            font-size: 14px;
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        .form-control:focus {
+            outline: none;
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+        }
+        
+        .table-container {
+            overflow-x: auto;
+        }
+        
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .table th {
+            background: #f8fafc;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #64748b;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .table td {
+            padding: 15px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #475569;
+        }
+        
+        .table tbody tr:hover {
+            background: #f8fafc;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .badge-success { background: #d1fae5; color: #065f46; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        .badge-info { background: #dbeafe; color: #1e40af; }
+        .badge-secondary { background: #f3f4f6; color: #6b7280; }
+        
+        .action-buttons {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .status-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .status-tab {
+            padding: 8px 20px;
+            border-radius: 20px;
+            background: #f1f5f9;
+            color: #64748b;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            transition: all 0.3s;
+        }
+        
+        .status-tab:hover {
+            background: #e2e8f0;
+        }
+        
+        .status-tab.active {
+            background: #4f46e5;
+            color: white;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        
+        .alert-success {
+            background-color: #d1fae5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
+        
+        .alert-error {
+            background-color: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+        
+        .user-avatar-small {
+            width: 36px;
+            height: 36px;
+            background: #10b981;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 14px;
+        }
+        
+        .payment-method-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            margin-right: 8px;
+        }
+        
+        .method-card { background: #dbeafe; color: #1e40af; }
+        .method-upi { background: #d1fae5; color: #065f46; }
+        .method-netbanking { background: #fef3c7; color: #92400e; }
+        .method-wallet { background: #f3e8ff; color: #6b21a8; }
+        
+        @media (max-width: 992px) {
+            .sidebar {
+                width: 70px;
+            }
+            
+            .sidebar .sidebar-title,
+            .sidebar .sidebar-link span {
+                display: none;
+            }
+            
+            .sidebar-link {
+                justify-content: center;
+                padding: 15px;
+            }
+            
+            .main-content {
+                margin-left: 70px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .navbar-menu {
+                display: none;
+            }
+            
+            .main-content {
+                padding: 20px;
+            }
+            
+            .filter-form {
+                grid-template-columns: 1fr;
+            }
+            
+            .page-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 15px;
+            }
+            
+            .status-tabs {
+                flex-wrap: wrap;
+            }
+            
+            .table td, .table th {
+                padding: 10px 5px;
+                font-size: 12px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <a href="/admin/dashboard" class="navbar-brand">
+            <span>ScanStory Admin</span>
+        </a>
+        
+        <div class="navbar-menu">
+            <span class="nav-link">Welcome, {{ admin.name }}</span>
+        </div>
+        
+        <div class="user-menu">
+            <div class="user-avatar">
+                {{ admin.name[0] if admin.name else 'A' }}
+            </div>
+            <div class="dropdown-menu" id="userDropdown">
+                <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
+                <a href="/admin/settings" class="dropdown-item">Settings</a>
+                <div class="dropdown-divider"></div>
+                <a href="/admin/logout" class="dropdown-item">Logout</a>
+            </div>
+            <span onclick="toggleDropdown()" style="cursor: pointer;">▼</span>
+        </div>
+    </nav>
+    
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-section">
+            <div class="sidebar-title">Dashboard</div>
+            <a href="/admin/dashboard" class="sidebar-link">
+                <i>📊</i>
+                <span>Overview</span>
+            </a>
+        </div>
+        
+        <div class="sidebar-section">
+            <div class="sidebar-title">User Management</div>
+            <a href="/admin/users" class="sidebar-link">
+                <i>👥</i>
+                <span>Users</span>
+            </a>
+        </div>
+        
+        <div class="sidebar-section">
+            <div class="sidebar-title">Content</div>
+            <a href="/admin/projects" class="sidebar-link">
+                <i>📁</i>
+                <span>Projects</span>
+            </a>
+        </div>
+        
+        <div class="sidebar-section">
+            <div class="sidebar-title">System</div>
+            <a href="/admin/plans" class="sidebar-link">
+                <i>📋</i>
+                <span>Plans</span>
+            </a>
+            <a href="/admin/payments" class="sidebar-link active">
+                <i>💳</i>
+                <span>Payments</span>
+            </a>
+            {% if admin.role == 'superadmin' %}
+            <a href="/admin/admins" class="sidebar-link">
+                <i>🛡️</i>
+                <span>Admins</span>
+            </a>
+            {% endif %}
+            <a href="/admin/settings" class="sidebar-link">
+                <i>⚙️</i>
+                <span>Settings</span>
+            </a>
+        </div>
+    </div>
+    
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">Payment Management</h1>
+            <div style="display: flex; gap: 15px; align-items: center;">
+                <span class="stats-badge success">
+                    <span>₹{{ "%.2f"|format(total_amount) }}</span>
+                    <span>•</span>
+                    <span>{{ success_count }} successful</span>
+                </span>
+            </div>
+        </div>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        <!-- Status Tabs -->
+        <div class="status-tabs">
+            <a href="/admin/payments" class="status-tab {% if status == 'all' %}active{% endif %}">All Payments</a>
+            <a href="/admin/payments?status=success" class="status-tab {% if status == 'success' %}active{% endif %}">Successful</a>
+            <a href="/admin/payments?status=pending" class="status-tab {% if status == 'pending' %}active{% endif %}">Pending</a>
+            <a href="/admin/payments?status=failed" class="status-tab {% if status == 'failed' %}active{% endif %}">Failed</a>
+        </div>
+        
+        <!-- Filters -->
+        <div class="card filter-card">
+            <form method="GET" action="/admin/payments" class="filter-form">
+                <div class="form-group">
+                    <label for="search">Search</label>
+                    <input type="text" id="search" name="search" class="form-control" placeholder="Order ID, User email, or Razorpay ID" value="{{ search }}">
+                </div>
+                
+                <div class="form-row" style="grid-column: span 2; display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                    <div class="form-group">
+                        <label for="start_date">Start Date</label>
+                        <input type="date" id="start_date" name="start_date" class="form-control" value="{{ start_date }}">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="end_date">End Date</label>
+                        <input type="date" id="end_date" name="end_date" class="form-control" value="{{ end_date }}">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="method">Payment Method</label>
+                    <select id="method" name="method" class="form-control">
+                        <option value="all" {% if method == 'all' %}selected{% endif %}>All Methods</option>
+                        <option value="card" {% if method == 'card' %}selected{% endif %}>Card</option>
+                        <option value="upi" {% if method == 'upi' %}selected{% endif %}>UPI</option>
+                        <option value="netbanking" {% if method == 'netbanking' %}selected{% endif %}>Net Banking</option>
+                        <option value="wallet" {% if method == 'wallet' %}selected{% endif %}>Wallet</option>
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <button type="submit" class="btn btn-primary" style="height: 42px;">Apply Filters</button>
+                    <a href="/admin/payments" class="btn btn-secondary" style="height: 42px;">Clear</a>
+                </div>
+            </form>
+        </div>
+        
+        <!-- Payments Table -->
+        <div class="card">
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>User</th>
+                            <th>Order Details</th>
+                            <th>Plan & Amount</th>
+                            <th>Payment Method</th>
+                            <th>Date & Time</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for payment in payments %}
+                        <tr>
+                            <td>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <div class="user-avatar-small">
+                                        {{ payment.user.first_name[0] if payment.user and payment.user.first_name else payment.user.email[0]|upper if payment.user else '?' }}
+                                    </div>
+                                    <div>
+                                        <strong>{{ payment.user.full_name if payment.user else 'User Not Found' }}</strong><br>
+                                        <small style="color: #6b7280;">{{ payment.user.email if payment.user else 'N/A' }}</small>
+                                    </div>
+                                </div>
+                            </td>
+                            <td>
+                                <strong>{{ payment.order_id }}</strong><br>
+                                <small style="color: #6b7280;">
+                                    {% if payment.razorpay_order_id %}
+                                    Razorpay: {{ payment.razorpay_order_id[:8] }}...
+                                    {% endif %}
+                                </small>
+                            </td>
+                            <td>
+                                <strong>{{ payment.plan.plan_name if payment.plan else 'N/A' }}</strong><br>
+                                <div>₹{{ "%.2f"|format(payment.total_amount) }}</div>
+                                {% if payment.offer_amount and payment.offer_amount < payment.amount %}
+                                <small style="color: #10b981; font-size: 12px;">
+                                    Save ₹{{ "%.2f"|format(payment.amount - payment.offer_amount) }}
+                                </small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div style="display: flex; align-items: center;">
+                                    {% if payment.payment_method == 'card' %}
+                                    <div class="payment-method-icon method-card">💳</div>
+                                    <span>Card</span>
+                                    {% elif payment.payment_method == 'upi' %}
+                                    <div class="payment-method-icon method-upi">📱</div>
+                                    <span>UPI</span>
+                                    {% elif payment.payment_method == 'netbanking' %}
+                                    <div class="payment-method-icon method-netbanking">🏦</div>
+                                    <span>Net Banking</span>
+                                    {% elif payment.payment_method == 'wallet' %}
+                                    <div class="payment-method-icon method-wallet">👛</div>
+                                    <span>Wallet</span>
+                                    {% else %}
+                                    <span style="color: #6b7280;">{{ payment.payment_method or 'Unknown' }}</span>
+                                    {% endif %}
+                                </div>
+                                {% if payment.bank_name %}
+                                <small style="color: #6b7280; font-size: 12px;">{{ payment.bank_name }}</small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if payment.payment_at %}
+                                {{ payment.payment_at.strftime('%d %b %Y') }}<br>
+                                <small style="color: #6b7280;">{{ payment.payment_at.strftime('%I:%M %p') }}</small>
+                                {% else %}
+                                {{ payment.created_at.strftime('%d %b %Y') }}<br>
+                                <small style="color: #6b7280;">{{ payment.created_at.strftime('%I:%M %p') }}</small>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if payment.status == 'success' %}
+                                <span class="badge badge-success">Success</span>
+                                {% elif payment.status == 'pending' %}
+                                <span class="badge badge-warning">Pending</span>
+                                {% elif payment.status == 'failed' %}
+                                <span class="badge badge-danger">Failed</span>
+                                {% elif payment.status == 'refunded' %}
+                                <span class="badge badge-secondary">Refunded</span>
+                                {% else %}
+                                <span class="badge badge-secondary">{{ payment.status|title }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="action-buttons">
+                                    <a href="/admin/payments/{{ payment.id }}" class="btn btn-primary btn-sm">View</a>
+                                    {% if payment.status == 'success' and payment.razorpay_payment_id %}
+                                    <button class="btn btn-secondary btn-sm" onclick="copyToClipboard('{{ payment.razorpay_payment_id }}')">Copy ID</button>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="7" style="text-align: center; padding: 40px;">
+                                No payments found
+                                {% if search or status != 'all' or method != 'all' or start_date or end_date %}
+                                with current filters. <a href="/admin/payments">Clear filters</a>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Payment Statistics -->
+        <div class="card">
+            <h3 style="margin-bottom: 15px;">Payment Statistics</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #4f46e5;">{{ payments|length }}</div>
+                    <div style="color: #6b7280;">Total Payments</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #10b981;">{{ success_count }}</div>
+                    <div style="color: #6b7280;">Successful</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #f59e0b;">₹{{ "%.2f"|format(total_amount) }}</div>
+                    <div style="color: #6b7280;">Total Revenue</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #8b5cf6;">
+                        {{ payments|selectattr('payment_method', 'equalto', 'card')|list|length }}
+                    </div>
+                    <div style="color: #6b7280;">Card Payments</div>
+                </div>
+            </div>
+            
+            <!-- Method Distribution -->
+            <div style="margin-top: 25px;">
+                <h4 style="margin-bottom: 15px;">Payment Method Distribution</h4>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
+                    {% set methods = {'card': 0, 'upi': 0, 'netbanking': 0, 'wallet': 0, 'other': 0} %}
+                    {% for payment in payments %}
+                        {% if payment.payment_method in methods %}
+                            {% set _ = methods.update({payment.payment_method: methods[payment.payment_method] + 1}) %}
+                        {% else %}
+                            {% set _ = methods.update({'other': methods['other'] + 1}) %}
+                        {% endif %}
+                    {% endfor %}
+                    
+                    {% for method_name, count in methods.items() if count > 0 %}
+                    <div style="background: #f8fafc; padding: 15px; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 20px; font-weight: bold; color: #4f46e5;">{{ count }}</div>
+                        <div style="color: #64748b; text-transform: capitalize;">{{ method_name }}</div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function toggleDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+        
+        // Close dropdown when clicking outside
+        window.onclick = function(event) {
+            if (!event.target.matches('.user-menu span')) {
+                const dropdowns = document.querySelectorAll('.dropdown-menu');
+                dropdowns.forEach(dropdown => {
+                    if (dropdown.classList.contains('show')) {
+                        dropdown.classList.remove('show');
+                    }
+                });
+            }
+        };
+        
+        // Copy payment ID to clipboard
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                alert('Payment ID copied to clipboard!');
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+            });
+        }
+        
+        // Auto remove alerts after 5 seconds
+        document.addEventListener('DOMContentLoaded', function() {
+            const alerts = document.querySelectorAll('.alert');
+            alerts.forEach(alert => {
+                setTimeout(() => {
+                    alert.style.transition = 'opacity 0.5s';
+                    alert.style.opacity = '0';
+                    setTimeout(() => alert.remove(), 500);
+                }, 5000);
+            });
+            
+            // Set date inputs max to today
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('start_date')?.setAttribute('max', today);
+            document.getElementById('end_date')?.setAttribute('max', today);
+        });
+    </script>
+</body>
+</html>

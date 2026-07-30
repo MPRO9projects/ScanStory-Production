@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Terms and Conditions | SCANSTORY</title>
+  <meta name="description" content="Read the ScanStory Terms and Conditions covering account usage, AR project uploads, QR codes, subscriptions, cancellations, refunds, content rights, and legal responsibilities.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://myscanstory.com/terms">
+
+  <!-- Schema JSON-LD -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "WebPage",
+    "name": "Terms and Conditions — ScanStory",
+    "url": "https://myscanstory.com/terms",
+    "description": "Terms and Conditions for ScanStory AR platform covering account usage, uploads, QR codes, subscriptions, refunds, and legal jurisdiction.",
+    "publisher": {
+      "@type": "Organization",
+      "name": "ScanStory — Namma Mysore Foundation",
+      "url": "https://myscanstory.com/",
+      "telephone": "+917338544142",
+      "email": "contact@myscanstory.com"
+    }
+  }
+  </script>
+
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: "Plus Jakarta Sans", Arial, sans-serif;
+      background:
+        radial-gradient(circle at top left, rgba(255, 0, 122, 0.16), transparent 32%),
+        radial-gradient(circle at bottom right, rgba(0, 212, 255, 0.14), transparent 35%),
+        #050509;
+      color: #ffffff;
+      line-height: 1.7;
+      min-height: 100vh;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    .page-shell {
+      width: min(1180px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 60px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 34px;
+    }
+
+    .brand { display: flex; align-items: center; gap: 12px; }
+
+    .brand-logo {
+      width: 46px; height: 46px;
+      border-radius: 14px;
+      object-fit: contain;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.1);
+      padding: 6px;
+    }
+
+    .brand-title {
+      font-size: 20px; font-weight: 900; letter-spacing: 0.08em;
+      background: linear-gradient(90deg, #ffffff, #00d4ff, #ff007a);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+
+    .brand-subtitle { font-size: 12px; color: rgba(255,255,255,0.55); letter-spacing: 0.08em; text-transform: uppercase; }
+
+    .back-btn {
+      padding: 10px 18px; border-radius: 999px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.13);
+      color: rgba(255,255,255,0.88);
+      font-size: 14px; font-weight: 700; transition: 0.25s ease;
+    }
+    .back-btn:hover {
+      background: linear-gradient(135deg, rgba(255,0,122,0.22), rgba(0,212,255,0.16));
+      border-color: rgba(255,255,255,0.28); transform: translateY(-1px);
+    }
+
+    .hero {
+      position: relative; overflow: hidden; border-radius: 34px;
+      padding: 56px; margin-bottom: 34px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.11), rgba(255,255,255,0.03)), rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.11);
+      box-shadow: 0 30px 90px rgba(0,0,0,0.45);
+    }
+    .hero::before {
+      content: ""; position: absolute; width: 360px; height: 360px; border-radius: 50%;
+      background: rgba(255,0,122,0.18); filter: blur(80px); right: -120px; top: -120px; pointer-events: none;
+    }
+    .hero::after {
+      content: ""; position: absolute; width: 260px; height: 260px; border-radius: 50%;
+      background: rgba(0,212,255,0.12); filter: blur(75px); left: -90px; bottom: -90px; pointer-events: none;
+    }
+
+    .hero-content { position: relative; z-index: 2; max-width: 800px; }
+
+    .eyebrow {
+      display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px;
+      border-radius: 999px; background: rgba(255,0,122,0.13); border: 1px solid rgba(255,0,122,0.24);
+      color: #ff8fc5; font-size: 12px; font-weight: 800; letter-spacing: 0.12em;
+      text-transform: uppercase; margin-bottom: 20px;
+    }
+
+    .hero h1 { font-size: clamp(34px,5vw,68px); line-height: 1.04; letter-spacing: -0.05em; margin-bottom: 20px; }
+
+    .gradient-text {
+      background: linear-gradient(90deg, #ffffff, #00d4ff, #ff007a);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+
+    .hero p { font-size: 17px; color: rgba(255,255,255,0.68); max-width: 720px; }
+
+    .meta-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 26px; }
+
+    .meta-pill {
+      padding: 10px 14px; border-radius: 14px;
+      background: rgba(0,0,0,0.28); border: 1px solid rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.78); font-size: 13px; font-weight: 700;
+    }
+
+    .layout { display: grid; grid-template-columns: 290px 1fr; gap: 26px; align-items: start; }
+
+    .side-nav {
+      position: sticky; top: 22px; border-radius: 24px; padding: 20px;
+      background: rgba(255,255,255,0.055); border: 1px solid rgba(255,255,255,0.11);
+      backdrop-filter: blur(18px);
+    }
+
+    .side-nav h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.12em; color: rgba(255,255,255,0.45); margin-bottom: 14px; }
+    .side-nav-links { display: grid; gap: 8px; }
+
+    .nav-link {
+      display: flex; align-items: center; gap: 10px; padding: 11px 12px;
+      border-radius: 14px; font-size: 14px; color: rgba(255,255,255,0.68); transition: 0.22s ease;
+    }
+    .nav-link span {
+      width: 24px; height: 24px; display: grid; place-items: center;
+      border-radius: 8px; font-size: 12px; background: rgba(255,255,255,0.07); color: #00d4ff;
+    }
+    .nav-link:hover { color: #ffffff; background: rgba(255,255,255,0.08); transform: translateX(3px); }
+
+    .content { display: flex; flex-direction: column; gap: 18px; }
+
+    .term-card {
+      position: relative; overflow: hidden; border-radius: 26px; padding: 28px;
+      background: linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0.035));
+      border: 1px solid rgba(255,255,255,0.1);
+      box-shadow: 0 18px 55px rgba(0,0,0,0.28);
+    }
+    .term-card::before {
+      content: ""; position: absolute; top: 0; left: 0; width: 5px; height: 100%;
+      background: linear-gradient(180deg,#ff007a,#7000ff,#00d4ff); opacity: 0.95;
+    }
+
+    .term-number {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 38px; height: 38px; border-radius: 14px; margin-bottom: 16px;
+      background: linear-gradient(135deg,rgba(255,0,122,0.24),rgba(0,212,255,0.17));
+      border: 1px solid rgba(255,255,255,0.14); color: #ffffff; font-weight: 900;
+    }
+
+    .term-card h2 { font-size: 24px; margin-bottom: 12px; letter-spacing: -0.03em; }
+    .term-card p { color: rgba(255,255,255,0.68); font-size: 15px; margin-bottom: 12px; }
+    .term-card p:last-child { margin-bottom: 0; }
+
+    .term-card ul { margin-top: 12px; padding-left: 0; list-style: none; display: grid; gap: 9px; }
+    .term-card li { position: relative; padding-left: 26px; color: rgba(255,255,255,0.68); font-size: 15px; }
+    .term-card li::before { content: "✓"; position: absolute; left: 0; top: 0; color: #00ffaa; font-weight: 900; }
+
+    .term-card ul.cross li::before { content: "✕"; color: #ff6b6b; }
+
+    .highlight-box {
+      margin-top: 16px; padding: 16px; border-radius: 18px;
+      background: rgba(255,0,122,0.09); border: 1px solid rgba(255,0,122,0.2);
+      color: rgba(255,255,255,0.72); font-size: 14px;
+    }
+
+    .info-box {
+      margin-top: 16px; padding: 16px; border-radius: 18px;
+      background: rgba(0,212,255,0.085); border: 1px solid rgba(0,212,255,0.18);
+      color: rgba(255,255,255,0.72); font-size: 14px;
+    }
+
+    .warn-box {
+      margin-top: 16px; padding: 16px; border-radius: 18px;
+      background: rgba(255, 180, 0, 0.08); border: 1px solid rgba(255,180,0,0.2);
+      color: rgba(255,255,255,0.72); font-size: 14px;
+    }
+
+    .footer-legal {
+      margin-top: 30px; padding: 26px; border-radius: 24px;
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.09);
+      text-align: center; color: rgba(255,255,255,0.56); font-size: 14px;
+    }
+    .footer-legal strong { color: #ffffff; }
+
+    .footer-actions { margin-top: 18px; display: flex; justify-content: center; gap: 12px; flex-wrap: wrap; }
+
+    .footer-btn {
+      padding: 11px 18px; border-radius: 999px;
+      background: linear-gradient(135deg, #ff007a, #7000ff); color: #ffffff;
+      font-size: 14px; font-weight: 800; transition: 0.2s ease;
+    }
+    .footer-btn:hover { opacity: 0.85; transform: translateY(-1px); }
+
+    .footer-btn.secondary {
+      background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+    }
+
+    @media (max-width: 900px) {
+      .hero { padding: 34px 24px; border-radius: 26px; }
+      .layout { grid-template-columns: 1fr; }
+      .side-nav { position: relative; top: auto; }
+      .side-nav-links { display: grid; grid-template-columns: repeat(2,1fr); gap: 8px; }
+      .nav-link { font-size: 13px; }
+    }
+
+    @media (max-width: 560px) {
+      .page-shell { width: min(100% - 20px,1180px); padding-top: 16px; }
+      .topbar { align-items: flex-start; }
+      .brand-logo { width: 40px; height: 40px; }
+      .brand-title { font-size: 16px; }
+      .brand-subtitle { font-size: 10px; }
+      .back-btn { padding: 9px 13px; font-size: 13px; }
+      .hero { padding: 28px 18px; }
+      .hero p { font-size: 15px; }
+      .side-nav-links { grid-template-columns: 1fr; }
+      .term-card { padding: 24px 20px; border-radius: 22px; }
+      .term-card h2 { font-size: 21px; }
+    }
+  </style>
+</head>
+
+<body>
+  <main class="page-shell">
+
+    <header class="topbar">
+      <a href="/" class="brand">
+        <img class="brand-logo" src="{{ url_for('static', filename='assets/logos/logo.png') }}" alt="ScanStory Logo">
+        <div>
+          <div class="brand-title">SCANSTORY</div>
+          <div class="brand-subtitle">AR Memory Platform</div>
+        </div>
+      </a>
+      <a href="/" class="back-btn">← Back Home</a>
+    </header>
+
+    <section class="hero">
+      <div class="hero-content">
+        <div class="eyebrow">Legal</div>
+        <h1>Terms &amp; <span class="gradient-text">Conditions</span></h1>
+        <p>Plain-language rules for using ScanStory — covering accounts, uploads, QR codes, AR scanner, payments, and your rights.</p>
+        <div class="meta-row">
+          <div class="meta-pill">Last Updated: 03 June 2026</div>
+          <div class="meta-pill">Platform: Web-Based AR</div>
+          <div class="meta-pill">Governed by: Indian Law</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="layout">
+
+      <aside class="side-nav">
+        <h3>Sections</h3>
+        <div class="side-nav-links">
+          <a href="#introduction"  class="nav-link"><span>1</span>  Introduction</a>
+          <a href="#accounts"      class="nav-link"><span>2</span>  Accounts</a>
+          <a href="#uploads"       class="nav-link"><span>3</span>  Uploads</a>
+          <a href="#qr"            class="nav-link"><span>4</span>  QR Codes</a>
+          <a href="#scanner"       class="nav-link"><span>5</span>  AR Scanner</a>
+          <a href="#ip"            class="nav-link"><span>6</span>  Ownership</a>
+          <a href="#trial"         class="nav-link"><span>7</span>  Free Trial</a>
+          <a href="#refund"        class="nav-link"><span>8</span>  Cancellation</a>
+          <a href="#liability"     class="nav-link"><span>9</span>  Liability</a>
+          <a href="#suspension"    class="nav-link"><span>10</span> Suspension</a>
+          <a href="#data"          class="nav-link"><span>11</span> Data</a>
+          <a href="#law"           class="nav-link"><span>12</span> Jurisdiction</a>
+        </div>
+      </aside>
+
+      <div class="content">
+
+        <!-- 1. Introduction -->
+        <article class="term-card" id="introduction">
+          <div class="term-number">1</div>
+          <h2>Introduction</h2>
+          <p>ScanStory is a WebAR platform by Namma Mysore Foundation. You upload a photo and video, get a QR code, and anyone who scans that QR and points their camera at the photo sees the video overlay in AR — no app needed.</p>
+          <div class="info-box">
+            By using ScanStory you agree to these terms. If you disagree, please do not use the platform.
+          </div>
+        </article>
+
+        <!-- 2. Accounts -->
+        <article class="term-card" id="accounts">
+          <div class="term-number">2</div>
+          <h2>Accounts &amp; Registration</h2>
+          <p>You need an account to create projects and generate QR codes.</p>
+          <ul>
+            <li>Use real and accurate details when registering.</li>
+            <li>Keep your password safe — you are responsible for all activity on your account.</li>
+            <li>Do not try to access other accounts, the admin panel, or backend systems.</li>
+            <li>One account per person — do not create duplicate accounts to bypass limits.</li>
+          </ul>
+        </article>
+
+        <!-- 3. Content Uploads -->
+        <article class="term-card" id="uploads">
+          <div class="term-number">3</div>
+          <h2>Content Uploads</h2>
+          <p>You own your uploaded images and videos. By uploading, you give us permission to process and display them solely to run your AR project.</p>
+          <p>You must not upload:</p>
+          <ul class="cross">
+            <li>Content you do not own or have permission to use</li>
+            <li>Illegal, harmful, hateful, or violent media</li>
+            <li>Misleading, fraudulent, or obscene content</li>
+            <li>Files with malware or harmful code</li>
+          </ul>
+          <div class="highlight-box">
+            We may remove any project that breaks these rules. Repeated violations = account suspension.
+          </div>
+        </article>
+
+        <!-- 4. QR Code Usage -->
+        <article class="term-card" id="qr">
+          <div class="term-number">4</div>
+          <h2>QR Code Usage</h2>
+          <p>Each project generates a unique QR code that opens your AR scanner page.</p>
+          <ul>
+            <li>QR codes are generated for your project access only — do not share them for unintended purposes.</li>
+            <li>We are not responsible for how QR codes are printed, shared, or misused by third parties.</li>
+            <li>QR code access stops if your plan expires or your account is suspended.</li>
+            <li>Do not copy or redirect QR codes to link to external harmful or illegal content.</li>
+          </ul>
+          <div class="info-box">
+            Always download a fresh QR code after updating your project — old printed codes may point to outdated content.
+          </div>
+        </article>
+
+        <!-- 5. AR Scanner & Camera -->
+        <article class="term-card" id="scanner">
+          <div class="term-number">5</div>
+          <h2>AR Scanner &amp; Camera Permission</h2>
+          <p>The ScanStory scanner runs in your mobile browser using your device camera.</p>
+          <ul>
+            <li>Camera permission is required — the scanner will not work without it.</li>
+            <li>The page must be opened over HTTPS. Camera access is blocked on plain HTTP.</li>
+            <li>Works best on Chrome (Android) and Safari (iOS). Older or unsupported browsers may have issues.</li>
+            <li>Detection quality depends on lighting, camera resolution, internet speed, and the quality of your uploaded image.</li>
+          </ul>
+          <div class="warn-box">
+            ⚠️ ScanStory is not responsible for detection failures caused by poor lighting, low-resolution cameras, or slow internet connections.
+          </div>
+        </article>
+
+        <!-- 6. Intellectual Property -->
+        <article class="term-card" id="ip">
+          <div class="term-number">6</div>
+          <h2>Ownership &amp; IP</h2>
+          <p>You own your uploads. We own the platform — the design, code, scanner logic, branding, and backend.</p>
+          <ul>
+            <li>Do not copy, resell, or reverse-engineer any part of ScanStory.</li>
+            <li>Do not remove or bypass platform watermarks or branding.</li>
+            <li>You are responsible for ensuring you have rights to all uploaded content.</li>
+          </ul>
+        </article>
+
+        <!-- 7. Free Trial -->
+        <article class="term-card" id="trial">
+          <div class="term-number">7</div>
+          <h2>Free Trial</h2>
+          <p>New users may access a free trial with limited projects and scans for a fixed period.</p>
+          <ul>
+            <li>Trial limits vary — check your dashboard for your specific limits.</li>
+            <li>After trial expiry or limit reached, upgrade to continue.</li>
+            <li>Creating multiple accounts to reuse trial access is misuse and may lead to a ban.</li>
+          </ul>
+        </article>
+
+        <!-- 8. Cancellation & Refund -->
+        <article class="term-card" id="refund">
+          <div class="term-number">8</div>
+          <h2>Cancellation &amp; Refund</h2>
+
+          <p><strong style="color:#fff;">Cancellation:</strong><br>
+          To cancel a recurring subscription, contact us at least <strong style="color:#ff007a;">7 days before your renewal date</strong>. If you miss this window, the next billing cycle may process automatically.</p>
+
+          <p><strong style="color:#fff;">Refunds:</strong><br>
+          All payments are non-refundable once processed. This applies to monthly plans, yearly plans, custom packages, and one-time payments.</p>
+
+          <p><strong style="color:#fff;">Custom Plans:</strong><br>
+          Custom or enterprise plans are billed as agreed. Terms of that agreement apply.</p>
+
+          <div class="highlight-box">
+            Not our fault if you forgot to cancel before renewal. Please set a reminder before your billing date.
+          </div>
+        </article>
+
+        <!-- 9. Limitation of Liability -->
+        <article class="term-card" id="liability">
+          <div class="term-number">9</div>
+          <h2>Limitation of Liability</h2>
+          <p>ScanStory is not responsible for:</p>
+          <ul class="cross">
+            <li>Misuse of content you upload or share</li>
+            <li>Copyright claims made against your uploaded content by third parties</li>
+            <li>Camera, browser, or device compatibility issues on user devices</li>
+            <li>Payment gateway failures or bank-side transaction errors</li>
+            <li>Business losses caused by service downtime, server issues, or maintenance</li>
+            <li>Hosting or network issues outside our direct control</li>
+          </ul>
+          <div class="info-box">
+            We do our best to keep ScanStory running reliably — but we cannot guarantee 100% uptime or zero errors.
+          </div>
+        </article>
+
+        <!-- 10. Account Suspension -->
+        <article class="term-card" id="suspension">
+          <div class="term-number">10</div>
+          <h2>Account Suspension &amp; Termination</h2>
+          <p>We may suspend or permanently remove an account if:</p>
+          <ul class="cross">
+            <li>Illegal, harmful, or copyrighted content is uploaded</li>
+            <li>Free trial is abused (multiple accounts, fake info)</li>
+            <li>Payments are disputed fraudulently</li>
+            <li>Platform security or admin systems are probed or attacked</li>
+            <li>Terms are repeatedly violated after prior warnings</li>
+          </ul>
+          <div class="highlight-box">
+            Suspended accounts lose access to projects, QR codes, and all stored media. No refunds on suspension due to rule violations.
+          </div>
+        </article>
+
+        <!-- 11. Data Handling -->
+        <article class="term-card" id="data">
+          <div class="term-number">11</div>
+          <h2>Data After Cancellation</h2>
+          <p>When your account expires or is cancelled:</p>
+          <ul>
+            <li>Project access and QR scanning may stop immediately.</li>
+            <li>Your data may be kept briefly for compliance and support purposes.</li>
+            <li>Inactive data may be deleted after a period based on our storage policy.</li>
+            <li>Download your QR codes and project records before cancelling.</li>
+          </ul>
+          <div class="info-box">
+            We do not guarantee permanent storage after account removal.
+          </div>
+        </article>
+
+        <!-- 12. Law & Jurisdiction -->
+        <article class="term-card" id="law">
+          <div class="term-number">12</div>
+          <h2>Law &amp; Jurisdiction</h2>
+          <p>These terms follow the laws of India. Any dispute is subject to the jurisdiction of courts in <strong style="color:#fff;">Mysuru, Karnataka</strong>.</p>
+          <div class="info-box">
+            Before going legal — please contact us first. Most issues can be resolved quickly through support.
+          </div>
+        </article>
+
+        <!-- Footer -->
+        <section class="footer-legal">
+          <p>Questions? Email <strong>contact@myscanstory.com</strong> or call <strong><a href="tel:+917338544142" style="color:#ff007a;">+91 73385 44142</a></strong></p>
+          <p style="margin-top:8px;font-size:13px;">By using ScanStory, you confirm you have read and agreed to these terms.</p>
+          <p style="margin-top:10px;font-size:12px;color:rgba(255,255,255,0.35);">© 2026 SCANSTORY / Namma Mysore Foundation. All rights reserved.</p>
+          <div class="footer-actions">
+            <a href="/" class="footer-btn">Back to Home</a>
+            
+            <a href="/contact" class="footer-btn secondary">Contact Support</a>
+          </div>
+        </section>
+
+      </div>
+    </section>
+
+  </main>
+</body>
+</html>

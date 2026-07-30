@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Details - Admin Panel</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        body {
+            background-color: #f8fafc;
+            color: #334155;
+        }
+        
+        .navbar {
+            background: linear-gradient(to right, #4f46e5, #7c3aed);
+            color: white;
+            padding: 0 20px;
+            height: 70px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1000;
+        }
+        
+        .navbar-brand {
+            font-size: 24px;
+            font-weight: bold;
+            text-decoration: none;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .navbar-menu {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .nav-link {
+            color: rgba(255, 255, 255, 0.9);
+            text-decoration: none;
+            padding: 8px 15px;
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+        
+        .nav-link:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+        
+        .user-menu {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            position: relative;
+        }
+        
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+        }
+        
+        .dropdown-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            min-width: 200px;
+            display: none;
+            overflow: hidden;
+            z-index: 1001;
+        }
+        
+        .dropdown-menu.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            display: block;
+            padding: 12px 20px;
+            color: #334155;
+            text-decoration: none;
+            transition: all 0.3s;
+        }
+        
+        .dropdown-item:hover {
+            background: #f1f5f9;
+        }
+        
+        .sidebar {
+            position: fixed;
+            left: 0;
+            top: 70px;
+            bottom: 0;
+            width: 250px;
+            background: white;
+            border-right: 1px solid #e2e8f0;
+            padding: 20px 0;
+            overflow-y: auto;
+            z-index: 999;
+        }
+        
+        .sidebar-section {
+            margin-bottom: 25px;
+        }
+        
+        .sidebar-title {
+            color: #64748b;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 0 20px;
+            margin-bottom: 10px;
+        }
+        
+        .sidebar-link {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 20px;
+            color: #475569;
+            text-decoration: none;
+            transition: all 0.3s;
+            border-left: 3px solid transparent;
+        }
+        
+        .sidebar-link:hover {
+            background: #f1f5f9;
+            color: #4f46e5;
+        }
+        
+        .sidebar-link.active {
+            background: #e0e7ff;
+            color: #4f46e5;
+            border-left-color: #4f46e5;
+        }
+        
+        .sidebar-link i {
+            width: 20px;
+            text-align: center;
+        }
+        
+        .main-content {
+            margin-left: 250px;
+            margin-top: 70px;
+            padding: 30px;
+            min-height: calc(100vh - 70px);
+        }
+        
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        
+        .page-title {
+            font-size: 28px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: none;
+        }
+        
+        .btn-primary {
+            background: #4f46e5;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #4338ca;
+        }
+        
+        .btn-secondary {
+            background: #6b7280;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #4b5563;
+        }
+        
+        .btn-success {
+            background: #10b981;
+            color: white;
+        }
+        
+        .btn-success:hover {
+            background: #059669;
+        }
+        
+        .btn-danger {
+            background: #ef4444;
+            color: white;
+        }
+        
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+        
+        .btn-warning {
+            background: #f59e0b;
+            color: white;
+        }
+        
+        .btn-warning:hover {
+            background: #d97706;
+        }
+        
+        .btn-sm {
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            margin-bottom: 30px;
+        }
+        
+        .project-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .project-title {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1e293b;
+        }
+        
+        .project-status-badge {
+            padding: 8px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+        
+        .status-active {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        
+        .status-inactive {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        
+        .info-section {
+            background: #f8fafc;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        
+        .info-section h3 {
+            font-size: 16px;
+            font-weight: 600;
+            color: #64748b;
+            margin-bottom: 15px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .info-row:last-child {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        
+        .info-label {
+            color: #64748b;
+            font-size: 14px;
+        }
+        
+        .info-value {
+            color: #1e293b;
+            font-weight: 500;
+            text-align: right;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        
+        .alert-success {
+            background-color: #d1fae5;
+            color: #065f46;
+            border: 1px solid #a7f3d0;
+        }
+        
+        .alert-error {
+            background-color: #fee2e2;
+            color: #991b1b;
+            border: 1px solid #fecaca;
+        }
+        
+        .user-avatar-large {
+            width: 60px;
+            height: 60px;
+            color: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 24px;
+            margin-bottom: 15px;
+        }
+        
+        .avatar-user { background: #4f46e5; }
+        .avatar-admin { background: #8b5cf6; }
+        
+        .admin-badge {
+            background: #8b5cf6;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: 600;
+            margin-left: 5px;
+        }
+        
+        .pairs-container {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+        }
+        
+        .pair-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border-bottom: 1px solid #e2e8f0;
+            transition: all 0.3s;
+        }
+        
+        .pair-item:hover {
+            background: #f8fafc;
+        }
+        
+        .pair-item:last-child {
+            border-bottom: none;
+        }
+        
+        .pair-text {
+            flex: 1;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        
+        .pair-actions {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        
+        .badge-success { background: #d1fae5; color: #065f46; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        .badge-info { background: #dbeafe; color: #1e40af; }
+        
+        .table-container {
+            overflow-x: auto;
+        }
+        
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .table th {
+            background: #f8fafc;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #64748b;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .table td {
+            padding: 15px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #475569;
+        }
+        
+        .table tbody tr:hover {
+            background: #f8fafc;
+        }
+        
+        @media (max-width: 992px) {
+            .sidebar {
+                width: 70px;
+            }
+            
+            .sidebar .sidebar-title,
+            .sidebar .sidebar-link span {
+                display: none;
+            }
+            
+            .sidebar-link {
+                justify-content: center;
+                padding: 15px;
+            }
+            
+            .main-content {
+                margin-left: 70px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .navbar-menu {
+                display: none;
+            }
+            
+            .main-content {
+                padding: 20px;
+            }
+            
+            .info-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .page-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 15px;
+            }
+            
+            .project-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 15px;
+            }
+            
+            .pair-item {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+            
+            .pair-actions {
+                width: 100%;
+                justify-content: flex-end;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar">
+        <a href="/admin/dashboard" class="navbar-brand">
+            <span>ScanStory Admin</span>
+        </a>
+        
+        <div class="navbar-menu">
+            <span class="nav-link">Welcome, {{ admin.name }}</span>
+        </div>
+        
+        <div class="user-menu">
+            <div class="user-avatar">
+                {{ admin.name[0] if admin.name else 'A' }}
+            </div>
+            <div class="dropdown-menu" id="userDropdown">
+                <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
+                <a href="/admin/settings" class="dropdown-item">Settings</a>
+                <div class="dropdown-divider"></div>
+                <a href="/admin/logout" class="dropdown-item">Logout</a>
+            </div>
+            <span onclick="toggleDropdown()" style="cursor: pointer;">▼</span>
+        </div>
+    </nav>
+    
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-section">
+            <div class="sidebar-title">Dashboard</div>
+            <a href="/admin/dashboard" class="sidebar-link">
+                <i>📊</i>
+                <span>Overview</span>
+            </a>
+        </div>
+        
+        <div class="sidebar-section">
+            <div class="sidebar-title">User Management</div>
+            <a href="/admin/users" class="sidebar-link">
+                <i>👥</i>
+                <span>Users</span>
+            </a>
+        </div>
+        
+        <div class="sidebar-section">
+            <div class="sidebar-title">Content</div>
+            <a href="/admin/projects" class="sidebar-link active">
+                <i>📁</i>
+                <span>Projects</span>
+            </a>
+        </div>
+        
+        <div class="sidebar-section">
+            <div class="sidebar-title">System</div>
+            <a href="/admin/plans" class="sidebar-link">
+                <i>📋</i>
+                <span>Plans</span>
+            </a>
+            <a href="/admin/payments" class="sidebar-link">
+                <i>💳</i>
+                <span>Payments</span>
+            </a>
+            {% if admin.role == 'superadmin' %}
+            <a href="/admin/admins" class="sidebar-link">
+                <i>🛡️</i>
+                <span>Admins</span>
+            </a>
+            {% endif %}
+            <a href="/admin/settings" class="sidebar-link">
+                <i>⚙️</i>
+                <span>Settings</span>
+            </a>
+        </div>
+    </div>
+    
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">Project Details</h1>
+            <div>
+                <a href="/admin/projects" class="btn btn-secondary">← Back to Projects</a>
+            </div>
+        </div>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        <!-- Project Header -->
+        <div class="card">
+            <div class="project-header">
+                <div>
+                    <div class="project-title">{{ project.name }}</div>
+                    <div style="color: #64748b; margin-top: 5px;">
+                        ID: {{ project.id }} • Created: {{ project.created_at.strftime('%d %b %Y') }}
+                    </div>
+                </div>
+                <div style="text-align: right;">
+                    <div class="project-status-badge status-{{ 'active' if project.is_active else 'inactive' }}">
+                        {{ 'Active' if project.is_active else 'Inactive' }}
+                    </div>
+                    <div style="margin-top: 10px; display: flex; gap: 10px;">
+                        {% if project.is_active %}
+                        <form action="/admin/projects/{{ project.id }}/toggle-status" method="POST" style="display: inline;">
+                            <button type="submit" class="btn btn-warning btn-sm">Deactivate</button>
+                        </form>
+                        {% else %}
+                        <form action="/admin/projects/{{ project.id }}/toggle-status" method="POST" style="display: inline;">
+                            <button type="submit" class="btn btn-success btn-sm">Activate</button>
+                        </form>
+                        {% endif %}
+                        <form action="/admin/projects/{{ project.id }}/delete" method="POST" style="display: inline;">
+                            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this project?')">Delete</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Project Information Grid -->
+            <div class="info-grid">
+                <!-- Owner Information -->
+                <div class="info-section">
+                    <h3>Owner Information</h3>
+                    {% if project.owner_user %}
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <div class="user-avatar-large avatar-user">
+                            {{ project.owner_user.first_name[0] if project.owner_user.first_name else project.owner_user.email[0]|upper }}
+                        </div>
+                        <div>
+                            <strong>{{ project.owner_user.full_name }}</strong>
+                            <div style="color: #64748b;">{{ project.owner_user.email }}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="info-row">
+                        <span class="info-label">User ID</span>
+                        <span class="info-value">{{ project.owner_user.id }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Account Status</span>
+                        <span class="info-value">
+                            {% if project.owner_user.is_active %}
+                            <span style="color: #10b981;">Active</span>
+                            {% else %}
+                            <span style="color: #ef4444;">Inactive</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Created</span>
+                        <span class="info-value">{{ project.owner_user.created_at.strftime('%d %b %Y') }}</span>
+                    </div>
+                    
+                    {% elif project.owner_admin %}
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <div class="user-avatar-large avatar-admin">
+                            {{ project.owner_admin.name[0] if project.owner_admin.name else project.owner_admin.email[0]|upper }}
+                        </div>
+                        <div>
+                            <strong>{{ project.owner_admin.name }}</strong>
+                            <span class="admin-badge">Admin</span>
+                            <div style="color: #64748b;">{{ project.owner_admin.email }}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="info-row">
+                        <span class="info-label">Admin ID</span>
+                        <span class="info-value">{{ project.owner_admin.id }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Role</span>
+                        <span class="info-value">{{ project.owner_admin.role|title }}</span>
+                    </div>
+                    {% else %}
+                    <div style="text-align: center; padding: 20px; color: #64748b;">
+                        Owner account deleted or not found
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <!-- Project Statistics -->
+                <div class="info-section">
+                    <h3>Project Statistics</h3>
+                    
+                    <div class="info-row">
+                        <span class="info-label">Total Pairs</span>
+                        <span class="info-value">{{ project.pairs|length }}</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Total Scans</span>
+                        <span class="info-value">{{ project.scan_logs|length }}</span>
+                    </div>
+                    
+                    {% if project.scan_logs %}
+                    <div class="info-row">
+                        <span class="info-label">Last Scan</span>
+                        <span class="info-value">
+                            {{ project.scan_logs|sort(attribute='created_at', reverse=true)|first.created_at.strftime('%d %b %Y') }}
+                        </span>
+                    </div>
+                    
+                    <div class="info-row">
+                        <span class="info-label">Successful Scans</span>
+                        <span class="info-value">
+                            {{ project.scan_logs|selectattr('status', 'equalto', 'success')|list|length }}
+                        </span>
+                    </div>
+                    {% endif %}
+                    
+                    <div class="info-row">
+                        <span class="info-label">Created At</span>
+                        <span class="info-value">{{ project.created_at.strftime('%d %b %Y, %I:%M %p') }}</span>
+                    </div>
+                    
+                    {% if project.updated_at and project.updated_at != project.created_at %}
+                    <div class="info-row">
+                        <span class="info-label">Last Updated</span>
+                        <span class="info-value">{{ project.updated_at.strftime('%d %b %Y, %I:%M %p') }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <!-- Subscription Information -->
+                <div class="info-section">
+                    <h3>Subscription Information</h3>
+                    
+                    {% if project.owner_user and project.owner_user.active_subscription %}
+                    {% set sub = project.owner_user.active_subscription %}
+                    <div class="info-row">
+                        <span class="info-label">Subscription</span>
+                        <span class="info-value">
+                            {{ sub.plan.plan_name if sub.plan else 'N/A' }}
+                        </span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Status</span>
+                        <span class="info-value">
+                            {% if sub.expiry_status == 'active' %}
+                            <span style="color: #10b981;">Active</span>
+                            {% else %}
+                            <span style="color: #ef4444;">Expired</span>
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Remaining Projects</span>
+                        <span class="info-value">{{ sub.remaining_projects }}/{{ sub.purchased_project_limit }}</span>
+                    </div>
+                    {% if sub.subscription_end %}
+                    <div class="info-row">
+                        <span class="info-label">Valid Until</span>
+                        <span class="info-value">{{ sub.subscription_end.strftime('%d %b %Y') }}</span>
+                    </div>
+                    {% endif %}
+                    {% else %}
+                    <div style="text-align: center; padding: 20px; color: #64748b;">
+                        No active subscription found
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        
+        <!-- Pairs List -->
+        <div class="card">
+            <h3 style="margin-bottom: 15px;">Story Pairs ({{ project.pairs|length }})</h3>
+            
+            {% if project.pairs %}
+            <div class="pairs-container">
+                {% for pair in project.pairs %}
+                <div class="pair-item">
+                    <div class="pair-text">
+                        <div><strong>Story 1:</strong> {{ pair.story_1[:100] }}{% if pair.story_1|length > 100 %}...{% endif %}</div>
+                        <div style="margin-top: 5px;"><strong>Story 2:</strong> {{ pair.story_2[:100] }}{% if pair.story_2|length > 100 %}...{% endif %}</div>
+                        {% if pair.notes %}
+                        <div style="margin-top: 5px; color: #6b7280; font-size: 11px;">
+                            <strong>Notes:</strong> {{ pair.notes[:50] }}{% if pair.notes|length > 50 %}...{% endif %}
+                        </div>
+                        {% endif %}
+                    </div>
+                    <div class="pair-actions">
+                        <button class="btn btn-secondary btn-sm" onclick="viewPair({{ pair.id }})">View</button>
+                        <form action="/admin/projects/{{ project.id }}/pairs/{{ pair.id }}/delete" method="POST" style="display: inline;">
+                            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this pair?')">Delete</button>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            
+            <div style="margin-top: 20px;">
+                <button class="btn btn-primary" onclick="addPair()">Add New Pair</button>
+                <button class="btn btn-secondary" onclick="exportPairs()">Export Pairs</button>
+            </div>
+            {% else %}
+            <div style="text-align: center; padding: 40px; color: #6b7280;">
+                No story pairs found in this project
+                <div style="margin-top: 15px;">
+                    <button class="btn btn-primary" onclick="addPair()">Add First Pair</button>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        
+        <!-- Scan History -->
+        {% if project.scan_logs %}
+        <div class="card">
+            <h3 style="margin-bottom: 15px;">Scan History ({{ project.scan_logs|length }})</h3>
+            
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Date & Time</th>
+                            <th>Type</th>
+                            <th>Pairs Scanned</th>
+                            <th>Detections</th>
+                            <th>Duration</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for scan in project.scan_logs|sort(attribute='created_at', reverse=true) %}
+                        <tr>
+                            <td>
+                                {{ scan.created_at.strftime('%d %b %Y') }}<br>
+                                <small style="color: #6b7280;">{{ scan.created_at.strftime('%I:%M %p') }}</small>
+                            </td>
+                            <td>
+                                {{ scan.scan_type|title }}
+                            </td>
+                            <td>
+                                {{ scan.scanned_pairs_count }}/{{ scan.total_pairs_count }}
+                            </td>
+                            <td>
+                                {{ scan.detections_count }}
+                            </td>
+                            <td>
+                                {{ scan.duration_minutes|round(1) }} min
+                            </td>
+                            <td>
+                                {% if scan.status == 'success' %}
+                                <span class="badge badge-success">Success</span>
+                                {% elif scan.status == 'failed' %}
+                                <span class="badge badge-danger">Failed</span>
+                                {% elif scan.status == 'partial' %}
+                                <span class="badge badge-warning">Partial</span>
+                                {% else %}
+                                <span class="badge badge-secondary">{{ scan.status|title }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div style="display: flex; gap: 5px;">
+                                    {% if scan.status == 'success' and scan.results_url %}
+                                    <a href="{{ scan.results_url }}" target="_blank" class="btn btn-primary btn-sm">View Results</a>
+                                    {% endif %}
+                                    <form action="/admin/scans/{{ scan.id }}/delete" method="POST" style="display: inline;">
+                                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this scan log?')">Delete</button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+        
+        <!-- Admin Actions -->
+        <div class="card">
+            <h3 style="margin-bottom: 15px;">Admin Actions</h3>
+            
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                <button class="btn btn-primary" onclick="runScan()">
+                    Run Scan on This Project
+                </button>
+                
+                {% if project.owner_user %}
+                <a href="/admin/users/{{ project.owner_user.id }}" class="btn btn-secondary">
+                    View Owner Profile
+                </a>
+                {% endif %}
+                
+                <button class="btn btn-warning" onclick="transferProject()">
+                    Transfer to Another User
+                </button>
+                
+                <button class="btn btn-danger" onclick="deleteAllScans()">
+                    Delete All Scan History
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modals -->
+    <div id="pairModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 2000; align-items: center; justify-content: center;">
+        <div style="background: white; border-radius: 12px; padding: 30px; max-width: 800px; width: 90%; max-height: 90vh; overflow-y: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3 style="font-size: 20px; font-weight: 600; color: #1e293b;">Story Pair Details</h3>
+                <button onclick="closeModal('pairModal')" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #64748b;">&times;</button>
+            </div>
+            <div id="pairModalContent"></div>
+        </div>
+    </div>
+    
+    <div id="addPairModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 2000; align-items: center; justify-content: center;">
+        <div style="background: white; border-radius: 12px; padding: 30px; max-width: 800px; width: 90%; max-height: 90vh; overflow-y: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3 style="font-size: 20px; font-weight: 600; color: #1e293b;">Add New Story Pair</h3>
+                <button onclick="closeModal('addPairModal')" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #64748b;">&times;</button>
+            </div>
+            <form id="addPairForm" method="POST" action="/admin/projects/{{ project.id }}/pairs/add">
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; color: #555; font-weight: 500;">Story 1</label>
+                    <textarea name="story_1" style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; min-height: 100px;" required></textarea>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; color: #555; font-weight: 500;">Story 2</label>
+                    <textarea name="story_2" style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; min-height: 100px;" required></textarea>
+                </div>
+                
+                <div style="margin-bottom: 20px;">
+                    <label style="display: block; margin-bottom: 8px; color: #555; font-weight: 500;">Notes (Optional)</label>
+                    <textarea name="notes" style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; min-height: 60px;"></textarea>
+                </div>
+                
+                <button type="submit" class="btn btn-primary">Add Pair</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal('addPairModal')">Cancel</button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function toggleDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('show');
+        }
+        
+        // Close dropdown when clicking outside
+        window.onclick = function(event) {
+            if (!event.target.matches('.user-menu span')) {
+                const dropdowns = document.querySelectorAll('.dropdown-menu');
+                dropdowns.forEach(dropdown => {
+                    if (dropdown.classList.contains('show')) {
+                        dropdown.classList.remove('show');
+                    }
+                });
+            }
+        };
+        
+        // Modal functions
+        function viewPair(pairId) {
+            fetch(`/admin/projects/{{ project.id }}/pairs/${pairId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        const pair = data.pair;
+                        const content = `
+                            <div style="margin-bottom: 20px;">
+                                <h4 style="margin-bottom: 10px; color: #64748b;">Story 1</h4>
+                                <div style="background: #f8fafc; padding: 15px; border-radius: 8px; white-space: pre-wrap;">${pair.story_1}</div>
+                            </div>
+                            
+                            <div style="margin-bottom: 20px;">
+                                <h4 style="margin-bottom: 10px; color: #64748b;">Story 2</h4>
+                                <div style="background: #f8fafc; padding: 15px; border-radius: 8px; white-space: pre-wrap;">${pair.story_2}</div>
+                            </div>
+                            
+                            ${pair.notes ? `
+                            <div style="margin-bottom: 20px;">
+                                <h4 style="margin-bottom: 10px; color: #64748b;">Notes</h4>
+                                <div style="background: #f8fafc; padding: 15px; border-radius: 8px;">${pair.notes}</div>
+                            </div>
+                            ` : ''}
+                            
+                            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                                <button class="btn btn-primary" onclick="editPair(${pairId})">Edit</button>
+                                <button class="btn btn-secondary" onclick="copyPair(${pairId})">Copy JSON</button>
+                                <form action="/admin/projects/{{ project.id }}/pairs/${pairId}/delete" method="POST" style="display: inline;">
+                                    <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this pair?')">Delete</button>
+                                </form>
+                            </div>
+                        `;
+                        document.getElementById('pairModalContent').innerHTML = content;
+                        document.getElementById('pairModal').style.display = 'flex';
+                    }
+                })
+                .catch(error => {
+                    alert('Error loading pair details');
+                });
+        }
+        
+        function addPair() {
+            document.getElementById('addPairModal').style.display = 'flex';
+        }
+        
+        function closeModal(modalId) {
+            document.getElementById(modalId).style.display = 'none';
+        }
+        
+        // Close modal when clicking outside
+        window.addEventListener('click', function(event) {
+            if (event.target.matches('#pairModal')) {
+                closeModal('pairModal');
+            }
+            if (event.target.matches('#addPairModal')) {
+                closeModal('addPairModal');
+            }
+        });
+        
+        // Copy pair as JSON
+        function copyPair(pairId) {
+            fetch(`/admin/projects/{{ project.id }}/pairs/${pairId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        const pairJson = JSON.stringify(data.pair, null, 2);
+                        navigator.clipboard.writeText(pairJson).then(() => {
+                            alert('Pair data copied to clipboard!');
+                        });
+                    }
+                });
+        }
+        
+        // Action functions
+        function runScan() {
+            if (confirm('Run a scan on this project?')) {
+                window.location.href = `/admin/projects/{{ project.id }}/scan`;
+            }
+        }
+        
+        function transferProject() {
+            const newOwner = prompt('Enter the email of the new owner:');
+            if (newOwner) {
+                if (confirm(`Transfer this project to ${newOwner}?`)) {
+                    window.location.href = `/admin/projects/{{ project.id }}/transfer?email=${encodeURIComponent(newOwner)}`;
+                }
+            }
+        }
+        
+        function deleteAllScans() {
+            if (confirm('Delete all scan history for this project? This cannot be undone.')) {
+                window.location.href = `/admin/projects/{{ project.id }}/delete-scans`;
+            }
+        }
+        
+        function exportPairs() {
+            window.location.href = `/admin/projects/{{ project.id }}/export`;
+        }
+        
+        // Auto remove alerts after 5 seconds
+        document.addEventListener('DOMContentLoaded', function() {
+            const alerts = document.querySelectorAll('.alert');
+            alerts.forEach(alert => {
+                setTimeout(() => {
+                    alert.style.transition = 'opacity 0.5s';
+                    alert.style.opacity = '0';
+                    setTimeout(() => alert.remove(), 500);
+                }, 5000);
+            });
+        });
+    </script>
+</body>
+</html>

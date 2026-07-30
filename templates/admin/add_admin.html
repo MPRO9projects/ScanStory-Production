@@ -1,0 +1,283 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Add New Admin{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pb-3 mb-3 border-bottom">
+    <h1 class="h2">
+        <i class="fas fa-user-plus me-2"></i>Add New Admin
+    </h1>
+    <div class="btn-toolbar mb-2 mb-md-0">
+        <a href="{{ url_for('admin_manage_admins') }}" class="btn btn-sm btn-outline-secondary">
+            <i class="fas fa-arrow-left me-1"></i>Back to Admins
+        </a>
+    </div>
+</div>
+
+<!-- Flash Messages -->
+{% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+        {% for category, message in messages %}
+            <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-admin alert-dismissible fade show" role="alert">
+                {{ message }}
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        {% endfor %}
+    {% endif %}
+{% endwith %}
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="m-0">Admin Details</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('admin_add_admin') }}">
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="name" class="form-label">Full Name *</label>
+                            <input type="text" class="form-control" id="name" name="name" required 
+                                   placeholder="Enter admin's full name" value="{{ request.form.name or '' }}">
+                            <div class="form-text">Enter the admin's full name.</div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <label for="email" class="form-label">Email Address *</label>
+                            <input type="email" class="form-control" id="email" name="email" required 
+                                   placeholder="admin@example.com" value="{{ request.form.email or '' }}">
+                            <div class="form-text">This will be used for login.</div>
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="phone" class="form-label">Phone Number</label>
+                            <input type="text" class="form-control" id="phone" name="phone" 
+                                   placeholder="+91 1234567890" value="{{ request.form.phone or '' }}">
+                            <div class="form-text">Optional contact number.</div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <label for="role" class="form-label">Admin Role *</label>
+                            <select class="form-select" id="role" name="role" required>
+                                <option value="admin" {% if request.form.role == 'admin' %}selected{% endif %}>Admin</option>
+                                <option value="superadmin" {% if request.form.role == 'superadmin' %}selected{% endif %}>Super Admin</option>
+                            </select>
+                            <div class="form-text">
+                                <strong>Super Admin:</strong> Full system access, can manage other admins.<br>
+                                <strong>Admin:</strong> Standard admin privileges.
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row mb-4">
+                        <div class="col-md-6">
+                            <label for="password" class="form-label">Password *</label>
+                            <div class="input-group">
+                                <input type="password" class="form-control" id="password" name="password" required 
+                                       placeholder="Minimum 8 characters">
+                                <button class="btn btn-outline-secondary" type="button" id="togglePassword">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                            <div class="form-text">Password must be at least 8 characters long.</div>
+                        </div>
+                        
+                        <div class="col-md-6">
+                            <label for="confirm_password" class="form-label">Confirm Password *</label>
+                            <div class="input-group">
+                                <input type="password" class="form-control" id="confirm_password" name="confirm_password" required 
+                                       placeholder="Re-enter password">
+                                <button class="btn btn-outline-secondary" type="button" id="toggleConfirmPassword">
+                                    <i class="fas fa-eye"></i>
+                                </button>
+                            </div>
+                            <div class="form-text">Re-enter the password for verification.</div>
+                        </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="send_welcome_email" name="send_welcome_email" checked>
+                            <label class="form-check-label" for="send_welcome_email">
+                                Send welcome email with login credentials
+                            </label>
+                            <div class="form-text">If checked, an email will be sent to the admin with login instructions.</div>
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>
+                        <strong>Note:</strong> The new admin will be able to access the admin panel immediately after creation.
+                    </div>
+                    
+                    <div class="d-flex justify-content-between mt-4">
+                        <a href="{{ url_for('admin_manage_admins') }}" class="btn btn-secondary">
+                            <i class="fas fa-times me-1"></i>Cancel
+                        </a>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-save me-1"></i>Create Admin Account
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="m-0">
+                    <i class="fas fa-lightbulb me-2"></i>Quick Tips
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-warning mb-3">
+                    <h6><i class="fas fa-exclamation-triangle me-2"></i>Important</h6>
+                    <ul class="mb-0">
+                        <li>Super Admin has full system access</li>
+                        <li>Only Super Admin can manage other admins</li>
+                        <li>Choose strong passwords for security</li>
+                    </ul>
+                </div>
+                
+                <div class="alert alert-success">
+                    <h6><i class="fas fa-check-circle me-2"></i>Best Practices</h6>
+                    <ul class="mb-0">
+                        <li>Use official company email addresses</li>
+                        <li>Assign appropriate roles based on responsibilities</li>
+                        <li>Send welcome emails with login instructions</li>
+                        <li>Inform admins to change password after first login</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card mt-4">
+            <div class="card-header">
+                <h5 class="m-0">
+                    <i class="fas fa-shield-alt me-2"></i>Role Permissions
+                </h5>
+            </div>
+            <div class="card-body">
+                <h6 class="mb-2">Super Admin:</h6>
+                <ul class="small mb-3">
+                    <li>Full system access</li>
+                    <li>Manage all admin accounts</li>
+                    <li>System configuration</li>
+                    <li>All user management</li>
+                    <li>Financial reports</li>
+                </ul>
+                
+                <h6 class="mb-2">Admin:</h6>
+                <ul class="small mb-0">
+                    <li>User management</li>
+                    <li>Project monitoring</li>
+                    <li>Plan management</li>
+                    <li>Payment tracking</li>
+                    <li>Scan usage monitoring</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Toggle password visibility
+    document.getElementById('togglePassword').addEventListener('click', function() {
+        const passwordInput = document.getElementById('password');
+        const icon = this.querySelector('i');
+        
+        if (passwordInput.type === 'password') {
+            passwordInput.type = 'text';
+            icon.classList.remove('fa-eye');
+            icon.classList.add('fa-eye-slash');
+        } else {
+            passwordInput.type = 'password';
+            icon.classList.remove('fa-eye-slash');
+            icon.classList.add('fa-eye');
+        }
+    });
+    
+    // Toggle confirm password visibility
+    document.getElementById('toggleConfirmPassword').addEventListener('click', function() {
+        const confirmInput = document.getElementById('confirm_password');
+        const icon = this.querySelector('i');
+        
+        if (confirmInput.type === 'password') {
+            confirmInput.type = 'text';
+            icon.classList.remove('fa-eye');
+            icon.classList.add('fa-eye-slash');
+        } else {
+            confirmInput.type = 'password';
+            icon.classList.remove('fa-eye-slash');
+            icon.classList.add('fa-eye');
+        }
+    });
+    
+    // Form validation
+    document.querySelector('form').addEventListener('submit', function(e) {
+        const password = document.getElementById('password').value;
+        const confirmPassword = document.getElementById('confirm_password').value;
+        const email = document.getElementById('email').value;
+        
+        // Check password length
+        if (password.length < 8) {
+            e.preventDefault();
+            alert('Password must be at least 8 characters long.');
+            return false;
+        }
+        
+        // Check password match
+        if (password !== confirmPassword) {
+            e.preventDefault();
+            alert('Passwords do not match. Please re-enter.');
+            return false;
+        }
+        
+        // Check email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            e.preventDefault();
+            alert('Please enter a valid email address.');
+            return false;
+        }
+        
+        return true;
+    });
+    
+    // Auto-generate password suggestion
+    document.addEventListener('DOMContentLoaded', function() {
+        const generatePasswordBtn = document.createElement('button');
+        generatePasswordBtn.type = 'button';
+        generatePasswordBtn.className = 'btn btn-sm btn-outline-info mt-2';
+        generatePasswordBtn.innerHTML = '<i class="fas fa-key me-1"></i>Suggest Strong Password';
+        
+        generatePasswordBtn.addEventListener('click', function() {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
+            let password = '';
+            for (let i = 0; i < 12; i++) {
+                password += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            
+            document.getElementById('password').value = password;
+            document.getElementById('confirm_password').value = password;
+            
+            // Show password briefly
+            document.getElementById('password').type = 'text';
+            document.getElementById('confirm_password').type = 'text';
+            
+            setTimeout(() => {
+                document.getElementById('password').type = 'password';
+                document.getElementById('confirm_password').type = 'password';
+            }, 2000);
+        });
+        
+        document.getElementById('password').parentNode.parentNode.appendChild(generatePasswordBtn);
+    });
+</script>
+{% endblock %}

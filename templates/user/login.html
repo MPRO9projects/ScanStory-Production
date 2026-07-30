@@ -1,0 +1,936 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login | ScanStory</title>
+    <meta name="robots" content="noindex, nofollow">
+    <link rel="canonical" href="https://myscanstory.com/">
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+
+        :root {
+            --primary: #ff007a;
+            --secondary: #7000ff;
+            --accent: #00d4ff;
+            --bg-dark: #050505;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+        }
+
+        body,
+        html {
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            background: var(--bg-dark);
+        }
+
+        .container-fluid {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        .left-panel {
+            flex: 1;
+            background: linear-gradient(135deg, #1a0033 0%, #050505 100%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            color: white;
+            padding: 0;
+            overflow: hidden;
+        }
+
+        .typing-container {
+            position: absolute;
+            top: 12%;
+            left: 0;
+            right: 0;
+            z-index: 2;
+            text-align: center;
+            padding: 0 20px;
+        }
+
+        .typing-text {
+            font-size: 38px;
+            font-weight: 800;
+            text-align: center;
+            text-transform: uppercase;
+            letter-spacing: -1px;
+            line-height: 1.1;
+            text-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        .typing-line {
+            display: block;
+            overflow: hidden;
+            white-space: nowrap;
+            margin: 0 auto;
+            height: 55px;
+            position: relative;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 3px;
+            margin-left: 2px;
+            background-color: var(--accent);
+            animation: blink 1s infinite;
+            vertical-align: baseline;
+            height: 1em;
+        }
+
+        @keyframes blink {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0;
+            }
+        }
+
+        .typing-highlight {
+            color: var(--primary);
+        }
+
+        .image-mockup {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            object-position: center;
+            filter: drop-shadow(0 20px 60px rgba(255, 0, 122, 0.4));
+            position: absolute;
+            inset: 0;
+        }
+
+        .image-overlay {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom,
+                    rgba(26, 0, 51, 0.7) 0%,
+                    rgba(26, 0, 51, 0.4) 20%,
+                    rgba(26, 0, 51, 0.2) 50%,
+                    rgba(5, 5, 5, 0.7) 100%);
+            z-index: 1;
+        }
+
+        .right-panel {
+            flex: 1;
+            background: #0a0a0a;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px;
+            position: relative;
+            border-left: 1px solid rgba(255, 255, 255, 0.05);
+            overflow-y: auto;
+            max-height: 100vh;
+        }
+
+        .right-panel::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .right-panel::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .right-panel::-webkit-scrollbar-thumb {
+            background: rgba(255, 0, 122, 0.75);
+            border-radius: 10px;
+        }
+
+        .form-section {
+            width: 100%;
+            max-width: 480px;
+        }
+
+        .logo-branding {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        .logo {
+            font-size: 42px;
+            font-weight: 900;
+            color: #ffffff;
+            font-style: italic;
+            letter-spacing: -2px;
+            margin-bottom: 10px;
+        }
+
+        .logo span {
+            color: var(--primary);
+        }
+
+        h1 {
+            font-size: 40px;
+            font-weight: 800;
+            margin-bottom: 8px;
+            color: #ffffff;
+            letter-spacing: -1px;
+            text-transform: uppercase;
+            text-align: center;
+        }
+
+        .subtitle {
+            color: rgba(255, 255, 255, 0.5);
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 4px;
+            margin-bottom: 45px;
+            font-weight: 800;
+            text-align: center;
+        }
+
+        .input-group {
+            margin-bottom: 30px;
+        }
+
+        .label-style {
+            display: block;
+            margin-bottom: 12px;
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-left: 4px;
+        }
+
+        .input-gloss {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1.5px solid rgba(0, 212, 255, 0.6);
+            border-radius: 16px;
+            padding: 18px 24px;
+            color: white;
+            font-size: 16px;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            outline: none;
+            box-shadow: 0 0 12px rgba(0, 212, 255, 0.1);
+        }
+
+        .input-gloss:focus {
+            border-color: var(--primary);
+            border-width: 2px;
+            background: rgba(255, 255, 255, 0.05);
+            box-shadow: 0 0 25px rgba(255, 0, 122, 0.25);
+            transform: translateY(-2px);
+        }
+
+        .input-gloss:hover:not(:focus) {
+            border-color: #00e5ff;
+            box-shadow: 0 0 18px rgba(0, 212, 255, 0.15);
+        }
+
+        .password-container {
+            position: relative;
+        }
+
+        .password-container .input-gloss {
+            padding-right: 60px;
+        }
+
+        .toggle-password {
+            position: absolute;
+            right: 22px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: var(--primary);
+            cursor: pointer;
+            font-size: 14px;
+            padding: 0;
+            width: 24px;
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 10;
+            opacity: 0.7;
+        }
+
+        .toggle-password:hover {
+            opacity: 1;
+            transform: translateY(-50%) scale(1.1);
+        }
+
+        .form-options {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 40px;
+            font-size: 13px;
+            gap: 12px;
+        }
+
+        .remember-me {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: rgba(255, 255, 255, 0.6);
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .remember-me input[type="checkbox"] {
+            accent-color: var(--primary);
+            width: 16px;
+            height: 16px;
+        }
+
+        .forgot-link {
+            color: var(--accent);
+            text-decoration: none;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-size: 11px;
+            transition: all 0.3s ease;
+            white-space: nowrap;
+        }
+
+        .forgot-link:hover {
+            color: white;
+        }
+
+        .submit-btn {
+            width: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--secondary));
+            padding: 20px;
+            border-radius: 18px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.3em;
+            font-size: 15px;
+            transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: white;
+            cursor: pointer;
+            box-shadow: 0 15px 30px rgba(255, 0, 122, 0.2);
+        }
+
+        .submit-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 15px 35px rgba(255, 0, 122, 0.3);
+            filter: brightness(1.1);
+        }
+
+        .register-footer {
+            margin-top: 45px;
+            text-align: center;
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.5);
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .register-footer a {
+            color: var(--primary);
+            text-decoration: none;
+            transition: all 0.3s ease;
+            margin-left: 8px;
+        }
+
+        .register-footer a:hover {
+            color: var(--accent);
+        }
+
+        .flash-stack {
+            position: fixed;
+            top: 25px;
+            right: 25px;
+            width: min(420px, calc(100vw - 40px));
+            max-height: 260px;
+            overflow-y: auto;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            padding-right: 4px;
+        }
+
+        .flash-stack::-webkit-scrollbar {
+            width: 5px;
+        }
+
+        .flash-stack::-webkit-scrollbar-thumb {
+            background: rgba(255, 0, 122, 0.7);
+            border-radius: 10px;
+        }
+
+        .flash-message {
+            padding: 14px 18px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            animation: slideIn 0.4s ease;
+            border: 1.5px solid;
+            margin-bottom: 0;
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .flash-message.fade-out {
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: all 0.4s ease;
+        }
+
+        .flash-success {
+            background: rgba(34, 197, 94, 0.14);
+            border-color: rgba(34, 197, 94, 0.5);
+            color: #4ade80;
+        }
+
+        .flash-error {
+            background: rgba(239, 68, 68, 0.14);
+            border-color: rgba(239, 68, 68, 0.5);
+            color: #f87171;
+        }
+
+        .flash-warning {
+            background: rgba(245, 158, 11, 0.14);
+            border-color: rgba(245, 158, 11, 0.55);
+            color: #fbbf24;
+        }
+
+        .flash-info {
+            background: rgba(0, 212, 255, 0.12);
+            border-color: rgba(0, 212, 255, 0.5);
+            color: #67e8f9;
+        }
+
+        .back-btn {
+            position: absolute;
+            top: 30px;
+            left: 30px;
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.25em;
+            color: var(--accent);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            z-index: 20;
+            padding: 10px 20px;
+            background: rgba(0, 212, 255, 0.1);
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            border-radius: 20px;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .back-btn:hover {
+            color: white;
+            background: rgba(0, 212, 255, 0.2);
+            border-color: var(--accent);
+            transform: translateX(-5px);
+            box-shadow: 0 10px 30px rgba(0, 212, 255, 0.3);
+        }
+
+        .back-btn i {
+            font-size: 12px;
+            transition: transform 0.3s ease;
+        }
+
+        .back-btn:hover i {
+            transform: translateX(-3px);
+        }
+
+        @media (max-width: 1024px) {
+            .left-panel {
+                display: none;
+            }
+
+            .right-panel {
+                border-left: none;
+                padding: 90px 20px 30px;
+                justify-content: flex-start;
+            }
+
+            .back-btn {
+                top: 20px;
+                left: 20px;
+                padding: 8px 16px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .flash-stack {
+                top: 74px;
+                left: 16px;
+                right: 16px;
+                width: auto;
+                max-height: 220px;
+            }
+
+            .logo {
+                font-size: 32px;
+            }
+
+            h1 {
+                font-size: 24px;
+            }
+
+            .input-gloss {
+                padding: 12px 16px;
+                font-size: 13px;
+            }
+
+            .submit-btn {
+                padding: 14px;
+                font-size: 12px;
+            }
+
+            .back-btn {
+                top: 15px;
+                left: 15px;
+                font-size: 9px;
+            }
+
+            .form-options {
+                align-items: flex-start;
+                flex-direction: column;
+                gap: 14px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .logo-branding {
+                margin-bottom: 36px;
+            }
+
+            .logo {
+                font-size: 28px;
+            }
+
+            h1 {
+                font-size: 20px;
+            }
+
+            .subtitle {
+                font-size: 9px;
+                letter-spacing: 2px;
+            }
+
+            .back-btn {
+                top: 12px;
+                left: 12px;
+                padding: 6px 12px;
+                font-size: 8px;
+            }
+
+            .register-footer {
+                font-size: 10px;
+            }
+        }
+
+        .flash-stack {
+            position: fixed;
+            top: 25px;
+            right: 25px;
+            width: min(420px, calc(100vw - 32px));
+            z-index: 99999;
+        }
+
+        .flash-message {
+            padding: 14px 18px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            animation: slideIn 0.4s ease;
+            border: 1.5px solid;
+            margin-bottom: 0;
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+        }
+
+        .flash-message.fade-out {
+            opacity: 0;
+            transform: translateY(-10px);
+            transition: all 0.4s ease;
+        }
+
+        .flash-success {
+            background: rgba(34, 197, 94, 0.14);
+            border-color: rgba(34, 197, 94, 0.5);
+            color: #4ade80;
+        }
+
+        .flash-error {
+            background: rgba(239, 68, 68, 0.14);
+            border-color: rgba(239, 68, 68, 0.5);
+            color: #f87171;
+        }
+
+        .flash-warning {
+            background: rgba(245, 158, 11, 0.14);
+            border-color: rgba(245, 158, 11, 0.55);
+            color: #fbbf24;
+        }
+
+        .flash-info {
+            background: rgba(0, 212, 255, 0.12);
+            border-color: rgba(0, 212, 255, 0.5);
+            color: #67e8f9;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .flash-stack {
+                top: 80px;
+                left: 16px;
+                right: 16px;
+                width: auto;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% set latest_category, latest_message = messages[-1] %}
+    <div class="flash-stack" id="flashStack">
+        <div class="flash-message {% if latest_category == 'success' %}flash-success{% elif latest_category == 'warning' %}flash-warning{% elif latest_category == 'info' %}flash-info{% else %}flash-error{% endif %}">
+            <i class="fas {% if latest_category == 'success' %}fa-check-circle{% elif latest_category == 'warning' %}fa-triangle-exclamation{% elif latest_category == 'info' %}fa-circle-info{% else %}fa-exclamation-circle{% endif %}"></i>
+            <span>{{ latest_message }}</span>
+        </div>
+    </div>
+    {% endif %}
+    {% endwith %}
+
+    <div class="container-fluid">
+        <div class="left-panel">
+            <div class="typing-container" data-aos="fade-down" data-aos-duration="1000">
+                <div class="typing-text">
+                    <div class="typing-line" id="typingLine"></div>
+                </div>
+            </div>
+
+            <div class="image-overlay"></div>
+            <img src="/static/assets/logos/login.png" alt="AR Mockup" class="image-mockup" data-aos="zoom-in"
+                data-aos-duration="1200">
+        </div>
+
+        <div class="right-panel">
+        <a href="{{ url_for('landing') }}" class="back-btn" data-aos="fade-right">
+            <i class="fas fa-arrow-left"></i> BACK TO HOME
+        </a>
+
+        <div class="form-section" data-aos="fade-up" data-aos-duration="1000">
+
+            <div class="logo-branding">
+                <div class="logo">SCAN<span>STORY</span></div>
+                <h1>Login</h1>
+                <p class="subtitle">USER CONTROL CENTER</p>
+            </div>
+
+            <form method="POST" class="relative z-10">
+                <div class="input-group">
+                    <label class="label-style">IDENTITY (EMAIL)</label>
+                    <input type="email" name="email" placeholder="@gmail.com" class="input-gloss" required>
+                </div>
+
+                <div class="input-group">
+                    <label class="label-style">SECURE KEY (PASSWORD)</label>
+                    <div class="password-container">
+                        <input type="password" name="password" id="passwordInput" placeholder="Enter Your Password"
+                            class="input-gloss" required>
+                        <button type="button" class="toggle-password" id="togglePassword"
+                            aria-label="Toggle password visibility">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-options">
+                    <label class="remember-me">
+                        <input type="checkbox" name="remember" class="accent-pink-500">
+                        <span>KEEP ME LOGGED IN</span>
+                    </label>
+                    <a href="{{ url_for('forgot_password') }}" class="forgot-link">FORGOT?</a>
+                </div>
+
+                <button type="submit" class="submit-btn">LOGIN HERE</button>
+            </form>
+
+            <p class="register-footer">
+                NEW USER? <a href="{{ url_for('register') }}">CREATE ACCOUNT</a>
+            </p>
+        </div>
+    </div>
+    </div>
+
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+
+    <script>
+        AOS.init({
+            once: true,
+            offset: 20,
+            duration: 800
+        });
+
+        if (window.innerWidth < 768) {
+            document.querySelectorAll('[data-aos]').forEach(el => {
+                el.removeAttribute('data-aos');
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', function () {
+            const togglePassword = document.getElementById('togglePassword');
+            const passwordInput = document.getElementById('passwordInput');
+
+            if (togglePassword && passwordInput) {
+                togglePassword.addEventListener('click', function () {
+                    const eyeIcon = this.querySelector('i');
+
+                    if (passwordInput.type === 'password') {
+                        passwordInput.type = 'text';
+                        eyeIcon.classList.remove('fa-eye');
+                        eyeIcon.classList.add('fa-eye-slash');
+                        eyeIcon.style.opacity = '1';
+                    } else {
+                        passwordInput.type = 'password';
+                        eyeIcon.classList.remove('fa-eye-slash');
+                        eyeIcon.classList.add('fa-eye');
+                        eyeIcon.style.opacity = '0.7';
+                    }
+
+                    passwordInput.focus();
+                });
+            }
+
+            const form = document.querySelector('form');
+            if (form) {
+                form.addEventListener('submit', function (e) {
+                    const requiredFields = form.querySelectorAll('[required]');
+                    let valid = true;
+
+                    requiredFields.forEach(field => {
+                        if (!field.value.trim()) {
+                            field.style.borderColor = '#ff4757';
+                            valid = false;
+                        }
+                    });
+
+                    if (!valid) {
+                        e.preventDefault();
+
+                        setTimeout(() => {
+                            requiredFields.forEach(field => {
+                                field.style.borderColor = 'rgba(0, 212, 255, 0.6)';
+                            });
+                        }, 2000);
+                    }
+                });
+            }
+
+            const FLASH_HIDE_DELAY = 5000;
+            // 5000 = 5 seconds
+            // If you really want 5 minutes, change 5000 to 300000
+
+            const flashStack = document.getElementById('flashStack');
+
+            if (flashStack) {
+                const flashMessage = flashStack.querySelector('.flash-message');
+
+                if (flashMessage) {
+                    setTimeout(() => {
+                        flashMessage.classList.add('fade-out');
+
+                        setTimeout(() => {
+                            flashMessage.remove();
+
+                            if (flashStack.children.length === 0) {
+                                flashStack.remove();
+                            }
+                        }, 400);
+                    }, FLASH_HIDE_DELAY);
+                }
+            }
+
+            const leftPanelImage = document.querySelector('.image-mockup');
+            if (leftPanelImage) {
+                leftPanelImage.addEventListener('error', function () {
+                    console.log('Login image failed to load.');
+                });
+            }
+
+            const typingLine = document.getElementById('typingLine');
+            if (typingLine) {
+                const typingAnimation = new SimpleTypingAnimation();
+                typingAnimation.startAnimation();
+            }
+        });
+
+        class SimpleTypingAnimation {
+            constructor() {
+                this.isAnimating = false;
+                this.texts = [
+                    "Augmented Reality",
+                    "Augmented Reality for Stories"
+                ];
+                this.currentTextIndex = 0;
+                this.typingDelay = 70;
+                this.deletingDelay = 50;
+                this.pauseDuration = 2000;
+            }
+
+            async startAnimation() {
+                if (this.isAnimating) return;
+                this.isAnimating = true;
+
+                const element = document.getElementById('typingLine');
+                if (!element) return;
+
+                const currentText = this.texts[this.currentTextIndex];
+
+                try {
+                    await this.typeText(element, currentText, this.typingDelay);
+                    await this.sleep(this.pauseDuration);
+                    await this.deleteText(element, this.deletingDelay);
+                    this.currentTextIndex = (this.currentTextIndex + 1) % this.texts.length;
+                    await this.sleep(500);
+                } catch (error) {
+                    console.error('Animation error:', error);
+                } finally {
+                    this.isAnimating = false;
+                    this.startAnimation();
+                }
+            }
+
+            async typeText(element, text, speed) {
+                return new Promise(resolve => {
+                    let i = 0;
+
+                    function typeChar() {
+                        if (i < text.length) {
+                            let nextChars = text.substring(i);
+
+                            if (nextChars.startsWith('Reality')) {
+                                element.innerHTML = text.substring(0, i) +
+                                    '<span class="typing-highlight">Reality</span>' +
+                                    '<span class="cursor"></span>';
+                                i += 'Reality'.length;
+                            } else if (nextChars.startsWith('Stories')) {
+                                element.innerHTML = text.substring(0, i) +
+                                    '<span class="typing-highlight">Stories</span>' +
+                                    '<span class="cursor"></span>';
+                                i += 'Stories'.length;
+                            } else {
+                                element.innerHTML = text.substring(0, i + 1) + '<span class="cursor"></span>';
+                                i++;
+                            }
+
+                            setTimeout(typeChar, speed);
+                        } else {
+                            resolve();
+                        }
+                    }
+
+                    typeChar();
+                });
+            }
+
+            async deleteText(element, speed) {
+                return new Promise(resolve => {
+                    function deleteChar() {
+                        let content = element.innerHTML.replace('<span class="cursor"></span>', '');
+                        let textOnly = content.replace(/<[^>]*>/g, '');
+
+                        if (textOnly.length > 0) {
+                            textOnly = textOnly.slice(0, -1);
+
+                            let newContent = '';
+                            if (textOnly.includes('Reality')) {
+                                newContent = textOnly.replace('Reality', '<span class="typing-highlight">Reality</span>');
+                            } else if (textOnly.includes('Stories')) {
+                                newContent = textOnly.replace('Stories', '<span class="typing-highlight">Stories</span>');
+                            } else {
+                                newContent = textOnly;
+                            }
+
+                            element.innerHTML = newContent + '<span class="cursor"></span>';
+                            setTimeout(deleteChar, speed);
+                        } else {
+                            element.innerHTML = '<span class="cursor"></span>';
+                            resolve();
+                        }
+                    }
+
+                    deleteChar();
+                });
+            }
+
+            sleep(ms) {
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }
+        }
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,1397 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0, user-scalable=no" />
+  <title>SCANSTORY | {{ project_name }}</title>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #050505;
+      padding: 12px;
+      text-align: center;
+      color: white;
+      margin: 0;
+    }
+
+    .wrap {
+      position: relative;
+      width: 100%;
+      max-width: 520px;
+      margin: 0 auto;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #000;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    }
+
+    #cam {
+      width: 100%;
+      height: auto;
+      display: block;
+      object-fit: cover;
+      transform: scaleX(1);
+    }
+
+    #overlayWrap {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      display: none;
+      pointer-events: none;
+      transform-origin: 0 0;
+      will-change: transform;
+    }
+
+    #overlay {
+      width: 100%;
+      height: 100%;
+      object-fit: fill;  /* fill = stretch video to exactly cover overlayWrap before perspective warp */
+      transform-origin: top left;
+    }
+
+    #wm-logo {
+      position: absolute;
+      left: 10px;
+      bottom: 10px;
+      height: 30px;
+      width: auto;
+      opacity: 0.7;
+      z-index: 5;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .status {
+      margin-top: 10px;
+      padding: 10px 15px;
+      font-weight: 700;
+      border-radius: 8px;
+      display: inline-block;
+      min-width: 150px;
+      transition: all 0.3s ease;
+    }
+
+    .scan {
+      background: rgba(255, 0, 122, 0.2);
+      color: #ff007a;
+      border: 1px solid rgba(255, 0, 122, 0.3);
+    }
+
+    .track {
+      background: rgba(112, 0, 255, 0.2);
+      color: #7000ff;
+      border: 1px solid rgba(112, 0, 255, 0.3);
+    }
+
+    .error {
+      background: rgba(255, 0, 0, 0.3);
+      color: #ff4444;
+      border: 1px solid rgba(255, 0, 0, 0.5);
+    }
+
+    #soundGate {
+      position: absolute;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      z-index: 50;
+      pointer-events: none;
+    }
+
+    #soundGateContent {
+      display: none;
+    }
+
+    .loading-spinner {
+      display: none !important;
+    }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+      padding: 0 10px;
+    }
+
+    .header h3 {
+      margin: 0;
+      font-size: 20px;
+      background: linear-gradient(to right, #fff, #00d4ff, #ff007a);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .back-btn {
+      background: rgba(255, 255, 255, 0.05);
+      color: white;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 8px 15px;
+      border-radius: 50px;
+      text-decoration: none;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+    }
+
+    .info-badge {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: rgba(0, 0, 0, 0.7);
+      color: #00d4ff;
+      padding: 5px 10px;
+      border-radius: 20px;
+      font-size: 12px;
+      display: none;
+      z-index: 40;
+      border: 1px solid rgba(0, 212, 255, 0.3);
+    }
+
+    .loading-spinner {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(255, 255, 255, 0.1);
+      border-top: 3px solid #00d4ff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      display: none;
+      z-index: 30;
+    }
+
+    @keyframes spin {
+      0% {
+        transform: translate(-50%, -50%) rotate(0deg);
+      }
+
+      100% {
+        transform: translate(-50%, -50%) rotate(360deg);
+      }
+    }
+
+    .match-indicator {
+      position: absolute;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.7);
+      color: #00ffaa;
+      padding: 8px 15px;
+      border-radius: 20px;
+      font-size: 12px;
+      display: none;
+      z-index: 40;
+      border: 1px solid rgba(0, 255, 170, 0.3);
+      animation: fadeOut 2s ease-out forwards;
+    }
+
+    @keyframes fadeOut {
+      0% {
+        opacity: 1;
+      }
+
+      70% {
+        opacity: 1;
+      }
+
+      100% {
+        opacity: 0;
+        display: none;
+      }
+    }
+
+    .device-info {
+      position: absolute;
+      bottom: 10px;
+      right: 10px;
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.5);
+      z-index: 5;
+    }
+
+    .progress-info {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      font-size: 10px;
+      color: rgba(255, 255, 255, 0.5);
+      z-index: 5;
+    }
+
+    @media (max-width: 768px) {
+      .status {
+        font-size: 12px;
+        padding: 8px 12px;
+      }
+
+      .match-indicator {
+        font-size: 11px;
+        padding: 6px 12px;
+      }
+    }
+
+    @keyframes arSpin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @keyframes arSpinReverse {
+      to {
+        transform: rotate(-360deg);
+      }
+    }
+
+    @keyframes arPing {
+      0% {
+        transform: translate(-50%, -50%) scale(0.4);
+        opacity: 0.6;
+      }
+
+      100% {
+        transform: translate(-50%, -50%) scale(1.1);
+        opacity: 0;
+      }
+    }
+
+    @keyframes dotBounce {
+
+      0%,
+      100% {
+        transform: translateY(0);
+        opacity: 0.4;
+      }
+
+      50% {
+        transform: translateY(-6px);
+        opacity: 1;
+      }
+    }
+
+    #arLoadingOverlay {
+      transition: opacity 0.5s ease, visibility 0.5s ease;
+    }
+
+    #arLoadingOverlay.hide {
+      opacity: 0 !important;
+      visibility: hidden !important;
+      display: none !important;
+      pointer-events: none !important;
+    }
+
+    #scannerStatusOverlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      z-index: 35;
+      pointer-events: none;
+      opacity: 1;
+      transition: opacity 0.6s ease, visibility 0.6s ease;
+      visibility: visible;
+      overflow: hidden;
+    }
+
+    #scannerStatusOverlay.hidden {
+      opacity: 0 !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
+
+    .scanner-mist-container {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      z-index: 1;
+    }
+
+    .scanner-mist {
+      position: absolute;
+      width: 150%;
+      height: 150%;
+      background: radial-gradient(circle at 30% 50%, rgba(112, 0, 255, 0.15) 0%, transparent 50%),
+                  radial-gradient(circle at 70% 50%, rgba(255, 0, 122, 0.15) 0%, transparent 50%),
+                  radial-gradient(circle at 50% 30%, rgba(0, 212, 255, 0.1) 0%, transparent 50%);
+      animation: mistDrift 12s ease-in-out infinite;
+      filter: blur(40px);
+    }
+
+    .scanner-mist::before {
+      content: '';
+      position: absolute;
+      top: -20%;
+      left: -20%;
+      width: 120%;
+      height: 120%;
+      background: radial-gradient(circle at 40% 60%, rgba(0, 212, 255, 0.12) 0%, transparent 60%);
+      animation: mistFlow 15s ease-in-out infinite;
+      filter: blur(60px);
+    }
+
+    .scanner-mist::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(135deg, transparent 0%, rgba(255, 0, 122, 0.08) 50%, transparent 100%);
+      animation: mistWave 8s ease-in-out infinite;
+    }
+
+    @keyframes mistDrift {
+      0%, 100% {
+        transform: translate(0, 0) scale(1);
+      }
+      50% {
+        transform: translate(30px, -20px) scale(1.05);
+      }
+    }
+
+    @keyframes mistFlow {
+      0%, 100% {
+        transform: translate(-10px, 0) rotate(0deg);
+      }
+      50% {
+        transform: translate(20px, 15px) rotate(10deg);
+      }
+    }
+
+    @keyframes mistWave {
+      0%, 100% {
+        opacity: 0.3;
+      }
+      50% {
+        opacity: 0.6;
+      }
+    }
+
+    #scannerStatusContent {
+      position: relative;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 24px;
+      text-align: center;
+      animation: statusFadeIn 0.8s ease-out;
+    }
+
+    @keyframes statusFadeIn {
+      from {
+        opacity: 0;
+        transform: scale(0.9);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    #scannerStatusWord {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      background: linear-gradient(135deg, #ff007a, #7000ff, #00d4ff, #ff007a);
+      background-size: 300% auto;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      animation: statusWordPulse 1s cubic-bezier(0.175, 0.885, 0.32, 1.275), gradientShift 6s ease infinite;
+      min-width: 240px;
+      white-space: nowrap;
+    }
+
+    @keyframes statusWordPulse {
+      0% {
+        opacity: 0;
+        transform: scale(0.7);
+      }
+      60% {
+        opacity: 1;
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    @keyframes gradientShift {
+      0%, 100% { background-position: 0% center; }
+      50% { background-position: 100% center; }
+    }
+
+    .scanner-dots {
+      display: flex;
+      gap: 8px;
+      justify-content: center;
+    }
+
+    .scanner-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ff007a;
+      animation: scannerDotBounce 1.4s ease infinite;
+      box-shadow: 0 0 12px rgba(255, 0, 122, 0.4);
+    }
+
+    .scanner-dot:nth-child(2) {
+      animation-delay: 0.2s;
+      background: #7000ff;
+      box-shadow: 0 0 12px rgba(112, 0, 255, 0.4);
+    }
+
+    .scanner-dot:nth-child(3) {
+      animation-delay: 0.4s;
+      background: #00d4ff;
+      box-shadow: 0 0 12px rgba(0, 212, 255, 0.4);
+    }
+
+    @keyframes scannerDotBounce {
+      0%, 100% {
+        transform: translateY(0) scale(1);
+        opacity: 0.5;
+      }
+      50% {
+        transform: translateY(-12px) scale(1.2);
+        opacity: 1;
+      }
+    }
+
+    #scannerStatusLabel {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.35);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 500;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="header">
+    <a href="/" class="back-btn" id="backBtn">← Back</a>
+    <h3>SCANSTORY</h3>
+    <div style="width:80px"></div>
+  </div>
+
+  <!-- AR ENGINE INITIALIZATION OVERLAY -->
+  <div id="arLoadingOverlay"
+    style="position: fixed; inset: 0; z-index: 9999; background: #050505; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; font-family: 'Plus Jakarta Sans', Arial, sans-serif;">
+    <div
+      style="position:absolute;top:-15%;left:-10%;width:340px;height:340px;border-radius:50%;background:#7000ff;filter:blur(100px);opacity:0.12;pointer-events:none;">
+    </div>
+    <div
+      style="position:absolute;bottom:-15%;right:-10%;width:380px;height:380px;border-radius:50%;background:#ff007a;filter:blur(100px);opacity:0.12;pointer-events:none;">
+    </div>
+
+    <div id="arCrosshair" style="position:relative;width:160px;height:160px;margin-bottom:28px;">
+      <svg width="160" height="160" style="position:absolute;top:0;left:0;animation:arSpin 3s linear infinite;">
+        <circle cx="80" cy="80" r="72" fill="none" stroke="url(#grad1)" stroke-width="1" stroke-dasharray="40 414"
+          stroke-linecap="round" />
+        <defs>
+          <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" style="stop-color:#ff007a;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#00d4ff;stop-opacity:1" />
+          </linearGradient>
+        </defs>
+      </svg>
+      <svg width="160" height="160" style="position:absolute;top:0;left:0;animation:arSpinReverse 2s linear infinite;">
+        <circle cx="80" cy="80" r="55" fill="none" stroke="rgba(112,0,255,0.5)" stroke-width="1"
+          stroke-dasharray="20 325" stroke-linecap="round" />
+      </svg>
+      <svg width="160" height="160" style="position:absolute;top:0;left:0;">
+        <path d="M 44 64 L 44 44 L 64 44" fill="none" stroke="#ff007a" stroke-width="2.5" stroke-linecap="round" />
+        <path d="M 116 64 L 116 44 L 96 44" fill="none" stroke="#ff007a" stroke-width="2.5" stroke-linecap="round" />
+        <path d="M 44 96 L 44 116 L 64 116" fill="none" stroke="#ff007a" stroke-width="2.5" stroke-linecap="round" />
+        <path d="M 116 96 L 116 116 L 96 116" fill="none" stroke="#ff007a" stroke-width="2.5" stroke-linecap="round" />
+        <circle cx="80" cy="80" r="3" fill="#ff007a" opacity="0.8" />
+        <line x1="50" y1="80" x2="110" y2="80" stroke="rgba(0,212,255,0.3)" stroke-width="1" />
+        <line x1="80" y1="50" x2="80" y2="110" stroke="rgba(0,212,255,0.3)" stroke-width="1" />
+      </svg>
+      <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}"
+        style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:38px;height:38px;object-fit:contain;opacity:0.9;" />
+      <div
+        style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:160px;height:160px;border-radius:50%;border:1px solid rgba(255,0,122,0.3);animation:arPing 2s ease-out infinite;pointer-events:none;">
+      </div>
+    </div>
+
+    <div id="arLoadingText"
+      style="font-size:13px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;background:linear-gradient(to right,#fff,#00d4ff,#ff007a);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:10px;">
+      Initializing AR Engine</div>
+
+    <div style="display:flex;gap:6px;margin-bottom:28px;">
+      <div style="width:6px;height:6px;border-radius:50%;background:#ff007a;animation:dotBounce 1.2s ease infinite 0s;">
+      </div>
+      <div
+        style="width:6px;height:6px;border-radius:50%;background:#7000ff;animation:dotBounce 1.2s ease infinite 0.2s;">
+      </div>
+      <div
+        style="width:6px;height:6px;border-radius:50%;background:#00d4ff;animation:dotBounce 1.2s ease infinite 0.4s;">
+      </div>
+    </div>
+
+    <div id="arStageLabel"
+      style="font-size:11px;color:rgba(255,255,255,0.28);letter-spacing:0.08em;text-transform:uppercase;font-weight:500;">
+      Loading vision engine...</div>
+  </div>
+
+  <div class="wrap" id="wrap">
+    <video id="cam" autoplay playsinline muted></video>
+
+    <div id="overlayWrap">
+      <video id="overlay" autoplay playsinline loop preload="auto"></video>
+      <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" id="wm-logo" alt="ScanStory">
+    </div>
+
+    <div id="scannerStatusOverlay">
+      <div class="scanner-mist-container">
+        <div class="scanner-mist"></div>
+      </div>
+      <div id="scannerStatusContent">
+        <div id="scannerStatusWord">Preparing Camera</div>
+        <div class="scanner-dots">
+          <div class="scanner-dot"></div>
+          <div class="scanner-dot"></div>
+          <div class="scanner-dot"></div>
+        </div>
+        <div id="scannerStatusLabel">Scanning for AR markers...</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="soundGate"></div>
+
+  <div class="loading-spinner" id="loadingSpinner"></div>
+  <div class="info-badge" id="infoBadge">Pair: --</div>
+  <div class="match-indicator" id="matchIndicator">✨ Matched!</div>
+  <div class="device-info" id="deviceInfo"></div>
+  <div class="progress-info" id="progressInfo"></div>
+
+  <canvas id="cap" hidden></canvas>
+
+  <div id="status" class="status scan">Loading OpenCV…</div>
+
+  <script>
+    // ================================================
+    // DEVICE DETECTION
+    // ================================================
+    const deviceInfo = {
+      isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
+      isIOS: /iPhone|iPad|iPod/i.test(navigator.userAgent),
+      isAndroid: /Android/i.test(navigator.userAgent),
+      memory: navigator.deviceMemory || 4,
+      cores: navigator.hardwareConcurrency || 2,
+      isLowEnd: false
+    };
+
+    deviceInfo.isLowEnd = deviceInfo.memory <= 2 || deviceInfo.cores <= 2;
+    document.getElementById('deviceInfo').textContent = `${deviceInfo.isMobile ? '📱' : '💻'} ${deviceInfo.memory}GB ${deviceInfo.cores}cores`;
+
+    const DETECT_W = deviceInfo.isLowEnd ? 480 : 720;
+    const DETECT_INTERVAL_MS = deviceInfo.isLowEnd ? 400 : 300;
+    const MIN_GOOD_POINTS = deviceInfo.isLowEnd ? 18 : 25;
+    const MAX_ERR = deviceInfo.isLowEnd ? 45 : 35;
+
+    // ================================================
+    // SCANNER SESSION COUNTING (FIXED)
+    // ================================================
+    const PROJECT_ID = {{ project_id }};
+    let scannerSessionId = null;
+    let sessionActive = false;
+    let sessionEnded = false;
+
+    function generateScannerSessionId() {
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        var r = Math.random() * 16 | 0, v = c == 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    }
+
+    function startScannerSession() {
+      if (sessionActive) return;
+      scannerSessionId = generateScannerSessionId();
+      sessionActive = true;
+      sessionEnded = false;
+      console.log('✅ Scanner session started:', scannerSessionId);
+    }
+
+    async function endScannerSession() {
+      if (sessionEnded || !sessionActive || !scannerSessionId) return;
+      sessionEnded = true;
+
+      console.log('🔚 Ending scanner session:', scannerSessionId);
+
+      const formData = new FormData();
+      formData.append('project_id', PROJECT_ID);
+      formData.append('session_id', scannerSessionId);
+
+      // Use sendBeacon for reliable delivery during page unload
+      if (navigator.sendBeacon) {
+        const blob = new Blob([new URLSearchParams(formData).toString()], {
+          type: 'application/x-www-form-urlencoded'
+        });
+        const sent = navigator.sendBeacon('/api/scanner/session/end', blob);
+        console.log('📡 Session end sent via beacon:', sent);
+      } else {
+        try {
+          await fetch('/api/scanner/session/end', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams(formData).toString()
+          });
+          console.log('📡 Session end sent via fetch');
+        } catch (error) {
+          console.error('Error ending session:', error);
+        }
+      }
+      sessionActive = false;
+    }
+
+    // Start session on page load
+    window.addEventListener('load', startScannerSession);
+
+    // End session on page unload
+    window.addEventListener('beforeunload', function (e) {
+      endScannerSession();
+    });
+
+    // Handle back button
+    document.getElementById('backBtn')?.addEventListener('click', function (e) {
+      e.preventDefault();
+      const href = this.href;
+      endScannerSession().then(() => {
+        window.location.href = href;
+      }).catch(() => {
+        window.location.href = href;
+      });
+    });
+
+    // ================================================
+    // OPENCV LOADER WITH RETRY
+    // ================================================
+    let cvReady = false;
+    let opencvLoadAttempts = 0;
+    const MAX_LOAD_ATTEMPTS = 3;
+
+    function loadOpenCV() {
+      opencvLoadAttempts++;
+      console.log(`📦 Loading OpenCV (attempt ${opencvLoadAttempts}/${MAX_LOAD_ATTEMPTS})...`);
+
+      const statusDiv = document.getElementById('status');
+      statusDiv.textContent = deviceInfo.isLowEnd ? "Loading (may take a moment)…" : "Loading OpenCV…";
+      statusDiv.className = "status scan";
+
+      const loadTimeout = setTimeout(() => {
+        if (!cvReady && opencvLoadAttempts < MAX_LOAD_ATTEMPTS) {
+          console.warn('⚠️ OpenCV load timeout, retrying...');
+          const oldScript = document.querySelector('script[src*="opencv"]');
+          if (oldScript) oldScript.remove();
+          loadOpenCV();
+        } else if (!cvReady && opencvLoadAttempts >= MAX_LOAD_ATTEMPTS) {
+          console.error('❌ OpenCV failed to load');
+          statusDiv.textContent = "OpenCV failed. Refresh if issues persist.";
+          statusDiv.className = "status error";
+          document.getElementById('loadingSpinner').style.display = 'none';
+        }
+      }, 15000);
+
+      window.Module = {
+        locateFile: function (path) {
+          if (path.endsWith('.wasm')) {
+            return "{{ url_for('static', filename='js/') }}" + path;
+          }
+          return path;
+        },
+        onRuntimeInitialized: function () {
+          clearTimeout(loadTimeout);
+          cvReady = true;
+          console.log('✅ OpenCV initialized');
+          statusDiv.textContent = "🎯 Scan AR marker";
+          statusDiv.className = "status scan";
+          startDetectLoop();
+          startScannerStatusCycle();
+          requestAnimationFrame(trackFrame);
+          document.getElementById('loadingSpinner').style.display = 'none';
+        },
+        onAbort: function (reason) {
+          clearTimeout(loadTimeout);
+          console.error('❌ OpenCV abort:', reason);
+          if (opencvLoadAttempts < MAX_LOAD_ATTEMPTS) {
+            loadOpenCV();
+          } else {
+            statusDiv.textContent = "OpenCV failed. Try refreshing.";
+            statusDiv.className = "status error";
+          }
+        }
+      };
+
+      const script = document.createElement('script');
+      script.src = "{{ url_for('static', filename='js/opencv.js') }}";
+      script.async = true;
+      script.onerror = function () {
+        clearTimeout(loadTimeout);
+        if (opencvLoadAttempts < MAX_LOAD_ATTEMPTS) {
+          loadOpenCV();
+        } else {
+          statusDiv.textContent = "OpenCV failed to load.";
+          statusDiv.className = "status error";
+        }
+      };
+      document.head.appendChild(script);
+    }
+
+    loadOpenCV();
+
+    // ================================================
+    // CAMERA SETUP
+    // ================================================
+    const cam = document.getElementById("cam");
+    const wrap = document.getElementById("wrap");
+    const overlayWrap = document.getElementById("overlayWrap");
+    const overlay = document.getElementById("overlay");
+    const cap = document.getElementById("cap");
+    const ctx = cap.getContext("2d", { willReadFrequently: true });
+    const statusDiv = document.getElementById("status");
+    const soundGate = document.getElementById("soundGate");
+    const loadingSpinner = document.getElementById("loadingSpinner");
+    const infoBadge = document.getElementById("infoBadge");
+    const matchIndicator = document.getElementById("matchIndicator");
+    const progressInfo = document.getElementById("progressInfo");
+
+    const RANSAC_REPROJ = 5.0;   // was 3.0 — too tight for mobile optical flow, caused premature tracking drops
+    const SMOOTH = deviceInfo.isLowEnd ? 0.50 : 0.35; // was 0.7/0.65 — high value caused ~90ms visible lag
+    const FLIP_X = false;
+    const FLIP_Y = false;
+    const FORCE_REDETECT_MS = 3000;   // re-anchor from server every 3s to prevent optical-flow drift
+    const TRACKING_GRACE_FRAMES = 3;  // frames of bad optical flow before dropping tracking
+
+    overlay.style.transform = `scale(${FLIP_X ? -1 : 1}, ${FLIP_Y ? -1 : 1})`;
+
+    let videoFinished = true;
+    overlay.addEventListener("ended", () => {
+      videoFinished = true;
+      console.log('📹 Video ended');
+    });
+
+    // ================================================
+    // SCANNER STATUS OVERLAY MANAGEMENT
+    // ================================================
+    const scannerStatusOverlay = document.getElementById('scannerStatusOverlay');
+    const scannerStatusWord = document.getElementById('scannerStatusWord');
+    const scannerStatusLabel = document.getElementById('scannerStatusLabel');
+
+    const scannerStatusWords = [
+      "Preparing Camera",
+      "Reading Marker",
+      "Scanning Visual",
+      "Matching Image",
+      "Loading AR Story",
+      "Tracking Surface",
+      "Unlocking Experience"
+    ];
+
+    let scannerWordIndex = 0;
+    let scannerStatusInterval = null;
+
+    function startScannerStatusCycle() {
+      if (scannerStatusInterval) return;
+      scannerWordIndex = 0;
+      scannerStatusOverlay.classList.remove('hidden');
+      scannerStatusWord.textContent = scannerStatusWords[0];
+
+      scannerStatusInterval = setInterval(() => {
+        scannerWordIndex = (scannerWordIndex + 1) % scannerStatusWords.length;
+        scannerStatusWord.style.animation = 'none';
+        setTimeout(() => {
+          scannerStatusWord.textContent = scannerStatusWords[scannerWordIndex];
+          scannerStatusWord.style.animation = 'statusWordPulse 1s cubic-bezier(0.175, 0.885, 0.32, 1.275), gradientShift 6s ease infinite';
+        }, 10);
+      }, 1400);
+    }
+
+    function stopScannerStatusCycle() {
+      if (scannerStatusInterval) {
+        clearInterval(scannerStatusInterval);
+        scannerStatusInterval = null;
+      }
+      scannerStatusOverlay.classList.add('hidden');
+    }
+
+    let tracking = false;
+    let detectInFlight = false;
+    let frameW = 0, frameH = 0;
+    let prevGray = null;
+    let prevPts = null;
+    let currCorners = null;
+    let lastOrdered = null;
+    let smoothCorners = null;
+    let lastLockTs = 0;
+    let lastDetectTs = 0;        // timestamp of last successful server detection
+    let trackingBadFrames = 0;   // consecutive frames with insufficient optical flow points
+    let currentVideoUrl = null;
+    let currentPairId = -1;
+    let detectionFailCount = 0;
+    let cameraStream = null;
+
+    // Camera setup with better error handling
+    async function setupCamera() {
+      try {
+        // ✅ HTTPS / camera API safety check
+        if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          statusDiv.textContent = "Camera works only on HTTPS. Please open this QR link in Chrome using https://";
+          statusDiv.className = "status error";
+          progressInfo.textContent = "⚠️ Camera not available in this browser/page";
+          return;
+        }
+
+        const constraints = {
+          video: {
+            facingMode: "environment",
+            width: { ideal: deviceInfo.isLowEnd ? 640 : 1280 },
+            height: { ideal: deviceInfo.isLowEnd ? 480 : 720 }
+          },
+          audio: false
+        };
+
+        cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        cam.srcObject = cameraStream;
+
+        cam.onloadedmetadata = async () => {
+          await cam.play();
+          requestAnimationFrame(() => {
+            const r = cam.getBoundingClientRect();
+            wrap.style.height = r.height + "px";
+            overlayWrap.style.height = r.height + "px";
+          });
+          tryAutoEnableAudio();
+          statusDiv.textContent = cvReady ? "🎯 Scan AR marker" : "Waiting for OpenCV…";
+        };
+      } catch (err) {
+        console.error('Camera error:', err);
+        statusDiv.textContent = "Camera error: " + (err.message || "Permission denied");
+        statusDiv.className = "status error";
+        progressInfo.textContent = "⚠️ Camera access required";
+      }
+    }
+
+    setupCamera();
+
+    async function tryAutoEnableAudio() {
+      try {
+        overlay.muted = false;
+        overlay.volume = 0.8;
+        await overlay.play();
+        soundGate.style.display = "none";
+        console.log('🔊 Audio enabled');
+      } catch (e) {
+        console.log('🔇 Audio blocked, switching to muted playback');
+        overlay.muted = true;
+        overlay.volume = 0;
+        await overlay.play().catch(() => {});
+        soundGate.style.display = "none";
+      }
+    }
+
+    // ================================================
+    // STATUS WORD CYCLING ANIMATION
+    // ================================================
+    function stopOverlayImmediate() {
+      overlayWrap.style.display = "none";
+      try { overlay.pause(); } catch (e) { }
+      infoBadge.style.display = "none";
+      progressInfo.textContent = "";
+    }
+
+    function playOverlay() {
+      if (overlayWrap.style.display !== "block") {
+        overlayWrap.style.display = "block";
+      }
+      if (overlay.paused && overlay.src) {
+        overlay.play().catch(e => console.log('Play failed:', e));
+      }
+    }
+
+    function showMatchIndicator(pairId) {
+      matchIndicator.textContent = `✨ Matched Pair #${pairId + 1}`;
+      matchIndicator.style.display = "block";
+      infoBadge.textContent = `🎯 Pair: ${pairId + 1}`;
+      infoBadge.style.display = "block";
+      setTimeout(() => {
+        matchIndicator.style.display = "none";
+      }, 2000);
+    }
+
+    function updateProgress(ready, total) {
+      if (ready && total && ready < total) {
+        progressInfo.textContent = `⏳ Processing: ${ready}/${total} pairs ready`;
+      } else {
+        progressInfo.textContent = "";
+      }
+    }
+
+    function centroid(pts) {
+      let x = 0, y = 0;
+      for (const p of pts) { x += p.x; y += p.y; }
+      return { x: x / pts.length, y: y / pts.length };
+    }
+
+    function sortAroundCenter(pts) {
+      const c = centroid(pts);
+      return pts.slice().sort((a, b) => {
+        const aa = Math.atan2(a.y - c.y, a.x - c.x);
+        const bb = Math.atan2(b.y - c.y, b.x - c.x);
+        return aa - bb;
+      });
+    }
+
+    function rotateToTL(pts) {
+      let bestI = 0, bestV = Infinity;
+      for (let i = 0; i < 4; i++) {
+        const v = pts[i].x + pts[i].y;
+        if (v < bestV) { bestV = v; bestI = i; }
+      }
+      return pts.slice(bestI).concat(pts.slice(0, bestI));
+    }
+
+    function dist2(a, b) { const dx = a.x - b.x, dy = a.y - b.y; return dx * dx + dy * dy; }
+    function rotateArray(arr, k) { return arr.slice(k).concat(arr.slice(0, k)); }
+
+    function bestMatchToPrevious(ordered, prev) {
+      let best = ordered, bestScore = Infinity;
+      for (let k = 0; k < 4; k++) {
+        const cand = rotateArray(ordered, k);
+        let s = 0; for (let i = 0; i < 4; i++) s += dist2(cand[i], prev[i]);
+        if (s < bestScore) { bestScore = s; best = cand; }
+      }
+      const rev = [ordered[0], ordered[3], ordered[2], ordered[1]];
+      for (let k = 0; k < 4; k++) {
+        const cand = rotateArray(rev, k);
+        let s = 0; for (let i = 0; i < 4; i++) s += dist2(cand[i], prev[i]);
+        if (s < bestScore) { bestScore = s; best = cand; }
+      }
+      return best;
+    }
+
+    function frameToElement(x, y, fw, fh) {
+      const elW = wrap.clientWidth;
+      const elH = wrap.clientHeight;
+      const s = Math.max(elW / fw, elH / fh);
+      const dispW = fw * s, dispH = fh * s;
+      const offX = (elW - dispW) / 2;
+      const offY = (elH - dispH) / 2;
+      return { x: x * s + offX, y: y * s + offY };
+    }
+
+    function quadToMatrix3d(x1, y1, x2, y2, x3, y3, x4, y4, w, h) {
+      const dx1 = x2 - x3, dy1 = y2 - y3;
+      const dx2 = x4 - x3, dy2 = y4 - y3;
+      const dx3 = x1 - x2 + x3 - x4;
+      const dy3 = y1 - y2 + y3 - y4;
+
+      let a13 = 0, a23 = 0;
+      if (dx3 !== 0 || dy3 !== 0) {
+        const det = dx1 * dy2 - dx2 * dy1;
+        a13 = (dx3 * dy2 - dx2 * dy3) / det;
+        a23 = (dx1 * dy3 - dx3 * dy1) / det;
+      }
+
+      const a11 = x2 - x1 + a13 * x2;
+      const a21 = x4 - x1 + a23 * x4;
+      const a31 = x1;
+      const a12 = y2 - y1 + a13 * y2;
+      const a22 = y4 - y1 + a23 * y4;
+      const a32 = y1;
+
+      return [
+        a11 / w, a12 / w, 0, a13 / w,
+        a21 / h, a22 / h, 0, a23 / h,
+        0, 0, 1, 0,
+        a31, a32, 0, 1
+      ];
+    }
+
+    function applyWarp(cornersFrame) {
+      let pts = cornersFrame.map(p => frameToElement(p.x, p.y, frameW, frameH));
+      pts = sortAroundCenter(pts);
+      pts = rotateToTL(pts);
+      if (lastOrdered) pts = bestMatchToPrevious(pts, lastOrdered);
+      lastOrdered = pts;
+
+      if (!smoothCorners) smoothCorners = pts;
+      else {
+        smoothCorners = pts.map((p, i) => ({
+          x: smoothCorners[i].x * SMOOTH + p.x * (1 - SMOOTH),
+          y: smoothCorners[i].y * SMOOTH + p.y * (1 - SMOOTH),
+        }));
+      }
+
+      const elW = wrap.clientWidth;
+      const elH = wrap.clientHeight;
+      const [p1, p2, p3, p4] = smoothCorners;
+      const m = quadToMatrix3d(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y, elW, elH);
+      overlayWrap.style.transform = `matrix3d(${m.join(",")})`;
+    }
+
+    function matFromVideoGray() {
+      ctx.drawImage(cam, 0, 0, cap.width, cap.height);
+      const imgData = ctx.getImageData(0, 0, cap.width, cap.height);
+      let src = cv.matFromImageData(imgData);
+      let gray = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      src.delete();
+      return gray;
+    }
+
+    function cornersToMat(corners) {
+      const data = [];
+      for (const p of corners) { data.push(p.x, p.y); }
+      return cv.matFromArray(4, 1, cv.CV_32FC2, data);
+    }
+
+    function matToCorners(mat) {
+      const arr = [];
+      for (let i = 0; i < 4; i++) {
+        arr.push({ x: mat.data32F[i * 2], y: mat.data32F[i * 2 + 1] });
+      }
+      return arr;
+    }
+
+    function trackFrame() {
+      requestAnimationFrame(trackFrame);
+      if (!cvReady || !tracking || cam.readyState < 2) return;
+
+      try {
+        const gray = matFromVideoGray();
+        const nextPts = new cv.Mat();
+        const status = new cv.Mat();
+        const err = new cv.Mat();
+
+        cv.calcOpticalFlowPyrLK(prevGray, gray, prevPts, nextPts, status, err, new cv.Size(21, 21), 3);
+
+        const goodPrev = [];
+        const goodNext = [];
+        const st = status.data;
+        const e = err.data32F;
+
+        for (let i = 0; i < st.length; i++) {
+          if (st[i] === 1 && e[i] < MAX_ERR) {
+            goodPrev.push(prevPts.data32F[i * 2], prevPts.data32F[i * 2 + 1]);
+            goodNext.push(nextPts.data32F[i * 2], nextPts.data32F[i * 2 + 1]);
+          }
+        }
+
+        if ((goodPrev.length / 2) < MIN_GOOD_POINTS) {
+          trackingBadFrames++;
+          // Grace period: require TRACKING_GRACE_FRAMES consecutive bad frames before dropping
+          if (trackingBadFrames < TRACKING_GRACE_FRAMES) {
+            gray.delete(); nextPts.delete(); status.delete(); err.delete();
+            return; // skip this frame, keep tracking state
+          }
+          trackingBadFrames = 0;
+          tracking = false;
+          lastOrdered = null;
+          smoothCorners = null;
+          stopOverlayImmediate();
+          startScannerStatusCycle();
+          statusDiv.textContent = "🎯 Scan AR marker";
+          statusDiv.className = "status scan";
+
+          prevGray.delete(); prevGray = null;
+          prevPts.delete(); prevPts = null;
+          gray.delete();
+          nextPts.delete(); status.delete(); err.delete();
+          return;
+        }
+        trackingBadFrames = 0; // reset on good frame
+
+        const prevMat = cv.matFromArray(goodPrev.length / 2, 1, cv.CV_32FC2, goodPrev);
+        const nextMat = cv.matFromArray(goodNext.length / 2, 1, cv.CV_32FC2, goodNext);
+        const mask = new cv.Mat();
+        const H = cv.findHomography(prevMat, nextMat, cv.RANSAC, RANSAC_REPROJ, mask);
+
+        if (H.empty()) {
+          tracking = false;
+          lastOrdered = null;
+          smoothCorners = null;
+          stopOverlayImmediate();
+          startScannerStatusCycle();
+          statusDiv.textContent = "🎯 Scan AR marker";
+          statusDiv.className = "status scan";
+        } else {
+          const cornerMat = cornersToMat(currCorners);
+          const newCornerMat = new cv.Mat();
+          cv.perspectiveTransform(cornerMat, newCornerMat, H);
+          const newCorners = matToCorners(newCornerMat);
+          cornerMat.delete(); newCornerMat.delete();
+
+          // Drop tracking if ALL corners drift >40% outside frame — target has left view
+          const pad = 0.40;
+          const inBounds = newCorners.every(p =>
+            p.x > -pad * frameW && p.x < frameW * (1 + pad) &&
+            p.y > -pad * frameH && p.y < frameH * (1 + pad)
+          );
+          if (!inBounds) {
+            tracking = false; lastOrdered = null; smoothCorners = null;
+            stopOverlayImmediate(); startScannerStatusCycle();
+            statusDiv.textContent = "🎯 Scan AR marker";
+            statusDiv.className = "status scan";
+            prevGray.delete(); prevGray = null;
+            prevPts.delete(); prevPts = null;
+            gray.delete(); nextPts.delete(); status.delete(); err.delete();
+            prevMat.delete(); nextMat.delete(); mask.delete(); H.delete();
+            return;
+          }
+
+          currCorners = newCorners;
+          applyWarp(currCorners);
+          playOverlay();
+
+          prevGray.delete();
+          prevGray = gray;
+          prevPts.delete();
+          prevPts = nextMat.clone();
+          lastLockTs = performance.now();
+          statusDiv.textContent = `🎬 AR IS ON LIVE${currentPairId + 1}`;
+          statusDiv.className = "status track";
+        }
+
+        nextPts.delete(); status.delete(); err.delete();
+        prevMat.delete(); nextMat.delete();
+        mask.delete(); H.delete();
+
+      } catch (e) {
+        console.error('Track frame error:', e);
+        tracking = false;
+      }
+    }
+
+    async function detectOnceFromServer() {
+      if (detectInFlight || !cvReady || cam.readyState < 2) return;
+      detectInFlight = true;
+      loadingSpinner.style.display = "block";
+
+      // Cap capture to max 1200px (server's ORB_MAX_DIM) to avoid sending oversized images
+      // and prevent frame_w/h mismatch after server-side resize
+      const DETECT_SIZE = 800;
+      let capW = DETECT_SIZE;
+      let capH = Math.round(cam.videoHeight * (DETECT_SIZE / cam.videoWidth));
+      const maxDim = Math.max(capW, capH);
+      if (maxDim > 1200) {
+        const limitScale = 1200 / maxDim;
+        capW = Math.round(capW * limitScale);
+        capH = Math.round(capH * limitScale);
+      }
+      cap.width = capW;
+      cap.height = capH;
+
+      ctx.drawImage(cam, 0, 0, cap.width, cap.height);
+      const blob = await new Promise(res => cap.toBlob(res, "image/jpeg", 0.85));
+
+      try {
+        const fd = new FormData();
+        fd.append("project_id", PROJECT_ID);
+        fd.append("test_image", blob, "frame.jpg");
+        if (scannerSessionId) {
+          fd.append("scan_session_id", scannerSessionId);
+        }
+
+        const r = await fetch("/detect_init", { method: "POST", body: fd });
+        const data = await r.json();
+
+        // Update progress if available
+        if (data.ready_pairs !== undefined && data.total_pairs !== undefined) {
+          updateProgress(data.ready_pairs, data.total_pairs);
+        }
+
+        if (!data.detected) {
+          detectionFailCount++;
+          if (!tracking) {
+            stopOverlayImmediate();
+            statusDiv.textContent = "🎯 Scan AR marker";
+            statusDiv.className = "status scan";
+          }
+          return;
+        }
+
+        // Reset fail count on successful detection
+        detectionFailCount = 0;
+
+        const newVideoUrl = data.video_url;
+        const newPairId = data.matched_pair_id || 0;
+        const isSame = (currentVideoUrl === newVideoUrl && currentPairId === newPairId);
+
+        if (!isSame) {
+          overlay.src = newVideoUrl;
+          overlay.currentTime = 0;
+          videoFinished = false;
+          currentVideoUrl = newVideoUrl;
+          currentPairId = newPairId;
+          showMatchIndicator(newPairId);
+          tryAutoEnableAudio();
+        } else {
+          if (videoFinished) {
+            overlay.currentTime = 0;
+            videoFinished = false;
+            tryAutoEnableAudio();
+          } else {
+            playOverlay();
+          }
+        }
+
+        frameW = Number(data.frame_width);
+        frameH = Number(data.frame_height);
+        cap.width = frameW;
+        cap.height = frameH;
+
+        const newCorners = data.corners.map(p => ({ x: Number(p.x), y: Number(p.y) }));
+        const pts = (data.init_points || []).map(p => [Number(p.x), Number(p.y)]);
+
+        if (prevPts) prevPts.delete();
+        if (prevGray) prevGray.delete();
+
+        // Redraw at server frame dimensions for consistent optical flow space
+        cap.width = frameW; cap.height = frameH;
+        prevGray = matFromVideoGray();
+
+        if (pts.length >= 25) {
+          const flat = [];
+          for (const [x, y] of pts) flat.push(x, y);
+          prevPts = cv.matFromArray(pts.length, 1, cv.CV_32FC2, flat);
+        } else {
+          // Sample a 10×10 bilinear grid across the detected quad — avoids collinear fallback
+          const c = newCorners; // [TL, TR, BR, BL] order from server
+          const flat = [];
+          const GRID = 10;
+          for (let ri = 0; ri < GRID; ri++) {
+            for (let ci2 = 0; ci2 < GRID; ci2++) {
+              const u = (ci2 + 0.5) / GRID;
+              const v = (ri + 0.5) / GRID;
+              // Bilinear interpolation: top edge TL→TR, bottom edge BL→BR
+              const tx = c[0].x + (c[1].x - c[0].x) * u;
+              const ty = c[0].y + (c[1].y - c[0].y) * u;
+              const bx = c[3].x + (c[2].x - c[3].x) * u;
+              const by = c[3].y + (c[2].y - c[3].y) * u;
+              flat.push(tx + (bx - tx) * v, ty + (by - ty) * v);
+            }
+          }
+          prevPts = cv.matFromArray(flat.length / 2, 1, cv.CV_32FC2, flat);
+        }
+
+        // When re-anchoring while already tracking same pair, preserve smoothCorners
+        // to avoid a visible jump — only reset when switching pairs or first detection
+        const isSameTarget = (currentPairId === (data.matched_pair_id || 0)) && tracking;
+        currCorners = newCorners;
+        if (!isSameTarget) {
+          lastOrdered = null;
+          smoothCorners = null;
+        }
+        tracking = true;
+        trackingBadFrames = 0;
+        lastDetectTs = performance.now();
+        lastLockTs = lastDetectTs;
+
+        stopScannerStatusCycle();
+        applyWarp(currCorners);
+        playOverlay();
+
+        statusDiv.textContent = `🎬 Tracking Pair #${newPairId + 1}`;
+        statusDiv.className = "status track";
+
+      } catch (e) {
+        console.error("Detection error:", e);
+        statusDiv.textContent = "⚠️ Detection error";
+        statusDiv.className = "status scan";
+      } finally {
+        detectInFlight = false;
+        loadingSpinner.style.display = "none";
+      }
+    }
+
+    function startDetectLoop() {
+      setInterval(() => {
+        const now = performance.now();
+        const driftMs = now - lastLockTs;
+        const sinceLastDetect = now - lastDetectTs;
+        // Re-detect when: not tracking, tracking lost for >1.5s, OR re-anchor interval reached
+        if (!tracking || driftMs > 1500 || sinceLastDetect > FORCE_REDETECT_MS) {
+          detectOnceFromServer();
+        }
+      }, DETECT_INTERVAL_MS);
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        if (overlay) overlay.pause();
+      } else {
+        if (tracking && overlay && overlay.src) {
+          overlay.play().catch(() => { });
+        }
+      }
+    });
+
+    // ================================================
+    // AR ENGINE INITIALIZATION OVERLAY
+    // ================================================
+
+    function forceHideAROverlay() {
+      const arOverlay = document.getElementById('arLoadingOverlay');
+      if (arOverlay) {
+        arOverlay.classList.add('hide');
+        arOverlay.style.opacity = '0';
+        arOverlay.style.visibility = 'hidden';
+        arOverlay.style.display = 'none';
+        arOverlay.style.pointerEvents = 'none';
+      }
+    }
+
+    // Show overlay on page load
+    window.addEventListener('DOMContentLoaded', function () {
+      const arOverlay = document.getElementById('arLoadingOverlay');
+      if (arOverlay) {
+        arOverlay.classList.remove('hide');
+      }
+
+      // Auto-hide after 2.5 seconds
+      setTimeout(function () {
+        forceHideAROverlay();
+      }, 2500);
+    });
+
+    // Optional: Click anywhere to dismiss early (for debugging)
+    document.getElementById('arLoadingOverlay')?.addEventListener('click', forceHideAROverlay);
+    document.getElementById('arLoadingOverlay')?.addEventListener('touchstart', forceHideAROverlay, { passive: true });
+
+    // Clean up on page unload
+    window.addEventListener('unload', function () {
+      if (cameraStream) {
+        cameraStream.getTracks().forEach(track => track.stop());
+      }
+    });
+  </script>
+</body>
+
+</html>

@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ScanStory | Project Created</title>
+
+    <!-- External Libraries -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+
+        :root {
+            --primary: #ff007a;
+            --secondary: #7000ff;
+            --accent: #00d4ff;
+            --bg-dark: #050505;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--bg-dark);
+            color: #ffffff;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        /* Ambient Background Blobs */
+        .blob {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(100px);
+            z-index: -1;
+            opacity: 0.2;
+            pointer-events: none;
+        }
+
+        .blob-1 {
+            width: 600px;
+            height: 600px;
+            background: var(--secondary);
+            top: -10%;
+            left: -10%;
+        }
+
+        .blob-2 {
+            width: 500px;
+            height: 500px;
+            background: var(--primary);
+            bottom: -10%;
+            right: -5%;
+        }
+
+        /* ====== High-Gloss Glass Card ====== */
+        .glass-auth-card {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01));
+            backdrop-filter: blur(50px);
+            -webkit-backdrop-filter: blur(50px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow:
+                0 40px 100px rgba(0, 0, 0, 0.7),
+                inset 0 0 20px rgba(255, 255, 255, 0.05);
+            border-radius: 40px;
+            padding: 3.5rem;
+            width: 100%;
+            max-width: 600px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Moving Gloss Effect */
+        .glass-auth-card::after {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(45deg,
+                    transparent 45%,
+                    rgba(255, 255, 255, 0.08) 50%,
+                    transparent 55%);
+            pointer-events: none;
+            transform: rotate(-20deg);
+            animation: glossSweep 8s infinite linear;
+        }
+
+        @keyframes glossSweep {
+            0% {
+                transform: translateX(-10%) rotate(-20deg);
+            }
+
+            100% {
+                transform: translateX(10%) rotate(-20deg);
+            }
+        }
+
+        .label-style {
+            display: block;
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.25em;
+            color: rgba(255, 255, 255, 0.5);
+            margin-bottom: 10px;
+            margin-left: 5px;
+        }
+
+        /* Button Styling */
+        .action-btn {
+            width: 100%;
+            background: var(--primary);
+            padding: 1.25rem;
+            border-radius: 22px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.3em;
+            font-size: 13px;
+            transition: all 0.5s cubic-bezier(0.23, 1, 0.32, 1);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            cursor: pointer;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .action-btn:hover {
+            transform: translateY(-5px) scale(1.02);
+            box-shadow: 0 20px 40px rgba(255, 0, 122, 0.4);
+            background: #fff;
+            color: #000;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(90deg, var(--accent), #0077ff);
+        }
+
+        .btn-secondary:hover {
+            background: #fff;
+            color: #000;
+        }
+
+        .btn-tertiary {
+            background: linear-gradient(90deg, #a855f7, #8b5cf6);
+        }
+
+        .btn-tertiary:hover {
+            background: #fff;
+            color: #000;
+        }
+
+        .back-nav {
+            position: absolute;
+            top: 2rem;
+            left: 2rem;
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            color: rgba(255, 255, 255, 0.3);
+            text-decoration: none;
+            transition: 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 20;
+        }
+
+        .back-nav:hover {
+            color: var(--accent);
+        }
+
+        /* Info Box Styling */
+        .info-box {
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .info-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .info-item:last-child {
+            border-bottom: none;
+        }
+
+        .info-label {
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.15em;
+            color: rgba(255, 255, 255, 0.5);
+        }
+
+        .info-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        /* QR Code Container */
+        .qr-container {
+            background: white;
+            padding: 15px;
+            border-radius: 16px;
+            display: inline-block;
+            margin: 20px 0;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+        }
+
+        /* Link Display */
+        .link-display {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 15px;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            word-break: break-all;
+            color: rgba(255, 255, 255, 0.8);
+            margin: 15px 0;
+        }
+
+        /* Utility Buttons */
+        .util-btn {
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.05);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            transition: all 0.3s;
+            margin: 5px;
+        }
+
+        .util-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
+        }
+
+        .download-btn {
+            background: rgba(0, 212, 255, 0.12);
+            color: var(--accent);
+            border-color: rgba(0, 212, 255, 0.25);
+        }
+
+        .download-btn:hover {
+            background: rgba(0, 212, 255, 0.22);
+            border-color: rgba(0, 212, 255, 0.35);
+        }
+
+        /* Success Icon */
+        .success-icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, var(--accent), var(--secondary));
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 36px;
+            font-weight: bold;
+        }
+
+        /* ===========================
+           ✅ ONLY ADDED: SCROLL ENABLE
+           - keep your CSS as-is
+           - make page scroll on mobile/desktop
+        =========================== */
+        body {
+            overflow-y: auto !important;
+            /* enable vertical scroll */
+            -webkit-overflow-scrolling: touch;
+            /* smooth iOS scrolling */
+            overscroll-behavior: contain;
+        }
+    </style>
+</head>
+
+<body class="flex items-center justify-center min-h-screen p-6">
+
+    <div class="blob blob-1"></div>
+    <div class="blob blob-2"></div>
+
+    <div class="glass-auth-card" data-aos="zoom-in" data-aos-duration="1000">
+        <!-- ✅ CHANGED: Back to Dashboard - conditionally go to admin or user dashboard -->
+        <a href="{% if is_admin %}{{ url_for('admin_dashboard') }}{% else %}{{ url_for('dashboard') }}{% endif %}"
+            class="back-nav">
+            <i class="fas fa-chevron-left"></i> Back to Dashboard
+        </a>
+
+        <div class="text-center mb-10">
+            <div class="success-icon">
+                <i class="fas fa-check"></i>
+            </div>
+            <div class="text-3xl font-black italic tracking-tighter mb-4">
+                SCAN<span class="text-pink-500">STORY</span>
+            </div>
+            <h1 class="text-3xl font-black uppercase tracking-tight mb-2">Project Created</h1>
+            <p class="text-slate-500 text-sm font-light uppercase tracking-widest">Ready for AR Scanning</p>
+        </div>
+
+        <!-- Project Info -->
+        <div class="info-box">
+            <label class="label-style">Project Details</label>
+            <div class="info-item">
+                <span class="info-label">Project Name</span>
+                <span class="info-value">Project {{ project.display_number }}: {{ project.name }}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Project #</span>
+                <span class="info-value">{{ project.display_number }}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Media Pairs</span>
+                <span class="info-value">{{ pairs|length }}</span>
+            </div>
+            <div class="info-item">
+                <span class="info-label">Created</span>
+                <span class="info-value">
+                    {% if project.created_at %}
+                    {{ project.created_at.strftime("%Y-%m-%d %H:%M") }}
+                    {% else %}
+                    -
+                    {% endif %}
+                </span>
+            </div>
+        </div>
+
+        <!-- QR Code Section -->
+        <div class="info-box">
+            <label class="label-style">QR Code</label>
+            <p class="text-slate-400 text-sm mb-4 text-center">Scan this QR code to launch the AR scanner</p>
+
+            <div class="text-center">
+                {% if project.qr_code_path %}
+                <div class="qr-container">
+                    <img id="qrImage" src="{{ project.qr_code_path }}" alt="QR Code" class="w-64 h-auto max-w-full mx-auto">
+                </div>
+                <br>
+                <a href="{{ qr_download_url }}" class="download-btn util-btn inline-flex items-center justify-center">
+                    <i class="fas fa-download mr-2"></i> Download QR Code
+                </a>
+                {% else %}
+                <p class="text-red-400 text-sm">QR code generation failed</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Scanner Link -->
+        {% if project.scanner_url %}
+        <div class="info-box">
+            <label class="label-style">Direct Scanner Link</label>
+            <div class="link-display" id="scannerLink">
+                {{ project.scanner_url }}
+            </div>
+            <div class="text-center">
+                <button class="util-btn" onclick="copyToClipboard()">
+                    <i class="fas fa-copy mr-2"></i> Copy Link
+                </button>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Action Buttons -->
+        <div class="space-y-4 mt-8">
+            <a href="{{ project.scanner_url }}" target="_blank" class="action-btn block">
+                <i class="fas fa-rocket mr-2"></i> Open AR Scanner
+            </a>
+
+            <!-- ✅ CHANGED: Condition for creating another project -->
+            {% if is_admin %}
+            <a href="{{ url_for('admin_create_project_page') }}" class="action-btn btn-secondary block">
+                <i class="fas fa-plus mr-2"></i> Create Another Project
+            </a>
+            {% else %}
+            {% if user.can_create_project %}
+            <a href="{{ url_for('user_create_project_page') }}" class="action-btn btn-secondary block">
+                <i class="fas fa-plus mr-2"></i> Create Another Project
+            </a>
+            {% else %}
+            <a href="{{ url_for('subscribe_page') }}" class="action-btn btn-secondary block">
+                <i class="fas fa-crown mr-2"></i> Upgrade to Create More
+            </a>
+            {% endif %}
+            {% endif %}
+
+            <!-- ✅ CHANGED: View All Projects - conditionally go to admin or user projects -->
+            <a href="{{ projects_url }}" class="action-btn btn-tertiary block">
+                <i class="fas fa-list mr-2"></i> View All Projects
+            </a>
+
+            <!-- Back Links -->
+            <div class="text-center pt-8 mt-8 border-t border-white/10">
+                <p class="text-slate-500 text-[10px] uppercase tracking-[0.2em] font-bold">
+                    Need help? <a href="#" class="text-accent hover:text-white transition-all ml-1">Contact Support</a>
+                    | <a href="{% if is_admin %}{{ url_for('admin_dashboard') }}{% else %}{{ url_for('user_profile') }}{% endif %}"
+                        class="text-accent hover:text-white transition-all ml-1">{% if is_admin %}Dashboard{% else
+                        %}View Profile{% endif %}</a>
+                </p>
+            </div>
+        </div>
+
+        <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+        <script>
+            AOS.init({
+                once: true
+            });
+
+            function copyToClipboard() {
+                const text = document.getElementById('scannerLink').innerText;
+                navigator.clipboard.writeText(text).then(() => {
+                    alert('Link copied to clipboard!');
+                }).catch(() => {
+                    alert('Copy failed - please copy manually');
+                });
+            }
+
+        </script>
+</body>
+
+</html>

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project {{ project.display_number }}: {{ project.name }} - Preview | ScanStory Admin</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+        
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: #050505;
+            color: white;
+        }
+        
+        .glass {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+        }
+        
+        .media-card {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 20px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .media-card:hover {
+            border-color: rgba(0, 212, 255, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        .back-btn {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 40px;
+            padding: 10px 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .back-btn:hover {
+            border-color: #00d4ff;
+            color: #00d4ff;
+        }
+        
+        .download-btn {
+            background: rgba(0, 212, 255, 0.1);
+            border: 1px solid rgba(0, 212, 255, 0.2);
+            border-radius: 30px;
+            padding: 8px 16px;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+        
+        .download-btn:hover {
+            background: rgba(0, 212, 255, 0.2);
+            border-color: rgba(0, 212, 255, 0.4);
+        }
+        
+        .admin-badge {
+            background: rgba(147, 51, 234, 0.2);
+            border: 1px solid rgba(147, 51, 234, 0.3);
+            color: #c084fc;
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-6">
+    
+    <!-- Simple Header -->
+    <div class="flex items-center justify-between mb-6">
+        <!-- CHANGE 1: Back to Admin Dashboard -->
+        <a href="{{ url_for('admin_dashboard') }}" class="back-btn inline-flex items-center gap-2">
+            <i class="fas fa-arrow-left text-xs"></i>
+            <span class="text-xs font-bold uppercase tracking-wider">Dashboard</span>
+        </a>
+        <div class="flex items-center gap-3">
+            <span class="admin-badge text-xs px-3 py-1.5 rounded-full font-bold uppercase tracking-wider">
+                <i class="fas fa-shield-alt mr-1"></i> Admin Project
+            </span>
+            <div class="text-right">
+                <div class="text-xs text-white/50">Viewing Project</div>
+                <div class="font-bold">Project {{ project.display_number }}: {{ project.name }}</div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Project Info Bar -->
+    <div class="glass p-4 mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-4">
+            <div>
+                <span class="text-xs text-white/50">Project #</span>
+                <div class="font-mono text-sm font-bold text-cyan-400">#{{ project.display_number }}</div>
+            </div>
+            <div class="w-px h-8 bg-white/10"></div>
+            <div>
+                <span class="text-xs text-white/50">Pairs</span>
+                <div class="font-bold">{{ pairs|length }}</div>
+            </div>
+            <div class="w-px h-8 bg-white/10 hidden md:block"></div>
+            <div class="hidden md:block">
+                <span class="text-xs text-white/50">Created</span>
+                <div class="font-bold">{{ project.created_at.strftime('%d %b %Y') }}</div>
+            </div>
+            <div class="w-px h-8 bg-white/10 hidden md:block"></div>
+            <div class="hidden md:block">
+                <span class="text-xs text-white/50">Owner</span>
+                <div class="font-bold text-purple-400">{{ admin.name or admin.email }}</div>
+            </div>
+        </div>
+        <!-- CHANGE 2: Scanner URL with admin_id parameter -->
+        <a href="{{ url_for('scanner', project_id=project.id, admin_id=admin.id, admin_name=admin.name) }}" target="_blank" 
+           class="bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 px-5 py-2 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-cyan-500/30 transition flex items-center gap-2">
+            <i class="fas fa-qrcode"></i> Scan AR
+        </a>
+    </div>
+    
+    <!-- Media Pairs Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {% for pair in pairs %}
+        <div class="media-card">
+            <!-- Pair Header -->
+            <div class="bg-white/5 px-4 py-3 border-b border-white/10 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <div class="w-6 h-6 rounded-full bg-cyan-500/20 flex items-center justify-center">
+                        <span class="text-xs font-bold text-cyan-400">{{ loop.index }}</span>
+                    </div>
+                    <span class="text-xs font-bold uppercase tracking-wider">Pair</span>
+                </div>
+                <span class="text-xs px-2 py-1 rounded-full 
+                    {% if pair.is_processed %}bg-green-500/20 text-green-400{% else %}bg-yellow-500/20 text-yellow-400{% endif %}">
+                    <i class="fas {% if pair.is_processed %}fa-check-circle{% else %}fa-spinner fa-spin{% endif %} mr-1"></i>
+                    {{ 'Ready' if pair.is_processed else 'Processing' }}
+                </span>
+            </div>
+            
+            <!-- Image Preview with Download -->
+            <div class="p-4">
+                <div class="aspect-video bg-black/50 rounded-xl overflow-hidden mb-3 relative group">
+                    {% if pair.image_filename %}
+                    <!-- CHANGE 3: Image URL - Admin route -->
+                    <img src="{{ url_for('serve_admin_image', project_id=project.id, image_id=pair.pair_index) }}" 
+                         class="w-full h-full object-cover"
+                         onerror="this.src='https://via.placeholder.com/400x300/1e293b/94a3b8?text=No+Image'">
+                    <div class="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-3">
+                        <!-- CHANGE 5: Download Image - Admin route -->
+                        <a href="{{ url_for('serve_admin_image', project_id=project.id, image_id=pair.pair_index) }}" download
+                           class="download-btn inline-flex items-center gap-2">
+                            <i class="fas fa-download"></i> Download Image
+                        </a>
+                    </div>
+                    {% else %}
+                    <div class="w-full h-full flex items-center justify-center text-white/30">
+                        <i class="fas fa-image text-4xl"></i>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <!-- Video Preview with Download -->
+                <div class="aspect-video bg-black/50 rounded-xl overflow-hidden relative group">
+                    {% if pair.video_filename %}
+                    <!-- CHANGE 4: Video URL - Admin route -->
+                    <video src="{{ url_for('serve_admin_video', project_id=project.id, image_id=pair.pair_index) }}" 
+                           class="w-full h-full object-cover"
+                           controls></video>
+                    <div class="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition">
+                        <!-- CHANGE 5: Download Video - Admin route -->
+                        <a href="{{ url_for('serve_admin_video', project_id=project.id, image_id=pair.pair_index) }}" download
+                           class="download-btn inline-flex items-center gap-2 bg-black/50">
+                            <i class="fas fa-download"></i> Download Video
+                        </a>
+                    </div>
+                    {% else %}
+                    <div class="w-full h-full flex items-center justify-center text-white/30">
+                        <i class="fas fa-video text-4xl"></i>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <!-- QR Download Button -->
+                <div class="mt-4 text-center">
+                    <!-- CHANGE 5: Download QR - Admin route -->
+                    <a href="{{ url_for('admin_download_project_qr', project_id=project.id) }}" 
+                       class="download-btn inline-flex items-center gap-2">
+                        <i class="fas fa-qrcode"></i> Download QR Code
+                    </a>
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <!-- Empty State -->
+        <div class="col-span-full text-center py-16">
+            <i class="fas fa-folder-open text-5xl text-white/20 mb-4"></i>
+            <h3 class="text-xl font-bold mb-2">No Media Pairs</h3>
+            <p class="text-white/50">This project has no images or videos yet.</p>
+            <a href="{{ url_for('admin_create_project_page') }}" 
+               class="inline-flex items-center gap-2 mt-4 download-btn">
+                <i class="fas fa-plus"></i> Create New Project
+            </a>
+        </div>
+        {% endfor %}
+    </div>
+    
+    <!-- Summary Footer -->
+    <div class="glass p-4 mt-8">
+        <div class="flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center gap-4">
+                <div>
+                    <span class="text-xs text-white/50">Total Pairs</span>
+                    <div class="font-bold text-lg">{{ pairs|length }}</div>
+                </div>
+                <div class="w-px h-8 bg-white/10"></div>
+                <div>
+                    <span class="text-xs text-white/50">Ready Pairs</span>
+                    <div class="font-bold text-lg text-green-400">{{ pairs|selectattr('is_processed')|list|length }}</div>
+                </div>
+            </div>
+            <div class="flex gap-3">
+                <a href="{{ url_for('admin_dashboard') }}" 
+                   class="back-btn inline-flex items-center gap-2">
+                    <i class="fas fa-arrow-left"></i>
+                    <span class="text-xs font-bold uppercase tracking-wider">Dashboard</span>
+                </a>
+                <!-- CHANGE 2: Scanner URL with admin_id parameter -->
+                <a href="{{ url_for('scanner', project_id=project.id, admin_id=admin.id, admin_name=admin.name) }}" target="_blank"
+                   class="download-btn inline-flex items-center gap-2">
+                    <i class="fas fa-external-link-alt"></i>
+                    Open Scanner
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Simple image fallback
+        document.querySelectorAll('img').forEach(img => {
+            img.addEventListener('error', function() {
+                this.src = 'https://via.placeholder.com/400x300/1e293b/94a3b8?text=No+Image';
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+area,file_line,finding,risk
+startup,app.py:239,db.create_all at import,startup latency and unsafe schema changes
+startup,app.py:5762,db.create_all in __main__,debug-start schema mutation
+dashboard,app.py:1903,per-project scan count loop,N+1 query risk
+dashboard,app.py:1912,per-project pair count loop,N+1 query risk
+admin dashboard,app.py:4160,per-project pair count loop,N+1 query risk
+admin dashboard,app.py:4161,per-project scan count loop,N+1 query risk
+admin users,app.py:4271,users .all(),unbounded memory and latency
+admin subscriptions,app.py:4768,subscriptions .all(),unbounded memory and latency
+admin payments,app.py:4927,payments .all(),unbounded memory and latency
+admin activity,app.py:5313,activity .all(),unbounded memory and latency
+

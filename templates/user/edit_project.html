@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Edit Story | {{ project.name }}</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+
+    :root {
+      --primary: #ff007a;
+      --secondary: #7000ff;
+      --accent: #00d4ff;
+      --bg-dark: #050505;
+      --glass-border: rgba(255,255,255,0.12);
+      --muted: rgba(255,255,255,0.5);
+      --radius-xl: 36px;
+      --radius-md: 18px;
+      --ease: cubic-bezier(0.23,1,0.32,1);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background: var(--bg-dark);
+      color: #fff;
+      min-height: 100vh;
+    }
+
+    .blob {
+      position: fixed;
+      border-radius: 50%;
+      filter: blur(100px);
+      z-index: -1;
+      opacity: 0.15;
+      pointer-events: none;
+    }
+
+    .page {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 28px;
+    }
+
+    .nav-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 18px;
+      border-radius: 999px;
+      text-decoration: none;
+      color: rgba(255,255,255,0.75);
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.04);
+      backdrop-filter: blur(20px);
+      transition: all 0.3s var(--ease);
+    }
+
+    .nav-back:hover {
+      color: var(--accent);
+      border-color: rgba(0,212,255,0.3);
+    }
+
+    .page-header {
+      margin-bottom: 32px;
+    }
+
+    .page-header h1 {
+      font-size: 32px;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      background: linear-gradient(135deg, #fff 40%, #00d4ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 8px;
+    }
+
+    .page-header p {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .info-banner {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 18px;
+      border-radius: var(--radius-md);
+      background: rgba(0,212,255,0.06);
+      border: 1px solid rgba(0,212,255,0.2);
+      color: #00d4ff;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 28px;
+    }
+
+    .panel {
+      background: linear-gradient(135deg, rgba(255,255,255,0.045), rgba(255,255,255,0.01));
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-xl);
+      padding: 32px;
+      backdrop-filter: blur(40px);
+      margin-bottom: 20px;
+    }
+
+    .pair-block {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: var(--radius-md);
+      padding: 22px;
+      margin-bottom: 16px;
+      background: rgba(255,255,255,0.018);
+    }
+
+    .pair-label {
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--accent);
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pair-num {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: rgba(0,212,255,0.15);
+      border: 1px solid rgba(0,212,255,0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      color: var(--accent);
+    }
+
+    .upload-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    @media (max-width: 600px) {
+      .upload-row { grid-template-columns: 1fr; }
+    }
+
+    .upload-slot label {
+      display: block;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .file-zone {
+      position: relative;
+      border: 1px dashed rgba(255,255,255,0.18);
+      border-radius: var(--radius-md);
+      padding: 22px 14px;
+      text-align: center;
+      cursor: pointer;
+      background: rgba(255,255,255,0.02);
+      transition: all 0.3s var(--ease);
+    }
+
+    .file-zone:hover {
+      border-color: rgba(0,212,255,0.4);
+      background: rgba(0,212,255,0.04);
+    }
+
+    .file-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+    }
+
+    .file-zone i {
+      font-size: 22px;
+      color: var(--accent);
+      opacity: 0.6;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .fz-title {
+      font-size: 12px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.7);
+      margin-bottom: 4px;
+    }
+
+    .fz-sub {
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+    }
+
+    .fz-selected {
+      font-size: 11px;
+      color: #34d399;
+      font-weight: 700;
+      margin-top: 8px;
+      display: none;
+    }
+
+    .status-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .status-ok {
+      background: rgba(52,211,153,0.12);
+      color: #34d399;
+      border: 1px solid rgba(52,211,153,0.25);
+    }
+
+    .status-fail {
+      background: rgba(255,60,60,0.12);
+      color: #ff6666;
+      border: 1px solid rgba(255,60,60,0.25);
+    }
+
+    .status-pending {
+      background: rgba(255,190,0,0.1);
+      color: #fbbf24;
+      border: 1px solid rgba(255,190,0,0.25);
+    }
+
+    .current-files {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .cf-label {
+      font-size: 10px;
+      color: var(--muted);
+      margin-right: 4px;
+    }
+
+    .action-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 28px;
+    }
+
+    @media (max-width: 500px) {
+      .action-row { grid-template-columns: 1fr; }
+    }
+
+    .btn-save {
+      padding: 1rem;
+      border-radius: 20px;
+      background: linear-gradient(135deg, var(--primary), var(--secondary));
+      border: none;
+      color: #fff;
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      cursor: pointer;
+      transition: all 0.4s var(--ease);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .btn-save:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 20px 40px rgba(255,0,122,0.35);
+      filter: brightness(1.12);
+    }
+
+    .btn-cancel {
+      padding: 1rem;
+      border-radius: 20px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.7);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-size: 13px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      cursor: pointer;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: all 0.3s var(--ease);
+    }
+
+    .btn-cancel:hover {
+      color: var(--accent);
+      border-color: rgba(0,212,255,0.3);
+    }
+
+    .flash-messages {
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      z-index: 2000;
+      max-width: 400px;
+    }
+
+    .flash-message {
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      border-radius: 14px;
+      color: white;
+      font-weight: 700;
+      font-size: 13px;
+      backdrop-filter: blur(16px);
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.1);
+      animation: slideIn 0.35s ease-out;
+    }
+
+    .flash-success { border-left: 4px solid #34d399; }
+    .flash-error { border-left: 4px solid #f87171; }
+    .flash-info { border-left: 4px solid #60a5fa; }
+
+    @keyframes slideIn {
+      from { transform: translateX(20px); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="blob" style="width:500px;height:500px;background:#7000ff;top:-10%;left:-8%;"></div>
+  <div class="blob" style="width:460px;height:460px;background:#ff007a;bottom:-10%;right:-8%;"></div>
+
+  <div class="flash-messages">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="flash-message flash-{{ category }}">{{ message }}</div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+  </div>
+
+  <div class="page">
+    <div class="topbar">
+      <a href="{{ url_for('projects_page') }}" class="nav-back">
+        <i class="fas fa-chevron-left"></i> Back to My Stories
+      </a>
+    </div>
+
+    <div class="page-header">
+      <h1>Edit Story</h1>
+      <p>Replace only the files you want to update. Empty fields will keep the current media.</p>
+    </div>
+
+    <div class="info-banner">
+      <i class="fas fa-circle-info"></i>
+      <span>Uploading a new image or video will reprocess only that story pair. Your QR code stays the same.</span>
+    </div>
+
+    <form method="POST" enctype="multipart/form-data" action="{{ url_for('user_edit_project', project_id=project.id) }}">
+      {% for pair in pairs %}
+      <div class="panel pair-block">
+        <div class="pair-label">
+          <span class="pair-num">{{ pair.pair_index + 1 }}</span>
+          Story Pair {{ pair.pair_index + 1 }}
+          {% if pair.is_processed %}
+          <span class="status-tag status-ok"><i class="fas fa-check"></i> Ready</span>
+          {% elif pair.processing_status == 'failed' %}
+          <span class="status-tag status-fail"><i class="fas fa-xmark"></i> Needs Fix</span>
+          {% else %}
+          <span class="status-tag status-pending"><i class="fas fa-clock"></i> Processing</span>
+          {% endif %}
+        </div>
+
+        <div class="current-files">
+          <span class="cf-label">Current files</span>
+          <span class="status-tag status-ok"><i class="fas fa-image"></i> {{ pair.image_filename }}</span>
+          <span class="status-tag status-ok"><i class="fas fa-film"></i> {{ pair.video_filename }}</span>
+        </div>
+
+        <div class="upload-row">
+          <div class="upload-slot">
+            <label>Replace Image</label>
+            <div class="file-zone" id="img-zone-{{ pair.pair_index }}">
+              <input type="file" name="image_{{ pair.pair_index }}" accept="image/*"
+                     onchange="onFileChosen(this, 'img-zone-{{ pair.pair_index }}', 'img-sel-{{ pair.pair_index }}')">
+              <i class="fas fa-image"></i>
+              <div class="fz-title">Upload new image</div>
+              <div class="fz-sub">JPG, PNG - leave empty to keep current</div>
+              <div class="fz-selected" id="img-sel-{{ pair.pair_index }}"></div>
+            </div>
+          </div>
+
+          <div class="upload-slot">
+            <label>Replace Video</label>
+            <div class="file-zone" id="vid-zone-{{ pair.pair_index }}">
+              <input type="file" name="video_{{ pair.pair_index }}" accept="video/*"
+                     onchange="onFileChosen(this, 'vid-zone-{{ pair.pair_index }}', 'vid-sel-{{ pair.pair_index }}')">
+              <i class="fas fa-film"></i>
+              <div class="fz-title">Upload new video</div>
+              <div class="fz-sub">MP4 - leave empty to keep current</div>
+              <div class="fz-selected" id="vid-sel-{{ pair.pair_index }}"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+
+      <div class="action-row">
+        <button type="submit" class="btn-save">
+          <i class="fas fa-floppy-disk"></i> Save Changes
+        </button>
+        <a href="{{ url_for('projects_page') }}" class="btn-cancel">
+          <i class="fas fa-xmark"></i> Cancel
+        </a>
+      </div>
+    </form>
+  </div>
+
+  <script>
+    function onFileChosen(input, zoneId, selId) {
+      const zone = document.getElementById(zoneId);
+      const sel = document.getElementById(selId);
+      if (input.files && input.files[0]) {
+        sel.textContent = 'Selected: ' + input.files[0].name;
+        sel.style.display = 'block';
+        zone.style.borderColor = 'rgba(52,211,153,0.5)';
+        zone.style.background = 'rgba(52,211,153,0.04)';
+      }
+    }
+
+    setTimeout(() => {
+      document.querySelectorAll('.flash-message').forEach((el) => {
+        el.style.transition = 'opacity 0.5s';
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 500);
+      });
+    }, 5000);
+  </script>
+</body>
+</html>

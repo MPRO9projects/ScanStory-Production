@@ -1,0 +1,139 @@
+# ==================================================
+# ENVIRONMENT / SECRETS
+# ==================================================
+.env
+.env.*
+!.env.example
+
+# Private keys / credentials
+*.pem
+*.key
+*.crt
+credentials.json
+Creds.json
+service-account.json
+service_account.json
+
+
+# ==================================================
+# PYTHON VIRTUAL ENVIRONMENT
+# ==================================================
+env/
+venv/
+.venv/
+
+
+# ==================================================
+# PYTHON CACHE
+# ==================================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+
+# ==================================================
+# LOCAL AI / EDITOR CONFIG
+# ==================================================
+.claude/
+.vscode/
+.idea/
+
+
+# ==================================================
+# BACKUPS
+# ==================================================
+backups/
+backup/
+*.zip
+*.rar
+*.tar
+*.tar.gz
+
+
+# ==================================================
+# RUNTIME / USER-GENERATED UPLOADS
+# ==================================================
+static/uploads/
+uploads/
+
+
+# ==================================================
+# APPLICATION RUNTIME DATA
+# ==================================================
+data/
+
+# If these folders contain runtime/admin-generated records
+data_admin/
+
+
+# ==================================================
+# GENERATED QR CODES
+# ==================================================
+qr_codes/
+
+# If QR codes are generated under static
+static/qr_codes/
+
+
+# ==================================================
+# TEMP / LOG FILES
+# ==================================================
+tmp/
+temp/
+*.tmp
+*.log
+logs/
+
+
+# ==================================================
+# DATABASE FILES
+# ==================================================
+*.db
+*.sqlite
+*.sqlite3
+
+
+# ==================================================
+# OS FILES
+# ==================================================
+Thumbs.db
+desktop.ini
+.DS_Store
+
+
+# ==================================================
+# TEST OUTPUT / CACHE
+# ==================================================
+.pytest_cache/
+.coverage
+htmlcov/
+
+
+# ==================================================
+# EXCEL / GENERATED REPORTS
+# ==================================================
+*.xlsx
+*.xls
+*.csv
+# Keep specification and audit CSV files
+!performance-audit/*.csv
+!project-understanding/*.csv
+!release-1-specification/*.csv
+!release-1-readiness-review/*.csv
+
+# Database backups
+*.backup
+*.dump
+*.sql
+
+test_razorpay.py
+# Generated Graphify output
+.graphify-app-corpus/
+graphify-out/
+graphify-out-app/
+
+# Local coding-agent tools and downloaded skill libraries
+.codex/
+agent skills/
+codex-skills/

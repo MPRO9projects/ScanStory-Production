@@ -1,0 +1,10 @@
+flow,entry,routes,templates,db_records,files,external_services,success_result,possible_failures
+visitor website,/,/ /blog /pricing /contact,user/landing user/blog user/subscribe user/contact,SubscriptionPlan,static assets videos,CDNs,reaches marketing/pricing/contact,CDN/media slow or unavailable
+registration,/register,/register /verify-email /resend-otp,user/register user/verify_email,User TrialDetails OTPCode,none,reCAPTCHA SMTP,verified account ready for login,reCAPTCHA fail SMTP fail expired OTP
+login,/login,/login /dashboard,user/login user/dashboard,User TrialDetails UserLoginActivity,none,none,session user_id set,lockout blocked expired trial invalid password
+project creation,/create-project,/create-project /upload /success,user_create_project success,Project ProjectPair User SystemConfig,data images videos features QR,none,project QR generated and processing starts,limits file size unequal pairs feature thread fail
+scanner,/scanner/<id>,/scanner /detect_init /api/scanner/session/end,scanner,Project ProjectPair ScanLog User,data/data_admin features videos,Browser camera OpenCV.js,video overlay and scan counted,camera denied no features no match session not counted
+payment,/subscribe,/create-razorpay-order /verify-payment /payment-success,subscribe payment_success,SubscriptionPlan PaymentOrder User TrialDetails,none,Razorpay SMTP,active paid subscription,missing gateway bad signature email fail
+admin management,/admin/login,admin routes,admin templates,Admin User Project PaymentOrder SubscriptionPlan SystemConfig,admin media/QR,SMTP for reset,admin can manage system,permission errors missing template for admin reset email
+admin project,/admin/projects/create,/admin/projects/upload /admin/success /admin/qr,user_create_project success,Project ProjectPair,data_admin images videos features QR,none,admin project scanner QR,feature thread fail file path mismatch
+

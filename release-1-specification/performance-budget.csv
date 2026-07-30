@@ -1,0 +1,10 @@
+Area,Budget,Measurement,Release Rule
+Dashboard JS,<250KB compressed where practical,Bundle analysis,Scanner code excluded
+Scanner assets,Lazy after viewer start,Network waterfall,No creator-page loading
+OpenCV/WASM load,Timeout plus fallback,RUM event,No infinite spinner
+Camera permission,Requested only after start,UX test,No eager prompt
+Recognition latency,Proposed SLO to validate,RUM/server timing,Must emit diagnostics
+Fallback availability,Always available,End-to-end test,Required for publish
+Analytics ingestion,Non-blocking,Trace/event queue,No viewer blocking
+Media delivery,Adaptive variants,Network/device tests,Mode-aware delivery
+Processing jobs,Async durable queue,Queue metrics,No unmanaged daemon threads

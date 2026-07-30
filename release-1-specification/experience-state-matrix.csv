@@ -1,0 +1,10 @@
+State,Entry Condition,Allowed Actions,Exit Condition,Public Behavior
+Draft,Experience created,Edit triggers and settings,Upload starts or archive,None
+Uploading,Asset upload active,Cancel or continue,Upload completed,None
+Processing,Jobs queued/running,View progress or retry failed jobs,All jobs ready or needs attention,None
+Needs Attention,Validation or quality issue,Replace asset or retry,Issues resolved,None
+Ready To Test,All required artifacts ready,Preview/test/request approval,Approved,None
+Approved,Reviewer/publisher approval,Publish or edit,Published or draft changed,None
+Published,Atomic publish complete,Monitor pause rollback archive,Paused archived or new version published,Serves immutable version
+Paused,Manual or policy pause,Resume archive,Fulfilled by resume/archive,Unavailable or fallback
+Archived,Archive action,Read-only reference,None,No new sessions

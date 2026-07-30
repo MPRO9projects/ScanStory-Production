@@ -1,0 +1,20 @@
+Entitlement,Trial,Creator,Professional,Business,Education,Enterprise
+max_active_experiences,Low,Configurable,Configurable,Configurable,Configurable,Contract
+max_triggers_per_experience,Low,Configurable,Configurable,Configurable,Configurable,Contract
+monthly_experience_views,Low,Configurable,Configurable,Configurable,Configurable,Contract
+storage_bytes,Low,Configurable,Configurable,Configurable,Configurable,Contract
+media_processing_minutes,Low,Configurable,Configurable,Configurable,Configurable,Contract
+workspace_members,1,Small,Medium,Larger,Classroom,Contract
+analytics_retention_days,Short,Standard,Longer,Longer,Education Policy,Contract
+custom_branding,No,No,Yes,Yes,Education Policy,Yes
+remove_platform_branding,No,No,Optional,Yes,Education Policy,Yes
+custom_domain,No,No,Optional,Yes,Optional,Yes
+bulk_upload,No,No,Optional,Yes,Optional,Yes
+approval_workflow,No,No,Optional,Yes,Optional,Yes
+audit_logs,No,No,Optional,Yes,Optional,Yes
+api_access,No,No,No,Optional,No,Optional
+priority_processing,No,No,Optional,Yes,Optional,Yes
+support_level,Community,Standard,Standard,Priority,Education,Contract
+managed_service_access,No,Optional,Optional,Optional,Optional,Yes
+future_3d,No,No,No,Future,Future,Future
+future_webxr,No,No,No,Future,Future,Future

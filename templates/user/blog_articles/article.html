@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+    <title>{{ article.meta_title }}</title>
+    <meta name="title" content="{{ article.meta_title }}">
+    <meta name="description" content="{{ article.meta_description }}">
+    <meta name="keywords"
+        content="{{ article.primary_keyword }}, ScanStory, WebAR platform, augmented reality platform, AR QR code generator, no-code AR platform, QR code to AR video, browser based augmented reality">
+    <meta name="author" content="ScanStory">
+    <meta name="robots" content="index, follow">
+
+    <link rel="canonical" href="https://myscanstory.com/blog/{{ slug }}">
+
+    <meta property="og:type" content="article">
+    <meta property="og:url" content="https://myscanstory.com/blog/{{ slug }}">
+    <meta property="og:title" content="{{ article.title }}">
+    <meta property="og:description" content="{{ article.meta_description }}">
+    <meta property="og:image" content="https://myscanstory.com/static/uploads/og/scanstory-og.jpg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+
+    <meta property="article:published_time" content="{{ article.date_published }}">
+    <meta property="article:modified_time" content="{{ article.date_modified }}">
+    <meta property="article:section" content="{{ article.category }}">
+    <meta property="article:tag" content="{{ article.primary_keyword }}">
+
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@graph": [
+            {
+                "@type": "Organization",
+                "@id": "https://myscanstory.com/#organization",
+                "name": "ScanStory",
+                "url": "https://myscanstory.com/",
+                "logo": "https://myscanstory.com/static/assets/logos/logo1.png",
+                "email": "contact@myscanstory.com",
+                "telephone": "+91 73385 44142",
+                "description": "ScanStory is a no-code WebAR platform for creating QR-based augmented reality experiences from photos and videos.",
+                "sameAs": [
+                    "https://www.linkedin.com/company/m-pro9-pvt-ltd/",
+                    "https://www.instagram.com/mpro9official/"
+                ]
+            },
+            {
+                "@type": "WebPage",
+                "@id": "https://myscanstory.com/blog/{{ slug }}#webpage",
+                "url": "https://myscanstory.com/blog/{{ slug }}",
+                "name": {{ article.title|tojson }},
+                "description": {{ article.meta_description|tojson }},
+                "isPartOf": {
+                    "@type": "WebSite",
+                    "@id": "https://myscanstory.com/#website",
+                    "name": "ScanStory",
+                    "url": "https://myscanstory.com/"
+                },
+                "about": {
+                    "@id": "https://myscanstory.com/#organization"
+                }
+            },
+            {
+                "@type": "BlogPosting",
+                "@id": "https://myscanstory.com/blog/{{ slug }}#blogposting",
+                "mainEntityOfPage": {
+                    "@id": "https://myscanstory.com/blog/{{ slug }}#webpage"
+                },
+                "headline": {{ article.title|tojson }},
+                "description": {{ article.meta_description|tojson }},
+                "image": "https://myscanstory.com/static/uploads/og/scanstory-og.jpg",
+                "author": {
+                    "@type": "Organization",
+                    "name": "ScanStory",
+                    "url": "https://myscanstory.com/"
+                },
+                "publisher": {
+                    "@id": "https://myscanstory.com/#organization"
+                },
+                "datePublished": "{{ article.date_published }}",
+                "dateModified": "{{ article.date_modified }}",
+                "articleSection": {{ article.category|tojson }},
+                "keywords": {{ article.primary_keyword|tojson }}
+            },
+            {
+                "@type": "BreadcrumbList",
+                "@id": "https://myscanstory.com/blog/{{ slug }}#breadcrumb",
+                "itemListElement": [
+                    {
+                        "@type": "ListItem",
+                        "position": 1,
+                        "name": "Home",
+                        "item": "https://myscanstory.com/"
+                    },
+                    {
+                        "@type": "ListItem",
+                        "position": 2,
+                        "name": "Blog",
+                        "item": "https://myscanstory.com/blog"
+                    },
+                    {
+                        "@type": "ListItem",
+                        "position": 3,
+                        "name": {{ article.title|tojson }},
+                        "item": "https://myscanstory.com/blog/{{ slug }}"
+                    }
+                ]
+            },
+            {
+                "@type": "FAQPage",
+                "@id": "https://myscanstory.com/blog/{{ slug }}#faq",
+                "mainEntity": [
+                    {% for faq in article.get('faqs', []) %}
+                    {
+                        "@type": "Question",
+                        "name": {{ faq.question|tojson }},
+                        "acceptedAnswer": {
+                            "@type": "Answer",
+                            "text": {{ faq.answer|tojson }}
+                        }
+                    }{% if not loop.last %},{% endif %}
+                    {% endfor %}
+                ]
+            }
+        ]
+    }
+    </script>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800;900&display=swap');
+
+        :root {
+            --primary: #ff007a;
+            --secondary: #7000ff;
+            --accent: #00d4ff;
+            --bg-dark: #050505;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--bg-dark);
+            color: #ffffff;
+            overflow-x: hidden;
+        }
+
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            border-radius: 10px;
+        }
+
+        .blob {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(90px);
+            z-index: -1;
+            opacity: 0.16;
+            pointer-events: none;
+        }
+
+        .animated-gradient-text {
+            background: linear-gradient(to right, #fff, var(--accent), var(--primary), #fff);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: textFlow 5s linear infinite;
+        }
+
+        @keyframes textFlow {
+            to {
+                background-position: 200% center;
+            }
+        }
+
+        .glow-btn {
+            transition: all 0.4s ease;
+        }
+
+        .glow-btn:hover {
+            box-shadow: 0 0 50px rgba(255, 0, 122, 0.45);
+            transform: translateY(-3px) scale(1.03);
+            background: #fff;
+            color: #000;
+        }
+
+        .article-card {
+            background: linear-gradient(135deg, rgba(255,255,255,0.055), rgba(255,255,255,0.012));
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 32px;
+            backdrop-filter: blur(22px);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .article-card::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(circle at top left, rgba(255, 0, 122, 0.09), transparent 35%),
+                radial-gradient(circle at bottom right, rgba(0, 212, 255, 0.08), transparent 35%);
+            pointer-events: none;
+        }
+
+        .article-inner {
+            position: relative;
+            z-index: 2;
+        }
+
+        .meta-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 13px;
+            border-radius: 999px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: #94a3b8;
+            font-size: 11px;
+            font-weight: 800;
+        }
+
+        .answer-box {
+            background: rgba(255, 0, 122, 0.08);
+            border: 1px solid rgba(255, 0, 122, 0.25);
+            border-left: 4px solid var(--primary);
+            border-radius: 24px;
+            padding: 24px;
+        }
+
+        .toc-card {
+            background: rgba(255,255,255,0.035);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 24px;
+            padding: 22px;
+        }
+
+        .toc-link {
+            display: block;
+            color: #94a3b8;
+            font-size: 13px;
+            font-weight: 700;
+            padding: 8px 0;
+            transition: all 0.25s ease;
+        }
+
+        .toc-link:hover {
+            color: var(--primary);
+            padding-left: 8px;
+        }
+
+        .content-section {
+            padding: 32px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.07);
+        }
+
+        .content-section:last-child {
+            border-bottom: none;
+        }
+
+        .content-section h2 {
+            font-size: clamp(1.9rem, 4vw, 3.4rem);
+            line-height: 1.02;
+            font-weight: 900;
+            text-transform: uppercase;
+            font-style: italic;
+            margin-bottom: 1rem;
+            color: #fff;
+        }
+
+        .content-section p {
+            color: #94a3b8;
+            font-size: 1rem;
+            line-height: 1.9;
+            margin-bottom: 1rem;
+            text-align: justify;
+        }
+
+        .mini-card {
+            background: rgba(255,255,255,0.035);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 20px;
+            padding: 18px;
+            transition: all 0.3s ease;
+        }
+
+        .mini-card:hover {
+            border-color: rgba(255,0,122,0.4);
+            transform: translateY(-4px);
+        }
+
+        .workflow-step {
+            display: flex;
+            gap: 16px;
+            align-items: flex-start;
+            padding: 18px;
+            background: rgba(255,255,255,0.035);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 20px;
+        }
+
+        .step-number {
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: #fff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 900;
+            flex-shrink: 0;
+        }
+
+        .related-card {
+            display: block;
+            padding: 18px;
+            border-radius: 20px;
+            background: rgba(255,255,255,0.035);
+            border: 1px solid rgba(255,255,255,0.08);
+            transition: all 0.3s ease;
+            text-decoration: none;
+        }
+
+        .related-card:hover {
+            border-color: rgba(255,0,122,0.45);
+            transform: translateY(-4px);
+            box-shadow: 0 12px 30px rgba(255,0,122,0.12);
+        }
+
+        .footer-link {
+            transition: all 0.3s ease;
+            color: #94a3b8;
+        }
+
+        .footer-link:hover {
+            color: #ff007a;
+            padding-left: 8px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]"></div>
+    <div class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]"></div>
+
+    <main class="px-6 lg:px-20 pt-28 pb-16">
+        <div class="max-w-6xl mx-auto">
+
+            <nav class="text-xs uppercase tracking-[0.25em] text-slate-500 font-black mb-8">
+                <a href="/" class="hover:text-pink-500">Home</a>
+                <span class="mx-2">/</span>
+                <a href="/blog" class="hover:text-pink-500">Blog</a>
+                <span class="mx-2">/</span>
+                <span class="text-pink-500">{{ article.category }}</span>
+            </nav>
+
+            <article class="article-card p-6 md:p-12" data-aos="fade-up">
+                <div class="article-inner">
+
+                    <span class="inline-block text-[10px] font-black uppercase tracking-[0.35em] text-pink-500 mb-5">
+                        {{ article.category }}
+                    </span>
+
+                    <h1 class="text-[clamp(2.4rem,7vw,5.8rem)] font-black leading-[0.9] uppercase mb-6">
+                        {{ article.title }}
+                    </h1>
+
+                    <div class="flex flex-wrap gap-3 mb-8">
+                        <span class="meta-pill">
+                            <i class="fas fa-key"></i> {{ article.primary_keyword }}
+                        </span>
+                        <span class="meta-pill">
+                            <i class="fas fa-clock"></i> {{ article.read_time }}
+                        </span>
+                        <span class="meta-pill">
+                            <i class="fas fa-calendar"></i> {{ article.date_published }}
+                        </span>
+                    </div>
+
+                    <p class="text-slate-400 text-lg leading-relaxed text-justify mb-10">
+                        {{ article.intro }}
+                    </p>
+
+                    <section id="direct-answer" class="answer-box mb-10">
+                        <span class="inline-block text-[10px] font-black uppercase tracking-[0.3em] text-pink-500 mb-3">
+                            Direct Answer
+                        </span>
+                        <h2 class="text-2xl md:text-3xl font-black uppercase italic mb-3">
+                            {{ article.title }}
+                        </h2>
+                        <p class="text-slate-300 leading-relaxed text-base md:text-lg">
+                            {{ article.get('direct_answer') or article.intro }}
+                        </p>
+                    </section>
+
+                    <section class="toc-card mb-10">
+                        <h2 class="text-xl font-black uppercase tracking-wider mb-4">
+                            Article Guide
+                        </h2>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-x-8">
+                            <a href="#what-it-means" class="toc-link">What it means</a>
+                            <a href="#how-it-works" class="toc-link">How it works</a>
+                            <a href="#why-it-matters" class="toc-link">Why it matters</a>
+                            <a href="#use-cases" class="toc-link">Use cases</a>
+                            <a href="#examples" class="toc-link">Examples</a>
+                            <a href="#scanstory-workflow" class="toc-link">ScanStory workflow</a>
+                            <a href="#faqs" class="toc-link">FAQs</a>
+                            <a href="#related" class="toc-link">Related articles</a>
+                        </div>
+                    </section>
+
+                    {% set sections = article.get('sections', []) %}
+
+                    <section id="what-it-means" class="content-section">
+                        <h2>What it means</h2>
+                        {% if article.get('what_it_means') %}
+                            <p>{{ article.get('what_it_means') }}</p>
+                        {% elif sections|length > 0 %}
+                            <p>{{ sections[0].body }}</p>
+                        {% else %}
+                            <p>{{ article.title }} explains how WebAR, QR codes, and browser-based augmented reality can convert static physical content into interactive digital experiences.</p>
+                        {% endif %}
+                    </section>
+
+                    <section id="how-it-works" class="content-section">
+                        <h2>How it works</h2>
+                        {% if article.get('how_it_works') %}
+                            <p>{{ article.get('how_it_works') }}</p>
+                        {% elif sections|length > 1 %}
+                            <p>{{ sections[1].body }}</p>
+                        {% else %}
+                            <p>The process starts with a target image and a digital video. The image is used for recognition, the video is linked to it, and a QR code opens the browser-based AR scanner. When the viewer scans the image, the video appears as an AR overlay.</p>
+                        {% endif %}
+                    </section>
+
+                    <section id="why-it-matters" class="content-section">
+                        <h2>Why it matters</h2>
+                        {% if article.get('why_it_matters') %}
+                            <p>{{ article.get('why_it_matters') }}</p>
+                        {% elif sections|length > 2 %}
+                            <p>{{ sections[2].body }}</p>
+                        {% else %}
+                            <p>This matters because businesses, educators, creators, and print shops need simple ways to connect physical content with digital storytelling. WebAR removes app-download friction and makes interactive experiences easier to share through QR codes.</p>
+                        {% endif %}
+                    </section>
+
+                    <section id="use-cases" class="content-section">
+                        <h2>Use cases</h2>
+
+                        {% set use_cases = article.get('use_cases') %}
+                        {% if use_cases %}
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {% for item in use_cases %}
+                                <div class="mini-card">
+                                    <p>{{ item }}</p>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        {% else %}
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div class="mini-card">
+                                    <h3 class="text-white font-black mb-2">Marketing and promotions</h3>
+                                    <p>Use AR QR codes on posters, brochures, product cards, and campaign material to show videos and brand stories.</p>
+                                </div>
+                                <div class="mini-card">
+                                    <h3 class="text-white font-black mb-2">Education and training</h3>
+                                    <p>Attach explanation videos to textbook pages, flashcards, certificates, posters, and classroom material.</p>
+                                </div>
+                                <div class="mini-card">
+                                    <h3 class="text-white font-black mb-2">Packaging and retail</h3>
+                                    <p>Turn product labels and packaging into interactive product communication channels using browser-based AR.</p>
+                                </div>
+                                <div class="mini-card">
+                                    <h3 class="text-white font-black mb-2">Events and business cards</h3>
+                                    <p>Add personal videos, invitation messages, company introductions, or portfolio content to printed materials.</p>
+                                </div>
+                            </div>
+                        {% endif %}
+                    </section>
+
+                    <section id="examples" class="content-section">
+                        <h2>Examples</h2>
+
+                        {% set examples = article.get('examples') %}
+                        {% if examples %}
+                            {% for example in examples %}
+                                <p>{{ example }}</p>
+                            {% endfor %}
+                        {% else %}
+                            <p>A school can attach a video lesson to a printed science diagram. A brand can attach a product demo to packaging. A real estate team can attach a property walkthrough to a brochure. A professional can attach an introduction video to a business card.</p>
+                            <p>In each case, the viewer scans a QR code, opens the browser camera, points at the target image, and watches the linked video appear as an AR overlay.</p>
+                        {% endif %}
+                    </section>
+
+                    <section id="scanstory-workflow" class="content-section">
+                        <h2>ScanStory workflow</h2>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div class="workflow-step">
+                                <div class="step-number">1</div>
+                                <div>
+                                    <h3 class="text-white font-black mb-2">Upload photo and video</h3>
+                                    <p>Select the image users will scan and upload the video that should appear as the AR overlay.</p>
+                                </div>
+                            </div>
+
+                            <div class="workflow-step">
+                                <div class="step-number">2</div>
+                                <div>
+                                    <h3 class="text-white font-black mb-2">Generate AR QR code</h3>
+                                    <p>ScanStory creates a QR code that opens the browser-based AR scanner for that project.</p>
+                                </div>
+                            </div>
+
+                            <div class="workflow-step">
+                                <div class="step-number">3</div>
+                                <div>
+                                    <h3 class="text-white font-black mb-2">Share or print</h3>
+                                    <p>Use the QR code on cards, posters, packaging, invitations, brochures, or learning material.</p>
+                                </div>
+                            </div>
+
+                            <div class="workflow-step">
+                                <div class="step-number">4</div>
+                                <div>
+                                    <h3 class="text-white font-black mb-2">Scan and view AR</h3>
+                                    <p>The viewer scans the QR code, points the camera at the target image, and watches the video overlay.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section id="faqs" class="content-section">
+                        <h2>Frequently Asked <span class="animated-gradient-text">Questions</span></h2>
+
+                        <div class="space-y-5">
+                            {% for faq in article.get('faqs', []) %}
+                            <div class="mini-card">
+                                <h3 class="text-white font-black text-lg mb-2">{{ faq.question }}</h3>
+                                <p>{{ faq.answer }}</p>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </section>
+
+                    <section class="mt-12 p-6 rounded-3xl bg-pink-600/10 border border-pink-500/20 text-center">
+                        <h2 class="text-3xl md:text-4xl font-black uppercase italic mb-4">
+                            Ready to Create Your Own <span class="animated-gradient-text">AR Experience?</span>
+                        </h2>
+
+                        <p class="text-slate-400 mb-6">
+                            Upload a photo and video, generate a QR code, and turn any printed material into a scannable AR story.
+                        </p>
+
+                        <div class="flex flex-wrap gap-4 justify-center">
+                            <a href="/register/"
+                                class="glow-btn bg-pink-600 px-8 py-3 rounded-2xl font-black uppercase tracking-widest text-xs inline-block">
+                                Start Free Trial
+                            </a>
+
+                            <a href="/pricing"
+                                class="glow-btn px-8 py-3 rounded-2xl border border-white/10 bg-white/5 font-black uppercase tracking-widest text-xs inline-block">
+                                View Pricing
+                            </a>
+
+                            <a href="/contact"
+                                class="glow-btn px-8 py-3 rounded-2xl border border-white/10 bg-white/5 font-black uppercase tracking-widest text-xs inline-block">
+                                Contact Sales
+                            </a>
+                        </div>
+                    </section>
+
+                    <section id="related" class="mt-12">
+                        <h2 class="text-3xl md:text-4xl font-black uppercase italic mb-6">
+                            Related <span class="animated-gradient-text">Articles</span>
+                        </h2>
+
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            {% for related_slug in article.get('related', []) %}
+                                {% set related_article = articles.get(related_slug) %}
+                                {% if related_article %}
+                                <a href="/blog/{{ related_slug }}" class="related-card">
+                                    <span class="text-[10px] font-black uppercase tracking-[0.25em] text-pink-500">
+                                        {{ related_article.category }}
+                                    </span>
+                                    <h3 class="text-white font-black mt-3 leading-tight">
+                                        {{ related_article.title }}
+                                    </h3>
+                                    <p class="text-slate-500 text-xs mt-3">
+                                        {{ related_article.read_time }}
+                                    </p>
+                                </a>
+                                {% endif %}
+                            {% endfor %}
+                        </div>
+                    </section>
+
+                </div>
+            </article>
+
+            <div class="text-center mt-10">
+                <a href="/blog" class="text-pink-500 font-black uppercase tracking-[0.2em] text-xs hover:text-white transition">
+                    ← Back to Blog
+                </a>
+            </div>
+
+        </div>
+    </main>
+
+    <footer class="pt-12 pb-8 px-6 lg:px-20 border-t border-white/5 mt-16">
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-8 mb-12">
+
+            <div>
+                <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" alt="SCANSTORY"
+                    style="height:100px;max-width:140px;object-fit:contain;">
+                <p class="text-slate-400 text-sm leading-relaxed mt-3">
+                    A simple way to bring memories, marketing materials, packaging, and learning content to life through browser-based AR.
+                </p>
+            </div>
+
+            <div>
+                <h4 class="text-white font-black uppercase tracking-[0.2em] text-[10px] mb-4">Explore</h4>
+                <ul class="space-y-2 text-sm">
+                    <li><a href="/" class="footer-link block">Home</a></li>
+                    <li><a href="/pricing" class="footer-link block">Pricing</a></li>
+                    <li><a href="/blog" class="footer-link block">Blog</a></li>
+                    <li><a href="/contact" class="footer-link block">Contact</a></li>
+                </ul>
+            </div>
+
+            <div>
+                <h4 class="text-white font-black uppercase tracking-[0.2em] text-[10px] mb-4">Resources</h4>
+                <ul class="space-y-2 text-sm">
+                    <li><a href="/terms" class="footer-link block">Terms of Service</a></li>
+                    <li><a href="/privacy" class="footer-link block">Privacy Policy</a></li>
+                    <li><a href="/terms#cancellation-refund" class="footer-link block">Cancellation & Refund</a></li>
+                </ul>
+            </div>
+
+            <div>
+                <h4 class="text-white font-black uppercase tracking-[0.2em] text-[10px] mb-4">Start</h4>
+                <ul class="space-y-2 text-sm">
+                    <li><a href="/register/" class="footer-link block">Start Free Trial</a></li>
+                    <li><a href="/login/" class="footer-link block">Login</a></li>
+                    <li><a href="/contact" class="footer-link block">Contact Support</a></li>
+                </ul>
+            </div>
+
+        </div>
+
+        <div class="pt-6 border-t border-white/5 text-center">
+            <p class="text-[9px] font-black uppercase tracking-[0.5em] text-slate-600">
+                © 2026 <span class="text-white/40">SCANSTORY</span>.
+                All Rights Reserved. Powered by Namma Mysore Foundation
+            </p>
+        </div>
+    </footer>
+
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+
+    <script>
+        AOS.init({
+            duration: 1000,
+            once: true,
+            mirror: false
+        });
+    </script>
+
+</body>
+
+</html>

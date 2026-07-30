@@ -1,0 +1,14 @@
+model,table,purpose,key_fields,relationships,created_by,read_by,updated_by,deleted_archived_by
+SubscriptionPlan,subscription_plans,plan pricing and limits,"id plan_name amount offer_price duration limits max_pairs is_active",users payment_orders,startup/admin plan add,pricing subscribe admin payment,user subscription/payment admin edit,admin delete/toggle
+User,users,customer account and subscription state,"id email password_hash subscription_status limits usage is_verified is_blocked",trial_details projects payment_orders login_activities,register,login dashboard admin scanner,payment login admin actions,admin block/delete not clearly hard delete
+TrialDetails,trial_details,trial period/limits,"id user_id trial_start trial_end limits converted fields",user,register/login/admin view,login/payment/admin extend,cascade with user
+PaymentOrder,payment_orders,Razorpay order/payment record,"id order_id razorpay ids user_id plan_id amounts status subscription dates",user plan,create-razorpay-order,admin/user payment pages,verify-payment admin subscription actions,not found
+OTPCode,otp_codes,email OTP for verification/reset,"id email code purpose expires_at",user optional,register forgot admin reset,verify/reset routes,deleted on verification
+Admin,admins,admin account,"id email password_hash role permissions_json is_active",projects admin_activities,startup/admin add,admin login/admin pages,admin edit/toggle,superadmin delete
+Project,projects,story/project container,"id name owner_user_id owner_admin_id scanner_url qr fields is_active",pairs scan_logs,user/admin upload,project/scanner/admin pages,edit/toggle/QR generation,delete routes hard delete
+ProjectPair,project_pairs,image-video pair,"id project_id pair_index image_filename video_filename statuses",project scan_logs,user/admin upload,scanner/project pages,processing/edit/reprocess,project delete hard delete
+ScanLog,scan_logs,scan session record/counting,"id project_id pair_id user_id scan_session_id is_successful counted",project pair user,detect_init,admin scan pages,detect_init session/end,project/user cascade
+UserLoginActivity,user_login_activities,login attempt log,"id user_id ip user_agent is_successful login_at",user,login,login lockout/admin possible,not found
+AdminActivity,admin_activities,admin audit log,"id admin_id activity_type description activity_at",admin,admin actions,admin activity logs,admin actions,not found
+SystemConfig,system_configs,key-value app config,"id config_key config_value config_type",admin optional,startup/admin settings,runtime helpers/admin settings,admin settings,not found
+

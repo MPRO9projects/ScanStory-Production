@@ -1,0 +1,10 @@
+endpoint,file_line,confirmed_risk,measurement_needed
+GET /,app.py:1429,loads active plans and large landing template,Lighthouse plus TTFB
+GET /media/<name>,app.py:1451,serves large MP4 with no-store cache,curl headers and range support
+POST /upload,app.py:2633,saves up to 1 GB videos and starts daemon thread,p95 latency and failure rate
+POST /detect_init,app.py:3262,OpenCV decode/detect/match/homography in request,p50/p95/p99 by sample image size
+POST /detect_track,app.py:3750,OpenCV tracking in request loop,p50/p95/p99 under concurrent scanner sessions
+GET /admin/users,app.py:4238,unbounded .all() and search risk,row count and query plan
+GET /admin/payments,app.py:4886,unbounded .all() plus in-memory sums,row count and query plan
+GET /admin/activity-logs,app.py:5284,unbounded .all() risk,row count and query plan
+

@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ project.name }} - Preview | ScanStory</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+        
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: #050505;
+            color: white;
+        }
+        
+        .glass {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 24px;
+        }
+        
+        .media-card {
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 20px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .media-card:hover {
+            border-color: rgba(0, 212, 255, 0.3);
+            transform: translateY(-2px);
+        }
+        
+        .back-btn {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 40px;
+            padding: 10px 20px;
+            transition: all 0.3s ease;
+        }
+        
+        .back-btn:hover {
+            border-color: #00d4ff;
+            color: #00d4ff;
+        }
+        
+        .download-btn {
+            background: rgba(0, 212, 255, 0.1);
+            border: 1px solid rgba(0, 212, 255, 0.2);
+            border-radius: 30px;
+            padding: 8px 16px;
+            font-size: 12px;
+            transition: all 0.3s ease;
+        }
+        
+        .download-btn:hover {
+            background: rgba(0, 212, 255, 0.2);
+            border-color: rgba(0, 212, 255, 0.4);
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-6">
+    
+    <!-- Simple Header -->
+    <div class="flex items-center justify-between mb-6">
+        <a href="{{ url_for('dashboard') }}" class="back-btn inline-flex items-center gap-2">
+            <i class="fas fa-arrow-left text-xs"></i>
+            <span class="text-xs font-bold uppercase tracking-wider">Dashboard</span>
+        </a>
+        <div class="text-right">
+            <div class="text-xs text-white/50">Viewing Project</div>
+            <div class="font-bold">Project {{ project.display_number }}: {{ project.name }}</div>
+        </div>
+    </div>
+    
+    <!-- Project Info Bar -->
+    <div class="glass p-4 mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div class="flex items-center gap-4">
+            <div>
+                <span class="text-xs text-white/50">Project #</span>
+                <div class="font-mono text-sm font-bold text-cyan-400">#{{ project.display_number }}</div>
+            </div>
+            <div class="w-px h-8 bg-white/10"></div>
+            <div>
+                <span class="text-xs text-white/50">Pairs</span>
+                <div class="font-bold">{{ pairs|length }}</div>
+            </div>
+            <div class="w-px h-8 bg-white/10 hidden md:block"></div>
+            <div class="hidden md:block">
+                <span class="text-xs text-white/50">Created</span>
+                <div class="font-bold">{{ project.created_at.strftime('%d %b %Y') }}</div>
+            </div>
+        </div>
+        <a href="{{ url_for('scanner', project_id=project.id) }}" target="_blank" 
+           class="bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 px-5 py-2 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-cyan-500/30 transition flex items-center gap-2">
+            <i class="fas fa-qrcode"></i> Scan AR
+        </a>
+    </div>
+    
+    <!-- Media Pairs Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+        {% for pair in pairs %}
+        <div class="media-card">
+            <!-- Pair Header -->
+            <div class="bg-white/5 px-4 py-3 border-b border-white/10 flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <div class="w-6 h-6 rounded-full bg-cyan-500/20 flex items-center justify-center">
+                        <span class="text-xs font-bold text-cyan-400">{{ loop.index }}</span>
+                    </div>
+                    <span class="text-xs font-bold uppercase tracking-wider">Pair</span>
+                </div>
+                <span class="text-xs px-2 py-1 rounded-full 
+                    {% if pair.is_processed %}bg-green-500/20 text-green-400{% else %}bg-yellow-500/20 text-yellow-400{% endif %}">
+                    <i class="fas {% if pair.is_processed %}fa-check-circle{% else %}fa-spinner fa-spin{% endif %} mr-1"></i>
+                    {{ 'Ready' if pair.is_processed else 'Processing' }}
+                </span>
+            </div>
+            
+            <!-- Image Preview -->
+            <div class="p-4">
+                <div class="aspect-video bg-black/50 rounded-xl overflow-hidden mb-3 relative group">
+                    {% if pair.image_filename %}
+                    <img src="{{ url_for('serve_image', project_id=project.id, image_id=pair.pair_index) }}" 
+                         class="w-full h-full object-cover"
+                         onerror="this.src='https://via.placeholder.com/400x300/1e293b/94a3b8?text=No+Image'">
+                    <div class="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-3">
+                        <a href="{{ url_for('serve_image', project_id=project.id, image_id=pair.pair_index) }}" download
+                           class="download-btn inline-flex items-center gap-2">
+                            <i class="fas fa-download"></i> Download Image
+                        </a>
+                    </div>
+                    {% else %}
+                    <div class="w-full h-full flex items-center justify-center text-white/30">
+                        <i class="fas fa-image text-4xl"></i>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <!-- Video Preview -->
+                <div class="aspect-video bg-black/50 rounded-xl overflow-hidden relative group">
+                    {% if pair.video_filename %}
+                    <video src="{{ url_for('serve_video', project_id=project.id, image_id=pair.pair_index) }}" 
+                           class="w-full h-full object-cover"
+                           controls></video>
+                    <div class="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition">
+                        <a href="{{ url_for('serve_video', project_id=project.id, image_id=pair.pair_index) }}" download
+                           class="download-btn inline-flex items-center gap-2 bg-black/50">
+                            <i class="fas fa-download"></i> Download Video
+                        </a>
+                    </div>
+                    {% else %}
+                    <div class="w-full h-full flex items-center justify-center text-white/30">
+                        <i class="fas fa-video text-4xl"></i>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% else %}
+        <!-- Empty State - Simple -->
+        <div class="col-span-full text-center py-16">
+            <i class="fas fa-folder-open text-5xl text-white/20 mb-4"></i>
+            <h3 class="text-xl font-bold mb-2">No Media Pairs</h3>
+            <p class="text-white/50">This project has no images or videos yet.</p>
+        </div>
+        {% endfor %}
+    </div>
+    
+    <script>
+        // Simple image fallback
+        document.querySelectorAll('img').forEach(img => {
+            img.addEventListener('error', function() {
+                this.src = 'https://via.placeholder.com/400x300/1e293b/94a3b8?text=No+Image';
+            });
+        });
+    </script>
+</body>
+</html>

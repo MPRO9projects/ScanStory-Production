@@ -1,0 +1,1530 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Create a Memory | SCANSTORY</title>
+
+  <!-- Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
+  <!-- QR Code Library -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+
+    :root {
+      --primary: #ff007a;
+      --secondary: #7000ff;
+      --accent: #00d4ff;
+      --bg-dark: #050505;
+
+      --glass-a: rgba(255, 255, 255, 0.06);
+      --glass-b: rgba(255, 255, 255, 0.01);
+      --glass-border: rgba(255, 255, 255, 0.14);
+
+      --muted: rgba(255, 255, 255, 0.55);
+      --muted2: rgba(255, 255, 255, 0.38);
+
+      --radius-xl: 40px;
+      --radius-lg: 28px;
+      --radius-md: 20px;
+      --radius-sm: 14px;
+
+      --shadow: 0 40px 100px rgba(0, 0, 0, 0.75), inset 0 0 20px rgba(255, 255, 255, 0.05);
+      --ease: cubic-bezier(0.23, 1, 0.32, 1);
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background: var(--bg-dark);
+      color: #fff;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* Ambient Blobs (Login-style) */
+    .blob {
+      position: fixed;
+      border-radius: 50%;
+      filter: blur(100px);
+      z-index: -2;
+      opacity: 0.2;
+      pointer-events: none;
+    }
+
+    .blob-1 {
+      width: 600px;
+      height: 600px;
+      background: var(--secondary);
+      top: -12%;
+      left: -12%;
+    }
+
+    .blob-2 {
+      width: 520px;
+      height: 520px;
+      background: var(--primary);
+      bottom: -12%;
+      right: -10%;
+    }
+
+    /* ====== Layout Container ====== */
+    .main-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 28px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ====== Top Bar (fix overlap: NOT absolute) ====== */
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: flex-start;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .nav-back {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 11px 18px;
+      border-radius: 999px;
+      text-decoration: none;
+      color: rgba(255, 255, 255, 0.9);
+      font-weight: 800;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      border: 1px solid rgba(255, 0, 122, 0.45);
+      background: rgba(255, 0, 122, 0.08);
+      backdrop-filter: blur(22px);
+      -webkit-backdrop-filter: blur(22px);
+      transition: all 0.45s var(--ease);
+      box-shadow: 0 0 14px rgba(255, 0, 122, 0.2), inset 0 0 18px rgba(255, 0, 122, 0.05);
+      white-space: nowrap;
+    }
+
+    .nav-back:hover {
+      color: #fff;
+      border-color: rgba(0, 212, 255, 0.6);
+      background: rgba(0, 212, 255, 0.1);
+      transform: translateY(-2px);
+      box-shadow: 0 0 22px rgba(0, 212, 255, 0.3), 0 18px 50px rgba(0, 0, 0, 0.5);
+    }
+
+    /* ====== Gloss Header (Login-style) ====== */
+    .header {
+      position: relative;
+      overflow: hidden;
+      border-radius: var(--radius-xl);
+      padding: 44px 40px;
+      background: linear-gradient(135deg, var(--glass-a), var(--glass-b));
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(50px);
+      -webkit-backdrop-filter: blur(50px);
+      margin-bottom: 34px;
+    }
+
+    .header::after {
+      content: '';
+      position: absolute;
+      top: -60%;
+      left: -60%;
+      width: 220%;
+      height: 220%;
+      background: linear-gradient(45deg, transparent 45%, rgba(255, 255, 255, 0.08) 50%, transparent 55%);
+      pointer-events: none;
+      transform: rotate(-20deg);
+      animation: glossSweep 9s infinite linear;
+    }
+
+    @keyframes glossSweep {
+      0% {
+        transform: translateX(-10%) rotate(-20deg);
+      }
+
+      100% {
+        transform: translateX(10%) rotate(-20deg);
+      }
+    }
+
+    .brandline {
+      font-weight: 900;
+      font-style: italic;
+      letter-spacing: -0.06em;
+      font-size: 30px;
+      margin-bottom: 14px;
+      text-align: center;
+      position: relative;
+      z-index: 2;
+    }
+
+    .brandline span {
+      color: var(--primary);
+    }
+
+    .header h1 {
+      text-align: center;
+      position: relative;
+      z-index: 2;
+      font-weight: 900;
+      letter-spacing: -0.03em;
+      text-transform: uppercase;
+      margin-bottom: 10px;
+      line-height: 1.05;
+    }
+
+    .header p {
+      text-align: center;
+      position: relative;
+      z-index: 2;
+      color: rgba(255, 255, 255, 0.48);
+      font-weight: 400;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-size: 12px;
+      line-height: 1.6;
+      max-width: 920px;
+      margin: 0 auto;
+    }
+
+    /* ====== Responsive Typography (as requested) ====== */
+    /* Mobile (<=640) */
+    @media (max-width: 640px) {
+      .main-container {
+        padding: 18px;
+      }
+
+      .header {
+        padding: 28px 18px;
+        border-radius: 28px;
+      }
+
+      .brandline {
+        font-size: 22px;
+        margin-bottom: 12px;
+      }
+
+      .header h1 {
+        font-size: 22px;
+      }
+
+      .header p {
+        font-size: 10px;
+        letter-spacing: 0.14em;
+      }
+
+      .nav-back {
+        font-size: 9px;
+        padding: 10px 14px;
+      }
+    }
+
+    /* Tablet (641-1024) */
+    @media (min-width: 641px) and (max-width: 1024px) {
+      .header h1 {
+        font-size: 34px;
+      }
+
+      .header p {
+        font-size: 11px;
+      }
+    }
+
+    /* Desktop (1025+) */
+    @media (min-width: 1025px) {
+      .header h1 {
+        font-size: 44px;
+      }
+
+      .header p {
+        font-size: 12px;
+      }
+    }
+
+    /* Large Desktop (1440+) */
+    @media (min-width: 1440px) {
+      .header h1 {
+        font-size: 54px;
+      }
+
+      .header p {
+        font-size: 13px;
+      }
+
+      .header {
+        padding: 54px 50px;
+      }
+    }
+
+    /* ====== Content Grid ====== */
+    .content-grid {
+      display: grid;
+      grid-template-columns: 1fr 1.12fr;
+      gap: 34px;
+      align-items: start;
+    }
+
+    @media (max-width: 1024px) {
+      .content-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* ====== Gloss Panels ====== */
+    .panel {
+      position: relative;
+      overflow: hidden;
+      border-radius: var(--radius-xl);
+      padding: 34px;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0.012));
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 34px 90px rgba(0, 0, 0, 0.65), inset 0 0 18px rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(50px);
+      -webkit-backdrop-filter: blur(50px);
+    }
+
+    .panel::after {
+      content: '';
+      position: absolute;
+      top: -55%;
+      left: -55%;
+      width: 210%;
+      height: 210%;
+      background: linear-gradient(45deg, transparent 45%, rgba(255, 255, 255, 0.06) 50%, transparent 55%);
+      pointer-events: none;
+      transform: rotate(-20deg);
+      opacity: 0.65;
+    }
+
+    .panel>* {
+      position: relative;
+      z-index: 2;
+    }
+
+    .panel-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.22em;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.78);
+      padding-bottom: 16px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+      margin-bottom: 22px;
+    }
+
+    .panel-title i {
+      color: var(--accent);
+      font-size: 14px;
+    }
+
+    /* ====== Inputs (Login-style) ====== */
+    .input-label {
+      display: block;
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.25em;
+      color: rgba(255, 255, 255, 0.5);
+      margin-bottom: 10px;
+      margin-left: 5px;
+    }
+
+    .input-field {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid rgba(255, 0, 122, 0.35);
+      border-radius: 20px;
+      padding: 1.1rem 1.4rem;
+      color: #fff;
+      transition: all 0.45s var(--ease);
+      outline: none;
+      font-size: 0.95rem;
+      box-shadow: 0 0 12px rgba(255, 0, 122, 0.1), inset 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    .input-field:focus {
+      border-color: var(--primary);
+      background: rgba(255, 255, 255, 0.05);
+      box-shadow: 0 0 28px rgba(255, 0, 122, 0.25);
+      transform: translateY(-2px);
+    }
+
+    .project-name-group {
+      margin-bottom: 22px;
+    }
+
+    /* ====== Pair Card ====== */
+    .pair-item {
+      margin-bottom: 18px;
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      background: rgba(0, 0, 0, 0.18);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      transition: all 0.35s var(--ease);
+    }
+
+    .pair-item:hover {
+      border-color: rgba(255, 255, 255, 0.12);
+      transform: translateY(-2px);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+    }
+
+    .pair-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+
+    .pair-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.8);
+    }
+
+    .pair-number {
+      width: 30px;
+      height: 30px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      background: var(--primary);
+      box-shadow: 0 14px 30px rgba(255, 0, 122, 0.25);
+    }
+
+    .icon-btn {
+      width: 38px;
+      height: 38px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      background: rgba(255, 255, 255, 0.04);
+      color: rgba(255, 255, 255, 0.72);
+      transition: all 0.35s var(--ease);
+    }
+
+    .icon-btn:hover {
+      transform: translateY(-2px) scale(1.03);
+      border-color: rgba(0, 212, 255, 0.35);
+      color: var(--accent);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    .icon-btn.danger:hover {
+      border-color: rgba(255, 0, 122, 0.45);
+      color: var(--primary);
+      box-shadow: 0 18px 40px rgba(255, 0, 122, 0.18);
+    }
+
+    /* ====== Upload Grid ======
+       Requested: Desktop/Tablet side-by-side, Mobile stacked
+    */
+    .upload-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    @media (max-width: 640px) {
+      .upload-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Upload Area with inline preview + hover replace */
+    .upload-area {
+      position: relative;
+      border-radius: 22px;
+      padding: 16px;
+      background: rgba(255, 0, 122, 0.04);
+      border: 2px dashed rgba(255, 0, 122, 0.4);
+      min-height: 150px;
+      overflow: hidden;
+      transition: all 0.4s var(--ease);
+      display: grid;
+      place-items: center;
+      text-align: center;
+      box-shadow: 0 0 16px rgba(255, 0, 122, 0.1);
+      cursor: pointer;
+    }
+
+    .upload-area:hover {
+      border-color: rgba(0, 212, 255, 0.55);
+      background: rgba(0, 212, 255, 0.05);
+      transform: translateY(-2px);
+      box-shadow: 0 0 22px rgba(0, 212, 255, 0.2), 0 18px 40px rgba(0, 0, 0, 0.45);
+    }
+
+    .upload-area .ua-inner {
+      display: grid;
+      gap: 8px;
+      justify-items: center;
+      padding: 10px;
+    }
+
+    .upload-area .ua-icon {
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, rgba(0, 212, 255, 0.22), rgba(255, 0, 122, 0.18));
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      color: var(--accent);
+      font-size: 18px;
+      box-shadow: inset 0 0 18px rgba(255, 255, 255, 0.06);
+    }
+
+    .upload-area .ua-title {
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.22em;
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .upload-area .ua-sub {
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.38);
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .file-input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      z-index: 5;
+    }
+
+    /* Preview media inside upload area */
+    .ua-preview {
+      position: absolute;
+      inset: 0;
+      display: none;
+      z-index: 2;
+    }
+
+    .ua-preview img,
+    .ua-preview video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transform: scale(1.02);
+    }
+
+    /* Replace overlay on hover when file exists */
+    .ua-overlay {
+      position: absolute;
+      inset: 0;
+      display: none;
+      z-index: 3;
+      background: rgba(0, 0, 0, 0.55);
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      color: #fff;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.22em;
+      font-size: 12px;
+      transition: all 0.25s var(--ease);
+    }
+
+    .upload-area.has-file {
+      border-style: solid;
+      border-color: rgba(255, 255, 255, 0.12);
+      padding: 0;
+      /* because media fills */
+    }
+
+    .upload-area.has-file .ua-inner {
+      display: none;
+    }
+
+    .upload-area.has-file .ua-preview {
+      display: block;
+    }
+
+    .upload-area.has-file:hover .ua-overlay {
+      display: flex;
+    }
+
+    .ua-overlay .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 16px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, rgba(255, 0, 122, 0.85), rgba(112, 0, 255, 0.85));
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow: 0 22px 50px rgba(255, 0, 122, 0.22);
+    }
+
+    /* ====== Add Pair Button (Login-style) ====== */
+    .add-pair-btn {
+      width: 100%;
+      margin-top: 14px;
+      padding: 1.1rem 1.2rem;
+      border-radius: 22px;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      cursor: pointer;
+      color: #fff;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.28em;
+      font-size: 12px;
+      background: linear-gradient(90deg, var(--primary), var(--secondary));
+      transition: all 0.5s var(--ease);
+    }
+
+    .add-pair-btn:hover {
+      transform: translateY(-4px) scale(1.01);
+      box-shadow: 0 20px 40px rgba(255, 0, 122, 0.35);
+      filter: brightness(1.15);
+    }
+
+    /* ====== Preview List ====== */
+    .preview-list {
+      max-height: 420px;
+      overflow-y: auto;
+      padding-right: 8px;
+      margin-bottom: 18px;
+    }
+
+    .preview-list::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .preview-list::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 10px;
+    }
+
+    .preview-list::-webkit-scrollbar-thumb {
+      background: linear-gradient(var(--primary), var(--secondary));
+      border-radius: 10px;
+    }
+
+    .preview-card {
+      background: rgba(0, 0, 0, 0.20);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      border-radius: var(--radius-lg);
+      padding: 18px;
+      margin-bottom: 14px;
+      transition: all 0.35s var(--ease);
+    }
+
+    .preview-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(255, 255, 255, 0.12);
+      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.6);
+    }
+
+    .preview-card.empty-state {
+      text-align: center;
+      padding: 48px 16px;
+      color: rgba(255, 255, 255, 0.45);
+    }
+
+    .preview-card.empty-state i {
+      font-size: 34px;
+      margin-bottom: 10px;
+      color: var(--accent);
+      opacity: 0.6;
+    }
+
+    .preview-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 12px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .preview-card-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.82);
+    }
+
+    .preview-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    /* Icon-only action buttons (requested) */
+    .action-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.04);
+      cursor: pointer;
+      transition: all 0.35s var(--ease);
+      color: rgba(255, 255, 255, 0.72);
+    }
+
+    .action-icon:hover {
+      transform: translateY(-2px) scale(1.03);
+      border-color: rgba(0, 212, 255, 0.35);
+      color: var(--accent);
+      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.55);
+    }
+
+    .action-icon.danger:hover {
+      border-color: rgba(255, 0, 122, 0.45);
+      color: var(--primary);
+      box-shadow: 0 18px 45px rgba(255, 0, 122, 0.18);
+    }
+
+    /* ====== Preview media layout (requested fix)
+       Desktop/Tablet: side-by-side, Mobile: stacked
+    */
+    .preview-media-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+
+    @media (max-width: 640px) {
+      .preview-media-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .preview-media-item {
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(0, 0, 0, 0.28);
+      height: 160px;
+      position: relative;
+    }
+
+    @media (min-width: 1440px) {
+      .preview-media-item {
+        height: 190px;
+      }
+    }
+
+    .preview-media-item img,
+    .preview-media-item video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .media-placeholder {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      text-align: center;
+      color: rgba(255, 255, 255, 0.45);
+      gap: 8px;
+    }
+
+    .media-placeholder i {
+      font-size: 26px;
+      color: var(--accent);
+      opacity: 0.6;
+    }
+
+    /* ====== QR Preview ====== */
+    .qr-preview-section {
+      text-align: center;
+      padding: 22px;
+      background: rgba(0, 0, 0, 0.18);
+      border-radius: var(--radius-lg);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      margin: 18px 0;
+    }
+
+    .qr-preview-section h3 {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.22em;
+      font-size: 11px;
+      color: rgba(255, 255, 255, 0.8);
+      margin-bottom: 14px;
+    }
+
+    .qr-preview-section h3 i {
+      color: var(--accent);
+    }
+
+    #qrPreviewContainer {
+      width: 200px;
+      height: 200px;
+      margin: 0 auto;
+      background: white;
+      padding: 14px;
+      border-radius: 14px;
+      display: grid;
+      place-items: center;
+    }
+
+    #qrPreviewCanvas {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* ====== Action Buttons (Login-style) ====== */
+    .action-buttons {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid rgba(255, 255, 255, 0.10);
+    }
+
+    @media (max-width: 640px) {
+      .action-buttons {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .action-btn {
+      width: 100%;
+      padding: 1.05rem 1.1rem;
+      border-radius: 22px;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      font-weight: 900;
+      text-transform: uppercase;
+      letter-spacing: 0.28em;
+      font-size: 12px;
+      cursor: pointer;
+      transition: all 0.5s var(--ease);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: #fff;
+    }
+
+    .upload-btn {
+      background: linear-gradient(90deg, var(--primary), var(--secondary));
+    }
+
+    .upload-btn:hover:not(:disabled) {
+      transform: translateY(-4px) scale(1.01);
+      box-shadow: 0 20px 40px rgba(255, 0, 122, 0.35);
+      filter: brightness(1.15);
+    }
+
+    .upload-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .clear-btn {
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .clear-btn:hover {
+      transform: translateY(-4px) scale(1.01);
+      border-color: rgba(0, 212, 255, 0.25);
+      color: var(--accent);
+      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+    }
+
+    /* ====== Flash Messages ====== */
+    .flash-messages {
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      z-index: 2000;
+      max-width: 420px;
+    }
+
+    .flash-message {
+      padding: 14px 16px;
+      margin-bottom: 10px;
+      border-radius: 14px;
+      color: white;
+      font-weight: 700;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      box-shadow: 0 18px 45px rgba(0, 0, 0, 0.55);
+      animation: slideIn 0.35s ease-out;
+    }
+
+    .flash-success {
+      border-left: 4px solid #34d399;
+    }
+
+    .flash-error {
+      border-left: 4px solid #f87171;
+    }
+
+    .flash-info {
+      border-left: 4px solid #60a5fa;
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(20px);
+        opacity: 0;
+      }
+
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+
+  <!-- Flash Messages Container -->
+  <div class="flash-messages">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="flash-message flash-{{ category }}">
+      <i class="fa-solid fa-circle-info" style="margin-right:10px; opacity:.85;"></i>{{ message }}
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+  </div>
+
+  <div class="main-container">
+
+    <!-- Top bar: fixes merged "Back to Dashboard" -->
+    <div class="topbar">
+      <a href="{% if is_admin %}{{ url_for('admin_dashboard') }}{% else %}{{ url_for('dashboard') }}{% endif %}"
+        class="nav-back">
+        <i class="fas fa-chevron-left"></i> Back to Your Stories
+      </a>
+    </div>
+
+    <!-- Header -->
+    <div class="header">
+      <div class="brandline">SCAN<span>STORY</span></div>
+      <h1>Create Your Memory</h1>
+      <p>Add a photo and a video — and turn a simple moment into something you can relive.
+        Just scan and watch your memory come alive again.</p>
+    </div>
+
+    <form method="POST" enctype="multipart/form-data" id="projectForm"
+      action="{% if is_admin %}{{ url_for('admin_handle_upload') }}{% else %}{{ url_for('handle_upload') }}{% endif %}">
+      <div class="content-grid">
+
+        <!-- Left Panel -->
+        <div class="panel">
+          <div class="panel-title"><i class="fas fa-plus-circle"></i> Story Details</div>
+
+          <div class="project-name-group">
+            <label class="input-label">Story Name</label>
+            <input type="text" name="name" id="projectName" class="input-field" placeholder="Enter story name" required
+              oninput="updateQRPreview(); updateFormFields();" />
+          </div>
+
+          <div class="panel-title"><i class="fas fa-layer-group"></i>Your Photos and Videos</div>
+
+          <div id="pairsContainer"></div>
+          <div class="help-text" id="pairLimitMessage" style="margin-bottom:16px; color:#d1d5db; font-size:0.95rem;">
+            {% if is_admin %}
+            Admin mode: unlimited image-video pairs allowed per project.
+            {% else %}
+            Your current plan allows up to {{ max_pairs_per_project }} image-video pair(s) per project.
+            {% endif %}
+          </div>
+
+          <button type="button" class="add-pair-btn" onclick="addPair()" id="addPairBtn">
+            <i class="fas fa-plus"></i>&nbsp; Add Another Moment
+          </button>
+        </div>
+
+        <!-- Right Panel -->
+        <div class="panel">
+          <div class="panel-title"><i class="fas fa-eye"></i> Story Preview</div>
+
+          <div class="preview-list" id="previewList">
+            <div class="preview-card empty-state">
+              <p>
+                <i class="fas fa-cloud-upload-alt"></i><br />
+                Add your photo and video to see your memory here
+              </p>
+            </div>
+          </div>
+
+          <div class="qr-preview-section">
+            <h3><i class="fas fa-qrcode"></i> Your Scan QR </h3>
+            <div id="qrPreviewContainer">
+              <canvas id="qrPreviewCanvas"></canvas>
+            </div>
+            <p
+              style="font-size:11px; color: rgba(255,255,255,.42); margin-top: 12px; letter-spacing:.12em; text-transform:uppercase;">
+              Scan this to relive your memoty anytime
+            </p>
+          </div>
+
+          <div class="action-buttons">
+            <button type="submit" class="action-btn upload-btn" id="submitBtn" disabled>
+              <i class="fas fa-qrcode"></i> Get My Scan Code
+            </button>
+            <button type="button" class="action-btn clear-btn" onclick="clearAll()">
+              <i class="fas fa-trash"></i> Clear All
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </form>
+  </div>
+
+  <script>
+    let pairCounter = 0;
+    let currentFiles = {};
+    const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
+    const MAX_PAIRS_PER_PROJECT = IS_ADMIN ? Infinity : Number({{ max_pairs_per_project or 0 }});
+
+    document.addEventListener('DOMContentLoaded', function () {
+      addPair();
+      updateQRPreview();
+      updatePairLimit();
+
+      // Auto-remove flash messages after 5 seconds
+      setTimeout(() => {
+        const flashMessages = document.querySelectorAll('.flash-message');
+        flashMessages.forEach(msg => {
+          msg.style.transition = 'opacity 0.5s';
+          msg.style.opacity = '0';
+          setTimeout(() => msg.remove(), 500);
+        });
+      }, 5000);
+    });
+
+    function addPair() {
+      const currentCount = document.querySelectorAll('.pair-item').length;
+      if (!IS_ADMIN && currentCount >= MAX_PAIRS_PER_PROJECT) {
+        alert(`Your current plan allows up to ${MAX_PAIRS_PER_PROJECT} image-video pair(s) per project.`);
+        return;
+      }
+
+      pairCounter++;
+      const pairId = pairCounter;
+
+      const pairHTML = `
+        <div class="pair-item" id="pair-${pairId}">
+          <div class="pair-header">
+            <div class="pair-title">
+              <span class="pair-number">${pairId}</span>
+              Moment #${pairId}
+            </div>
+
+            ${pairId > 1 ? `
+              <button type="button" class="icon-btn danger" onclick="removePair(${pairId})" title="Delete Pair" aria-label="Delete Pair">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+            ` : ``}
+          </div>
+
+          <div class="upload-grid">
+            <!-- Image Upload -->
+            <div class="upload-area" id="image-area-${pairId}">
+              <input type="file"
+                     id="image-input-${pairId}"
+                     name="images"
+                     accept="image/*"
+                     class="file-input"
+                     onchange="handleFileSelect(this, ${pairId}, 'image')"
+                     required />
+              <div class="ua-inner">
+                <div class="ua-icon"><i class="fa-solid fa-image"></i></div>
+                <div class="ua-title">Add Your Photo</div>
+                <div class="ua-sub">This is the moment people will scan</div>
+              </div>
+
+              <div class="ua-preview" id="image-preview-${pairId}"></div>
+
+              <div class="ua-overlay" aria-hidden="true">
+                <div class="pill">
+                  <i class="fa-solid fa-rotate"></i>
+                  Replace
+                </div>
+              </div>
+            </div>
+
+            <!-- Video Upload -->
+            <div class="upload-area" id="video-area-${pairId}">
+              <input type="file"
+                     id="video-input-${pairId}"
+                     name="videos"
+                     accept="video/*"
+                     class="file-input"
+                     onchange="handleFileSelect(this, ${pairId}, 'video')"
+                     required />
+              <div class="ua-inner">
+                <div class="ua-icon"><i class="fa-solid fa-video"></i></div>
+                <div class="ua-title">Add Your Video</div>
+                <div class="ua-sub">This is the memory that will come to life</div>
+              </div>
+
+              <div class="ua-preview" id="video-preview-${pairId}"></div>
+
+              <div class="ua-overlay" aria-hidden="true">
+                <div class="pill">
+                  <i class="fa-solid fa-rotate"></i>
+                  Replace
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('pairsContainer').insertAdjacentHTML('beforeend', pairHTML);
+
+      currentFiles[pairId] = { image: null, video: null, imageUrl: null, videoUrl: null };
+
+      updateFormFields();
+      updatePreview();
+      updatePairLimit();
+    }
+
+
+    function removePair(pairId) {
+      const pairElement = document.getElementById(`pair-${pairId}`);
+      if (!pairElement) return;
+
+      // Revoke object URLs
+      if (currentFiles[pairId]) {
+        if (currentFiles[pairId].imageUrl) URL.revokeObjectURL(currentFiles[pairId].imageUrl);
+        if (currentFiles[pairId].videoUrl) URL.revokeObjectURL(currentFiles[pairId].videoUrl);
+        delete currentFiles[pairId];
+      }
+
+      pairElement.remove();
+
+      // Renumber pairs + rebuild currentFiles preserving order
+      const remainingPairs = Array.from(document.querySelectorAll('.pair-item'));
+      const newFiles = {};
+      pairCounter = remainingPairs.length;
+
+      remainingPairs.forEach((pair, index) => {
+        const newId = index + 1;
+
+        // old id from DOM
+        const oldId = parseInt(pair.id.replace('pair-', ''), 10);
+
+        // update pair id
+        pair.id = `pair-${newId}`;
+
+        // update number badge + label
+        pair.querySelector('.pair-number').textContent = newId;
+        const title = pair.querySelector('.pair-title');
+        title.childNodes.forEach(n => {
+          if (n.nodeType === Node.TEXT_NODE) n.textContent = '';
+        });
+        // Keep "Pair #X" text by setting via template (simple)
+        title.insertAdjacentText('beforeend', ` Moment #${newId}`);
+
+        // update upload areas ids
+        const imageArea = pair.querySelector('#image-area-' + oldId) || pair.querySelector('[id^="image-area-"]');
+        const videoArea = pair.querySelector('#video-area-' + oldId) || pair.querySelector('[id^="video-area-"]');
+        if (imageArea) imageArea.id = `image-area-${newId}`;
+        if (videoArea) videoArea.id = `video-area-${newId}`;
+
+        // update inputs
+        const imageInput = pair.querySelector('input[type="file"][accept^="image"]');
+        const videoInput = pair.querySelector('input[type="file"][accept^="video"]');
+        if (imageInput) {
+          imageInput.id = `image-input-${newId}`;
+          imageInput.setAttribute('onchange', `handleFileSelect(this, ${newId}, 'image')`);
+        }
+        if (videoInput) {
+          videoInput.id = `video-input-${newId}`;
+          videoInput.setAttribute('onchange', `handleFileSelect(this, ${newId}, 'video')`);
+        }
+
+        // update previews
+        const imagePreview = pair.querySelector('#image-preview-' + oldId) || pair.querySelector('[id^="image-preview-"]');
+        const videoPreview = pair.querySelector('#video-preview-' + oldId) || pair.querySelector('[id^="video-preview-"]');
+        if (imagePreview) imagePreview.id = `image-preview-${newId}`;
+        if (videoPreview) videoPreview.id = `video-preview-${newId}`;
+
+        // update delete button (remove for first, add for others if missing)
+        let deleteBtn = pair.querySelector('.icon-btn.danger');
+        if (newId === 1) {
+          if (deleteBtn) deleteBtn.remove();
+        } else {
+          if (!deleteBtn) {
+            const header = pair.querySelector('.pair-header');
+            header.insertAdjacentHTML('beforeend', `
+              <button type="button" class="icon-btn danger" onclick="removePair(${newId})" title="Delete Pair" aria-label="Delete Pair">
+                <i class="fa-solid fa-trash"></i>
+              </button>
+            `);
+          } else {
+            deleteBtn.setAttribute('onclick', `removePair(${newId})`);
+          }
+        }
+
+        // carry files
+        if (currentFiles[oldId]) newFiles[newId] = currentFiles[oldId];
+      });
+
+      currentFiles = newFiles;
+
+      // refresh upload areas UI after renumber
+      refreshAllUploadAreas();
+      updatePreview();
+      updateQRPreview();
+      updateFormFields();
+      updatePairLimit();
+    }
+
+    function refreshAllUploadAreas() {
+      Object.keys(currentFiles).forEach((idStr) => {
+        const pairId = parseInt(idStr, 10);
+        const pairData = currentFiles[pairId];
+
+        // Image
+        const imageArea = document.getElementById(`image-area-${pairId}`);
+        const imagePreview = document.getElementById(`image-preview-${pairId}`);
+        if (imageArea && imagePreview) {
+          if (pairData.imageUrl) {
+            imageArea.classList.add('has-file');
+            imagePreview.innerHTML = `<img src="${pairData.imageUrl}" alt="Image Preview">`;
+          } else {
+            imageArea.classList.remove('has-file');
+            imagePreview.innerHTML = '';
+          }
+        }
+
+        // Video
+        const videoArea = document.getElementById(`video-area-${pairId}`);
+        const videoPreview = document.getElementById(`video-preview-${pairId}`);
+        if (videoArea && videoPreview) {
+          if (pairData.videoUrl) {
+            videoArea.classList.add('has-file');
+            videoPreview.innerHTML = `<video src="${pairData.videoUrl}" muted playsinline></video>`;
+          } else {
+            videoArea.classList.remove('has-file');
+            videoPreview.innerHTML = '';
+          }
+        }
+      });
+    }
+
+    function handleFileSelect(input, pairId, type) {
+      const file = input.files[0];
+      if (!file) return;
+
+      // Validate size
+      const maxSize = type === 'image' ? 50 * 1024 * 1024 : 1024 * 1024 * 1024;
+      if (file.size > maxSize) {
+        alert(`${type === 'image' ? 'Image' : 'Video'} size exceeds ${Math.round(maxSize / (1024 * 1024))}MB limit!`);
+        input.value = '';
+        return;
+      }
+
+      // Validate type
+      const validImageTypes = ['image/jpeg', 'image/png', 'image/jpg'];
+      const validVideoTypes = ['video/mp4', 'video/mpeg', 'video/quicktime'];
+      if (type === 'image' && !validImageTypes.includes(file.type)) {
+        alert('Invalid image type! Please upload JPG or PNG.');
+        input.value = '';
+        return;
+      }
+      if (type === 'video' && !validVideoTypes.includes(file.type)) {
+        alert('Invalid video type! Please upload MP4.');
+        input.value = '';
+        return;
+      }
+
+      const fileUrl = URL.createObjectURL(file);
+      if (!currentFiles[pairId]) currentFiles[pairId] = { image: null, video: null, imageUrl: null, videoUrl: null };
+
+      // Revoke old URLs
+      if (type === 'image' && currentFiles[pairId].imageUrl) URL.revokeObjectURL(currentFiles[pairId].imageUrl);
+      if (type === 'video' && currentFiles[pairId].videoUrl) URL.revokeObjectURL(currentFiles[pairId].videoUrl);
+
+      if (type === 'image') {
+        currentFiles[pairId].image = file;
+        currentFiles[pairId].imageUrl = fileUrl;
+
+        const area = document.getElementById(`image-area-${pairId}`);
+        const preview = document.getElementById(`image-preview-${pairId}`);
+        if (area && preview) {
+          area.classList.add('has-file');
+          preview.innerHTML = `<img src="${fileUrl}" alt="Image Preview">`;
+        }
+      } else {
+        currentFiles[pairId].video = file;
+        currentFiles[pairId].videoUrl = fileUrl;
+
+        const area = document.getElementById(`video-area-${pairId}`);
+        const preview = document.getElementById(`video-preview-${pairId}`);
+        if (area && preview) {
+          area.classList.add('has-file');
+          // no controls in upload tile; hover shows "Replace" and click opens picker
+          preview.innerHTML = `<video src="${fileUrl}" muted playsinline></video>`;
+        }
+      }
+
+      updatePreview();
+      updateQRPreview();
+      updateFormFields();
+    }
+
+    function updateFormFields() {
+      const submitBtn = document.getElementById('submitBtn');
+      const projectName = document.getElementById('projectName').value.trim();
+      const hasFiles = Object.values(currentFiles).some(pair => pair.image && pair.video);
+
+      submitBtn.disabled = !(hasFiles && projectName);
+      submitBtn.style.opacity = submitBtn.disabled ? '0.6' : '1';
+      submitBtn.style.cursor = submitBtn.disabled ? 'not-allowed' : 'pointer';
+      updatePairLimit();
+    }
+
+    function updatePairLimit() {
+      const pairCount = document.querySelectorAll('.pair-item').length;
+      const addPairBtn = document.getElementById('addPairBtn');
+      const pairLimitMessage = document.getElementById('pairLimitMessage');
+
+      if (IS_ADMIN) {
+        if (addPairBtn) {
+          addPairBtn.disabled = false;
+          addPairBtn.innerHTML = '<i class="fas fa-plus"></i>&nbsp; Add Another Moment';
+          addPairBtn.style.cursor = 'pointer';
+        }
+
+        if (pairLimitMessage) {
+          pairLimitMessage.textContent = `Admin mode: unlimited image-video pairs allowed per project. Current moments: ${pairCount}.`;
+        }
+
+        return;
+      }
+
+      if (addPairBtn) {
+        if (pairCount >= MAX_PAIRS_PER_PROJECT) {
+          addPairBtn.disabled = true;
+          addPairBtn.innerHTML = '<i class="fas fa-lock"></i> Limit reached';
+          addPairBtn.style.cursor = 'not-allowed';
+        } else {
+          addPairBtn.disabled = false;
+          addPairBtn.innerHTML = '<i class="fas fa-plus"></i>&nbsp; Add Another Moment';
+          addPairBtn.style.cursor = 'pointer';
+        }
+      }
+
+      if (pairLimitMessage) {
+        pairLimitMessage.textContent = `Your current plan allows up to ${MAX_PAIRS_PER_PROJECT} image-video pair(s) per project.`;
+      }
+    }
+
+    function updatePreview() {
+      const previewList = document.getElementById('previewList');
+      previewList.innerHTML = '';
+
+      const hasAny = Object.values(currentFiles).some(pair => pair.image || pair.video);
+      if (!hasAny) {
+        previewList.innerHTML = `
+          <div class="preview-card empty-state">
+            <p><i class="fas fa-cloud-upload-alt"></i><br>Add a moment to see it here</p>
+          </div>
+        `;
+        return;
+      }
+
+      // Keep preview order by pair number
+      const pairIds = Object.keys(currentFiles).map(n => parseInt(n, 10)).sort((a, b) => a - b);
+
+      pairIds.forEach((pairId) => {
+        const pairData = currentFiles[pairId];
+        if (!pairData || (!pairData.image && !pairData.video)) return;
+
+        const previewHTML = `
+          <div class="preview-card" id="preview-card-${pairId}">
+            <div class="preview-card-header">
+              <div class="preview-card-title">Moment #${pairId}</div>
+              <div class="preview-actions">
+                <button type="button" class="action-icon" onclick="replaceFile(${pairId}, 'image')" title="Replace Photo" aria-label="Replace Photo">
+                  <i class="fa-solid fa-image"></i>
+                </button>
+                <button type="button" class="action-icon" onclick="replaceFile(${pairId}, 'video')" title="Replace Video" aria-label="Replace Video">
+                  <i class="fa-solid fa-video"></i>
+                </button>
+                ${pairId > 1 ? `
+                  <button type="button" class="action-icon danger" onclick="removePairFromPreview(${pairId})" title="Delete Pair" aria-label="Delete Pair">
+                    <i class="fa-solid fa-trash"></i>
+                  </button>
+                ` : ``}
+              </div>
+            </div>
+
+            <div class="preview-media-grid">
+              <div class="preview-media-item">
+                ${pairData.imageUrl
+            ? `<img src="${pairData.imageUrl}" alt="Image Preview">`
+            : `<div class="media-placeholder"><i class="fas fa-image"></i><div>No Image Yet</div></div>`
+          }
+              </div>
+
+              <div class="preview-media-item">
+                ${pairData.videoUrl
+            ? `<video src="${pairData.videoUrl}" controls></video>`
+            : `<div class="media-placeholder"><i class="fas fa-video"></i><div>No Story</div></div>`
+          }
+              </div>
+            </div>
+          </div>
+        `;
+
+        previewList.insertAdjacentHTML('beforeend', previewHTML);
+      });
+    }
+
+    function replaceFile(pairId, type) {
+      const inputId = type === 'image' ? `image-input-${pairId}` : `video-input-${pairId}`;
+      const fileInput = document.getElementById(inputId);
+      if (fileInput) fileInput.click();
+    }
+
+    function removePairFromPreview(pairId) {
+      removePair(pairId);
+    }
+
+    function updateQRPreview() {
+      const projectName = document.getElementById('projectName')?.value || '';
+      const canvas = document.getElementById('qrPreviewCanvas');
+      if (!canvas) return;
+
+      const ctx = canvas.getContext('2d');
+      canvas.width = 200;
+      canvas.height = 200;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      let qrData = `scanstory://ar-project/`;
+      qrData += projectName.trim() ? encodeURIComponent(projectName.trim()) + '/' : 'unnamed-project/';
+      qrData += new Date().getTime();
+
+      try {
+        QRCode.toCanvas(canvas, qrData, {
+          width: 180,
+          margin: 1,
+          color: { dark: '#000000', light: '#ffffff' }
+        }, function (error) {
+          if (error) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, 200, 200);
+            ctx.fillStyle = '#000000';
+            ctx.font = '14px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('QR Preview', 100, 100);
+          }
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function clearAll() {
+      if (!confirm('Are you sure you want to clear all files and settings? This cannot be undone.')) return;
+
+      // Clear file inputs
+      document.querySelectorAll('input[type="file"]').forEach(input => input.value = '');
+
+      // Revoke URLs
+      Object.values(currentFiles).forEach(pairData => {
+        if (pairData.imageUrl) URL.revokeObjectURL(pairData.imageUrl);
+        if (pairData.videoUrl) URL.revokeObjectURL(pairData.videoUrl);
+      });
+
+      currentFiles = {};
+
+      // Reset UI
+      document.getElementById('pairsContainer').innerHTML = '';
+      document.getElementById('projectName').value = '';
+
+      pairCounter = 0;
+      addPair();
+      updatePreview();
+      updateQRPreview();
+      updateFormFields();
+    }
+
+    // Form validation (keep logic)
+    document.getElementById('projectForm').addEventListener('submit', function (e) {
+      const projectName = document.getElementById('projectName').value.trim();
+      const hasValidPairs = Object.values(currentFiles).some(pair => pair.image && pair.video);
+
+      if (!projectName) {
+        e.preventDefault();
+        alert('Please enter a Story name.');
+        return;
+      }
+
+      if (!hasValidPairs) {
+        e.preventDefault();
+        alert('Please add at least one complete memory with your photo and video.');
+        return;
+      }
+
+      const submitBtn = document.getElementById('submitBtn');
+      submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating Your Story...';
+      submitBtn.disabled = true;
+    });
+  </script>
+</body>
+
+</html>

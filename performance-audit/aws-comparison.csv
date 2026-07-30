@@ -1,0 +1,5 @@
+option,services,monthly_range_usd,fit,main_limitation
+A Cost-conscious,Lightsail or EC2 plus CloudFront/S3 optional,25-80,early low traffic,no HA and scanner CPU still competes
+B Reliable,CloudFront S3 ALB EC2/ECS RDS CloudWatch,100-250,regular production,more setup cost
+C Scalable,CloudFront ALB ECS web+worker SQS S3 RDS Multi-AZ WAF,250-700+,growth and reliability,cost not justified before baseline
+

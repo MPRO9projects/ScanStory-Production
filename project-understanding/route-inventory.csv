@@ -1,0 +1,96 @@
+route,method,auth,purpose,response,db_used,external_service,side_effects
+/,GET,public,landing page,user/landing.html,SubscriptionPlan,,none
+/terms,GET,public,terms page,user/terms.html,,,none
+/privacy,GET,public,privacy page,user/privacy_policy.html,,,none
+/media/<name>,GET,public,serve bundled landing video,mp4 file,,,serves static video
+/blog,GET,public,blog index,user/blog.html,,,none
+/blog/<slug>,GET,public,blog article,user/blog_articles/article.html,,,none
+/dashboard,GET,user,account dashboard,user/dashboard.html,User TrialDetails Project ScanLog,,syncs trial/counters
+/contact,GET,public,contact page,user/contact.html,,,none
+/send-contact-email,POST,public,submit contact form,JSON,,SMTP/reCAPTCHA,sends email
+/profile,GET,user,user profile,user/profile.html,User TrialDetails Project,,none
+/projects,GET,user,user project list,user/projects.html,Project ProjectPair ScanLog,,none
+/projects/<project_id>/qr,GET,user,download own QR,file,Project,,serves QR
+/projects/delete/<project_id>,POST,user,delete own project,redirect,Project ProjectPair,,deletes DB rows and files
+/projects/<project_id>/edit,GET,user,edit form,user/edit_project.html,Project ProjectPair,,none
+/projects/<project_id>/edit,POST,user,edit files,redirect,Project ProjectPair,,updates media and reprocesses
+/projects/<project_id>/reprocess,POST,user,reprocess project,redirect,Project ProjectPair,,starts background thread
+/register,GET/POST,public,user registration,user/register.html/redirect,User TrialDetails OTPCode,SMTP/reCAPTCHA,creates user/trial/OTP
+/verify-email/,GET/POST,session pending email,email OTP verify,user/verify_email.html/redirect,User OTPCode,,marks user verified
+/resend-otp/,GET,session pending email,resend verification OTP,redirect,OTPCode,SMTP,creates/sends OTP
+/login/,GET/POST,public,user login,user/login.html/redirect,User TrialDetails UserLoginActivity,,sets session
+/logout/,GET,public,user logout,redirect,,,clears user session
+/forgot-password/,GET/POST,public,start reset,user/forgot_password.html/redirect,User OTPCode,SMTP,creates reset OTP
+/reset-password/,GET/POST,session pending email,complete reset,user/reset_password.html/redirect,User OTPCode,,updates password hash
+/create-project,GET,user+subscription,project create form,user/user_create_project.html,User SubscriptionPlan,,none
+/upload,POST,user+subscription,create project,redirect,Project ProjectPair User SystemConfig,,saves files QR starts feature thread
+/project/<project_id>,GET,user,project view,user project page,Project ProjectPair,,none
+/pricing,GET,public,pricing/plans,user/subscribe.html,SubscriptionPlan,,none
+/subscribe,GET,user,subscription plans,user/subscribe.html,SubscriptionPlan,,none
+/create-razorpay-order,POST,user,create payment order,JSON,SubscriptionPlan PaymentOrder,Razorpay,creates pending order
+/verify-payment,POST,user,verify payment,JSON,PaymentOrder User TrialDetails,Razorpay/SMTP,activates subscription
+/payment-success,GET,user,payment success page,user/payment_success.html,PaymentOrder SubscriptionPlan,,none
+/payment-failed,GET,user,payment failed page,user/subscribe or fail page,,,none
+/success/<project_id>,GET,user,project creation success,user/success.html,Project ProjectPair,,none
+/video/<project_id>/<image_id>,GET,public,serve user video,file,Project ProjectPair,,serves video
+/image/<project_id>/<image_id>,GET,public,serve user image,file,Project ProjectPair,,serves image
+/qr/<filename>,GET,public,serve QR,file,,,serves QR
+/scanner/<project_id>,GET,public,scanner page,user/scanner.html,Project User Admin,,sets user_id session from query if present
+/detect_init,POST,public API,initial recognition,JSON,Project ProjectPair ScanLog User,,creates/updates scan log
+/api/scanner/session/end,POST,public API,end scanner session,JSON,Project User ScanLog,,counts scan once
+/detect_track,POST,public API,known pair tracking,JSON,Project features,,none
+/project/<project_id>/preview,GET,user,project preview,user/project_preview.html,Project ProjectPair,,none
+/admin_panel,GET,public,admin redirect,redirect,,,none
+/admin/login,GET/POST,public,admin login,admin/login.html/redirect,Admin,,sets admin session
+/admin/forgot-password,GET/POST,public,admin reset start,admin/forgot_password.html,Admin OTPCode,SMTP,creates OTP
+/admin/reset-password,GET/POST,session pending admin email,admin reset complete,admin/reset_password.html,Admin OTPCode,,updates password
+/admin/logout,GET,admin,admin logout,redirect,,,clears admin session
+/admin/admins,GET,superadmin,manage admins,admin/manage_admins.html,Admin,,none
+/admin/admins/add,GET/POST,superadmin,add admin,admin/add_admin.html/redirect,Admin,,creates admin
+/admin/admins/<admin_id>/edit,GET/POST,superadmin,edit admin,admin/edit_admin.html/redirect,Admin,,updates admin
+/admin/admins/<admin_id>/delete,POST,superadmin,delete admin,redirect,Admin,,deletes admin
+/admin/admins/<admin_id>/toggle-status,POST,superadmin,toggle admin status,redirect,Admin,,updates active flag
+/admin/dashboard,GET,admin,admin dashboard,admin/dashboard.html,User Project PaymentOrder ScanLog SubscriptionPlan,,none
+/admin/my-projects,GET,admin,admin own projects,admin/my_projects.html,Project ProjectPair ScanLog,,none
+/admin/users,GET,admin,user list,admin/users.html,User SubscriptionPlan,,none
+/admin/users/<user_id>,GET,admin,user detail,admin/view_user.html,User Project PaymentOrder ScanLog TrialDetails,,none
+/admin/users/<user_id>/toggle-block,POST,admin,block/unblock user,redirect,User AdminActivity,,updates user block
+/admin/users/<user_id>/reset-password,POST,admin,reset user password,redirect,User AdminActivity,,updates password
+/admin/users/<user_id>/extend-trial,POST,admin,extend trial,redirect,User TrialDetails AdminActivity,,updates trial
+/admin/users/<user_id>/add-scans,POST,admin,add scan quota,redirect,User AdminActivity,,updates quota
+/admin/plans,GET,admin,plan list,admin/plans.html,SubscriptionPlan,,none
+/admin/project/<project_id>/preview,GET,admin,admin project preview,admin/project_preview.html,Project ProjectPair,,none
+/admin/plans/add,GET/POST,admin,add plan,admin/add_plan.html/redirect,SubscriptionPlan AdminActivity,,creates plan
+/admin/plans/<plan_id>/edit,GET/POST,admin,edit plan,admin/edit_plan.html/redirect,SubscriptionPlan AdminActivity,,updates plan
+/admin/plans/<plan_id>/delete,POST,admin,delete plan,redirect,SubscriptionPlan,,deletes/blocks depending use
+/admin/plans/<plan_id>/toggle-status,POST,admin,toggle plan,redirect,SubscriptionPlan,,updates active
+/admin/subscriptions,GET,admin,subscription list,admin/subscriptions.html,PaymentOrder User SubscriptionPlan,,none
+/admin/subscriptions/<order_id>/extend,POST,admin,extend subscription,redirect,PaymentOrder User AdminActivity,,updates subscription end
+/admin/subscriptions/<order_id>/increase-limits,POST,admin,increase limits,redirect,PaymentOrder User AdminActivity,,updates limits
+/admin/subscriptions/<order_id>/deactivate,POST,admin,deactivate subscription,redirect,PaymentOrder User AdminActivity,,expires subscription
+/admin/payments,GET,admin,payment list,admin/payments.html,PaymentOrder User,,none
+/admin/payments/<payment_id>,GET,admin,payment detail,admin/view_payment.html,PaymentOrder User SubscriptionPlan,,none
+/admin/projects,GET,admin,all projects,admin/projects.html,Project User Admin,,none
+/admin/projects/<project_id>,GET,admin,project detail,admin/view_project.html,Project ProjectPair ScanLog,,none
+/admin/projects/<project_id>/toggle-status,POST,admin,toggle project,redirect,Project AdminActivity,,updates active
+/admin/projects/<project_id>/delete,POST,admin,delete project,redirect,Project ProjectPair AdminActivity,,deletes files/rows
+/admin/scans,GET,admin,scan report,admin/scans.html,ScanLog User Project,,none
+/admin/scans/user/<user_id>,GET,admin,user scan detail,admin/user_scans.html,User ScanLog,,none
+/admin/scans/<user_id>/update-limit,POST,admin,update scan limit,redirect,User AdminActivity,,updates limit
+/admin/scans/<user_id>/grant-extra,POST,admin,grant extra scans,redirect,User AdminActivity,,updates limit
+/admin/scans/<user_id>/lock-scanner,POST,admin,lock scanner,redirect,User AdminActivity,,sets limit/status
+/admin/settings,GET/POST,admin,system settings,admin/settings.html,SystemConfig AdminActivity,,updates config
+/admin/activity-logs,GET,admin,admin activity logs,admin/activity_logs.html,AdminActivity Admin,,none
+/admin/projects/create,GET,admin,admin project create,user/user_create_project.html,Admin,,none
+/admin/projects/upload,POST,admin,admin project upload,redirect,Project ProjectPair,,saves admin files QR starts thread
+/admin/image/<project_id>/<image_id>,GET,public,serve admin image,file,Project ProjectPair,,serves admin image
+/admin/video/<project_id>/<image_id>,GET,public,serve admin video,file,Project ProjectPair,,serves admin video
+/admin/qr/<filename>,GET,public,serve admin QR,file,Project,,serves admin QR
+/admin/success/<project_id>,GET,admin,admin success,user/success.html,Project ProjectPair,,none
+/admin/projects/<project_id>/qr,GET,admin,download admin QR,file,Project,,serves admin QR
+/admin/projects/delete/<project_id>,POST,admin,delete own admin project,redirect,Project ProjectPair,,deletes project
+/sitemap.xml,GET,public,sitemap,XML,,,none
+/robots.txt,GET,public,robots,plain text,,,none
+/yandex_2bd289a4ca147833.html,GET,public,yandex verify,file,,,none
+/faqs,GET,public,FAQ landing,user/landing.html,,,none
+

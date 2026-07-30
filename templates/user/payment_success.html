@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ScanStory | Payment Successful</title>
+    
+    <!-- External Libraries -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+
+        :root {
+            --primary: #ff007a;
+            --secondary: #7000ff;
+            --accent: #00d4ff;
+            --bg-dark: #050505;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background: var(--bg-dark);
+            color: #ffffff;
+            overflow-x: hidden;
+            scroll-behavior: smooth;
+            min-height: 100vh;
+        }
+
+        .blob {
+            position: fixed;
+            border-radius: 50%;
+            filter: blur(90px);
+            z-index: -1;
+            opacity: 0.16;
+            transition: transform 0.2s ease-out;
+            pointer-events: none;
+        }
+
+        .glass {
+            background: rgba(255, 255, 255, 0.01);
+            backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            transition: all 0.4s ease;
+        }
+
+        .glass:hover {
+            border-color: rgba(255, 255, 255, 0.18);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .animated-gradient-text {
+            background: linear-gradient(to right, #fff, var(--accent), var(--primary), #fff);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: textFlow 5s linear infinite;
+        }
+
+        @keyframes textFlow {
+            to {
+                background-position: 200% center;
+            }
+        }
+
+        .glow-btn {
+            transition: all 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        .glow-btn:hover {
+            box-shadow: 0 0 50px rgba(255, 0, 122, 0.45);
+            transform: translateY(-3px) scale(1.02);
+            background: #fff;
+            color: #000;
+        }
+
+        .btn-neo {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 0.95rem 1.1rem;
+            border-radius: 18px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.18em;
+            font-size: 11px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(255, 255, 255, 0.03);
+            transition: all 0.35s ease;
+        }
+
+        .btn-neo:hover {
+            border-color: rgba(0, 212, 255, 0.35);
+            box-shadow: 0 0 30px rgba(0, 212, 255, 0.12);
+            transform: translateY(-2px);
+        }
+
+        .card {
+            border-radius: 28px;
+            padding: 1.4rem;
+        }
+
+        .topbar {
+            height: 74px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 1.25rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .brand-title {
+            font-weight: 900;
+            letter-spacing: -0.02em;
+            font-style: italic;
+            font-size: 1.2rem;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            font-size: 10px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.22em;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .divider-line {
+            height: 1px;
+            width: 100%;
+            background: linear-gradient(90deg, rgba(255, 0, 122, 0.8), transparent);
+            opacity: 0.25;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 8px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            border-radius: 10px;
+            transition: width 0.5s ease;
+        }
+        
+        .projects-progress {
+            background: linear-gradient(90deg, #7000ff, #a855f7);
+        }
+        
+        .scans-progress {
+            background: linear-gradient(90deg, #00d4ff, #22d3ee);
+        }
+        
+        .status-badge {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 10px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+        }
+        
+        .status-success {
+            background: rgba(34, 197, 94, 0.15);
+            color: #22c55e;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+        }
+        
+        .status-active {
+            background: rgba(0, 212, 255, 0.15);
+            color: #00d4ff;
+            border: 1px solid rgba(0, 212, 255, 0.3);
+        }
+
+        .mobile-menu {
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            .topbar {
+                padding: 0 1rem;
+            }
+
+            .btn-neo {
+                padding: 0.85rem 1rem;
+            }
+
+            .desktop-actions {
+                display: none !important;
+            }
+
+            .mobile-menu {
+                display: inline-flex;
+            }
+        }
+
+        .success-header {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 28px 28px 0 0;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .success-header::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(45deg, transparent 40%, rgba(255,255,255,0.1) 50%, transparent 60%);
+            pointer-events: none;
+        }
+
+        .info-card {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01));
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .transaction-id {
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            letter-spacing: 0.1em;
+            color: var(--accent);
+            background: rgba(0, 212, 255, 0.05);
+            padding: 6px 12px;
+            border-radius: 10px;
+            border: 1px solid rgba(0, 212, 255, 0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Blobs -->
+    <div id="blob1" class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]"></div>
+    <div id="blob2" class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]"></div>
+
+    <!-- Topbar -->
+    <header class="topbar glass">
+        <div class="brand">
+            <div class="brand-title">
+                SCAN<span class="text-pink-500">STORY</span>
+            </div>
+
+            <div class="badge">
+                <i class="fa-solid fa-crown text-yellow-400"></i>
+                Payment Successful
+            </div>
+        </div>
+
+        <!-- Desktop actions -->
+        <div class="desktop-actions flex items-center gap-3">
+            <a class="btn-neo" href="{{ url_for('user_profile') }}">
+                <i class="fa-solid fa-user"></i> Profile
+            </a>
+            <a class="btn-neo" href="{{ url_for('projects_page') }}">
+                <i class="fa-solid fa-folder-open"></i> Projects
+            </a>
+            <a class="btn-neo" href="{{ url_for('dashboard') }}">
+                <i class="fa-solid fa-grid"></i> Dashboard
+            </a>
+        </div>
+
+        <!-- Mobile menu button -->
+        <button class="btn-neo mobile-menu" type="button" onclick="toggleMobileMenu()">
+            <i class="fa-solid fa-bars"></i>
+        </button>
+    </header>
+
+    <!-- Mobile dropdown panel -->
+    <div id="mobileMenuPanel" class="glass mx-4 mt-3 rounded-2xl p-3 hidden">
+        <div class="flex flex-col gap-2">
+            <a class="btn-neo" href="{{ url_for('user_profile') }}">
+                <i class="fa-solid fa-user"></i> Profile
+            </a>
+            <a class="btn-neo" href="{{ url_for('projects_page') }}">
+                <i class="fa-solid fa-folder-open"></i> Projects
+            </a>
+            <a class="btn-neo" href="{{ url_for('dashboard') }}">
+                <i class="fa-solid fa-grid"></i> Dashboard
+            </a>
+        </div>
+    </div>
+
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        <div class="max-w-7xl mx-auto px-6 mt-4">
+            {% for category, message in messages %}
+            <div class="bg-{% if category == 'error' %}red{% elif category == 'warning' %}yellow{% else %}green{% endif %}-500/10 border border-{% if category == 'error' %}red{% elif category == 'warning' %}yellow{% else %}green{% endif %}-500/20 text-{% if category == 'error' %}red{% elif category == 'warning' %}yellow{% else %}green{% endif %}-300 px-4 py-3 rounded-xl mb-4" role="alert">
+                <div class="flex items-center">
+                    <i class="fas fa-{% if category == 'error' %}exclamation-circle{% elif category == 'warning' %}exclamation-triangle{% else %}check-circle{% endif %} mr-3"></i>
+                    <span>{{ message }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    {% endwith %}
+
+    <main class="max-w-7xl mx-auto px-6 md:px-10 py-10 md:py-14">
+
+        <!-- Success Header -->
+        <div class="glass success-header p-8 md:p-12 mb-10" data-aos="fade-up">
+            <div class="text-center relative z-10">
+                <div class="mb-6">
+                    <i class="fas fa-check-circle text-6xl md:text-7xl text-white mb-4"></i>
+                </div>
+                <h1 class="text-4xl md:text-6xl font-black uppercase italic mb-4">
+                    Payment <span class="animated-gradient-text">Success</span>
+                </h1>
+                <p class="text-xl text-white/80">
+                    Your <span class="font-bold text-yellow-300">{{ plan.plan_name }}</span> plan is now active
+                </p>
+            </div>
+        </div>
+
+        <div class="divider-line mb-10"></div>
+
+        <!-- Plan & Limits Section -->
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 md:gap-8 mb-10">
+            <!-- Plan Information -->
+            <div class="glass info-card card" data-aos="fade-up" data-aos-delay="50">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-xl font-black uppercase tracking-widest text-[12px] text-white/70">
+                        <i class="fas fa-crown text-yellow-400 mr-2"></i> Plan Information
+                    </h2>
+                    <span class="status-active">ACTIVE</span>
+                </div>
+
+                <div class="space-y-4">
+                    <div class="flex items-center justify-between">
+                        <span class="text-white/70">Plan</span>
+                        <span class="text-white font-bold text-lg">{{ plan.plan_name }}</span>
+                    </div>
+                    
+                    <div class="flex items-center justify-between">
+                        <span class="text-white/70">Amount</span>
+                        <span class="text-white font-bold text-lg">₹{{ order.total_amount }}</span>
+                    </div>
+                    
+                    <div class="flex items-center justify-between">
+                        <span class="text-white/70">Validity</span>
+                        <span class="text-white font-bold">
+                            {{ order.subscription_start.strftime('%d %b %Y') }} → {{ order.subscription_end.strftime('%d %b %Y') }}
+                        </span>
+                    </div>
+                    
+                    <div class="flex items-center justify-between">
+                        <span class="text-white/70">Status</span>
+                        <span class="status-success">{{ order.status|upper }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Your New Limits -->
+            <div class="glass info-card card" data-aos="fade-up" data-aos-delay="150">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-xl font-black uppercase tracking-widest text-[12px] text-white/70">
+                        <i class="fas fa-tachometer-alt text-cyan-400 mr-2"></i> Your New Limits
+                    </h2>
+                    <i class="fa-solid fa-bolt text-yellow-400"></i>
+                </div>
+
+                <div class="space-y-6">
+                    <!-- Projects -->
+                    <div>
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center gap-2">
+                                <i class="fas fa-cubes text-purple-400"></i>
+                                <span class="text-white/70">Projects</span>
+                            </div>
+                            <span class="text-white font-bold">{{ user.projects_used }} / {{ plan.total_project_limit }}</span>
+                        </div>
+                        
+                        <div class="progress-bar">
+                            <div class="progress-fill projects-progress" 
+                                 style="width: {{ (user.projects_used / plan.total_project_limit * 100) if plan.total_project_limit > 0 else 0 }}%"></div>
+                        </div>
+                        
+                        <div class="flex items-center justify-between mt-2">
+                            <span class="text-white/70 text-xs">Used</span>
+                            <span class="text-white font-bold text-sm">{{ user.remaining_projects }} Remaining</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Scans -->
+                    <div>
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center gap-2">
+                                <i class="fas fa-qrcode text-cyan-400"></i>
+                                <span class="text-white/70">Scans</span>
+                            </div>
+                            <span class="text-white font-bold">{{ user.scans_used }} / {{ plan.total_scan_limit }}</span>
+                        </div>
+                        
+                        <div class="progress-bar">
+                            <div class="progress-fill scans-progress" 
+                                 style="width: {{ (user.scans_used / plan.total_scan_limit * 100) if plan.total_scan_limit > 0 else 0 }}%"></div>
+                        </div>
+                        
+                        <div class="flex items-center justify-between mt-2">
+                            <span class="text-white/70 text-xs">Used</span>
+                            <span class="text-white font-bold text-sm">{{ user.remaining_scans }} Remaining</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Payment Details -->
+        <section class="mb-10" data-aos="fade-up" data-aos-delay="200">
+            <div class="glass card">
+                <h2 class="text-xl font-black uppercase tracking-widest text-[12px] text-white/70 mb-6">
+                    <i class="fas fa-receipt text-green-400 mr-2"></i> Payment Details
+                </h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div class="space-y-4">
+                        <div>
+                            <span class="text-white/50 text-xs uppercase tracking-widest block mb-2">Order ID</span>
+                            <span class="transaction-id">{{ order.order_id }}</span>
+                        </div>
+                        <div>
+                            <span class="text-white/50 text-xs uppercase tracking-widest block mb-2">Transaction ID</span>
+                            <span class="transaction-id">{{ order.razorpay_payment_id }}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="space-y-4">
+                        <div>
+                            <span class="text-white/50 text-xs uppercase tracking-widest block mb-2">Payment Date</span>
+                            <span class="text-white font-bold">{{ order.payment_at.strftime('%d %b %Y, %I:%M %p') }}</span>
+                        </div>
+                        <div>
+                            <span class="text-white/50 text-xs uppercase tracking-widest block mb-2">Payment Method</span>
+                            <span class="text-white font-bold">{{ order.payment_method|default('Online Payment')|title }}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Receipt Note -->
+                <div class="glass bg-blue-500/5 border border-blue-500/20 rounded-2xl p-5">
+                    <div class="flex items-start">
+                        <i class="fas fa-info-circle text-blue-400 text-xl mt-1 mr-4"></i>
+                        <div>
+                            <h4 class="text-blue-300 font-bold mb-2">Receipt Sent</h4>
+                            <p class="text-white/70 text-sm">
+                                A detailed receipt has been sent to your email address: 
+                                <span class="font-bold text-white">{{ user.email }}</span>
+                            </p>
+                            <p class="text-white/50 text-xs mt-2">
+                                Keep this information for your records. Contact support if you need assistance.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Quick Actions -->
+        <section class="mb-10" data-aos="fade-up" data-aos-delay="250">
+            <div class="glass card">
+                <h2 class="text-xl font-black uppercase tracking-widest text-[12px] text-white/70 mb-6">
+                    <i class="fas fa-bolt text-yellow-400 mr-2"></i> Quick Actions
+                </h2>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <a href="{{ url_for('user_create_project_page') }}" 
+                       class="btn-neo glow-btn justify-center hover:border-pink-500/50 hover:text-pink-400">
+                        <i class="fas fa-plus-circle"></i> Create Project
+                    </a>
+                    <a href="{{ url_for('dashboard') }}" 
+                       class="btn-neo justify-center hover:border-cyan-400/50 hover:text-cyan-400">
+                        <i class="fas fa-home"></i> Dashboard
+                    </a>
+                    <a href="{{ url_for('user_profile') }}" 
+                       class="btn-neo justify-center hover:border-green-400/50 hover:text-green-400">
+                        <i class="fas fa-user-cog"></i> Profile
+                    </a>
+                </div>
+            </div>
+        </section>
+
+        <!-- Support Info -->
+        <div class="glass card text-center" data-aos="fade-up" data-aos-delay="300">
+            <div class="mb-6">
+                <i class="fas fa-heart text-pink-500 text-3xl mb-4"></i>
+                <h3 class="text-xl font-bold text-white mb-2">Thank You for Choosing SCANSTORY!</h3>
+                <p class="text-white/60">
+                    Need help? Contact our support team at 
+                    <a href="mailto:info.mpro9@gmail.com" class="text-cyan-400 hover:text-cyan-300 font-bold">
+                        info.mpro9@gmail.com
+                    </a>
+                </p>
+            </div>
+            
+            <div class="transaction-id inline-block">
+                TXN: {{ order.razorpay_payment_id }}
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="glass border-t border-white/5 py-8">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="text-center">
+                <p class="text-white/30 text-xs uppercase tracking-widest mb-4">
+                    &copy; {{ order.payment_at.year if order.payment_at else '' }} ScanStory AR Platform
+                </p>
+                <p class="text-white/20 text-[10px] uppercase tracking-widest">
+                    Transaction Completed Successfully
+                </p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script>
+        AOS.init({ duration: 1100, once: true });
+
+        // Blob movement
+        window.addEventListener('scroll', () => {
+            const scroll = window.pageYOffset;
+            const b1 = document.getElementById('blob1');
+            const b2 = document.getElementById('blob2');
+            if (b1) b1.style.transform = `translate(${scroll * 0.05}px, ${scroll * 0.1}px)`;
+            if (b2) b2.style.transform = `translate(${scroll * -0.05}px, ${scroll * -0.1}px)`;
+        });
+
+        // Mobile menu
+        function toggleMobileMenu() {
+            const panel = document.getElementById("mobileMenuPanel");
+            if (!panel) return;
+            panel.classList.toggle("hidden");
+        }
+
+        // Celebrate animation
+        document.addEventListener('DOMContentLoaded', function() {
+            const successIcon = document.querySelector('.fa-check-circle');
+            if (successIcon) {
+                setTimeout(() => {
+                    successIcon.style.transform = 'scale(1.2)';
+                    successIcon.style.transition = 'transform 0.3s ease';
+                }, 500);
+                
+                setTimeout(() => {
+                    successIcon.style.transform = 'scale(1)';
+                }, 800);
+            }
+        });
+    </script>
+</body>
+</html>
