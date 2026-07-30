@@ -1,0 +1,8 @@
+state,http_status,draft_leak,notes
+flag disabled,404,no,public route unavailable
+unknown key,404,no,safe not found
+unpublished,404,no,no current Published Version
+paused,503,no,controlled unavailable
+archived,410,no,controlled archived
+published,200,no,current Published Version snapshots only
+unavailable current version,503,no,safe unavailable

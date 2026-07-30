@@ -1,0 +1,8 @@
+case,status,notes
+valid rollback,passed,same QR restored previous video
+invalid version,covered by service guard,target must belong to Experience
+other Experience version,covered by service guard,query scopes to Experience
+missing historical asset,covered by service guard,rollback blocks missing refs
+unauthorized,passed,publish permission required
+idempotent repeat,passed,current target returns idempotent
+concurrent rollback/publish,documented gap,no DB row lock in Gate H

@@ -6,6 +6,10 @@ EXPERIENCE_CREATOR_FLAGS = {
     "ENABLE_TRIGGER_MANAGEMENT": False,
     "ENABLE_PROCESSING_STATUS_UI": False,
     "ENABLE_EXPERIENCE_QR_ASSET": False,
+    "ENABLE_EXPERIENCE_PUBLISHING": False,
+    "ENABLE_PUBLIC_EXPERIENCE_ROUTE": False,
+    "ENABLE_VERSION_ROLLBACK": False,
+    "ENABLE_EXPERIENCE_PAUSE": False,
 }
 
 
@@ -35,6 +39,22 @@ def processing_status_ui_enabled():
 
 def experience_qr_asset_enabled():
     return experience_creator_enabled() and flag_enabled("ENABLE_EXPERIENCE_QR_ASSET")
+
+
+def experience_publishing_enabled():
+    return experience_creator_enabled() and flag_enabled("ENABLE_EXPERIENCE_PUBLISHING")
+
+
+def public_experience_route_enabled():
+    return flag_enabled("ENABLE_PUBLIC_EXPERIENCE_ROUTE")
+
+
+def version_rollback_enabled():
+    return experience_publishing_enabled() and flag_enabled("ENABLE_VERSION_ROLLBACK")
+
+
+def experience_pause_enabled():
+    return experience_publishing_enabled() and flag_enabled("ENABLE_EXPERIENCE_PAUSE")
 
 
 def experience_creator_flag_snapshot():

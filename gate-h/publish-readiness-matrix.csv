@@ -1,0 +1,11 @@
+condition,result,blocking
+active included Trigger present,required,yes
+reference image present,required,yes
+video present,required,yes
+recognition artifact present,required,yes
+required jobs succeeded,required,yes
+active failed Trigger,blocked,yes
+excluded failed Trigger,ignored,no
+processing job active,blocked,yes
+public key present,required,yes
+paused or archived Experience,blocked,yes

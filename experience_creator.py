@@ -8,11 +8,14 @@ from werkzeug.utils import secure_filename
 
 from feature_flags import (
     experience_creator_enabled,
+    experience_pause_enabled,
+    experience_publishing_enabled,
     experience_qr_asset_enabled,
     processing_status_ui_enabled,
     trigger_management_enabled,
+    version_rollback_enabled,
 )
-from models import Asset, Experience, ProcessingEvent, ProcessingJob, Trigger, TriggerAsset, User, Workspace, WorkspaceMember, db
+from models import Asset, Experience, ExperienceVersion, ProcessingEvent, ProcessingJob, Trigger, TriggerAsset, User, Workspace, WorkspaceMember, db
 from public_keys import generate_unique_public_key
 from storage import LocalFilesystemStorage, build_storage_key
 
@@ -248,6 +251,16 @@ def experience_detail(experience_id):
         .limit(50)
         .all()
     )
+    versions = ExperienceVersion.query.filter_by(experience_id=experience.id).order_by(ExperienceVersion.version_number.desc()).limit(50).all()
+    readiness = None
+    if experience_publishing_enabled():
+        try:
+            from publishing import ensure_draft_version, evaluate_publish_readiness
+
+            draft = ensure_draft_version(experience.id, requested_by=user.id)
+            readiness = evaluate_publish_readiness(experience.id, draft.id, requested_by=user.id)
+        except PermissionError:
+            readiness = {"ready": False, "issues": ["publish_permission_required"], "warnings": []}
     statuses = {}
     if processing_status_ui_enabled():
         from processing_orchestration import get_trigger_processing_status, get_experience_processing_status
@@ -261,12 +274,112 @@ def experience_detail(experience_id):
         triggers=triggers,
         events=events,
         statuses=statuses,
+        versions=versions,
+        readiness=readiness,
         trigger_management=trigger_management_enabled(),
         status_ui=processing_status_ui_enabled(),
         qr_enabled=experience_qr_asset_enabled(),
+        publishing_enabled=experience_publishing_enabled(),
+        rollback_enabled=version_rollback_enabled(),
+        pause_enabled=experience_pause_enabled(),
         destination=_experience_destination(experience),
         asset_for=_asset_for,
     )
+
+
+@experience_creator_bp.post("/experiences/<int:experience_id>/versions/draft")
+def create_draft_version(experience_id):
+    user, response = _require_user()
+    if response:
+        return response
+    if not experience_publishing_enabled():
+        abort(404)
+    from publishing import ensure_draft_version
+
+    ensure_draft_version(experience_id, requested_by=user.id)
+    return redirect(url_for("experience_creator.experience_detail", experience_id=experience_id))
+
+
+@experience_creator_bp.post("/experiences/<int:experience_id>/publish")
+def publish_experience(experience_id):
+    user, response = _require_user()
+    if response:
+        return response
+    if not experience_publishing_enabled():
+        abort(404)
+    from publishing import PublishingError, ensure_draft_version, evaluate_publish_readiness, publish_experience_version
+
+    try:
+        draft = ensure_draft_version(experience_id, requested_by=user.id)
+        readiness = evaluate_publish_readiness(experience_id, draft.id, requested_by=user.id)
+        publish_experience_version(
+            experience_id,
+            draft.id,
+            requested_by=user.id,
+            idempotency_key=request.form.get("idempotency_key") or f"publish-{experience_id}-{draft.id}",
+            expected_checksum=readiness.get("checksum"),
+        )
+        flash("Experience published.", "success")
+    except (PublishingError, PermissionError) as exc:
+        flash(f"Publish blocked: {exc}", "error")
+    return redirect(url_for("experience_creator.experience_detail", experience_id=experience_id))
+
+
+@experience_creator_bp.post("/experiences/<int:experience_id>/versions/<int:version_id>/rollback")
+def rollback_experience(experience_id, version_id):
+    user, response = _require_user()
+    if response:
+        return response
+    if not version_rollback_enabled():
+        abort(404)
+    from publishing import PublishingError, rollback_experience_to_version
+
+    try:
+        rollback_experience_to_version(experience_id, version_id, requested_by=user.id, idempotency_key=request.form.get("idempotency_key"))
+        flash("Experience rolled back.", "success")
+    except (PublishingError, PermissionError) as exc:
+        flash(f"Rollback blocked: {exc}", "error")
+    return redirect(url_for("experience_creator.experience_detail", experience_id=experience_id))
+
+
+@experience_creator_bp.post("/experiences/<int:experience_id>/pause")
+def pause_experience(experience_id):
+    return _set_public_state(experience_id, "paused")
+
+
+@experience_creator_bp.post("/experiences/<int:experience_id>/resume")
+def resume_experience(experience_id):
+    return _set_public_state(experience_id, "ready_to_publish")
+
+
+@experience_creator_bp.post("/experiences/<int:experience_id>/archive")
+def archive_experience(experience_id):
+    return _set_public_state(experience_id, "archived")
+
+
+def _set_public_state(experience_id, state):
+    user, response = _require_user()
+    if response:
+        return response
+    if not experience_pause_enabled():
+        abort(404)
+    from publishing import PublishingError, set_experience_public_state
+
+    try:
+        set_experience_public_state(experience_id, state, requested_by=user.id)
+    except (PublishingError, PermissionError) as exc:
+        flash(f"State change blocked: {exc}", "error")
+    return redirect(url_for("experience_creator.experience_detail", experience_id=experience_id))
+
+
+@experience_creator_bp.route("/e/<public_key>")
+def public_experience(public_key):
+    from publishing import resolve_published_experience
+
+    result = resolve_published_experience(public_key)
+    if result["status"] != "published":
+        return render_template("user/experiences/public_unavailable.html", result=result), result["http_status"]
+    return render_template("user/experiences/public_viewer.html", result=result), 200
 
 
 @experience_creator_bp.route("/experiences/<int:experience_id>/triggers/new", methods=["GET", "POST"])

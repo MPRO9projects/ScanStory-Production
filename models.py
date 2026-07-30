@@ -739,7 +739,17 @@ EXPERIENCE_STATUSES = {
     "paused",
     "archived",
 }
-EXPERIENCE_VERSION_STATUSES = {"draft", "published", "superseded", "archived"}
+EXPERIENCE_VERSION_STATUSES = {
+    "draft",
+    "processing",
+    "needs_attention",
+    "ready_to_publish",
+    "publishing",
+    "published",
+    "superseded",
+    "failed_publish",
+    "archived",
+}
 
 TRIGGER_TYPES = {"image_marker"}
 TRIGGER_STATUSES = {
@@ -880,7 +890,7 @@ class Experience(db.Model):
 
     workspace = db.relationship("Workspace", back_populates="experiences", lazy=True)
     legacy_project = db.relationship("Project", backref=db.backref("mapped_experience", uselist=False), lazy=True)
-    created_by_user = db.relationship("User", lazy=True)
+    created_by_user = db.relationship("User", foreign_keys=[created_by_user_id], lazy=True)
     versions = db.relationship(
         "ExperienceVersion",
         back_populates="experience",
@@ -914,11 +924,22 @@ class ExperienceVersion(db.Model):
     published_at = db.Column(db.DateTime, nullable=True)
     superseded_at = db.Column(db.DateTime, nullable=True)
     source_version_id = db.Column(db.Integer, db.ForeignKey("experience_versions.id"), nullable=True)
+    published_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    publication_checksum = db.Column(db.String(128), nullable=True)
+    publication_idempotency_key = db.Column(db.String(128), nullable=True, index=True)
+    processing_snapshot_json = db.Column(db.Text, nullable=True)
+    publication_notes = db.Column(db.Text, nullable=True)
+    rollback_source_version_id = db.Column(db.Integer, db.ForeignKey("experience_versions.id"), nullable=True)
+    is_immutable = db.Column(db.Boolean, default=False, nullable=False)
+    public_destination = db.Column(db.String(500), nullable=True)
 
     experience = db.relationship("Experience", back_populates="versions", foreign_keys=[experience_id], lazy=True)
-    created_by_user = db.relationship("User", lazy=True)
-    source_version = db.relationship("ExperienceVersion", remote_side=[id], lazy=True)
+    created_by_user = db.relationship("User", foreign_keys=[created_by_user_id], lazy=True)
+    published_by_user = db.relationship("User", foreign_keys=[published_by_user_id], lazy=True)
+    source_version = db.relationship("ExperienceVersion", remote_side=[id], foreign_keys=[source_version_id], lazy=True)
+    rollback_source_version = db.relationship("ExperienceVersion", remote_side=[id], foreign_keys=[rollback_source_version_id], lazy=True)
     triggers = db.relationship("Trigger", back_populates="experience_version", lazy=True)
+    trigger_snapshots = db.relationship("ExperienceVersionTrigger", back_populates="version", lazy=True, cascade="all, delete-orphan")
 
     __table_args__ = (
         db.UniqueConstraint("experience_id", "version_number", name="uq_experience_version_number"),
@@ -927,6 +948,36 @@ class ExperienceVersion(db.Model):
     @validates("status")
     def validate_status(self, key, value):
         return _validate_value(value, EXPERIENCE_VERSION_STATUSES, key)
+
+
+class ExperienceVersionTrigger(db.Model):
+    __tablename__ = "experience_version_triggers"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    experience_version_id = db.Column(db.Integer, db.ForeignKey("experience_versions.id"), nullable=False, index=True)
+    trigger_id = db.Column(db.Integer, db.ForeignKey("triggers.id"), nullable=False, index=True)
+    inclusion_order = db.Column(db.Integer, default=0, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    is_excluded = db.Column(db.Boolean, default=False, nullable=False)
+    reference_image_asset_id = db.Column(db.Integer, db.ForeignKey("assets.id"), nullable=True)
+    video_asset_id = db.Column(db.Integer, db.ForeignKey("assets.id"), nullable=True)
+    recognition_artifact_id = db.Column(db.Integer, db.ForeignKey("recognition_artifacts.id"), nullable=True)
+    fallback_asset_id = db.Column(db.Integer, db.ForeignKey("assets.id"), nullable=True)
+    creator_label = db.Column(db.String(255), nullable=True)
+    processing_snapshot_json = db.Column(db.Text, nullable=True)
+    source_revision_hash = db.Column(db.String(128), nullable=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+
+    version = db.relationship("ExperienceVersion", back_populates="trigger_snapshots", lazy=True)
+    trigger = db.relationship("Trigger", lazy=True)
+    reference_image_asset = db.relationship("Asset", foreign_keys=[reference_image_asset_id], lazy=True)
+    video_asset = db.relationship("Asset", foreign_keys=[video_asset_id], lazy=True)
+    recognition_artifact = db.relationship("RecognitionArtifact", lazy=True)
+    fallback_asset = db.relationship("Asset", foreign_keys=[fallback_asset_id], lazy=True)
+
+    __table_args__ = (
+        db.UniqueConstraint("experience_version_id", "trigger_id", name="uq_experience_version_trigger"),
+    )
 
 
 class Trigger(db.Model):
@@ -1124,3 +1175,19 @@ class MigrationCheckpoint(db.Model):
 
 for _public_model in (Organization, Workspace, Experience, Trigger, Asset, ProcessingJob):
     event.listen(_public_model, "before_update", _prevent_public_key_update)
+
+
+def _prevent_published_snapshot_update(mapper, connection, target):
+    version = getattr(target, "version", None)
+    if version and version.is_immutable:
+        raise ValueError("published version snapshot is immutable")
+
+
+def _prevent_published_snapshot_delete(mapper, connection, target):
+    version = getattr(target, "version", None)
+    if version and version.is_immutable:
+        raise ValueError("published version snapshot cannot be deleted")
+
+
+event.listen(ExperienceVersionTrigger, "before_update", _prevent_published_snapshot_update)
+event.listen(ExperienceVersionTrigger, "before_delete", _prevent_published_snapshot_delete)

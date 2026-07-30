@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ result.experience.name }} - ScanStory</title>
+  <style>
+    body{font-family:Arial,sans-serif;margin:0;color:#18212f;background:#f7f8fb}
+    main{max-width:920px;margin:0 auto;padding:20px}
+    .card{background:white;border:1px solid #d9dfeb;border-radius:8px;padding:14px;margin:12px 0}
+  </style>
+</head>
+<body>
+<main data-page="public-experience">
+  <h1>{{ result.experience.name }}</h1>
+  <p role="status">Published Version {{ result.version.version_number }}</p>
+  <p>Scanner compatibility shell. Legacy scanner routes remain unchanged.</p>
+  {% for item in result.snapshots %}
+    <article class="card">
+      <h2>{{ item.creator_label }}</h2>
+      <p>Reference image asset: {{ item.reference_image_asset.original_filename if item.reference_image_asset else 'Unavailable' }}</p>
+      <p>Video asset: {{ item.video_asset.original_filename if item.video_asset else 'Unavailable' }}</p>
+    </article>
+  {% endfor %}
+</main>
+</body>
+</html>

@@ -55,6 +55,53 @@
     </section>
   {% endif %}
 
+  {% if publishing_enabled %}
+    <section class="card" aria-label="Publishing">
+      <h2>Publishing</h2>
+      <p class="meta">Permanent public link: {{ destination }}</p>
+      {% if readiness %}
+        <p role="status">Publish readiness: {% if readiness.ready %}Ready{% else %}Blocked{% endif %}</p>
+        {% if readiness.issues %}
+          <ul aria-label="Publish blockers">
+            {% for issue in readiness.issues[:8] %}
+              <li>{{ issue.replace('_',' ') }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endif %}
+      <div class="actions">
+        <form class="inline" method="post" action="{{ url_for('experience_creator.create_draft_version', experience_id=experience.id) }}"><button type="submit">Create Draft Version</button></form>
+        <form class="inline" method="post" action="{{ url_for('experience_creator.publish_experience', experience_id=experience.id) }}">
+          <input type="hidden" name="idempotency_key" value="publish-{{ experience.id }}">
+          <button type="submit">Publish Version</button>
+        </form>
+        {% if pause_enabled %}
+          <form class="inline" method="post" action="{{ url_for('experience_creator.pause_experience', experience_id=experience.id) }}"><button type="submit">Pause</button></form>
+          <form class="inline" method="post" action="{{ url_for('experience_creator.resume_experience', experience_id=experience.id) }}"><button type="submit">Resume</button></form>
+          <form class="inline" method="post" action="{{ url_for('experience_creator.archive_experience', experience_id=experience.id) }}"><button type="submit">Archive</button></form>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="card" aria-label="Version history">
+      <h2>Version History</h2>
+      {% for version in versions %}
+        <p>
+          Version {{ version.version_number }}: {{ version.status.replace('_',' ') }}
+          {% if version.id == experience.current_published_version_id %}<strong>Current Published Version</strong>{% endif %}
+          {% if rollback_enabled and version.is_immutable and version.id != experience.current_published_version_id %}
+            <form class="inline" method="post" action="{{ url_for('experience_creator.rollback_experience', experience_id=experience.id, version_id=version.id) }}">
+              <input type="hidden" name="idempotency_key" value="rollback-{{ experience.id }}-{{ version.id }}">
+              <button type="submit">Rollback</button>
+            </form>
+          {% endif %}
+        </p>
+      {% else %}
+        <p role="status">No Versions yet.</p>
+      {% endfor %}
+    </section>
+  {% endif %}
+
   <section class="grid" aria-label="Trigger cards">
     {% for trigger in triggers %}
       {% set status = statuses.triggers.get(trigger.id) if statuses.triggers else none %}
