@@ -15,15 +15,17 @@ stateDiagram-v2
   Uploading --> Uploaded
   Uploaded --> Validating
   Validating --> Optimizing
-  Optimizing --> ExtractingFeatures
-  ExtractingFeatures --> Testing
-  Testing --> Ready
+  Optimizing --> Extracting
+  Extracting --> RobustnessTesting
+  RobustnessTesting --> Ready
   Validating --> Failed
   Optimizing --> Failed
-  ExtractingFeatures --> Failed
+  Extracting --> Failed
+  RobustnessTesting --> Failed
   Failed --> RetryScheduled
   RetryScheduled --> Retrying
   Retrying --> Validating
+  Failed --> Excluded
 ```
 
 ## Job Record Requirements
@@ -45,3 +47,25 @@ flowchart LR
 
 No unmanaged daemon threads. Durable queues own processing.
 
+## Revision 1 Canonical Trigger Lifecycle
+
+Decision status: Approved Release 1 rule.
+
+Trigger lifecycle:
+
+```text
+Draft -> Uploading -> Validating -> Optimizing -> Extracting -> Robustness Testing -> Ready
+```
+
+Failure states:
+
+```text
+Failed -> Retry Scheduled -> Retrying
+Failed -> Excluded
+```
+
+## QR Timing Rule
+
+Decision status: Approved Release 1 rule.
+
+Legacy Projects may already create QR at upload time. Release 1 target publishing creates or activates the permanent Experience public key at publication. The compatibility resolver must preserve existing QR behavior while the new publishing model atomically switches the public key to the current Published Version.

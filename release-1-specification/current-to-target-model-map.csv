@@ -1,13 +1,14 @@
-Current Model,Target Model,Migration Note
-User,Workspace Member,User joins one or more workspaces
-Project,Experience,Preserve existing public behavior
-ProjectPair,Trigger,Each pair becomes image/video trigger
-Image file,Reference Asset,Attach metadata and validation result
-Video file,Content Asset,Generate optimized variants
-.npz feature,Recognition Artifact,Version by algorithm and processing version
-Project QR,Permanent Experience Link and QR,Existing QR remains valid
-ScanLog,Experience Session,Session-level launch and device data
-ScanLog,Recognition Event,Recognition attempts and results
-Admin,Admin or Workspace Role,Separate platform admin from workspace role
-SubscriptionPlan,Plan and Entitlements,Move limits to config-driven keys
-PaymentOrder,Billing Event,Use idempotent payment records
+Current legacy term,Target product term,Migration rule,Decision status
+Project,Experience,Legacy code and routes may continue using Project temporarily; creator-facing Release 1 moves toward Experience,Approved Release 1 rule
+ProjectPair,Trigger,Legacy ProjectPair maps to Trigger and preserves pair_index during compatibility migration,Approved Release 1 rule
+Scan,Context-dependent legacy metric,Do not use scan ambiguously for launch detection and billing events,Approved Release 1 rule
+Experience View,Billable viewer launch,One launch within configured session window; fallback launch counts,Approved Release 1 rule
+Recognition Attempt,Non-billable detection attempt,Detection requests frames and re-anchors are not billable,Approved Release 1 rule
+Scanner Session,One scanner runtime session,Groups launch recognition attempts fallback and events,Approved Release 1 rule
+User,Workspace Member,Existing Users backfilled into default personal Workspace,Approved Release 1 rule
+User subscription fields,Workspace Billing Account,Legacy User subscription remains temporarily supported during migration,Approved Release 1 rule
+Image file,Reference Asset,Existing media preserved and mapped additively,Approved Release 1 rule
+Video file,Content Asset,Existing media preserved and mapped additively,Approved Release 1 rule
+.npz feature,Recognition Artifact,Existing artifacts remain usable until regenerated safely,Approved Release 1 rule
+Project QR,Permanent Experience Link and QR,Existing QR and /scanner/<project_id> continue working,Approved Release 1 rule
+ScanLog,Scanner Session plus Recognition Event,Backfill reports while preserving legacy logs,Approved Release 1 rule

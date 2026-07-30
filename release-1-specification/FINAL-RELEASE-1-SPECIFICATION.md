@@ -52,3 +52,18 @@ If a feature does not directly support image-triggered video creation, publishin
 
 Specification ready for review.
 
+# Revision 1 Readiness Status
+
+Previous readiness score: 56/100.
+
+Corrections completed: canonical terminology, Workspace ownership, Workspace billing, legacy QR compatibility, versioned scanner API, additive migration phases, canonical Experience and Trigger lifecycles, partial-failure publish rules, creator scalability tiers, mobile failure matrix, recognition gates, performance measurement gates, billing rules, security gates, Organization scope, managed-service ownership, acceptance gates, and updated CSV matrices.
+
+Remaining critical gaps: 1. Gate A regression protection has not been implemented.
+
+Remaining contradictions: 0 specification-level contradictions after Revision 1.
+
+Remaining must-decide-before-implementation items: 0 specification-level decisions. Gate A regression protection remains a required implementation gate, and production/staging infrastructure choices remain before AWS staging.
+
+New recommended readiness classification: **Ready for implementation planning**.
+
+Do not mark Ready for implementation until Gate A regression protection is complete.

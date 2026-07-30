@@ -1,10 +1,10 @@
-State,Entry Condition,Allowed Actions,Exit Condition,Public Behavior
-Draft,Experience created,Edit triggers and settings,Upload starts or archive,None
-Uploading,Asset upload active,Cancel or continue,Upload completed,None
-Processing,Jobs queued/running,View progress or retry failed jobs,All jobs ready or needs attention,None
-Needs Attention,Validation or quality issue,Replace asset or retry,Issues resolved,None
-Ready To Test,All required artifacts ready,Preview/test/request approval,Approved,None
-Approved,Reviewer/publisher approval,Publish or edit,Published or draft changed,None
-Published,Atomic publish complete,Monitor pause rollback archive,Paused archived or new version published,Serves immutable version
-Paused,Manual or policy pause,Resume archive,Fulfilled by resume/archive,Unavailable or fallback
-Archived,Archive action,Read-only reference,None,No new sessions
+State,Entry Condition,Allowed Actions,Exit Condition,Public Behavior,Decision status
+Draft,Experience or new draft version created,Edit triggers settings fallback and metadata,Processing starts or draft archived,None,Approved Release 1 rule
+Processing,One or more Trigger jobs running,View progress retry failed jobs exclude failed triggers,All active triggers ready or needs attention,None,Approved Release 1 rule
+Needs Attention,Active trigger failure or blocking warning,Fix retry or exclude trigger,Issues resolved,None,Approved Release 1 rule
+Ready To Test,All active required artifacts ready,Preview test request approval if enabled,Readiness gates pass,None,Approved Release 1 rule
+Ready To Publish,Publication gates pass,Publish or return to draft,Published,None,Approved Release 1 rule
+Published,Atomic publication complete,Monitor pause rollback archive create new draft,Paused archived or new version published,Serves immutable Published Version,Approved Release 1 rule
+Paused,Manual or policy pause,Resume archive or show fallback,Resumed or archived,Controlled unavailable/fallback; link remains valid,Approved Release 1 rule
+Archived,Archive action,Read-only retention governed restore/delete if authorized,Retention/delete action,No new public sessions unless restored,Approved Release 1 rule
+Deleted,Authorized retention-governed deletion,Audit only,Finalized,Compatibility behavior follows deletion policy,Requires leadership approval

@@ -1,12 +1,12 @@
-State,Meaning,Retryable,Creator Visible,Diagnostics Required
-Draft,Trigger exists before upload,No,Yes,No
-Uploading,Asset transfer active,Yes,Yes,Upload ID
-Uploaded,Asset received,Yes,Yes,Asset checksum
-Validating,File and policy checks running,Yes,Yes,Validation category
-Optimizing,Media variants being created,Yes,Yes,Codec/timing data
-Extracting Features,Recognition artifacts being generated,Yes,Yes,Algorithm version
-Testing,Robustness tests running,Yes,Yes,Quality scores
-Ready,Trigger can be published,No,Yes,Artifact versions
-Failed,Processing failed,Yes,Yes,Failure category
-Retry Scheduled,Retry queued,No,Yes,Next attempt time
-Retrying,Retry active,Yes,Yes,Attempt count
+State,Meaning,Retryable,Creator Visible,Publication effect,Diagnostics Required
+Draft,Trigger exists before upload,No,Yes,Not publishable,No
+Uploading,Asset transfer active,Yes,Yes,Not publishable,Upload ID
+Validating,File policy MIME signature and limits checked,Yes,Yes,Blocks if active,Validation category
+Optimizing,Media variants and poster assets generated,Yes,Yes,Blocks if active,Codec timing data
+Extracting,Recognition artifacts generated,Yes,Yes,Blocks if active,Algorithm version
+Robustness Testing,Quality robustness variants tested,Yes,Yes,Blocks if active,Quality scores
+Ready,Trigger can be included in publication,No,Yes,Included if active,Artifact versions
+Failed,Processing failed,Yes,Yes,Blocks if active,Failure category
+Retry Scheduled,Retry queued,No,Yes,Blocks if active,Next attempt time
+Retrying,Retry active,Yes,Yes,Blocks if active,Attempt count
+Excluded,Creator explicitly excludes trigger,No,Yes,Not included; does not block,Audit event

@@ -24,3 +24,11 @@ status: draft
 
 Original uploads, optimized images, optimized videos, poster frames, feature files, QR assets, published manifests, temporary processing files, logs, and diagnostics.
 
+## Revision 1 Reliability Rules
+
+Decision status: Approved Release 1 rule.
+
+- Heavy processing never runs inside normal viewer or creator web requests.
+- Future 3D, AR, VR, AI, enterprise, or bulk features must not be bundled into the core image-video scanner unless the active Experience explicitly requires them.
+- Candidate retrieval must prevent large Experiences from sequentially matching every Trigger.
+- Modules must be independently disableable and rollbackable through feature flags or route isolation.

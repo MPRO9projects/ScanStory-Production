@@ -1,13 +1,15 @@
-Permission,Owner,Workspace Admin,Creator,Reviewer,Publisher,Analyst,Billing Admin,Viewer
-Manage workspace,Yes,Yes,No,No,No,No,No,No
-Manage members,Yes,Yes,No,No,No,No,No,No
-Manage billing,Yes,No,No,No,No,No,Yes,No
-Create draft Experience,Yes,Yes,Yes,No,No,No,No,No
-Upload assets,Yes,Yes,Yes,No,No,No,No,No
-Review quality,Yes,Yes,Yes,Yes,Yes,No,No,No
-Approve Experience,Yes,Yes,No,Yes,Yes,No,No,No
-Publish Experience,Yes,Yes,No,No,Yes,No,No,No
-Pause Experience,Yes,Yes,No,No,Yes,No,No,No
-View analytics,Yes,Yes,No,No,No,Yes,No,No
-View public Experience,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes
-Access admin diagnostics,Yes,Yes,No,No,No,No,No,No
+Permission,Owner,Workspace Admin,Creator,Reviewer,Publisher,Analyst,Billing Admin,Viewer,Decision status
+Manage workspace,Yes,Yes,No,No,No,No,No,No,Approved Release 1 rule
+Manage members,Yes,Yes,No,No,No,No,No,No,Approved Release 1 rule
+Transfer ownership,Yes,No,No,No,No,No,No,No,Approved Release 1 rule with audit
+Manage billing,Yes,No,No,No,No,No,Yes,No,Approved Release 1 rule
+Create draft Experience,Yes,Yes,Yes,No,No,No,No,No,Approved Release 1 rule
+Upload assets,Yes,Yes,Yes,No,No,No,No,No,Approved Release 1 rule
+Exclude failed Trigger,Yes,Yes,Yes,Yes,Yes,No,No,No,Approved Release 1 rule with audit
+Approve Experience,Yes,Yes,No,Yes,Yes,No,No,No,Configurable approval workflow
+Publish Experience,Yes,Yes,No,No,Yes,No,No,No,Approved Release 1 rule
+Pause Experience,Yes,Yes,No,No,Yes,No,No,No,Approved Release 1 rule
+Rollback Published Version,Yes,Yes,No,No,Yes,No,No,No,Approved Release 1 rule
+View analytics,Yes,Yes,No,No,No,Yes,No,No,Approved Release 1 rule
+View public Experience,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Yes,Approved Release 1 rule
+Access support diagnostics,Yes,Yes,No,No,No,No,No,No,Approved support-safe rule

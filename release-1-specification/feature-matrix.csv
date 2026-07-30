@@ -1,18 +1,16 @@
-Feature,Release 1 Status,Primary Module,Entitlement Gate,Notes
-Image-triggered video Experiences,Included,Experiences,Plan active,Core product
-Multiple triggers per Experience,Included,Triggers,max_triggers_per_experience,Plan-limited
-Workspace members,Included,Workspaces,workspace_members,Role-aware
-Plan entitlements,Included,Billing,Plan active,Config-driven
-Async processing jobs,Included,Media Processing,media_processing_minutes,Durable queue required
-Marker quality scoring,Included,Computer Vision,Plan active,Creator-facing warnings
-Media variants,Included,Assets,storage_bytes,Device-appropriate delivery
-Scanner modes,Included,Scanner,Plan active,Full/Standard/Lightweight/Unsupported
-Fallback Experiences,Included,Public Viewer,Plan active,Required for publish
-Permanent QR/public links,Included,Publishing,Plan active,Stable public keys
-Trigger QR links,Optional,Publishing,Plan active,May ship API-first
-Creator analytics,Included,Analytics,analytics_retention_days,Privacy-safe
-Admin diagnostics,Included,Admin,Support role,Sanitized
-Bulk upload foundation,Foundation,Integrations,bulk_upload,No full importer required
-Managed service workflow,Foundation,Managed Services,managed_service_access,Staff-audited
-Future 3D add-on,Excluded,Add-ons,future_3d,Interface placeholder only
-Future WebXR add-on,Excluded,Add-ons,future_webxr,Interface placeholder only
+Feature,Release 1 Status,Primary Module,Entitlement Gate,Decision status,Notes
+Image-triggered video Experiences,Included,Experiences,Plan active,Approved Release 1 rule,Core product
+Workspace required,Included,Workspaces,Plan active,Approved Release 1 rule,Default personal Workspace for every account
+Organization optional,Foundation,Workspaces,Enterprise policy,Approved Release 1 rule,No enterprise complexity for simple creators
+Multiple triggers per Experience,Included,Triggers,max_triggers_per_experience,Approved Release 1 rule,Plan-limited
+Legacy Project/ProjectPair compatibility,Included,Migration,None,Approved Release 1 rule,No destructive first migration
+Legacy QR preservation,Included,Publishing,None,Approved Release 1 rule,Existing QR keeps working
+Versioned scanner API,Included,Scanner,None,Approved Release 1 rule,Legacy API remains
+Workspace billing,Included,Billing,Plan active,Approved Release 1 rule,Legacy User subscription wrapper during migration
+Async durable processing,Included,Media Processing,media_processing_minutes,Approved Release 1 rule,No heavy request processing target
+Marker quality gates,Included,Computer Vision,Plan active,Approved Release 1 rule,Thresholds configurable after calibration
+Fallback Experiences,Included,Public Viewer,Plan active,Approved Release 1 rule,Required for publish
+Creator scalability tiers,Included,Creator UX,Plan limits,Approved Release 1 rule,1-30 normal 31-100 virtualized 101-1000 bulk-ready
+Private Experiences,Foundation,Security,Plan policy,Recommended default,Public-first unless leadership requires private in R1
+Bulk upload UI,Deferred,Creator UX,bulk_upload,Deferred,Data/API must not block future
+Future 3D/WebXR/Object recognition,Excluded,Add-ons,future flags,Deferred,Must not load in core scanner

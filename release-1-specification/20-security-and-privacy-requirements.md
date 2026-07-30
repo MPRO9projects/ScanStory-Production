@@ -29,3 +29,32 @@ status: draft
 
 Do not collect camera images or biometric identifiers for analytics. Scanner diagnostics must be event-based and sanitized.
 
+## Revision 1 Security Gates
+
+Decision status: Approved Release 1 rule.
+
+| Control | Gate |
+|---|---|
+| CSRF protection | Gate A |
+| Secure session configuration | Gate A |
+| Authorization checks | before new data model |
+| Workspace tenant isolation | before new data model |
+| Admin authorization | Gate A |
+| Login rate limiting | before public staging |
+| OTP rate limiting | before public staging |
+| Password-reset rate limiting | before public staging |
+| Payment idempotency | before public staging |
+| Upload MIME validation | before public staging |
+| Extension validation | before public staging |
+| File-signature validation | before public staging |
+| Safe image decoding | before public staging |
+| Safe video probing | before public staging |
+| Configurable upload size | before public staging |
+| Secret management | before public staging |
+| Debug disabled in production | before public staging |
+| Viewer-safe errors | Gate A |
+| Private Experience authorization | before production |
+| Audit events | before public staging |
+| Data retention | before production |
+| Privacy-safe scanner analytics | before public staging |
+| No storage of camera frames by default | Gate A |

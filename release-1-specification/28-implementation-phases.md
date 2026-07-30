@@ -32,3 +32,8 @@ Plan enforcement, usage metering, creator analytics, operations dashboards, audi
 
 Bulk placeholders, approval workflow, custom branding, custom domain, managed-service support.
 
+## Revision 1 Gate Alignment
+
+Decision status: Approved Release 1 rule.
+
+Implementation planning must begin with Gate A: repository and regression protection. No data model, scanner contract, QR compatibility, billing, or migration work begins until Gate A covers auth, upload, QR, legacy scanner, detection, payment, and admin/user ownership smoke tests.

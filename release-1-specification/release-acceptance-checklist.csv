@@ -1,20 +1,17 @@
-Area,Acceptance Criterion,Status
-Auth,Registration OTP login logout password reset work,Open
-Workspace,Members roles and billing context work,Open
-Entitlements,Plan gates enforce creation upload publish and analytics,Open
-Creation,Creator can create Experience and triggers,Open
-Uploads,Image and video validation works,Open
-Processing,Durable jobs produce media variants and recognition artifacts,Open
-Quality,Marker quality classes and warnings display,Open
-Testing,Creator can preview/test before publish,Open
-Publishing,Stable QR/link points to immutable version,Open
-Rollback,Previous published version can be restored,Open
-Viewer,Public scanner launches from QR/link,Open
-Scanner,Capability modes and diagnostics work,Open
-Recognition,Supported targets trigger correct video overlay,Open
-Fallback,Unsupported/denied/not-found paths show useful fallback,Open
-Analytics,Views recognitions fallback and errors are recorded,Open
-Admin,Support can diagnose processing scanner and billing issues,Open
-Security,Upload auth CSRF rate limits tenant isolation pass,Open
-Performance,Budgets measured and regressions blocked,Open
-Migration,Existing projects URLs and QR remain compatible,Open
+Area,Acceptance Criterion,Status,Decision status
+Gate A,Regression protection exists for auth upload QR scanner detection payment and ownership,Open,Required before implementation
+Workspace,Every account has default personal Workspace mapping,Open,Approved Release 1 rule
+Organization,Organization is optional for Release 1 ordinary creators,Open,Approved Release 1 rule
+Terminology,Creator-facing spec uses Experience/Trigger and legacy compatibility is explicit,Open,Approved Release 1 rule
+Legacy QR,/scanner/<project_id> and /qr/<filename> continue working,Open,Approved Release 1 rule
+Scanner API,Legacy detect routes remain and v1 API contract is versioned,Open,Approved Release 1 rule
+Migration,Dry run row counts checkpoints rollback and no destructive first migration,Open,Approved Release 1 rule
+Lifecycle,Experience and Trigger state matrices match canonical lifecycle,Open,Approved Release 1 rule
+Publishing,Only active Ready Triggers publish; failed active Triggers block unless excluded,Open,Approved Release 1 rule
+Billing,One launch creates at most one Experience View; recognition attempts not billable,Open,Approved Release 1 rule
+Fallback,Fallback exists for all published Experiences and no endless loader states,Open,Approved Release 1 rule
+Creator scalability,30/100/1000 Trigger UX and API requirements are defined,Open,Approved Release 1 rule
+Recognition,Marker quality robustness and runtime gates measured before thresholds final,Open,Approved Release 1 rule
+Performance,Baseline target threshold and regression threshold recorded separately,Open,Approved measurement gate
+Security,CSRF sessions authz tenant upload rate limit privacy gates classified,Open,Approved Release 1 rule
+Managed service,Staff-created Experiences have explicit customer or managed-service Workspace ownership,Open,Approved Release 1 rule

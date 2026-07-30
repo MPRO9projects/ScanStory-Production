@@ -1,0 +1,20 @@
+decision_id,topic,decision,status,owner,implementation_gate,remaining_action
+R1-D001,Release scope,Image-triggered video only,Approved Release 1 rule,Product,Gate A,None
+R1-D002,Terminology,Project maps to Experience and ProjectPair maps to Trigger,Approved Release 1 rule,Architecture,Gate C,None
+R1-D003,Workspace scope,Workspace required and personal Workspace created by default,Approved Release 1 rule,Product/Architecture,Gate C,None
+R1-D004,Organization scope,Organization optional in Release 1,Approved Release 1 rule,Product,Gate C,None
+R1-D005,Billing ownership,Billing Account belongs to Workspace,Approved Release 1 rule,Billing,Gate L,None
+R1-D006,Legacy subscription,Current User subscription fields remain temporarily supported,Approved Release 1 rule,Billing/Architecture,Gate L,Retire only after approval
+R1-D007,QR compatibility,Existing QR and /scanner/<project_id> keep working,Approved Release 1 rule,Architecture,Gate H,None
+R1-D008,Scanner API,Legacy API remains and new API is versioned,Approved Release 1 rule,Architecture,Gate I,Finalize exact schemas during planning
+R1-D009,Migration,Additive no destructive first migration,Approved Release 1 rule,Migration,Gate C,None
+R1-D010,Published versions,Published Version is immutable and switched atomically,Approved Release 1 rule,Architecture,Gate H,None
+R1-D011,Billing unit,Experience View is billable launch and recognition attempts are non-billable,Approved Release 1 rule,Billing,Gate L,None
+R1-D012,Fallback,Fallback required and no endless loader states,Approved Release 1 rule,Product/UX,Gate I,None
+R1-D013,Performance,Measure baseline target acceptance and regression threshold separately,Approved Release 1 rule,Performance,Gate A,Collect baselines
+R1-D014,Security,Security gates are classified before implementation/staging/production,Approved Release 1 rule,Security,Gate A,Implement gates later
+R1-D015,Commercial values,Prices and exact plan limits remain configurable,Configurable policy,Product/Billing,Gate L,Leadership sets values
+R1-D016,Private Experiences,Public-first with signed/private foundation,Recommended default,Product/Security,Gate C,Leadership confirms depth
+R1-D017,Storage provider,Storage interface before provider lock-in,Requires leadership approval,DevOps,Gate F,Choose before AWS staging
+R1-D018,Queue technology,Durable queue required but provider undecided,Requires leadership approval,DevOps,Gate E,Choose before processing implementation
+R1-D019,Future modules,3D/WebXR/object/place/body features deferred and isolated,Deferred,Product,Post R1,None

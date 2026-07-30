@@ -1,10 +1,13 @@
-Area,Budget,Measurement,Release Rule
-Dashboard JS,<250KB compressed where practical,Bundle analysis,Scanner code excluded
-Scanner assets,Lazy after viewer start,Network waterfall,No creator-page loading
-OpenCV/WASM load,Timeout plus fallback,RUM event,No infinite spinner
-Camera permission,Requested only after start,UX test,No eager prompt
-Recognition latency,Proposed SLO to validate,RUM/server timing,Must emit diagnostics
-Fallback availability,Always available,End-to-end test,Required for publish
-Analytics ingestion,Non-blocking,Trace/event queue,No viewer blocking
-Media delivery,Adaptive variants,Network/device tests,Mode-aware delivery
-Processing jobs,Async durable queue,Queue metrics,No unmanaged daemon threads
+Area,Measurement,Environment,Proposed target,Measured baseline,Acceptance threshold,Blocking regression threshold,Decision status
+Dashboard initial payload,Bundle/network size,Local and staging,Configurable target,Required before enforcement,TBD from baseline,TBD from baseline,Approved measurement gate
+Experience-list query latency,p50/p95,Local staging load-test,Configurable target,Required before enforcement,TBD,TBD,Approved measurement gate
+Trigger-list query latency,p50/p95 at 30/100/1000 triggers,Local staging load-test,Configurable target,Required before enforcement,TBD,TBD,Approved measurement gate
+Upload response time,HTTP timing,Local and staging,Configurable target,Required before enforcement,TBD,TBD,Approved measurement gate
+Status-update latency,Polling/event latency,Local and staging,Configurable target,Required before enforcement,TBD,TBD,Approved measurement gate
+Scanner dependency load,OpenCV/WASM/network timing,Mid Android iPhone staging,Configurable target,Required before enforcement,TBD,TBD,Approved measurement gate
+Camera-ready time,Runtime timing,Mid Android iPhone staging,Configurable target,Required before enforcement,TBD,TBD,Approved measurement gate
+First-recognition time,p50/p95,Mid Android iPhone staging,Configurable target,Required before enforcement,TBD,TBD,Approved measurement gate
+Tracking FPS,FPS sample,Mid Android iPhone,Configurable target,Required before enforcement,TBD,TBD,Approved measurement gate
+Detection latency,p50/p95,Staging load-test,Configurable target,Required before enforcement,TBD,TBD,Approved measurement gate
+Queue age,Worker metric,Staging load-test,Configurable target,Required after queue exists,TBD,TBD,Approved measurement gate
+Fallback load,Runtime timing,Device and staging,Configurable target,Required before enforcement,TBD,TBD,Approved measurement gate
