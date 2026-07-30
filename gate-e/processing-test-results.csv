@@ -1,0 +1,4 @@
+suite,total,passed,failed,skipped,xfailed,warnings,status
+tests/gate_e,17,17,0,0,0,2,passed
+models_migrations_compatibility_gate_e,50,50,0,0,0,15,passed
+final_full_suite,114,110,0,0,4,94,passed

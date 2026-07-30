@@ -1,0 +1,13 @@
+from_status,to_status,allowed
+pending,ready,true
+ready,claimed,true
+claimed,running,true
+running,succeeded,true
+running,failed_retryable,true
+failed_retryable,retry_scheduled,true
+retry_scheduled,ready,true
+running,failed_terminal,true
+pending,cancelled,true
+ready,cancelled,true
+succeeded,ready,false
+running,ready,false

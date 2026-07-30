@@ -1,0 +1,13 @@
+failure,classification,policy
+temporary file lock,retryable,schedule retry
+transient database issue,retryable,schedule retry
+temporary subprocess failure,retryable,schedule retry
+worker interruption,retryable,lease expiry then reclaim
+temporary storage failure,retryable,schedule retry
+invalid image,terminal,do not retry forever
+corrupt video,terminal,creator-safe failure
+unsupported media,terminal,creator-safe failure
+missing required source,terminal,needs attention
+path outside allowed root,terminal,security failure
+invalid public destination,terminal,security failure
+repeated artifact validation failure,terminal,manual review

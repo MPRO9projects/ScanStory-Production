@@ -1,0 +1,12 @@
+operation,local_filesystem,legacy_compatibility,notes
+put_file,implemented,no,atomic replacement
+get_file,implemented,read_only,copy out
+open_file,implemented,read_only,root checked
+exists,implemented,implemented,missing files reported
+delete,implemented,no,not for legacy roots
+copy,implemented,no,within storage root
+move,implemented,no,copy then delete
+get_size,implemented,no,metadata support
+get_metadata,implemented,no,size content type hash
+generate_access_url,implemented,no,local URL placeholder
+list_prefix,implemented,no,bounded by root

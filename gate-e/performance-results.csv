@@ -1,0 +1,6 @@
+surface,status,notes
+scanner imports,passed,processing modules not imported by app
+scanner execution,passed,no processing route wiring
+storage hashing,passed,streaming reads
+worker startup,passed,explicit command only
+performance smoke,passed,covered by full regression

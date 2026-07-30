@@ -1,0 +1,11 @@
+job_type,status
+validate_reference_image,foundation implemented
+probe_video,foundation implemented
+generate_poster,deferred foundation only
+extract_recognition_artifact,foundation implemented
+test_marker_robustness,deterministic placeholder
+generate_experience_qr,foundation implemented
+generate_trigger_qr,foundation implemented
+regenerate_recognition_artifact,foundation implemented
+regenerate_qr_asset,foundation implemented
+verify_processing_readiness,foundation implemented

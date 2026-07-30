@@ -759,7 +759,17 @@ TRIGGER_STATUSES = {
 ASSET_TYPES = {"image", "video", "poster", "fallback", "recognition_artifact"}
 TRIGGER_ASSET_ROLES = {"reference_image", "video", "poster", "fallback"}
 RECOGNITION_ARTIFACT_TYPES = {"feature_npz"}
-PROCESSING_JOB_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
+PROCESSING_JOB_STATUSES = {
+    "pending",
+    "ready",
+    "claimed",
+    "running",
+    "succeeded",
+    "failed_retryable",
+    "retry_scheduled",
+    "failed_terminal",
+    "cancelled",
+}
 MIGRATION_CHECKPOINT_STATUSES = {"pending", "dry_run", "completed", "failed", "skipped"}
 
 
@@ -1030,12 +1040,19 @@ class ProcessingJob(db.Model):
     experience_id = db.Column(db.Integer, db.ForeignKey("experiences.id"), nullable=True, index=True)
     trigger_id = db.Column(db.Integer, db.ForeignKey("triggers.id"), nullable=True, index=True)
     job_type = db.Column(db.String(80), nullable=False)
-    status = db.Column(db.String(30), default="queued", nullable=False)
+    status = db.Column(db.String(30), default="pending", nullable=False)
     progress = db.Column(db.Integer, default=0, nullable=False)
     attempt_count = db.Column(db.Integer, default=0, nullable=False)
+    max_attempts = db.Column(db.Integer, default=3, nullable=False)
+    priority = db.Column(db.Integer, default=100, nullable=False)
     idempotency_key = db.Column(db.String(128), nullable=False, index=True)
+    available_at = db.Column(db.DateTime, nullable=True)
+    claimed_at = db.Column(db.DateTime, nullable=True)
+    claimed_by = db.Column(db.String(128), nullable=True)
+    lease_expires_at = db.Column(db.DateTime, nullable=True)
     error_code = db.Column(db.String(80), nullable=True)
     error_message = db.Column(db.Text, nullable=True)
+    internal_diagnostics = db.Column(db.Text, nullable=True)
     created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
     started_at = db.Column(db.DateTime, nullable=True)
     completed_at = db.Column(db.DateTime, nullable=True)
