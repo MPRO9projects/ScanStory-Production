@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Create Experience - ScanStory</title>
+  <style>
+    body{font-family:Arial,sans-serif;margin:0;color:#18212f;background:#f7f8fb}
+    main{max-width:720px;margin:0 auto;padding:20px}
+    form{display:grid;gap:12px;background:white;border:1px solid #d9dfeb;border-radius:8px;padding:16px}
+    input,textarea{min-height:40px;border:1px solid #b8c1d1;border-radius:6px;padding:8px}
+    button,a{min-height:44px}
+    button,.button{border:1px solid #1f6feb;background:#1f6feb;color:white;padding:10px 14px;border-radius:6px;text-decoration:none}
+    .error{border-left:4px solid #b42318;background:#fff1f0;padding:10px}
+  </style>
+</head>
+<body>
+<main data-page="experience-new">
+  <a href="{{ url_for('experience_creator.experience_list') }}">Back to Experiences</a>
+  <h1>Create Experience</h1>
+  {% if error %}<p id="name-error" class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" novalidate>
+    <label for="name">Experience name</label>
+    <input id="name" name="name" value="{{ name }}" maxlength="255" required {% if error %}aria-describedby="name-error" autofocus{% endif %}>
+    <label for="description">Description</label>
+    <textarea id="description" name="description" rows="5">{{ description or '' }}</textarea>
+    <button type="submit">Create Experience</button>
+  </form>
+</main>
+</body>
+</html>

@@ -85,6 +85,9 @@ app.config.update(
 
 # ✅ Initialize SQLAlchemy ONLY ONCE
 db.init_app(app)
+from experience_creator import experience_creator_bp
+
+app.register_blueprint(experience_creator_bp)
 
 # Ensure correct MIME type for wasm
 mimetypes.add_type("application/wasm", ".wasm")

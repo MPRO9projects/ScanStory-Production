@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Add Triggers - ScanStory</title>
+  <style>
+    body{font-family:Arial,sans-serif;margin:0;color:#18212f;background:#f7f8fb}
+    main{max-width:760px;margin:0 auto;padding:20px}
+    form{display:grid;gap:12px;background:white;border:1px solid #d9dfeb;border-radius:8px;padding:16px}
+    input,textarea{min-height:40px;border:1px solid #b8c1d1;border-radius:6px;padding:8px}
+    button,a{min-height:44px}
+    button,.button{border:1px solid #1f6feb;background:#1f6feb;color:white;padding:10px 14px;border-radius:6px;text-decoration:none}
+    .error{border-left:4px solid #b42318;background:#fff1f0;padding:10px}
+  </style>
+</head>
+<body>
+<main data-page="trigger-new">
+  <a href="{{ url_for('experience_creator.experience_detail', experience_id=experience.id) }}">Back to Experience</a>
+  <h1>Add Triggers</h1>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" enctype="multipart/form-data">
+    <label for="reference_images">Reference image files</label>
+    <input id="reference_images" name="reference_images" type="file" accept="image/*" multiple required>
+    <label for="videos">Video files</label>
+    <input id="videos" name="videos" type="file" accept="video/*" multiple required>
+    <label for="labels">Optional labels, one per line</label>
+    <textarea id="labels" name="labels" rows="4"></textarea>
+    <p role="status">Files are paired by order. Matching image and video counts are required.</p>
+    <button type="submit">Queue Trigger Processing</button>
+  </form>
+</main>
+</body>
+</html>

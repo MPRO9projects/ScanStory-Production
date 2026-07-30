@@ -1,0 +1,13 @@
+route,methods,flag,auth,notes
+/experiences,GET,ENABLE_EXPERIENCE_CREATOR,user,Experience list
+/experiences/new,GET POST,ENABLE_EXPERIENCE_CREATOR,user,Create Draft Experience
+/experiences/<experience_id>,GET,ENABLE_EXPERIENCE_CREATOR,user,Experience detail
+/experiences/<experience_id>/triggers/new,GET POST,ENABLE_TRIGGER_MANAGEMENT,user,Add one or many Triggers
+/experiences/<experience_id>/processing-status,GET,ENABLE_PROCESSING_STATUS_UI,user,Bounded status JSON
+/experiences/<experience_id>/triggers/<trigger_id>/retry,POST,ENABLE_TRIGGER_MANAGEMENT,user,Scoped retry
+/experiences/<experience_id>/triggers/<trigger_id>/replace-image,POST,ENABLE_TRIGGER_MANAGEMENT,user,Selective image processing
+/experiences/<experience_id>/triggers/<trigger_id>/replace-video,POST,ENABLE_TRIGGER_MANAGEMENT,user,Video readiness only
+/experiences/<experience_id>/triggers/<trigger_id>/regenerate-recognition,POST,ENABLE_TRIGGER_MANAGEMENT,user,Selected Trigger only
+/experiences/<experience_id>/triggers/<trigger_id>/exclude,POST,ENABLE_TRIGGER_MANAGEMENT,user,Soft exclude
+/experiences/<experience_id>/triggers/<trigger_id>/reactivate,POST,ENABLE_TRIGGER_MANAGEMENT,user,Reactivate and queue processing
+/experiences/<experience_id>/regenerate-qr,POST,ENABLE_EXPERIENCE_QR_ASSET,user,QR asset only

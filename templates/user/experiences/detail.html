@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ experience.name }} - ScanStory</title>
+  <style>
+    body{font-family:Arial,sans-serif;margin:0;color:#18212f;background:#f7f8fb}
+    main{max-width:1180px;margin:0 auto;padding:20px}
+    header,.actions{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+    button,a{min-height:44px}
+    button,.button{border:1px solid #1f6feb;background:#1f6feb;color:white;padding:10px 14px;border-radius:6px;text-decoration:none;cursor:pointer}
+    .secondary{background:white;color:#1f2937;border-color:#b8c1d1}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-top:16px}
+    .card{background:white;border:1px solid #d9dfeb;border-radius:8px;padding:14px}
+    .meta{color:#52606f;font-size:14px}
+    .status{font-weight:700}
+    progress{width:100%;height:18px}
+    input{max-width:100%;min-height:40px}
+    form.inline{display:inline}
+    @media(max-width:480px){main{padding:12px}.actions,.inline,button,.button{width:100%}}
+  </style>
+</head>
+<body>
+<main data-page="experience-detail">
+  <a href="{{ url_for('experience_creator.experience_list') }}">Back to Experiences</a>
+  <header>
+    <div>
+      <h1>{{ experience.name }}</h1>
+      <p>{{ experience.description or 'No description' }}</p>
+      {% if statuses.experience %}
+        <p class="status" role="status" aria-live="polite">{{ statuses.experience.summary }}</p>
+      {% else %}
+        <p class="status" role="status">Draft</p>
+      {% endif %}
+    </div>
+    <div class="actions">
+      {% if trigger_management %}
+        <a class="button" href="{{ url_for('experience_creator.trigger_new', experience_id=experience.id) }}">Add Triggers</a>
+      {% endif %}
+      {% if status_ui %}
+        <a class="button secondary" href="{{ url_for('experience_creator.processing_status', experience_id=experience.id) }}">Refresh Status</a>
+      {% endif %}
+    </div>
+  </header>
+
+  {% if qr_enabled %}
+    <section class="card" aria-label="QR asset">
+      <h2>QR Asset</h2>
+      <p role="status">QR asset prepared. Public publishing is not yet enabled.</p>
+      <p class="meta">Permanent destination: {{ destination }}</p>
+      <form method="post" action="{{ url_for('experience_creator.regenerate_qr', experience_id=experience.id) }}">
+        <button type="submit">Regenerate QR Asset</button>
+      </form>
+    </section>
+  {% endif %}
+
+  <section class="grid" aria-label="Trigger cards">
+    {% for trigger in triggers %}
+      {% set status = statuses.triggers.get(trigger.id) if statuses.triggers else none %}
+      {% set image = asset_for(trigger, 'reference_image') %}
+      {% set video = asset_for(trigger, 'video') %}
+      <article class="card">
+        <h2>{{ trigger.name }}</h2>
+        <p class="status" role="status">{{ status.status if status else trigger.status.replace('_',' ') }}</p>
+        <progress max="100" value="{{ status.progress if status else 0 }}">{{ status.progress if status else 0 }}%</progress>
+        <p class="meta">Reference image: {{ image.original_filename if image else 'Missing' }}</p>
+        <p class="meta">Video: {{ video.original_filename if video else 'Missing' }}</p>
+        <p>{{ status.creator_message if status else 'Processing has not started.' }}</p>
+        {% if status and status.warnings %}
+          <p role="alert">{{ status.warnings[0] }}</p>
+        {% endif %}
+        <p class="meta">Recognition artifact version: current queued artifact</p>
+        <p class="meta">Last processed: {{ trigger.updated_at }}</p>
+        {% if trigger_management %}
+          <div class="actions" aria-label="Trigger actions for {{ trigger.name }}">
+            <form class="inline" method="post" action="{{ url_for('experience_creator.retry_trigger', experience_id=experience.id, trigger_id=trigger.id) }}"><button type="submit">Retry</button></form>
+            <form class="inline" method="post" enctype="multipart/form-data" action="{{ url_for('experience_creator.replace_image', experience_id=experience.id, trigger_id=trigger.id) }}">
+              <label for="replacement-image-{{ trigger.id }}">Replace image</label>
+              <input id="replacement-image-{{ trigger.id }}" name="replacement_image" type="file" accept="image/*">
+              <button type="submit">Replace Image</button>
+            </form>
+            <form class="inline" method="post" enctype="multipart/form-data" action="{{ url_for('experience_creator.replace_video', experience_id=experience.id, trigger_id=trigger.id) }}">
+              <label for="replacement-video-{{ trigger.id }}">Replace video</label>
+              <input id="replacement-video-{{ trigger.id }}" name="replacement_video" type="file" accept="video/*">
+              <button type="submit">Replace Video</button>
+            </form>
+            <form class="inline" method="post" action="{{ url_for('experience_creator.regenerate_recognition', experience_id=experience.id, trigger_id=trigger.id) }}"><button type="submit">Regenerate Recognition</button></form>
+            {% if trigger.is_excluded %}
+              <form class="inline" method="post" action="{{ url_for('experience_creator.reactivate_trigger', experience_id=experience.id, trigger_id=trigger.id) }}"><button type="submit">Reactivate</button></form>
+            {% else %}
+              <form class="inline" method="post" action="{{ url_for('experience_creator.exclude_trigger', experience_id=experience.id, trigger_id=trigger.id) }}"><button type="submit">Exclude Trigger</button></form>
+            {% endif %}
+          </div>
+        {% endif %}
+      </article>
+    {% else %}
+      <section class="card" role="status"><h2>No Triggers yet</h2><p>Add reference image and video pairs to start processing.</p></section>
+    {% endfor %}
+  </section>
+
+  <section class="card" aria-label="Processing history">
+    <h2>Processing History</h2>
+    {% for event in events %}
+      <p><strong>{{ event.event_type.replace('_',' ') }}</strong>: {{ event.creator_message or 'Update recorded' }} <span class="meta">{{ event.created_at }}</span></p>
+    {% else %}
+      <p role="status">No processing history yet.</p>
+    {% endfor %}
+  </section>
+</main>
+</body>
+</html>

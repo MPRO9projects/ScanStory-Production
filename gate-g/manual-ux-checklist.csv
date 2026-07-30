@@ -1,0 +1,11 @@
+surface,status,notes
+Chrome Windows,not executed,manual browser validation deferred
+Edge Windows,not executed,manual browser validation deferred
+Chrome Android,not executed,manual browser validation deferred
+Samsung Internet,not executed,manual browser validation deferred
+Safari iPhone,not executed,manual browser validation deferred
+Desktop width,covered by template/test inspection,no real browser screenshot
+Tablet width,covered by responsive CSS,no real browser screenshot
+375 px phone,covered by responsive CSS,no real browser screenshot
+320 px phone,covered by responsive CSS,no real browser screenshot
+Keyboard access,baseline present,buttons and links are native controls

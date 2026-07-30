@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Experiences - ScanStory</title>
+  <style>
+    body{font-family:Arial,sans-serif;margin:0;color:#18212f;background:#f7f8fb}
+    main{max-width:1120px;margin:0 auto;padding:20px}
+    header,.toolbar,.pager{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+    a,button{min-height:44px}
+    .button,button{border:1px solid #1f6feb;background:#1f6feb;color:white;padding:10px 14px;border-radius:6px;text-decoration:none;cursor:pointer}
+    input,select,textarea{min-height:40px;border:1px solid #b8c1d1;border-radius:6px;padding:8px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-top:16px}
+    .card{background:white;border:1px solid #d9dfeb;border-radius:8px;padding:14px}
+    .meta{color:#52606f;font-size:14px}
+    .counts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;margin:10px 0}
+    .status{font-weight:700}
+    @media(max-width:420px){main{padding:12px}.toolbar form{display:grid;width:100%;gap:8px}.button,button{width:100%}}
+  </style>
+</head>
+<body>
+<main data-page="experience-list">
+  <header>
+    <div>
+      <h1>Experiences</h1>
+      <p class="meta" role="status">{{ total }} total Experiences</p>
+    </div>
+    <a class="button" href="{{ url_for('experience_creator.experience_new') }}">Create Experience</a>
+  </header>
+
+  <section class="toolbar" aria-label="Experience filters">
+    <form method="get">
+      <label for="q">Search</label>
+      <input id="q" name="q" value="{{ search }}" placeholder="Experience name">
+      <label for="status">Status</label>
+      <select id="status" name="status">
+        <option value="">All statuses</option>
+        {% for value in ['draft','processing','needs_attention','ready_to_test','ready_to_publish'] %}
+          <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ value.replace('_',' ') }}</option>
+        {% endfor %}
+      </select>
+      <label for="sort">Sort</label>
+      <select id="sort" name="sort">
+        <option value="updated_desc" {% if sort == 'updated_desc' %}selected{% endif %}>Recently updated</option>
+        <option value="created_asc" {% if sort == 'created_asc' %}selected{% endif %}>Oldest first</option>
+        <option value="name" {% if sort == 'name' %}selected{% endif %}>Name</option>
+      </select>
+      <button type="submit">Apply</button>
+    </form>
+  </section>
+
+  {% if not rows %}
+    <section class="card" role="status"><h2>No Experiences yet</h2><p>Create an Experience to add image and video Triggers.</p></section>
+  {% endif %}
+
+  <section class="grid" aria-label="Experience results">
+    {% for row in rows %}
+      {% set exp = row[0] %}
+      <article class="card">
+        <h2><a href="{{ url_for('experience_creator.experience_detail', experience_id=exp.id) }}">{{ exp.name }}</a></h2>
+        <p class="status">Status: {{ exp.status.replace('_',' ') }}</p>
+        <div class="counts" aria-label="Processing summary">
+          <span>{{ row.trigger_count or 0 }} Triggers</span>
+          <span>{{ row.ready_count or 0 }} Ready</span>
+          <span>{{ row.processing_count or 0 }} Processing</span>
+          <span>{{ row.needs_attention_count or 0 }} Needs Attention</span>
+          <span>{{ row.excluded_count or 0 }} Excluded</span>
+          <span>{% if qr_enabled %}QR prepared foundation{% else %}QR hidden{% endif %}</span>
+        </div>
+        <p class="meta">Creator: {{ exp.created_by_user.full_name if exp.created_by_user else 'Unknown' }}</p>
+        <p class="meta">Updated: {{ exp.updated_at }}</p>
+      </article>
+    {% endfor %}
+  </section>
+
+  <nav class="pager" aria-label="Pagination">
+    {% if page > 1 %}
+      <a class="button" href="{{ url_for('experience_creator.experience_list', page=page-1, per_page=per_page, q=search, status=status, sort=sort) }}">Previous</a>
+    {% endif %}
+    <span>Page {{ page }}</span>
+    {% if page * per_page < total %}
+      <a class="button" href="{{ url_for('experience_creator.experience_list', page=page+1, per_page=per_page, q=search, status=status, sort=sort) }}">Next</a>
+    {% endif %}
+  </nav>
+</main>
+</body>
+</html>

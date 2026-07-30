@@ -1,0 +1,5 @@
+flag,default,enabled_behavior,disabled_behavior
+ENABLE_EXPERIENCE_CREATOR,false,Experience routes available to authenticated members,Routes return 404
+ENABLE_TRIGGER_MANAGEMENT,false,Trigger create/actions available,Trigger create/actions return 404
+ENABLE_PROCESSING_STATUS_UI,false,Status UI and JSON available,Status route returns 404 and detail uses static status
+ENABLE_EXPERIENCE_QR_ASSET,false,QR foundation controls visible,QR controls hidden and route returns 404
