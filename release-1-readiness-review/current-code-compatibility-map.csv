@@ -1,0 +1,20 @@
+Target Entity,Current Structure,Additive Fields,New Table,Migration,Replacement,Risk,Backward Compatibility
+Organization,None,None,Yes,Backfill default org,No,Medium,Users assigned to default org
+Workspace,None,None,Yes,Backfill from user/admin ownership,No,High,Legacy owner fields remain
+Workspace Member,User,role metadata,Yes,Backfill owner membership,No,High,User login unchanged
+Billing Account,User subscription fields,workspace_id,Yes,Map user subscription,No,High,User billing wrapper
+Experience,Project,public_key/status,Maybe,Map Project,No,High,/project and /scanner remain
+Experience Version,None,current_version_id,Yes,Backfill published legacy version,No,High,Legacy scanner reads old Project
+Trigger,ProjectPair,quality/fallback keys,Maybe,Map pair,No,Medium,pair_index preserved
+Asset,File paths,asset_id/checksum,Yes,Backfill images/videos,No,High,Old media routes preserved
+Recognition Artifact,.npz file,None,Yes,Backfill artifact rows,No,Medium,Legacy load_features works
+Processing Job,Daemon thread status fields,job_id,Yes,Backfill not required,Yes later,High,Legacy status fields kept
+Published Version,Project scanner_url QR fields,published_version_id,Yes,Backfill current Project,No,High,Old QR remains valid
+Public Experience Key,project_id URL,public_key,Maybe,Generate keys,No,High,/scanner/<id> alias
+Public Trigger Key,None,public_trigger_key,Maybe,Generate if enabled,No,Medium,Optional
+Experience Session,ScanLog session_id,None,Yes,Backfill from logs,No,Medium,ScanLog reports preserved
+Experience View,scans_used/ScanLog,None,Yes,Backfill usage,No,High,Do not bill attempts
+Recognition Event,ScanLog partial,None,Yes,Backfill if useful,No,Medium,Legacy logs unchanged
+Usage Record,User counters,None,Yes,Backfill from logs/payments,No,High,User counters stay until cutover
+Entitlement,SubscriptionPlan limits,None,Yes,Backfill plan entitlements,No,High,Plan fields remain
+Contract Override,Admin edits,None,Yes,Optional backfill,No,Medium,Admin limit edits preserved

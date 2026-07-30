@@ -1,0 +1,16 @@
+Target,Currently Measured,Measurable Locally,Staging Required,Production Required,Feasibility,Notes
+Dashboard JS under 250KB,No,Yes,No,No,Aggressive,Needs bundle tooling
+Scanner excluded from dashboard,Partly,Yes,No,No,Realistic,Scanner currently separate template
+Scanner assets lazy-loaded,Partly,Yes,Yes,No,Realistic,SW caches OpenCV only after scanner use
+OpenCV/WASM timeout retry fallback,Partly,Yes,Yes,No,Achievable,Fallback needs detail
+Adaptive media delivery,No,Yes,Yes,No,Unsupported by current code,Requires variants
+Recognition latency budget,No,Yes,Yes,Yes,Too vague,Needs target
+Tracking FPS,No,Yes,Yes,Yes,Requires device testing,Mobile matrix needed
+Memory usage,No,Yes,Yes,Yes,Requires device testing,Weak devices important
+Detection request latency,Partly logs,Yes,Yes,Yes,Measurable,OpenCV in request is risk
+Queue delay,No,No,Yes,Yes,Unsupported,No durable queue yet
+Feature extraction time,Partly fields,Yes,Yes,No,Measurable,Fields exist on ProjectPair
+Video processing,Partly fields,Yes,Yes,No,Measurable,Needs actual processing path
+QR generation,No,Yes,No,No,Measurable,Currently upload-time
+Admin list queries,No,Yes,Yes,Yes,Measurable,Unbounded lists noted
+Creator 1000 triggers,No,Yes,Yes,No,Aggressive,Needs UX architecture

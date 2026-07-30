@@ -1,0 +1,12 @@
+Decision,Classification,Options,Recommended Option,Consequence,Owner,Gate,Deadline
+Workspace billing ownership,Before implementation,"User-owned; Workspace-owned; hybrid","Workspace-owned with legacy User wrapper","Affects DB and billing migration","Product/Architecture",Gate C,Before data model
+Scanner contract versioning,Before implementation,"Replace; preserve legacy plus v1","Preserve legacy plus v1","Protects QR/scanner","Architecture",Gate A,Before scanner changes
+QR compatibility,Before implementation,"Redirect; alias; preserve route","Preserve route and add public keys","Protects printed QR","Architecture",Gate H,Before publishing work
+Private Experience policy,Before implementation,"Public only; signed links; auth required","Public only plus future signed model unless business requires private","Affects auth and URLs","Product/Security",Gate C,Before routes
+Fallback billing,Before implementation,"Free; count as view; separate unit","Count launch as Experience View","Affects billing metrics","Product/Billing",Gate L,Before metering
+Overage/grace,Before implementation,"Hard stop; soft limit; contract override","Soft limit for live Experiences","Avoids breaking live campaigns","Product/Billing",Gate L,Before billing
+Storage provider,Before AWS staging,"Local; S3-compatible; AWS S3","Storage interface then S3 staging","Affects deployment","DevOps",Gate F,Before staging
+Queue technology,Before AWS staging,"RQ; Celery; managed queue","Choose after local proof","Affects workers","DevOps/Architecture",Gate E,Before jobs
+Malware scanning,Before AWS staging,"None; provider; integration point","Integration point now provider later","Affects uploads","Security",Gate N,Before staging
+Default fallback template,During implementation,"Video; gallery; creator message","Direct video with creator message","Low-risk UX","Product",Gate I,During viewer work
+Education verification,After Release 1,"Manual; domain; provider","Manual after Release 1","Not core scanner","Product",Post R1,After release
