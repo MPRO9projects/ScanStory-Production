@@ -1,0 +1,5 @@
+test,severity,flow,desired_behavior,current_behavior,future_gate
+test_security_headers_present,Medium,all HTTP responses,security headers applied via after_request,helper exists but not registered,security hardening
+test_csrf_should_be_enabled_for_mutating_routes,High,mutating form routes,CSRF enabled/enforced,WTF_CSRF_ENABLED disabled globally,security hardening
+test_upload_should_require_file_signature_validation,High,upload,file signatures verified before save,signature validation not enforced,upload security
+test_otp_bruteforce_throttling_required,High,OTP verification,rate limit failed OTP attempts,no OTP brute-force throttling,auth security

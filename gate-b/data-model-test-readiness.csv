@@ -1,0 +1,8 @@
+future_case,status,notes
+existing user to default Workspace,placeholder,fixture can add Workspace later
+existing Project to Experience mapping,placeholder,legacy Project fixture exists
+existing ProjectPair to Trigger mapping,placeholder,legacy ProjectPair fixture exists
+legacy scanner URL resolution,placeholder,scanner route tests exist
+additive migration rollback,placeholder,requires migration gate
+migration idempotency,placeholder,requires migration gate
+dual-read behavior,placeholder,requires compatibility data model gate

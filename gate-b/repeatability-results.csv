@@ -1,0 +1,4 @@
+run,total,passed,failed,skipped,xfailed,duration,temp_cleanup,database_cleanup,unexpected_network_calls,warnings,status
+1,64 collected / 63 selected,59,0,1 deselected,4,181.59s,pytest tmp roots,per-test sqlite schema,0,78,passed
+2,12,8,0,0,4,27.20s,pytest tmp roots,per-test sqlite schema,0,10,passed
+3,64 collected / 63 selected,59,0,1 deselected,4,178.05s,pytest tmp roots,per-test sqlite schema,0,78,passed

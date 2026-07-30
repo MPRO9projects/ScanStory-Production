@@ -1,0 +1,9 @@
+gap,classification,gate_b_action,status
+Full password-reset flow,Must resolve in Gate B,Added password reset tests,Resolved
+Fuller admin CRUD coverage,Must resolve in Gate B,Added admin and plan tests,Improved
+Actual browser camera behavior,Requires manual device testing,Kept in manual matrix,Deferred
+Actual CV accuracy,Must remain documented for scanner gate,Kept out of normal tests,Deferred
+Deeper upload edge cases,Must resolve in Gate B,Added upload edge baseline tests,Improved
+Four expected failures,Must remain documented for security gate,Expanded xfail metadata,Resolved for planning
+Five documented security gaps,Must remain documented for security gate,Registered and xfailed where executable,Documented
+Mobile/browser tests not executed,Requires manual device testing,Kept as manual status,Deferred

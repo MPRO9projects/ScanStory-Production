@@ -1,5 +1,7 @@
 import importlib
 import os
+import smtplib
+import socket
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -7,6 +9,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 from werkzeug.security import generate_password_hash
+
+
+def _assert_under(child, parent):
+    child_path = Path(child).resolve()
+    parent_path = Path(parent).resolve()
+    assert child_path == parent_path or parent_path in child_path.parents
 
 
 @pytest.fixture()
@@ -33,14 +41,41 @@ def isolated_app(tmp_path, monkeypatch):
     app_module = importlib.import_module("app")
     app_module.app.config.update(TESTING=True, WTF_CSRF_ENABLED=False)
 
+    assert os.environ.get("SCANSTORY_TESTING") == "1"
+    assert app_module.app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite:///")
+    _assert_under(app_module.DATA_DIR, tmp_path)
+    _assert_under(app_module.ADMIN_DATA_DIR, tmp_path)
+    _assert_under(app_module.STATIC_UPLOADS_DIR, tmp_path)
+    for path in [
+        app_module.IMAGES_DIR, app_module.VIDEOS_DIR, app_module.FEATURES_DIR, app_module.QR_DIR,
+        app_module.ADMIN_IMAGES_DIR, app_module.ADMIN_VIDEOS_DIR, app_module.ADMIN_FEATURES_DIR,
+        app_module.ADMIN_QR_DIR,
+    ]:
+        _assert_under(path, tmp_path)
+
     sent_emails = []
+    blocked_external_calls = []
 
     def fake_send_email(to_email, subject, html_body):
         sent_emails.append({"to": to_email, "subject": subject, "html": html_body})
         return True
 
+    def blocked_smtp(*args, **kwargs):
+        blocked_external_calls.append({"service": "smtp", "args": args})
+        raise AssertionError("Unmocked SMTP call blocked in tests")
+
+    def blocked_requests(self, method, url, *args, **kwargs):
+        if str(url).startswith(("http://localhost", "http://127.0.0.1")):
+            raise AssertionError("Backend external HTTP call attempted in unit test")
+        blocked_external_calls.append({"service": "http", "method": method, "url": url})
+        raise AssertionError(f"Unmocked external HTTP call blocked: {method} {url}")
+
     monkeypatch.setattr(app_module, "send_email_smtp", fake_send_email)
     monkeypatch.setattr(app_module, "verify_recaptcha_v3", lambda action: (True, "OK"))
+    monkeypatch.setattr(smtplib, "SMTP", blocked_smtp)
+    monkeypatch.setattr(smtplib, "SMTP_SSL", blocked_smtp)
+    monkeypatch.setattr(app_module.requests.sessions.Session, "request", blocked_requests)
+    app_module._gate_b_blocked_external_calls = blocked_external_calls
 
     ctx = app_module.app.app_context()
     ctx.push()
@@ -144,6 +179,21 @@ def admin(app_module):
 
 
 @pytest.fixture()
+def secondary_admin(app_module, db_session, admin):
+    secondary = app_module.Admin(
+        email="secondary-admin@example.com",
+        name="Secondary Admin",
+        password_hash=generate_password_hash("AdminPass123"),
+        role="admin",
+        is_active=True,
+        created_by=admin.id,
+    )
+    db_session.add(secondary)
+    db_session.commit()
+    return secondary
+
+
+@pytest.fixture()
 def project_with_pair(app_module, db_session, normal_user, tmp_path):
     project = app_module.Project(
         name="Baseline Project",
@@ -228,3 +278,13 @@ def login_admin(client, admin):
     with client.session_transaction() as sess:
         sess["admin_id"] = admin.id
     return admin
+
+
+@pytest.fixture()
+def invalid_binary_file():
+    return b"not a real image or video"
+
+
+@pytest.fixture()
+def path_traversal_filename():
+    return "..\\..\\evil.jpg"
