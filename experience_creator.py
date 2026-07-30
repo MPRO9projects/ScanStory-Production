@@ -375,8 +375,12 @@ def _set_public_state(experience_id, state):
 @experience_creator_bp.route("/e/<public_key>")
 def public_experience(public_key):
     from publishing import resolve_published_experience
+    from scanner_runtime import create_viewer_session_id
 
     result = resolve_published_experience(public_key)
+    if result["status"] == "published" and not session.get("experience_viewer_session_id"):
+        session["experience_viewer_session_id"] = create_viewer_session_id()
+    result["viewer_session_id"] = session.get("experience_viewer_session_id")
     if result["status"] != "published":
         return render_template("user/experiences/public_unavailable.html", result=result), result["http_status"]
     return render_template("user/experiences/public_viewer.html", result=result), 200

@@ -1,0 +1,7 @@
+case,result,notes
+valid_detection_response,passed,bounding coordinates accepted
+invalid_detection_response,passed,rejected and bounded
+overlapping_request,passed,blocked by request policy
+stale_response,passed,ignored by request id
+request_timeout,passed,enters timeout handling
+physical_marker_rehearsal,not_executed,requires device and printed/displayed target

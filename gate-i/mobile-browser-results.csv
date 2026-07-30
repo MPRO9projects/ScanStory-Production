@@ -1,0 +1,7 @@
+browser,platform,result,notes
+Chrome,Windows,not_executed,local automated tests passed only
+Edge,Windows,not_executed,local automated tests passed only
+Chrome,Android,not_executed,physical device required
+Samsung Internet,Android,not_executed,physical device required
+Safari,iPhone,not_executed,physical device required
+

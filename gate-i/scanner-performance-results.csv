@@ -1,0 +1,7 @@
+rehearsal,result,notes
+1_session,passed,automated scanner policy/template smoke passed
+5_sessions,not_executed,requires local browser/device concurrency rehearsal
+10_sessions,not_executed,requires local browser/device concurrency rehearsal
+20_sessions,not_executed,required before production mobile certification
+performance_smoke,passed,full suite includes scanner response-time smoke
+

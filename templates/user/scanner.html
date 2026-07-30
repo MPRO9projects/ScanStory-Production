@@ -595,26 +595,45 @@
 
   <div id="status" class="status scan">Loading OpenCV…</div>
 
+  <script src="{{ url_for('static', filename='js/scanner-runtime.js') }}"></script>
   <script>
     // ================================================
     // DEVICE DETECTION
     // ================================================
+    const runtime = window.ScanStoryScannerRuntime;
+    const scannerState = runtime.createStateMachine(function (state) {
+      document.documentElement.dataset.scannerState = state;
+      const stage = document.getElementById('arStageLabel');
+      if (stage) stage.textContent = state.replaceAll('_', ' ');
+    });
+    scannerState.transition('loading_shell');
+    scannerState.transition('checking_capabilities');
+    const runtimeCapabilities = runtime.detectCapabilities();
+    const runtimeOverride = new URLSearchParams(location.search).get('scanner_mode');
+    const scannerMode = runtime.selectRuntimeMode(runtimeCapabilities, runtimeOverride, sessionStorage.getItem('scanstoryScannerPriorFailure') === '1');
+    const runtimeConfig = runtime.MODES[scannerMode];
+    if (scannerMode === 'fallback') { scannerState.transition('fallback'); } else { scannerState.transition('requesting_camera'); }
+
     const deviceInfo = {
       isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
       isIOS: /iPhone|iPad|iPod/i.test(navigator.userAgent),
       isAndroid: /Android/i.test(navigator.userAgent),
       memory: navigator.deviceMemory || 4,
       cores: navigator.hardwareConcurrency || 2,
-      isLowEnd: false
+      isLowEnd: false,
+      scannerMode
     };
 
     deviceInfo.isLowEnd = deviceInfo.memory <= 2 || deviceInfo.cores <= 2;
-    document.getElementById('deviceInfo').textContent = `${deviceInfo.isMobile ? '📱' : '💻'} ${deviceInfo.memory}GB ${deviceInfo.cores}cores`;
+    document.getElementById('deviceInfo').textContent = (deviceInfo.isMobile ? 'mobile' : 'desktop') + ' ' + deviceInfo.memory + 'GB ' + deviceInfo.cores + 'cores ' + scannerMode;
 
-    const DETECT_W = deviceInfo.isLowEnd ? 480 : 720;
-    const DETECT_INTERVAL_MS = deviceInfo.isLowEnd ? 400 : 300;
-    const MIN_GOOD_POINTS = deviceInfo.isLowEnd ? 18 : 25;
-    const MAX_ERR = deviceInfo.isLowEnd ? 45 : 35;
+    const DETECT_W = runtimeConfig.frameWidth || (deviceInfo.isLowEnd ? 480 : 720);
+    const DETECT_INTERVAL_MS = runtimeConfig.detectIntervalMs || (deviceInfo.isLowEnd ? 400 : 300);
+    const MIN_GOOD_POINTS = scannerMode === 'lightweight' ? 14 : (deviceInfo.isLowEnd ? 18 : 25);
+    const MAX_ERR = scannerMode === 'lightweight' ? 55 : (deviceInfo.isLowEnd ? 45 : 35);
+    const detectionPolicy = runtime.createRequestPolicy(scannerMode === 'fallback' ? 'standard' : scannerMode);
+    let detectLoopTimer = null;
+    let trackLoopActive = false;
 
     // ================================================
     // SCANNER SESSION COUNTING (FIXED)
@@ -713,8 +732,7 @@
           loadOpenCV();
         } else if (!cvReady && opencvLoadAttempts >= MAX_LOAD_ATTEMPTS) {
           console.error('❌ OpenCV failed to load');
-          statusDiv.textContent = "OpenCV failed. Refresh if issues persist.";
-          statusDiv.className = "status error";
+          enterFallback('OPENCV_LOAD_FAILED');
           document.getElementById('loadingSpinner').style.display = 'none';
         }
       }, 15000);
@@ -734,6 +752,7 @@
           statusDiv.className = "status scan";
           startDetectLoop();
           startScannerStatusCycle();
+          trackLoopActive = true;
           requestAnimationFrame(trackFrame);
           document.getElementById('loadingSpinner').style.display = 'none';
         },
@@ -743,8 +762,7 @@
           if (opencvLoadAttempts < MAX_LOAD_ATTEMPTS) {
             loadOpenCV();
           } else {
-            statusDiv.textContent = "OpenCV failed. Try refreshing.";
-            statusDiv.className = "status error";
+            enterFallback('OPENCV_LOAD_FAILED');
           }
         }
       };
@@ -757,14 +775,15 @@
         if (opencvLoadAttempts < MAX_LOAD_ATTEMPTS) {
           loadOpenCV();
         } else {
-          statusDiv.textContent = "OpenCV failed to load.";
-          statusDiv.className = "status error";
+          enterFallback('OPENCV_LOAD_FAILED');
         }
       };
       document.head.appendChild(script);
     }
 
-    loadOpenCV();
+    if (scannerMode !== 'fallback') {
+      loadOpenCV();
+    }
 
     // ================================================
     // CAMERA SETUP
@@ -781,6 +800,41 @@
     const infoBadge = document.getElementById("infoBadge");
     const matchIndicator = document.getElementById("matchIndicator");
     const progressInfo = document.getElementById("progressInfo");
+
+    function enterFallback(code) {
+      sessionStorage.setItem('scanstoryScannerPriorFailure', '1');
+      try {
+        if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+      } catch (_) {}
+      tracking = false;
+      detectInFlight = false;
+      if (typeof stopOverlayImmediate === 'function') stopOverlayImmediate();
+      const safe = runtime.ERRORS[code] || runtime.ERRORS.UNSUPPORTED_DEVICE;
+      statusDiv.textContent = safe;
+      statusDiv.className = "status error";
+      scannerStatusLabel.textContent = safe;
+      scannerStatusWord.textContent = "Fallback Available";
+      const ar = document.getElementById('arLoadingOverlay');
+      if (ar) ar.classList.add('hide');
+      if (scannerState.state !== 'fallback') {
+        try { scannerState.transition('fallback'); } catch (_) {}
+      }
+    }
+
+    window.addEventListener('pagehide', function () {
+      if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+      if (detectLoopTimer) clearInterval(detectLoopTimer);
+      trackLoopActive = false;
+    });
+
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) {
+        try { scannerState.transition('paused'); } catch (_) {}
+        if (typeof stopOverlayImmediate === 'function') stopOverlayImmediate();
+      } else if (scannerState.state === 'paused') {
+        try { scannerState.transition(cameraStream ? 'ready_to_scan' : 'requesting_camera'); } catch (_) {}
+      }
+    });
 
     const RANSAC_REPROJ = 5.0;   // was 3.0 — too tight for mobile optical flow, caused premature tracking drops
     const SMOOTH = deviceInfo.isLowEnd ? 0.50 : 0.35; // was 0.7/0.65 — high value caused ~90ms visible lag
@@ -860,11 +914,11 @@
     // Camera setup with better error handling
     async function setupCamera() {
       try {
+        if (scannerState.state === 'fallback') return;
         // ✅ HTTPS / camera API safety check
         if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          statusDiv.textContent = "Camera works only on HTTPS. Please open this QR link in Chrome using https://";
-          statusDiv.className = "status error";
-          progressInfo.textContent = "⚠️ Camera not available in this browser/page";
+          progressInfo.textContent = "Camera unavailable";
+          enterFallback(!window.isSecureContext ? 'SECURE_CONTEXT_REQUIRED' : 'CAMERA_UNAVAILABLE');
           return;
         }
 
@@ -878,6 +932,10 @@
         };
 
         cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        try { scannerState.transition('initializing_camera'); } catch (_) {}
+        cameraStream.getVideoTracks().forEach(track => {
+          track.addEventListener('ended', () => enterFallback('CAMERA_UNAVAILABLE'));
+        });
         cam.srcObject = cameraStream;
 
         cam.onloadedmetadata = async () => {
@@ -892,9 +950,8 @@
         };
       } catch (err) {
         console.error('Camera error:', err);
-        statusDiv.textContent = "Camera error: " + (err.message || "Permission denied");
-        statusDiv.className = "status error";
-        progressInfo.textContent = "⚠️ Camera access required";
+        const denied = err && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError');
+        enterFallback(denied ? 'CAMERA_PERMISSION_DENIED' : 'CAMERA_UNAVAILABLE');
       }
     }
 
@@ -1081,6 +1138,7 @@
     }
 
     function trackFrame() {
+      if (!trackLoopActive) return;
       requestAnimationFrame(trackFrame);
       if (!cvReady || !tracking || cam.readyState < 2) return;
 
@@ -1113,6 +1171,7 @@
           }
           trackingBadFrames = 0;
           tracking = false;
+          try { scannerState.transition('target_lost'); scannerState.transition('recovering'); } catch (_) {}
           lastOrdered = null;
           smoothCorners = null;
           stopOverlayImmediate();
@@ -1135,6 +1194,7 @@
 
         if (H.empty()) {
           tracking = false;
+          try { scannerState.transition('target_lost'); scannerState.transition('recovering'); } catch (_) {}
           lastOrdered = null;
           smoothCorners = null;
           stopOverlayImmediate();
@@ -1155,8 +1215,11 @@
             p.y > -pad * frameH && p.y < frameH * (1 + pad)
           );
           if (!inBounds) {
-            tracking = false; lastOrdered = null; smoothCorners = null;
-            stopOverlayImmediate(); startScannerStatusCycle();
+            tracking = false;
+          try { scannerState.transition('target_lost'); scannerState.transition('recovering'); } catch (_) {}
+          lastOrdered = null;
+          smoothCorners = null;
+          stopOverlayImmediate(); startScannerStatusCycle();
             statusDiv.textContent = "🎯 Scan AR marker";
             statusDiv.className = "status scan";
             prevGray.delete(); prevGray = null;
@@ -1191,7 +1254,12 @@
 
     async function detectOnceFromServer() {
       if (detectInFlight || !cvReady || cam.readyState < 2) return;
+      if (!detectionPolicy.canStart(performance.now(), !document.hidden, Boolean(cameraStream), tracking)) return;
+      const requestId = detectionPolicy.start(performance.now());
       detectInFlight = true;
+      try {
+        if (scannerState.state === 'ready_to_scan' || scannerState.state === 'recovering') scannerState.transition('detecting');
+      } catch (_) {}
       loadingSpinner.style.display = "block";
 
       // Cap capture to max 1200px (server's ORB_MAX_DIM) to avoid sending oversized images
@@ -1219,8 +1287,17 @@
           fd.append("scan_session_id", scannerSessionId);
         }
 
-        const r = await fetch("/detect_init", { method: "POST", body: fd });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), runtimeConfig.requestTimeoutMs || 8000);
+        const r = await fetch("/detect_init", { method: "POST", body: fd, signal: controller.signal });
+        clearTimeout(timeoutId);
         const data = await r.json();
+        if (detectionPolicy.finish(requestId) === 'stale') return;
+        const validation = runtime.validateDetectionResponse(data);
+        if (!validation.ok) {
+          enterFallback(validation.code);
+          return;
+        }
 
         // Update progress if available
         if (data.ready_pairs !== undefined && data.total_pairs !== undefined) {
@@ -1231,9 +1308,10 @@
           detectionFailCount++;
           if (!tracking) {
             stopOverlayImmediate();
-            statusDiv.textContent = "🎯 Scan AR marker";
+            statusDiv.textContent = "Scan AR marker";
             statusDiv.className = "status scan";
           }
+          if (detectionFailCount >= 25) enterFallback('DETECTION_TIMEOUT');
           return;
         }
 
@@ -1310,6 +1388,7 @@
           smoothCorners = null;
         }
         tracking = true;
+        try { scannerState.transition('tracking'); } catch (_) {}
         trackingBadFrames = 0;
         lastDetectTs = performance.now();
         lastLockTs = lastDetectTs;
@@ -1323,8 +1402,13 @@
 
       } catch (e) {
         console.error("Detection error:", e);
-        statusDiv.textContent = "⚠️ Detection error";
-        statusDiv.className = "status scan";
+        detectionPolicy.finish(requestId);
+        if (e && e.name === 'AbortError') {
+          enterFallback('DETECTION_TIMEOUT');
+        } else {
+          statusDiv.textContent = "Detection error";
+          statusDiv.className = "status scan";
+        }
       } finally {
         detectInFlight = false;
         loadingSpinner.style.display = "none";
@@ -1332,7 +1416,8 @@
     }
 
     function startDetectLoop() {
-      setInterval(() => {
+      if (detectLoopTimer) return;
+      detectLoopTimer = setInterval(() => {
         const now = performance.now();
         const driftMs = now - lastLockTs;
         const sinceLastDetect = now - lastDetectTs;
@@ -1395,3 +1480,6 @@
 </body>
 
 </html>
+
+
+

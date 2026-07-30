@@ -1,0 +1,18 @@
+state,purpose,timeout_ms,fallback_path
+idle,not started,0,none
+loading_shell,load runtime shell,4000,SCANNER_INIT_TIMEOUT
+checking_capabilities,detect browser capability,4000,UNSUPPORTED_DEVICE
+requesting_camera,request camera permission,15000,CAMERA_PERMISSION_DENIED
+initializing_camera,bind camera stream,15000,CAMERA_UNAVAILABLE
+loading_opencv,load OpenCV runtime,12000,OPENCV_LOAD_FAILED
+loading_wasm,verify WASM support,8000,WASM_LOAD_FAILED
+initializing_scanner,initialize tracking,8000,SCANNER_INIT_TIMEOUT
+ready_to_scan,waiting for detection,0,none
+detecting,bounded recognition request,mode request timeout,DETECTION_TIMEOUT
+tracking,optical-flow tracking,0,TARGET_LOST_TIMEOUT
+target_lost,target lost observed,3000,TARGET_LOST_TIMEOUT
+recovering,re-anchor with detection,9000,DETECTION_TIMEOUT
+fallback,direct playback fallback,0,none
+paused,page hidden or paused,0,none
+failed,terminal unsafe state,0,fallback
+

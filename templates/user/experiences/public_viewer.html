@@ -15,6 +15,8 @@
   <h1>{{ result.experience.name }}</h1>
   <p role="status">Published Version {{ result.version.version_number }}</p>
   <p>Scanner compatibility shell. Legacy scanner routes remain unchanged.</p>
+  <p class="card" role="status">If live tracking is unavailable, use direct video playback below.</p>
+  <p data-viewer-session="{{ result.viewer_session_id or '' }}">Viewer session initialized.</p>
   {% for item in result.snapshots %}
     <article class="card">
       <h2>{{ item.creator_label }}</h2>
