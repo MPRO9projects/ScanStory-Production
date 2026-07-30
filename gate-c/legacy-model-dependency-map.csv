@@ -1,0 +1,12 @@
+legacy_entity,dependency,used_by,gate_c_handling
+Project,id,/scanner and QR/media/admin/user routes,preserved
+Project,owner_user_id,user project ownership,mapped to owner personal Workspace
+Project,owner_admin_id,admin-created projects,reported for explicit resolution
+Project,qr_code_path,QR serving,preserved
+ProjectPair,id,ScanLog.pair_id and Trigger legacy mapping,preserved
+ProjectPair,project_id and pair_index,media routes and feature filenames,preserved
+ProjectPair,image_filename,legacy image file representation,represented as Asset
+ProjectPair,video_filename,legacy video file representation,represented as Asset
+ScanLog,project_id and pair_id,scanner usage accounting,preserved
+User,subscription fields,billing and limits,preserved
+PaymentOrder,user_id and plan_id,Razorpay flow,preserved

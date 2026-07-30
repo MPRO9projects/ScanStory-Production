@@ -5,6 +5,7 @@ from datetime import datetime as dt
 import os
 
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import event, inspect
 from sqlalchemy.orm import validates
 from sqlalchemy.sql import func
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -717,3 +718,371 @@ class SystemConfig(db.Model):
 
     def __repr__(self):
         return f"<SystemConfig {self.config_key}={self.config_value}>"
+
+
+# ---------------------------------------------------------------------
+# Gate C additive compatibility model foundation
+# ---------------------------------------------------------------------
+
+WORKSPACE_STATUSES = {"active", "suspended", "archived"}
+WORKSPACE_TYPES = {"personal", "team", "agency", "education", "enterprise", "managed_service"}
+WORKSPACE_MEMBER_ROLES = {"owner", "admin", "creator", "reviewer", "publisher", "analyst", "billing_admin"}
+WORKSPACE_MEMBER_STATUSES = {"active", "invited", "suspended", "removed"}
+
+EXPERIENCE_STATUSES = {
+    "draft",
+    "processing",
+    "needs_attention",
+    "ready_to_test",
+    "ready_to_publish",
+    "published",
+    "paused",
+    "archived",
+}
+EXPERIENCE_VERSION_STATUSES = {"draft", "published", "superseded", "archived"}
+
+TRIGGER_TYPES = {"image_marker"}
+TRIGGER_STATUSES = {
+    "draft",
+    "uploading",
+    "validating",
+    "optimizing",
+    "extracting",
+    "robustness_testing",
+    "ready",
+    "failed",
+    "retry_scheduled",
+    "retrying",
+    "excluded",
+}
+
+ASSET_TYPES = {"image", "video", "poster", "fallback", "recognition_artifact"}
+TRIGGER_ASSET_ROLES = {"reference_image", "video", "poster", "fallback"}
+RECOGNITION_ARTIFACT_TYPES = {"feature_npz"}
+PROCESSING_JOB_STATUSES = {"queued", "running", "succeeded", "failed", "cancelled"}
+MIGRATION_CHECKPOINT_STATUSES = {"pending", "dry_run", "completed", "failed", "skipped"}
+
+
+def _validate_value(value, allowed, field_name):
+    if value not in allowed:
+        raise ValueError(f"{field_name} must be one of: {', '.join(sorted(allowed))}")
+    return value
+
+
+def _prevent_public_key_update(mapper, connection, target):
+    state = inspect(target)
+    history = state.attrs.public_key.history
+    if history.has_changes() and history.deleted:
+        raise ValueError("public_key is immutable")
+
+
+class Organization(db.Model):
+    __tablename__ = "organizations"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    public_key = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    name = db.Column(db.String(255), nullable=False)
+    status = db.Column(db.String(20), default="active", nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    workspaces = db.relationship("Workspace", back_populates="organization", lazy=True)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value(value, WORKSPACE_STATUSES, key)
+
+
+class Workspace(db.Model):
+    __tablename__ = "workspaces"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    public_key = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey("organizations.id"), nullable=True, index=True)
+    name = db.Column(db.String(255), nullable=False)
+    workspace_type = db.Column(db.String(40), default="personal", nullable=False)
+    status = db.Column(db.String(20), default="active", nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    organization = db.relationship("Organization", back_populates="workspaces", lazy=True)
+    members = db.relationship("WorkspaceMember", back_populates="workspace", lazy=True, cascade="all, delete-orphan")
+    experiences = db.relationship("Experience", back_populates="workspace", lazy=True)
+    assets = db.relationship("Asset", back_populates="workspace", lazy=True)
+    processing_jobs = db.relationship("ProcessingJob", back_populates="workspace", lazy=True)
+
+    @validates("workspace_type")
+    def validate_workspace_type(self, key, value):
+        return _validate_value(value, WORKSPACE_TYPES, key)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value(value, WORKSPACE_STATUSES, key)
+
+
+class WorkspaceMember(db.Model):
+    __tablename__ = "workspace_members"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspaces.id"), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    role = db.Column(db.String(40), default="owner", nullable=False)
+    status = db.Column(db.String(20), default="active", nullable=False)
+    joined_at = db.Column(db.DateTime, nullable=False, default=get_utc_now)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    workspace = db.relationship("Workspace", back_populates="members", lazy=True)
+    user = db.relationship("User", backref=db.backref("workspace_memberships", lazy=True), lazy=True)
+
+    __table_args__ = (
+        db.UniqueConstraint("workspace_id", "user_id", name="uq_workspace_member_user"),
+    )
+
+    @validates("role")
+    def validate_role(self, key, value):
+        return _validate_value(value, WORKSPACE_MEMBER_ROLES, key)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value(value, WORKSPACE_MEMBER_STATUSES, key)
+
+
+class Experience(db.Model):
+    __tablename__ = "experiences"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    public_key = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspaces.id"), nullable=False, index=True)
+    legacy_project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), unique=True, nullable=True, index=True)
+    name = db.Column(db.String(255), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(40), default="draft", nullable=False)
+    current_published_version_id = db.Column(
+        db.Integer,
+        db.ForeignKey("experience_versions.id", use_alter=True, name="fk_experiences_current_published_version"),
+        nullable=True,
+    )
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    archived_at = db.Column(db.DateTime, nullable=True)
+
+    workspace = db.relationship("Workspace", back_populates="experiences", lazy=True)
+    legacy_project = db.relationship("Project", backref=db.backref("mapped_experience", uselist=False), lazy=True)
+    created_by_user = db.relationship("User", lazy=True)
+    versions = db.relationship(
+        "ExperienceVersion",
+        back_populates="experience",
+        lazy=True,
+        cascade="all, delete-orphan",
+        foreign_keys="ExperienceVersion.experience_id",
+    )
+    current_published_version = db.relationship(
+        "ExperienceVersion",
+        foreign_keys=[current_published_version_id],
+        post_update=True,
+        lazy=True,
+    )
+    triggers = db.relationship("Trigger", back_populates="experience", lazy=True)
+    processing_jobs = db.relationship("ProcessingJob", back_populates="experience", lazy=True)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value(value, EXPERIENCE_STATUSES, key)
+
+
+class ExperienceVersion(db.Model):
+    __tablename__ = "experience_versions"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    experience_id = db.Column(db.Integer, db.ForeignKey("experiences.id"), nullable=False, index=True)
+    version_number = db.Column(db.Integer, nullable=False)
+    status = db.Column(db.String(30), default="draft", nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    published_at = db.Column(db.DateTime, nullable=True)
+    superseded_at = db.Column(db.DateTime, nullable=True)
+    source_version_id = db.Column(db.Integer, db.ForeignKey("experience_versions.id"), nullable=True)
+
+    experience = db.relationship("Experience", back_populates="versions", foreign_keys=[experience_id], lazy=True)
+    created_by_user = db.relationship("User", lazy=True)
+    source_version = db.relationship("ExperienceVersion", remote_side=[id], lazy=True)
+    triggers = db.relationship("Trigger", back_populates="experience_version", lazy=True)
+
+    __table_args__ = (
+        db.UniqueConstraint("experience_id", "version_number", name="uq_experience_version_number"),
+    )
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value(value, EXPERIENCE_VERSION_STATUSES, key)
+
+
+class Trigger(db.Model):
+    __tablename__ = "triggers"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    public_key = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    experience_id = db.Column(db.Integer, db.ForeignKey("experiences.id"), nullable=False, index=True)
+    experience_version_id = db.Column(db.Integer, db.ForeignKey("experience_versions.id"), nullable=True, index=True)
+    legacy_project_pair_id = db.Column(db.Integer, db.ForeignKey("project_pairs.id"), unique=True, nullable=True, index=True)
+    name = db.Column(db.String(255), nullable=False)
+    trigger_type = db.Column(db.String(40), default="image_marker", nullable=False)
+    status = db.Column(db.String(40), default="draft", nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    is_excluded = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    experience = db.relationship("Experience", back_populates="triggers", lazy=True)
+    experience_version = db.relationship("ExperienceVersion", back_populates="triggers", lazy=True)
+    legacy_project_pair = db.relationship("ProjectPair", backref=db.backref("mapped_trigger", uselist=False), lazy=True)
+    trigger_assets = db.relationship("TriggerAsset", back_populates="trigger", lazy=True, cascade="all, delete-orphan")
+    recognition_artifacts = db.relationship("RecognitionArtifact", back_populates="trigger", lazy=True, cascade="all, delete-orphan")
+    processing_jobs = db.relationship("ProcessingJob", back_populates="trigger", lazy=True)
+
+    @validates("trigger_type")
+    def validate_trigger_type(self, key, value):
+        return _validate_value(value, TRIGGER_TYPES, key)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value(value, TRIGGER_STATUSES, key)
+
+
+class Asset(db.Model):
+    __tablename__ = "assets"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    public_key = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspaces.id"), nullable=False, index=True)
+    asset_type = db.Column(db.String(40), nullable=False)
+    storage_provider = db.Column(db.String(40), default="local_legacy", nullable=False)
+    storage_key = db.Column(db.String(500), nullable=False)
+    original_filename = db.Column(db.String(255), nullable=True)
+    mime_type = db.Column(db.String(255), nullable=True)
+    size_bytes = db.Column(db.Integer, nullable=True)
+    status = db.Column(db.String(30), default="available", nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    workspace = db.relationship("Workspace", back_populates="assets", lazy=True)
+    trigger_assets = db.relationship("TriggerAsset", back_populates="asset", lazy=True, cascade="all, delete-orphan")
+
+    @validates("asset_type")
+    def validate_asset_type(self, key, value):
+        return _validate_value(value, ASSET_TYPES, key)
+
+
+class TriggerAsset(db.Model):
+    __tablename__ = "trigger_assets"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    trigger_id = db.Column(db.Integer, db.ForeignKey("triggers.id"), nullable=False, index=True)
+    asset_id = db.Column(db.Integer, db.ForeignKey("assets.id"), nullable=False, index=True)
+    role = db.Column(db.String(40), nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+
+    trigger = db.relationship("Trigger", back_populates="trigger_assets", lazy=True)
+    asset = db.relationship("Asset", back_populates="trigger_assets", lazy=True)
+
+    __table_args__ = (
+        db.UniqueConstraint("trigger_id", "asset_id", "role", name="uq_trigger_asset_role"),
+    )
+
+    @validates("role")
+    def validate_role(self, key, value):
+        return _validate_value(value, TRIGGER_ASSET_ROLES, key)
+
+
+class RecognitionArtifact(db.Model):
+    __tablename__ = "recognition_artifacts"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    trigger_id = db.Column(db.Integer, db.ForeignKey("triggers.id"), nullable=False, index=True)
+    artifact_type = db.Column(db.String(40), nullable=False)
+    algorithm = db.Column(db.String(80), default="orb", nullable=False)
+    algorithm_version = db.Column(db.String(80), nullable=True)
+    storage_provider = db.Column(db.String(40), default="local_legacy", nullable=False)
+    storage_key = db.Column(db.String(500), nullable=False)
+    status = db.Column(db.String(30), default="available", nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    trigger = db.relationship("Trigger", back_populates="recognition_artifacts", lazy=True)
+
+    __table_args__ = (
+        db.UniqueConstraint("trigger_id", "artifact_type", "storage_key", name="uq_trigger_artifact_storage"),
+    )
+
+    @validates("artifact_type")
+    def validate_artifact_type(self, key, value):
+        return _validate_value(value, RECOGNITION_ARTIFACT_TYPES, key)
+
+
+class ProcessingJob(db.Model):
+    __tablename__ = "processing_jobs"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    public_key = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    workspace_id = db.Column(db.Integer, db.ForeignKey("workspaces.id"), nullable=False, index=True)
+    experience_id = db.Column(db.Integer, db.ForeignKey("experiences.id"), nullable=True, index=True)
+    trigger_id = db.Column(db.Integer, db.ForeignKey("triggers.id"), nullable=True, index=True)
+    job_type = db.Column(db.String(80), nullable=False)
+    status = db.Column(db.String(30), default="queued", nullable=False)
+    progress = db.Column(db.Integer, default=0, nullable=False)
+    attempt_count = db.Column(db.Integer, default=0, nullable=False)
+    idempotency_key = db.Column(db.String(128), nullable=False, index=True)
+    error_code = db.Column(db.String(80), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    workspace = db.relationship("Workspace", back_populates="processing_jobs", lazy=True)
+    experience = db.relationship("Experience", back_populates="processing_jobs", lazy=True)
+    trigger = db.relationship("Trigger", back_populates="processing_jobs", lazy=True)
+
+    __table_args__ = (
+        db.UniqueConstraint("workspace_id", "idempotency_key", name="uq_processing_job_workspace_idempotency"),
+    )
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value(value, PROCESSING_JOB_STATUSES, key)
+
+    @validates("progress")
+    def validate_progress(self, key, value):
+        if value < 0 or value > 100:
+            raise ValueError("progress must be between 0 and 100")
+        return value
+
+
+class MigrationCheckpoint(db.Model):
+    __tablename__ = "migration_checkpoints"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    migration_name = db.Column(db.String(120), nullable=False, index=True)
+    entity_type = db.Column(db.String(80), nullable=False, index=True)
+    legacy_id = db.Column(db.Integer, nullable=True, index=True)
+    target_id = db.Column(db.Integer, nullable=True)
+    status = db.Column(db.String(30), default="pending", nullable=False)
+    attempt_count = db.Column(db.Integer, default=0, nullable=False)
+    error_message = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    __table_args__ = (
+        db.UniqueConstraint("migration_name", "entity_type", "legacy_id", name="uq_migration_checkpoint_legacy"),
+    )
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value(value, MIGRATION_CHECKPOINT_STATUSES, key)
+
+
+for _public_model in (Organization, Workspace, Experience, Trigger, Asset, ProcessingJob):
+    event.listen(_public_model, "before_update", _prevent_public_key_update)

@@ -1,0 +1,9 @@
+legacy_source,target,rule,status
+User,Workspace,one personal Workspace per User lacking active personal owner membership,implemented
+User,WorkspaceMember,owner membership for default personal Workspace,implemented
+Project,Experience,Project.id to Experience.legacy_project_id,implemented
+ProjectPair,Trigger,ProjectPair.id to Trigger.legacy_project_pair_id,implemented
+ProjectPair.image_filename,Asset.storage_key,local_legacy image asset,implemented
+ProjectPair.video_filename,Asset.storage_key,local_legacy video asset,implemented
+ProjectPair project_id/pair_index,RecognitionArtifact.storage_key,<project_id>_<pair_index>.npz,implemented
+Admin-owned Project,Experience,explicit owner resolution required,deferred

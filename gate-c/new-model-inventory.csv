@@ -1,0 +1,12 @@
+model,table,purpose,legacy_dependency
+Organization,organizations,optional future organization owner,none
+Workspace,workspaces,future ownership boundary,created per User by backfill
+WorkspaceMember,workspace_members,user membership and roles,links User to Workspace
+Experience,experiences,future creator experience,maps Project.id
+ExperienceVersion,experience_versions,future version foundation,links Experience
+Trigger,triggers,future trigger foundation,maps ProjectPair.id
+Asset,assets,legacy file representation,stores image/video filename keys
+TriggerAsset,trigger_assets,asset role per trigger,links Trigger and Asset
+RecognitionArtifact,recognition_artifacts,feature artifact representation,stores legacy npz key
+ProcessingJob,processing_jobs,future processing job schema,none active
+MigrationCheckpoint,migration_checkpoints,migration diagnostics,legacy ids

@@ -1,0 +1,4 @@
+entity_type,legacy_id,target_id,status,notes
+user,dynamic,dynamic,completed or failed,default Workspace backfill
+project,dynamic,dynamic,completed or failed,Project to Experience mapping
+project_pair,dynamic,dynamic,completed or failed,ProjectPair to Trigger mapping
