@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Gate J Browser Probe</title>
+  <script src="/static/js/scanner-runtime.js"></script>
+</head>
+<body>
+<pre id="result">running</pre>
+<script>
+(async function () {
+  const out = {
+    runtimeLoaded: !!window.ScanStoryScannerRuntime,
+    capabilityMode: null,
+    overrideModes: {},
+    stateMachine: [],
+    cameraAccepted: false,
+    cameraError: null,
+    fallbackMessage: null
+  };
+  try {
+    const runtime = window.ScanStoryScannerRuntime;
+    const machine = runtime.createStateMachine();
+    ["loading_shell", "checking_capabilities", "requesting_camera"].forEach((state) => {
+      machine.transition(state);
+      out.stateMachine.push(machine.state);
+    });
+    const caps = runtime.detectCapabilities();
+    out.capabilityMode = runtime.selectRuntimeMode(caps);
+    ["full", "standard", "lightweight", "fallback"].forEach((mode) => {
+      out.overrideModes[mode] = runtime.selectRuntimeMode(caps, mode);
+    });
+    out.fallbackMessage = runtime.ERRORS.CAMERA_PERMISSION_DENIED;
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      const stream = await Promise.race([
+        navigator.mediaDevices.getUserMedia({video: true, audio: false}),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("camera probe timeout")), 1500))
+      ]);
+      out.cameraAccepted = stream.getVideoTracks().length > 0;
+      stream.getTracks().forEach((track) => track.stop());
+    }
+  } catch (error) {
+    out.cameraError = String(error && error.name ? error.name : error);
+  }
+  document.getElementById("result").textContent = "__GATE_J_DONE__" + JSON.stringify(out);
+}());
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+browser,platform,execution_type,result,notes
+Chrome,Windows,headless localhost runtime probe,passed_with_limitations,runtime loaded and modes resolved; fake camera timed out
+Edge,Windows,headless localhost runtime probe,passed_with_limitations,runtime loaded and modes resolved; fake camera timed out
+Firefox,Windows,none,not_executed,browser unavailable
+Chrome,Android,none,blocked,no physical or remote device available
+Samsung Internet,Android,none,blocked,no physical or remote device available
+Safari,iPhone,none,blocked,no physical or remote device available
+

@@ -1,0 +1,11 @@
+scenario,result,notes
+target_loss_reacquisition,passed,automated state path passed
+portrait_to_landscape,not_executed,physical/mobile browser unavailable
+landscape_to_portrait,not_executed,physical/mobile browser unavailable
+address_bar_resize,not_executed,physical/mobile browser unavailable
+tab_background,not_executed,physical/mobile browser unavailable
+tab_foreground,not_executed,physical/mobile browser unavailable
+device_lock_unlock,not_executed,physical/mobile browser unavailable
+pagehide,passed_with_limitations,Gate I runtime path retained; no real stream
+refresh,passed_with_limitations,desktop runtime probe reload executed
+

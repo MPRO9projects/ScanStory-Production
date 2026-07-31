@@ -1,0 +1,5 @@
+id,severity,status,scope,description,correction
+GJ-001,blocker,open,certification,Android Chrome real or remote execution unavailable,requires physical or remote Android device
+GJ-002,blocker,open,certification,iPhone Safari real or remote execution unavailable,requires physical or remote iPhone Safari
+GJ-003,medium,open,certification,Headless desktop fake camera timed out,rerun with visible browser or working fake camera harness
+

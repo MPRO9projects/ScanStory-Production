@@ -1,0 +1,9 @@
+category,browser_or_device,status,notes
+fully_supported,none,not_certified,Gate J mobile requirements blocked
+supported_reduced_mode,none,not_certified,no real weaker device executed
+fallback_supported,Chrome Windows,passed_with_limitations,headless runtime fallback messaging passed
+fallback_supported,Edge Windows,passed_with_limitations,headless runtime fallback messaging passed
+unsupported,missing secure context,policy_supported,fallback required
+unsupported,missing camera API,policy_supported,fallback required
+unsupported,missing WASM,policy_supported,fallback required
+

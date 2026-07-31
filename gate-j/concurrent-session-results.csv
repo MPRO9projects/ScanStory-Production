@@ -1,0 +1,7 @@
+sessions,execution_type,result,notes
+1,api_only,passed,bounded synthetic frame response
+5,api_only,passed,bounded synthetic frame responses
+10,api_only,passed,bounded synthetic frame responses
+20,api_only,passed,bounded synthetic frame responses
+20,browser_camera,not_executed,no automation/physical camera matrix available
+
