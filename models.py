@@ -507,6 +507,21 @@ class ProjectPair(db.Model):
     image_size = db.Column(db.Integer, nullable=True)
     video_size = db.Column(db.Integer, nullable=True)
 
+    # Recognition marker metadata. Legacy rows without explicit values behave as full-image markers.
+    marker_mode = db.Column(db.String(20), nullable=True, default="full_image")
+    marker_crop_x = db.Column(db.Float, nullable=True, default=0.0)
+    marker_crop_y = db.Column(db.Float, nullable=True, default=0.0)
+    marker_crop_width = db.Column(db.Float, nullable=True, default=1.0)
+    marker_crop_height = db.Column(db.Float, nullable=True, default=1.0)
+    marker_rotation = db.Column(db.Integer, nullable=True, default=0)
+    marker_original_width = db.Column(db.Integer, nullable=True)
+    marker_original_height = db.Column(db.Integer, nullable=True)
+    marker_processed_width = db.Column(db.Integer, nullable=True)
+    marker_processed_height = db.Column(db.Integer, nullable=True)
+    marker_source_size_bytes = db.Column(db.Integer, nullable=True)
+    marker_processed_size_bytes = db.Column(db.Integer, nullable=True)
+    marker_display_orientation = db.Column(db.String(20), nullable=True)
+
     # ✅ CRITICAL ADDITIONS FOR FAST PROCESSING:
     is_processed = db.Column(db.Boolean, default=False)
     processing_status = db.Column(db.String(20), default='uploaded')  # 'uploaded', 'processing', 'completed', 'failed'

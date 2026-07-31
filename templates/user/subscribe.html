@@ -922,6 +922,12 @@
             </div>
             {% endif %}
 
+            {% if dev_test_entitled %}
+            <div class="max-w-4xl mx-auto mb-8 rounded-2xl border border-cyan-400/30 bg-cyan-400/10 px-5 py-4 text-cyan-100 text-sm font-bold">
+                Development Test Account — Unlimited. Development test accounts already have unlimited access. Payment is disabled.
+            </div>
+            {% endif %}
+
             <div class="currency-toggle-wrap" aria-label="Currency selector">
                 <div class="currency-toggle-label">Display Pricing In</div>
                 <button type="button" class="currency-btn active" data-currency="inr">INR ₹</button>
@@ -1051,7 +1057,11 @@
 
                     <!-- Action Button -->
                     {% if user %}
-                    {% if plan.is_trial_plan %}
+                    {% if dev_test_entitled %}
+                    <button class="action-btn bg-gray-800 text-cyan-200 cursor-not-allowed text-xs md:text-sm" disabled>
+                        <i class="fas fa-flask mr-1 md:mr-2"></i> Development Test Account
+                    </button>
+                    {% elif plan.is_trial_plan %}
                     <button class="action-btn bg-gray-800 text-gray-400 cursor-not-allowed text-xs md:text-sm" disabled>
                         <i class="fas fa-check-circle mr-1 md:mr-2"></i> Current Plan
                     </button>
@@ -1201,6 +1211,7 @@
         let currentPlanId = null;
         let currentPlanName = '';
         let currentPlanPrice = 0;
+        const DEV_TEST_ENTITLED = {{ 'true' if dev_test_entitled else 'false' }};
         let isMobileMenuOpen = false;
 
         // Mobile menu toggle
@@ -1231,6 +1242,10 @@
         });
 
         function subscribeToPlan(planId, planName, price) {
+            if (DEV_TEST_ENTITLED) {
+                alert('Development test accounts already have unlimited access. Payment is disabled.');
+                return;
+            }
             currentPlanId = planId;
             currentPlanName = planName;
             currentPlanPrice = price;

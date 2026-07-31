@@ -27,8 +27,9 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 import logging
 import requests
+import click
 
-from sqlalchemy import or_, desc, func, and_, case
+from sqlalchemy import or_, desc, func, and_, case, text, inspect
 
 # ✅ Import models
 from models import (
@@ -243,11 +244,39 @@ ADMIN_QR_DIR = os.path.join(ADMIN_DATA_DIR, "qr_codes")
 for d in [ADMIN_DATA_DIR, ADMIN_IMAGES_DIR, ADMIN_VIDEOS_DIR, ADMIN_FEATURES_DIR, ADMIN_QR_DIR]:
     os.makedirs(d, exist_ok=True)
 
+PROJECT_PAIR_MARKER_COLUMNS = {
+    "marker_mode": "VARCHAR(20) DEFAULT 'full_image'",
+    "marker_crop_x": "FLOAT DEFAULT 0.0",
+    "marker_crop_y": "FLOAT DEFAULT 0.0",
+    "marker_crop_width": "FLOAT DEFAULT 1.0",
+    "marker_crop_height": "FLOAT DEFAULT 1.0",
+    "marker_rotation": "INTEGER DEFAULT 0",
+    "marker_original_width": "INTEGER",
+    "marker_original_height": "INTEGER",
+    "marker_processed_width": "INTEGER",
+    "marker_processed_height": "INTEGER",
+    "marker_source_size_bytes": "INTEGER",
+    "marker_processed_size_bytes": "INTEGER",
+    "marker_display_orientation": "VARCHAR(20)",
+}
+
+
+def ensure_marker_schema():
+    inspector = inspect(db.engine)
+    if "project_pairs" not in inspector.get_table_names():
+        return
+    existing = {column["name"] for column in inspector.get_columns("project_pairs")}
+    for column_name, ddl in PROJECT_PAIR_MARKER_COLUMNS.items():
+        if column_name not in existing:
+            db.session.execute(text(f"ALTER TABLE project_pairs ADD COLUMN {column_name} {ddl}"))
+    db.session.commit()
+
 # --------------------------------------------------------------------------------------------
 # Bootstrap (tables + default plans + initial admin + system config)
 # --------------------------------------------------------------------------------------------
 with app.app_context():
     db.create_all()
+    ensure_marker_schema()
     
     # Create default trial plan
     if SubscriptionPlan.query.filter_by(is_trial_plan=True).first() is None:
@@ -599,8 +628,97 @@ def _limit_reached(limit_value, used_value):
     return int(used_value or 0) >= int(limit_value)
 
 
+MARKER_MIN_PIXELS = int(os.environ.get("SCANSTORY_MARKER_MIN_PIXELS", "240"))
+
+
+def _upload_log(stage, upload_id, **fields):
+    payload = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+    print(
+        f"[{stage}] ts={dt.utcnow().isoformat(timespec='milliseconds')}Z "
+        f"upload_id={upload_id} pid={os.getpid()} thread_id={threading.get_ident()} {payload}".strip()
+    )
+    sys.stdout.flush()
+
+
+def _parse_marker_meta(index):
+    def form_value(name, default=None):
+        return request.form.get(f"marker_{index}_{name}", default)
+
+    if form_value("mode") is None:
+        return {
+            "mode": "full_image",
+            "crop_x": 0.0,
+            "crop_y": 0.0,
+            "crop_width": 1.0,
+            "crop_height": 1.0,
+            "rotation": 0,
+            "original_width": None,
+            "original_height": None,
+            "processed_width": None,
+            "processed_height": None,
+            "source_size_bytes": None,
+            "processed_size_bytes": None,
+            "display_orientation": "legacy",
+        }
+
+    mode = (form_value("mode", "crop") or "crop").strip()
+    if mode not in ("crop", "full_image"):
+        raise ValueError("Invalid marker mode")
+
+    if mode == "full_image":
+        crop_x, crop_y, crop_w, crop_h = 0.0, 0.0, 1.0, 1.0
+    else:
+        try:
+            crop_x = float(form_value("crop_x"))
+            crop_y = float(form_value("crop_y"))
+            crop_w = float(form_value("crop_width"))
+            crop_h = float(form_value("crop_height"))
+        except (TypeError, ValueError):
+            raise ValueError("Invalid crop metadata")
+
+    values = [crop_x, crop_y, crop_w, crop_h]
+    if any(not np.isfinite(v) for v in values):
+        raise ValueError("Invalid crop metadata")
+    if crop_x < 0 or crop_y < 0 or crop_w <= 0 or crop_h <= 0 or crop_x + crop_w > 1.0001 or crop_y + crop_h > 1.0001:
+        raise ValueError("Crop must stay inside image bounds")
+
+    try:
+        original_w = int(float(form_value("original_width", 0) or 0))
+        original_h = int(float(form_value("original_height", 0) or 0))
+        processed_w = int(float(form_value("processed_width", 0) or 0))
+        processed_h = int(float(form_value("processed_height", 0) or 0))
+        rotation = int(float(form_value("rotation", 0) or 0)) % 360
+        source_bytes = int(float(form_value("source_size_bytes", 0) or 0))
+        processed_bytes = int(float(form_value("processed_size_bytes", 0) or 0))
+    except (TypeError, ValueError):
+        raise ValueError("Invalid marker dimensions")
+
+    if original_w <= 0 or original_h <= 0 or processed_w <= 0 or processed_h <= 0:
+        raise ValueError("Marker dimensions are required")
+    if mode == "crop" and (processed_w < MARKER_MIN_PIXELS or processed_h < MARKER_MIN_PIXELS):
+        raise ValueError(f"Marker crop must be at least {MARKER_MIN_PIXELS}px on each side")
+
+    return {
+        "mode": mode,
+        "crop_x": crop_x,
+        "crop_y": crop_y,
+        "crop_width": crop_w,
+        "crop_height": crop_h,
+        "rotation": rotation,
+        "original_width": original_w,
+        "original_height": original_h,
+        "processed_width": processed_w,
+        "processed_height": processed_h,
+        "source_size_bytes": source_bytes,
+        "processed_size_bytes": processed_bytes,
+        "display_orientation": (form_value("display_orientation", "") or "").strip()[:20],
+    }
+
+
 def get_plan_pairs_limit(user):
     """Return the configured max pairs per project for the user's current plan."""
+    if has_dev_test_entitlement(user):
+        return None
     plan = getattr(user, "subscription_plan", None)
     if not plan:
         return None
@@ -614,6 +732,68 @@ def get_plan_pairs_limit(user):
         return None
 
 
+DEV_TEST_USER_EMAILS = tuple(f"scanstorytest{i:02d}@gmail.com" for i in range(1, 11))
+DEV_TEST_CONFIG_KEY = "dev_test_user_identity"
+
+
+def _production_mode_flag_active():
+    for key in ("SCANSTORY_PRODUCTION", "APP_ENV", "ENV"):
+        value = (os.environ.get(key) or "").strip().lower()
+        if value in ("1", "true", "yes", "production", "prod"):
+            return True
+    return (os.environ.get("FLASK_ENV") or "").strip().lower() in ("production", "prod")
+
+
+def dev_test_entitlement_enabled():
+    return (
+        (os.environ.get("FLASK_ENV") or "").strip().lower() == "development"
+        and os.environ.get("SCANSTORY_DEV_TESTING") == "1"
+        and not _production_mode_flag_active()
+    )
+
+
+def _dev_test_identity_payload():
+    config = SystemConfig.query.filter_by(config_key=DEV_TEST_CONFIG_KEY).first()
+    if not config or not config.config_value:
+        return {"user_ids": [], "emails": []}
+    try:
+        payload = json.loads(config.config_value)
+    except Exception:
+        return {"user_ids": [], "emails": []}
+    return {
+        "user_ids": [int(uid) for uid in payload.get("user_ids", []) if str(uid).isdigit()],
+        "emails": [str(email).strip().lower() for email in payload.get("emails", [])],
+    }
+
+
+def _store_dev_test_identity(users):
+    payload = {
+        "user_ids": sorted({int(user.id) for user in users if user.id}),
+        "emails": sorted({user.email.strip().lower() for user in users}),
+    }
+    config = SystemConfig.query.filter_by(config_key=DEV_TEST_CONFIG_KEY).first()
+    if not config:
+        config = SystemConfig(
+            config_key=DEV_TEST_CONFIG_KEY,
+            config_type="json",
+            description="Development-only seeded ScanStory test user identity allowlist",
+        )
+        db.session.add(config)
+    config.config_value = json.dumps(payload, sort_keys=True)
+    return payload
+
+
+def has_dev_test_entitlement(user):
+    if not user or not dev_test_entitlement_enabled():
+        return False
+    payload = _dev_test_identity_payload()
+    user_email = (getattr(user, "email", "") or "").strip().lower()
+    entitled = int(user.id) in set(payload["user_ids"]) and user_email in set(payload["emails"])
+    if entitled:
+        print(f"[DEV TEST ENTITLEMENT] Unlimited local test access for user_id={user.id}")
+    return entitled
+
+
 def check_user_limits(user):
     """
     Single source of truth enforcement:
@@ -622,6 +802,9 @@ def check_user_limits(user):
     """
     if user.is_blocked:
         return False, url_for("login"), "Account is blocked"
+
+    if has_dev_test_entitlement(user):
+        return True, None, None
 
     user.projects_used = int(user.projects_used or 0)
     user.scans_used = int(user.scans_used or 0)
@@ -720,6 +903,156 @@ def _delete_project_files_and_rows(project: Project):
     db.session.delete(project)
     db.session.commit()
     load_features.cache_clear()
+
+
+def _desired_dev_test_user_values(plan):
+    now = dt.utcnow()
+    return {
+        "first_name": "ScanStory",
+        "last_name": "Dev Test",
+        "company": "Development Test Account",
+        "password_hash": generate_password_hash("123456"),
+        "is_verified": True,
+        "email_verified_at": now,
+        "is_blocked": False,
+        "subscription_id": plan.id if plan else None,
+        "subscription_status": "trial",
+        "subscription_taken_at": now,
+        "subscription_expires_at": None,
+        "subscribed_project_limit": int(plan.total_project_limit if plan else 1),
+        "subscribed_scan_limit": int(plan.total_scan_limit if plan else 50),
+        "projects_used": 0,
+        "scans_used": 0,
+        "razorpay_customer_id": None,
+        "razorpay_subscription_id": None,
+    }
+
+
+def _ensure_dev_test_trial(user, plan):
+    trial = TrialDetails.query.filter_by(user_id=user.id).first()
+    if not trial:
+        trial = TrialDetails(user_id=user.id)
+        db.session.add(trial)
+    trial.trial_start = dt.utcnow()
+    trial.trial_end = dt.utcnow() + timedelta(days=3650)
+    trial.trial_project_limit = int(plan.total_project_limit if plan else 1)
+    trial.trial_scan_limit = int(plan.total_scan_limit if plan else 50)
+    trial.converted_to_paid = False
+    trial.converted_at = None
+    trial.converted_plan_id = None
+
+
+def _seed_dev_test_users():
+    if not dev_test_entitlement_enabled():
+        raise click.ClickException("Refusing to seed: require FLASK_ENV=development and SCANSTORY_DEV_TESTING=1 with no production flag.")
+    db.create_all()
+    plan = SubscriptionPlan.query.filter_by(is_trial_plan=True, is_active=True).first()
+    payload = _dev_test_identity_payload()
+    known_ids = set(payload["user_ids"])
+    known_emails = set(payload["emails"])
+    created = updated = skipped = 0
+    touched = []
+
+    for email in DEV_TEST_USER_EMAILS:
+        user = User.query.filter_by(email=email).first()
+        if user and user.id not in known_ids and email not in known_emails:
+            skipped += 1
+            continue
+
+        values = _desired_dev_test_user_values(plan)
+        if not user:
+            user = User(email=email, **values)
+            db.session.add(user)
+            db.session.flush()
+            _ensure_dev_test_trial(user, plan)
+            created += 1
+        else:
+            changed = False
+            for key, value in values.items():
+                if key in ("email_verified_at", "subscription_taken_at") and getattr(user, key):
+                    continue
+                if key == "password_hash":
+                    if not check_password_hash(user.password_hash, "123456"):
+                        setattr(user, key, value)
+                        changed = True
+                    continue
+                if getattr(user, key) != value:
+                    setattr(user, key, value)
+                    changed = True
+            _ensure_dev_test_trial(user, plan)
+            if changed:
+                updated += 1
+            else:
+                skipped += 1
+        touched.append(user)
+
+    db.session.flush()
+    _store_dev_test_identity(touched)
+    db.session.commit()
+    return {"created": created, "updated": updated, "skipped": skipped}
+
+
+def _dev_test_cleanup_candidates():
+    payload = _dev_test_identity_payload()
+    if not payload["user_ids"] or not payload["emails"]:
+        return []
+    allowed_emails = set(DEV_TEST_USER_EMAILS).intersection(payload["emails"])
+    if not allowed_emails:
+        return []
+    return User.query.filter(User.id.in_(payload["user_ids"]), User.email.in_(allowed_emails)).all()
+
+
+def _delete_dev_test_users(confirm=False, dry_run=False):
+    if not dev_test_entitlement_enabled():
+        raise click.ClickException("Refusing cleanup: require FLASK_ENV=development and SCANSTORY_DEV_TESTING=1 with no production flag.")
+    if confirm == dry_run:
+        raise click.ClickException("Choose exactly one: --dry-run or --confirm.")
+
+    users = _dev_test_cleanup_candidates()
+    summary = {"users": len(users), "projects": 0, "pairs": 0, "scan_logs": 0, "payment_orders": 0}
+    for user in users:
+        projects = Project.query.filter_by(owner_user_id=user.id).all()
+        summary["projects"] += len(projects)
+        summary["pairs"] += sum(ProjectPair.query.filter_by(project_id=project.id).count() for project in projects)
+        summary["scan_logs"] += ScanLog.query.filter_by(user_id=user.id).count()
+        summary["payment_orders"] += PaymentOrder.query.filter_by(user_id=user.id).count()
+
+    if dry_run:
+        return summary
+
+    for user in users:
+        for project in Project.query.filter_by(owner_user_id=user.id).all():
+            _delete_project_files_and_rows(project)
+        ScanLog.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        PaymentOrder.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+        db.session.delete(user)
+
+    config = SystemConfig.query.filter_by(config_key=DEV_TEST_CONFIG_KEY).first()
+    if config:
+        config.config_value = json.dumps({"user_ids": [], "emails": []})
+    db.session.commit()
+    return summary
+
+
+@app.cli.command("seed-dev-test-users")
+def seed_dev_test_users_command():
+    result = _seed_dev_test_users()
+    click.echo(f"Created: {result['created']}")
+    click.echo(f"Updated: {result['updated']}")
+    click.echo(f"Skipped: {result['skipped']}")
+
+
+@app.cli.command("delete-dev-test-users")
+@click.option("--dry-run", is_flag=True, help="Report what would be deleted without deleting.")
+@click.option("--confirm", is_flag=True, help="Delete the seeded development test users and their data.")
+def delete_dev_test_users_command(dry_run, confirm):
+    result = _delete_dev_test_users(confirm=confirm, dry_run=dry_run)
+    prefix = "Would delete" if dry_run else "Deleted"
+    click.echo(f"{prefix} users: {result['users']}")
+    click.echo(f"{prefix} projects: {result['projects']}")
+    click.echo(f"{prefix} pairs: {result['pairs']}")
+    click.echo(f"{prefix} scan logs: {result['scan_logs']}")
+    click.echo(f"{prefix} payment orders: {result['payment_orders']}")
 
 # --------------------------------------------------------------------------------------------
 # CV/QR functions (same as before)
@@ -1312,6 +1645,112 @@ def valid_corners(corners_xy, w, h):
             return False
     return True
 
+def _grid_coverage(points_xy, width, height, grid=3):
+    if points_xy is None or len(points_xy) == 0 or width <= 0 or height <= 0:
+        return 0, 0.0
+    cells = set()
+    for x, y in np.asarray(points_xy, dtype=np.float32).reshape(-1, 2):
+        if not np.isfinite(x) or not np.isfinite(y):
+            continue
+        cx = min(grid - 1, max(0, int((float(x) / float(width)) * grid)))
+        cy = min(grid - 1, max(0, int((float(y) / float(height)) * grid)))
+        cells.add((cx, cy))
+    occupied = len(cells)
+    return occupied, occupied / float(grid * grid)
+
+def _quad_metrics(corners_xy):
+    pts = np.asarray(corners_xy, dtype=np.float32).reshape(4, 2)
+    edges = [float(np.linalg.norm(pts[(i + 1) % 4] - pts[i])) for i in range(4)]
+    diag1 = float(np.linalg.norm(pts[2] - pts[0]))
+    diag2 = float(np.linalg.norm(pts[3] - pts[1]))
+    min_edge = max(min(edges), 1.0)
+    return {
+        "area": float(cv2.contourArea(pts)),
+        "edge_ratio": max(edges) / min_edge,
+        "diagonal_ratio": max(diag1, diag2) / max(min(diag1, diag2), 1.0),
+    }
+
+def evaluate_homography_quality(src_arr, dst_arr, homography, mask, marker_w, marker_h, frame_w, frame_h, scale=1.0):
+    """Reject high-match false poses caused by clustered inliers or unstable projection."""
+    if homography is None or mask is None or src_arr is None or dst_arr is None:
+        return False, {"reason": "missing_homography"}
+    inlier_mask = mask.reshape(-1).astype(bool)
+    total = int(len(src_arr))
+    inliers = int(np.sum(inlier_mask))
+    inlier_ratio = inliers / float(max(total, 1))
+    if inliers < max(MIN_INLIERS_ABS, int(MIN_INLIERS_RATIO * total)) or inlier_ratio < 0.30:
+        return False, {"reason": "weak_inliers", "inliers": inliers, "inlier_ratio": inlier_ratio}
+
+    src_in = np.asarray(src_arr[inlier_mask], dtype=np.float32).reshape(-1, 1, 2)
+    dst_in = np.asarray(dst_arr[inlier_mask], dtype=np.float32).reshape(-1, 2)
+    projected = cv2.perspectiveTransform(src_in, homography).reshape(-1, 2)
+    errors = np.linalg.norm(projected - dst_in, axis=1)
+    mean_error = float(np.mean(errors)) if len(errors) else float("inf")
+    median_error = float(np.median(errors)) if len(errors) else float("inf")
+    max_error = float(np.max(errors)) if len(errors) else float("inf")
+    detect_frame_w = max(float(frame_w) * float(scale), 1.0)
+    detect_frame_h = max(float(frame_h) * float(scale), 1.0)
+    normalized_limit = max(8.0, min(detect_frame_w, detect_frame_h) * 0.018)
+    if median_error > normalized_limit or mean_error > normalized_limit * 1.6 or max_error > normalized_limit * 4.0:
+        return False, {"reason": "reprojection_error", "mean_error": mean_error, "median_error": median_error, "max_error": max_error}
+
+    rect = np.array([[0, 0], [marker_w, 0], [marker_w, marker_h], [0, marker_h]], dtype=np.float32).reshape(-1, 1, 2)
+    projected_corners = cv2.perspectiveTransform(rect, homography).reshape(4, 2)
+    ref_cells, ref_score = _grid_coverage(src_arr[inlier_mask], marker_w, marker_h, grid=3)
+    frame_cells, frame_score = _grid_coverage(dst_arr[inlier_mask], detect_frame_w, detect_frame_h, grid=3)
+    try:
+        roi_to_marker = cv2.getPerspectiveTransform(
+            projected_corners.astype(np.float32),
+            np.array([[0, 0], [marker_w, 0], [marker_w, marker_h], [0, marker_h]], dtype=np.float32),
+        )
+        dst_in_marker_roi = cv2.perspectiveTransform(dst_arr[inlier_mask].reshape(-1, 1, 2), roi_to_marker).reshape(-1, 2)
+        roi_cells, roi_score = _grid_coverage(dst_in_marker_roi, marker_w, marker_h, grid=3)
+    except Exception:
+        roi_cells, roi_score = 0, 0.0
+    if ref_cells < 3 or roi_cells < 3:
+        return False, {
+            "reason": "clustered_inliers",
+            "reference_grid_cells": ref_cells,
+            "projected_roi_grid_cells": roi_cells,
+            "frame_grid_cells": frame_cells,
+        }
+    corners = [(float(p[0] / scale), float(p[1] / scale)) for p in projected_corners]
+    if not valid_corners(corners, frame_w, frame_h):
+        return False, {
+            "reason": "invalid_corners",
+            "corners": corners,
+            "inliers": inliers,
+            "inlier_ratio": inlier_ratio,
+            "reference_grid_cells": ref_cells,
+            "projected_roi_grid_cells": roi_cells,
+            "frame_grid_cells": frame_cells,
+        }
+    metrics = _quad_metrics(corners)
+    marker_aspect = max(float(marker_w) / max(float(marker_h), 1.0), float(marker_h) / max(float(marker_w), 1.0))
+    if metrics["edge_ratio"] > 8.0 or metrics["diagonal_ratio"] > 6.0:
+        return False, {"reason": "distorted_quad", **metrics}
+    if metrics["edge_ratio"] > marker_aspect * 6.0:
+        return False, {"reason": "aspect_distortion", **metrics}
+
+    return True, {
+        "reason": "accepted",
+        "inliers": inliers,
+        "inlier_ratio": inlier_ratio,
+        "mean_error": mean_error,
+        "median_error": median_error,
+        "max_error": max_error,
+        "reference_grid_cells": ref_cells,
+        "reference_grid_score": ref_score,
+        "projected_roi_grid_cells": roi_cells,
+        "projected_roi_grid_score": roi_score,
+        "frame_grid_cells": frame_cells,
+        "frame_grid_score": frame_score,
+        "quad_area": metrics["area"],
+        "edge_ratio": metrics["edge_ratio"],
+        "diagonal_ratio": metrics["diagonal_ratio"],
+        "corners": corners,
+    }
+
 def _resize_gray_for_detect(img_bgr, max_dim=DETECT_MAX_DIM):
     h, w = img_bgr.shape[:2]
     m = max(h, w)
@@ -1786,11 +2225,13 @@ def dashboard():
                 session.pop("user_id", None)
             return redirect(url_for("login"))
 
+        dev_test_entitled = has_dev_test_entitlement(user)
+
         trial = None
         changed = False
 
         # Handle TRIAL and LIMIT_REACHED users
-        if user.subscription_status in ("trial", "limit_reached"):
+        if user.subscription_status in ("trial", "limit_reached") and not dev_test_entitled:
             try:
                 trial_plan = SubscriptionPlan.query.filter_by(
                     is_trial_plan=True,
@@ -1932,7 +2373,8 @@ def dashboard():
             user=user,
             projects=projects,
             trial=trial,
-            admin_view=admin_view  # Pass this to template if needed
+            admin_view=admin_view,  # Pass this to template if needed
+            dev_test_entitled=dev_test_entitled,
         )
         
     except Exception as e:
@@ -2479,7 +2921,9 @@ def login():
         return render_template("user/login.html")
 
     # ✅ TRIAL SAFETY + DYNAMIC PLAN SYNC
-    if user.subscription_status == "trial":
+    dev_test_entitled = has_dev_test_entitlement(user)
+
+    if user.subscription_status == "trial" and not dev_test_entitled:
         changed = False
 
         # Ensure usage counters are sane
@@ -2625,19 +3069,25 @@ def reset_password():
 @enforce_subscription
 def user_create_project_page():
     user = current_user()
+    dev_test_entitled = has_dev_test_entitlement(user)
 
     # enforce_subscription already checked.
     # This is just an extra safety check (optional)
-    if not user.can_create_project:
+    if not user.can_create_project and not dev_test_entitled:
         flash("Project limit reached. Please upgrade your plan.", "error")
         return redirect(url_for("subscribe_page"))
 
     max_pairs_per_project = get_plan_pairs_limit(user)
-    if max_pairs_per_project is None:
+    if max_pairs_per_project is None and not dev_test_entitled:
         flash("Pairs allowed per project is not configured for your current plan. Please contact admin.", "error")
         return redirect(url_for("subscribe_page"))
 
-    return render_template("user/user_create_project.html", user=user, max_pairs_per_project=max_pairs_per_project)
+    return render_template(
+        "user/user_create_project.html",
+        user=user,
+        max_pairs_per_project=max_pairs_per_project,
+        dev_test_entitled=dev_test_entitled,
+    )
 
 
 
@@ -2647,30 +3097,40 @@ def user_create_project_page():
 def handle_upload():
     """Optimized project creation with background processing for MULTIPLE PAIRS"""
     user = current_user()
+    dev_test_entitled = has_dev_test_entitlement(user)
+    upload_id = (request.form.get("upload_id") or str(uuid.uuid4())).strip()[:80]
+    request_start = time.time()
+    _upload_log("UPLOAD REQUEST ENTER", upload_id, user_id=user.id, content_length=request.content_length)
 
-    if not user.can_create_project:
+    if not user.can_create_project and not dev_test_entitled:
         flash("Project limit reached. Please upgrade your plan.", "error")
         return redirect(url_for("user_create_project_page"))
 
     t0 = time.time()
+    upload_timing = {
+        "files_persisted_at": None,
+        "jobs_scheduled_at": None,
+    }
 
     # Get project name and uploaded files
     name = request.form.get("name", "Untitled Project")
     images = request.files.getlist("images")
     videos = request.files.getlist("videos")
+    _upload_log("UPLOAD BODY READY", upload_id, user_id=user.id, pair_count=len(images), duration_ms=round((time.time() - request_start) * 1000))
 
     # Validation
+    _upload_log("UPLOAD VALIDATION START", upload_id, user_id=user.id, pair_count=len(images))
     if not images or not videos or len(images) != len(videos):
         flash("Error: Please upload equal number of images and videos", "error")
         return redirect(url_for("user_create_project_page"))
 
     # Get max pairs based on subscription plan only
     max_pairs = get_plan_pairs_limit(user)
-    if max_pairs is None:
+    if max_pairs is None and not dev_test_entitled:
         flash("Pairs allowed per project is not configured for your current plan. Please contact admin.", "error")
         return redirect(url_for("user_create_project_page"))
 
-    if len(images) > max_pairs:
+    if max_pairs is not None and len(images) > max_pairs:
         flash(f"Your current plan allows maximum {max_pairs} pairs per project.", "error")
         return redirect(url_for("user_create_project_page"))
 
@@ -2684,6 +3144,12 @@ def handle_upload():
         if video_file.content_length and video_file.content_length > MAX_VIDEO_SIZE:
             flash("Video file exceeds allowed size limit.", "error")
             return redirect(url_for("user_create_project_page"))
+
+    try:
+        marker_metadata = [_parse_marker_meta(i) for i in range(len(images))]
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("user_create_project_page"))
 
     # ✅ STEP 1: Create project record (FAST)
     # Assign a per-user project index so each user sees projects numbered 1,2,3...
@@ -2702,12 +3168,14 @@ def handle_upload():
         user_project_index = int(existing_count or 0) + 1
 
     project = Project(name=name, owner_user_id=user.id, user_project_index=user_project_index)
+    _upload_log("UPLOAD PERSIST START", upload_id, user_id=user.id, pair_count=len(images))
     db.session.add(project)
     db.session.commit()
 
     # ✅ STEP 2: Save ALL files quickly with standardization
     pairs_data = []
     for i, (image_file, video_file) in enumerate(zip(images, videos)):
+        marker_meta = marker_metadata[i]
         # Generate filenames
         img_filename = f"{project.id}_{i}.jpg"
         vid_ext = os.path.splitext(video_file.filename or "")[1].lower() or ".mp4"
@@ -2718,7 +3186,6 @@ def handle_upload():
         image_file.save(img_path)
         
         # ✅ FIX: Standardize image to 1200px (match ORB_MAX_DIM)
-        standardize_uploaded_image(img_path, target_size=1200)
         
         vid_path = os.path.join(VIDEOS_DIR, vid_filename)
         video_file.save(vid_path)
@@ -2730,6 +3197,23 @@ def handle_upload():
             image_filename=img_filename,
             video_filename=vid_filename,
             image_path=f"/image/{project.id}/{i}",
+            original_image_name=image_file.filename,
+            original_video_name=video_file.filename,
+            image_size=marker_meta["processed_size_bytes"] or image_file.content_length,
+            video_size=video_file.content_length,
+            marker_mode=marker_meta["mode"],
+            marker_crop_x=marker_meta["crop_x"],
+            marker_crop_y=marker_meta["crop_y"],
+            marker_crop_width=marker_meta["crop_width"],
+            marker_crop_height=marker_meta["crop_height"],
+            marker_rotation=marker_meta["rotation"],
+            marker_original_width=marker_meta["original_width"],
+            marker_original_height=marker_meta["original_height"],
+            marker_processed_width=marker_meta["processed_width"],
+            marker_processed_height=marker_meta["processed_height"],
+            marker_source_size_bytes=marker_meta["source_size_bytes"],
+            marker_processed_size_bytes=marker_meta["processed_size_bytes"],
+            marker_display_orientation=marker_meta["display_orientation"],
             is_processed=False,
             processing_status="uploaded",
             feature_extraction_status="pending",
@@ -2745,8 +3229,11 @@ def handle_upload():
         })
 
     # ✅ STEP 3: Update user count
+    upload_timing["files_persisted_at"] = time.time()
+    _upload_log("UPLOAD PERSIST DONE", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), duration_ms=round((upload_timing["files_persisted_at"] - request_start) * 1000))
     user.projects_used = int(user.projects_used or 0) + 1
     db.session.commit()
+    _upload_log("UPLOAD DB COMMIT DONE", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data))
 
     # ✅ STEP 4: Generate QR code (FAST)
     user_name = (user.first_name or user.email.split("@")[0]).strip()
@@ -2786,8 +3273,9 @@ def handle_upload():
         import threading
         from concurrent.futures import ThreadPoolExecutor
         
-        def process_single_pair_bg(project_id, pair_index, img_filename):
+        def process_single_pair_bg(project_id, pair_index, img_filename, upload_id):
             """Process ONE pair in background - YOUR EXACT LOGIC"""
+            pair_start = time.time()
             try:
                 # Get image path
                 img_path = os.path.join(IMAGES_DIR, img_filename)
@@ -2808,6 +3296,7 @@ def handle_upload():
                 npz_path = os.path.join(FEATURES_DIR, f"{project_id}_{pair_index}.npz")
                 
                 # Process this single pair
+                standardize_uploaded_image(img_path, target_size=1200)
                 make_feature_working_jpeg(img_path, work_img_path, max_dim=ORB_MAX_DIM, jpeg_quality=92)
                 extract_features_multi(work_img_path, npz_path, max_dim=ORB_MAX_DIM)
                 
@@ -2833,11 +3322,13 @@ def handle_upload():
                         proj = Project.query.get(project_id)
                         display_pid = proj.user_project_index if proj and proj.user_project_index else project_id
                         print(f"[BG] Processed pair {pair_index} for project {display_pid} (global {project_id})")
+                        _upload_log("BG PAIR DONE", upload_id, project_id=project_id, pair_index=pair_index, duration_ms=round((time.time() - pair_start) * 1000), status="completed")
                 
                 return True
                 
             except Exception as e:
                 print(f"[BG ERROR] Failed pair {pair_index}: {e}")
+                _upload_log("BG PAIR DONE", upload_id, project_id=project_id, pair_index=pair_index, duration_ms=round((time.time() - pair_start) * 1000), status="failed", error=str(e)[:120])
                 with app.app_context():
                     pair = ProjectPair.query.filter_by(
                         project_id=project_id,
@@ -2851,13 +3342,15 @@ def handle_upload():
                         db.session.commit()
                 return False
         
-        def background_processing_all_pairs(project_id, all_pairs_data):
+        def background_processing_all_pairs(project_id, all_pairs_data, upload_id):
             """Process ALL pairs in parallel"""
+            bg_start = time.time()
             with app.app_context():
                 try:
                     proj = Project.query.get(project_id)
                     display_pid = proj.user_project_index if proj and proj.user_project_index else project_id
                     print(f"[BG START] Processing {len(all_pairs_data)} pairs for project {display_pid} (global {project_id})")
+                    _upload_log("BG START", upload_id, project_id=project_id, pair_count=len(all_pairs_data))
                     
                     # Process pairs in parallel for speed
                     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
@@ -2867,7 +3360,8 @@ def handle_upload():
                                 process_single_pair_bg,
                                 project_id,
                                 pair_data["pair_index"],
-                                pair_data["image_filename"]
+                                pair_data["image_filename"],
+                                upload_id
                             )
                             futures.append(future)
                         
@@ -2878,22 +3372,26 @@ def handle_upload():
                         proj = Project.query.get(project_id)
                         display_pid = proj.user_project_index if proj and proj.user_project_index else project_id
                         print(f"[BG DONE] Project {display_pid} (global {project_id}): {successful}/{len(all_pairs_data)} pairs processed")
+                        _upload_log("BG DONE", upload_id, project_id=project_id, pair_count=len(all_pairs_data), successful=successful, duration_ms=round((time.time() - bg_start) * 1000))
                     
                     # Clear feature cache
                     load_features.cache_clear()
                     
                 except Exception as e:
                     print(f"[BG FATAL ERROR] {e}")
+                    _upload_log("BG DONE", upload_id, project_id=project_id, pair_count=len(all_pairs_data), status="failed", error=str(e)[:120])
                     import traceback
                     traceback.print_exc()
         
         # Start background processing
         thread = threading.Thread(
             target=background_processing_all_pairs,
-            args=(project.id, pairs_data),
+            args=(project.id, pairs_data, upload_id),
             daemon=True
         )
         thread.start()
+        upload_timing["jobs_scheduled_at"] = time.time()
+        _upload_log("UPLOAD BG SCHEDULED", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data))
         
         print(f"[UPLOAD] Started background processing for {len(pairs_data)} pairs")
         
@@ -2901,7 +3399,11 @@ def handle_upload():
         print(f"Failed to start background processing: {e}")
 
     display_pid = project.user_project_index if project and project.user_project_index else project.id
-    print(f"[UPLOAD COMPLETE] Project {display_pid} (global {project.id}) created in {time.time() - t0:.2f}s with {len(pairs_data)} pairs")
+    total_time = time.time() - t0
+    persist_time = (upload_timing["files_persisted_at"] or time.time()) - t0
+    schedule_time = (upload_timing["jobs_scheduled_at"] or time.time()) - (upload_timing["files_persisted_at"] or t0)
+    print(f"[UPLOAD COMPLETE] Project {display_pid} (global {project.id}) created in {total_time:.2f}s with {len(pairs_data)} pairs; persist={persist_time:.2f}s schedule={schedule_time:.2f}s")
+    _upload_log("UPLOAD RESPONSE SENT", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), duration_ms=round(total_time * 1000))
 
     flash("Project created successfully! Features are processing in the background.", "success")
     return redirect(url_for("success_page", project_id=project.id))
@@ -2938,7 +3440,7 @@ def pricing_page():
     """Public pricing page — no login required. Passes user=None for guests."""
     plans = SubscriptionPlan.query.filter_by(is_active=True).order_by(SubscriptionPlan.display_order.asc()).all()
     user = current_user()  # None for guests, User object if logged in
-    return render_template("user/subscribe.html", plans=plans, user=user, get_system_config=get_system_config)
+    return render_template("user/subscribe.html", plans=plans, user=user, get_system_config=get_system_config, dev_test_entitled=has_dev_test_entitlement(user))
 
 
 @app.route("/subscribe", methods=["GET"])
@@ -2951,13 +3453,20 @@ def subscribe_page():
     return render_template("user/subscribe.html", 
                          plans=plans, 
                          user=user,
-                         get_system_config=get_system_config)
+                         get_system_config=get_system_config,
+                         dev_test_entitled=has_dev_test_entitlement(user))
 
 @app.route("/create-razorpay-order", methods=["POST"])
 @login_required
 def create_razorpay_order():
     """Create Razorpay order for subscription"""
     user = current_user()
+    if has_dev_test_entitlement(user):
+        return jsonify({
+            "success": False,
+            "error": "Development test accounts already have unlimited access. Payment is disabled."
+        }), 403
+
     plan_id = request.form.get("plan_id", type=int)
     
     if not plan_id:
@@ -3282,6 +3791,16 @@ def detect_init():
         
         project_id = request.form.get("project_id", type=int)
         test_file = request.files.get("test_image")
+        scanner_generation = request.form.get("scanner_generation")
+        source_frame_width = request.form.get("source_frame_width", type=int)
+        source_frame_height = request.form.get("source_frame_height", type=int)
+        orientation_revision = request.form.get("orientation_revision")
+        detection_meta = {
+            "scanner_generation": scanner_generation,
+            "source_frame_width": source_frame_width,
+            "source_frame_height": source_frame_height,
+            "orientation_revision": orientation_revision,
+        }
         
         print(f"📌 project_id: {project_id}")
         print(f"📌 test_file: {test_file.filename if test_file else 'None'}")
@@ -3329,7 +3848,11 @@ def detect_init():
                 "reason": f"Project is processing ({unprocessed}/{total_pairs} pairs remaining)",
                 "progress": f"0/{total_pairs}",
                 "total_pairs": total_pairs,
-                "ready_pairs": 0
+                "ready_pairs": 0,
+                "scanner_generation": scanner_generation,
+                "source_frame_width": source_frame_width,
+                "source_frame_height": source_frame_height,
+                "orientation_revision": orientation_revision,
             }), 200
         
         # Get scan session info
@@ -3380,7 +3903,7 @@ def detect_init():
                 
                 # ✅ ONLY check scan limits for USER projects (not admin projects)
                 if not is_admin_project:
-                    if not user.can_scan:
+                    if not user.can_scan and not has_dev_test_entitlement(user):
                         print(f"❌ User cannot scan - limit reached")
                         return jsonify({
                             "detected": False, 
@@ -3403,7 +3926,7 @@ def detect_init():
             print(f"❌ Invalid image")
             if scan_log and not is_admin_project:
                 db.session.commit()
-            return jsonify({"detected": False, "reason": "Invalid image"}), 400
+            return jsonify({"detected": False, "reason": "Invalid image", **detection_meta}), 400
         
         print(f"📸 Original image shape: {original_img.shape}")
         
@@ -3452,7 +3975,11 @@ def detect_init():
                 "detected": False, 
                 "reason": f"Too few features ({len(test_kp) if test_kp else 0})", 
                 "frame_width": frame_w, 
-                "frame_height": frame_h
+                "frame_height": frame_h,
+                "scanner_generation": scanner_generation,
+                "source_frame_width": source_frame_width,
+                "source_frame_height": source_frame_height,
+                "orientation_revision": orientation_revision,
             }), 200
         
         print(f"🔍 Found {len(test_kp)} features")
@@ -3520,7 +4047,11 @@ def detect_init():
                 "detected": False, 
                 "reason": f"Mobile detection failed: Found {best_good} matches",
                 "frame_width": frame_w, 
-                "frame_height": frame_h
+                "frame_height": frame_h,
+                "scanner_generation": scanner_generation,
+                "source_frame_width": source_frame_width,
+                "source_frame_height": source_frame_height,
+                "orientation_revision": orientation_revision,
             }), 200
         
         print(f"✅ Best match: pair {best_match_id} with {best_good} matches")
@@ -3559,6 +4090,27 @@ def detect_init():
             return jsonify({"detected": False, "reason": "Weak homography"}), 200
         
         tw, th = feats["w"], feats["h"]
+        quality_ok, homography_quality = evaluate_homography_quality(
+            src_arr, dst_arr, H, mask, tw, th, frame_w, frame_h, scale=scale
+        )
+        print(f"Homography quality: {homography_quality}")
+
+        if not quality_ok:
+            print(f"Rejected pose: {homography_quality.get('reason')}")
+            if scan_log and not is_admin_project:
+                db.session.commit()
+            return jsonify({
+                "detected": False,
+                "reason": f"Rejected pose: {homography_quality.get('reason')}",
+                "frame_width": frame_w,
+                "frame_height": frame_h,
+                "scanner_generation": scanner_generation,
+                "source_frame_width": source_frame_width,
+                "source_frame_height": source_frame_height,
+                "orientation_revision": orientation_revision,
+                "homography_quality": homography_quality,
+            }), 200
+
         rect = np.array([[0, 0], [tw, 0], [tw, th], [0, th]], dtype=np.float32).reshape(-1, 1, 2)
         pts = cv2.perspectiveTransform(rect, H).reshape(4, 2)
         corners = [(float(p[0] / scale), float(p[1] / scale)) for p in pts]
@@ -3607,6 +4159,8 @@ def detect_init():
         
         corners_out = [{"x": c[0], "y": c[1]} for c in corners]
         points_out = [{"x": float(p[0]), "y": float(p[1])} for p in pts_track.reshape(-1, 2)]
+        matched_pair = next((p for p in processed_pairs if p.pair_index == best_match_id), None)
+        marker_mode = getattr(matched_pair, "marker_mode", None) or "full_image"
         
         if project.owner_admin_id:
             matched_video_url = url_for("serve_admin_video", project_id=project_id, image_id=best_match_id, _external=True,_scheme="https")
@@ -3624,8 +4178,14 @@ def detect_init():
             "init_points": points_out,
             "frame_width": frame_w,
             "frame_height": frame_h,
+            "scanner_generation": scanner_generation,
+            "source_frame_width": source_frame_width,
+            "source_frame_height": source_frame_height,
+            "orientation_revision": orientation_revision,
             "variant": best_tag,
             "inliers": inliers,
+            "homography_quality": homography_quality,
+            "marker_mode": marker_mode,
             "top_checked": top_ids,
             "scan_session_id": scan_session_id if user_id else None,
             "ready_pairs": len(processed_pairs),
@@ -3730,6 +4290,12 @@ def scanner_session_end():
             print("⏭️ Session already counted, skipping")
             return jsonify({"ok": True, "counted": False, "reason": "Already counted"})
         
+        if has_dev_test_entitlement(user):
+            successful_scan.counted = True
+            db.session.commit()
+            print("[DEV TEST ENTITLEMENT] Scan count bypassed for local test user")
+            return jsonify({"ok": True, "counted": False, "reason": "Development test entitlement"})
+
         # COUNT THE SCAN
         old_count = user.scans_used
         user.scans_used = (user.scans_used or 0) + 1
@@ -3770,6 +4336,8 @@ def detect_track():
         
         if project_id is None or pair_id is None or test_file is None:
             return jsonify({"ok": False, "reason": "Missing project_id/pair_id/image"}), 400
+
+        pair_record = ProjectPair.query.filter_by(project_id=project_id, pair_index=pair_id).first()
         
         feats = load_features(project_id, pair_id)
         if feats is None:
@@ -3834,6 +4402,18 @@ def detect_track():
             return jsonify({"ok": False, "reason": "Weak homography", "frame_width": frame_w, "frame_height": frame_h}), 200
         
         tw, th = feats["w"], feats["h"]
+        quality_ok, homography_quality = evaluate_homography_quality(
+            src_arr, dst_arr, H, mask, tw, th, frame_w, frame_h, scale=scale
+        )
+        if not quality_ok:
+            return jsonify({
+                "ok": False,
+                "reason": f"Rejected pose: {homography_quality.get('reason')}",
+                "frame_width": frame_w,
+                "frame_height": frame_h,
+                "homography_quality": homography_quality,
+            }), 200
+
         rect = np.array([[0, 0], [tw, 0], [tw, th], [0, th]], dtype=np.float32).reshape(-1, 1, 2)
         pts = cv2.perspectiveTransform(rect, H).reshape(4, 2)
         corners = [(float(p[0] / scale), float(p[1] / scale)) for p in pts]
@@ -3849,7 +4429,9 @@ def detect_track():
             "frame_width": frame_w,
             "frame_height": frame_h,
             "variant": best_tag,
-            "inliers": inliers
+            "inliers": inliers,
+            "homography_quality": homography_quality,
+            "marker_mode": getattr(pair_record, "marker_mode", None) or "full_image"
         }), 200
         
     except Exception as e:
@@ -5771,6 +6353,7 @@ if __name__ == "__main__":
     with app.app_context():
         # Create all tables first
         db.create_all()
+        ensure_marker_schema()
         
         # Then populate with default data
         bootstrap_database()

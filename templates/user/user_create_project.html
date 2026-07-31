@@ -912,6 +912,185 @@
       border-left: 4px solid #60a5fa;
     }
 
+    .marker-tools {
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .marker-options {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .marker-option {
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 14px;
+      padding: 10px;
+      background: rgba(0, 0, 0, 0.18);
+      color: #fff;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .marker-option.active {
+      border-color: rgba(0, 212, 255, 0.75);
+      box-shadow: 0 0 0 1px rgba(0, 212, 255, 0.24) inset;
+    }
+
+    .marker-option strong,
+    .marker-status strong {
+      display: block;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .marker-option span,
+    .marker-status span {
+      display: block;
+      margin-top: 5px;
+      color: rgba(255, 255, 255, .66);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .marker-preview {
+      min-height: 96px;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border-radius: 12px;
+      border: 1px dashed rgba(255, 255, 255, .16);
+      background: rgba(0, 0, 0, .20);
+      color: rgba(255, 255, 255, .62);
+      font-size: 12px;
+    }
+
+    .marker-preview img {
+      width: 100%;
+      height: 120px;
+      object-fit: contain;
+    }
+
+    .upload-progress {
+      display: none;
+      margin-top: 16px;
+      padding: 14px;
+      border-radius: 16px;
+      border: 1px solid rgba(0, 212, 255, .20);
+      background: rgba(0, 212, 255, .08);
+    }
+
+    .upload-progress-bar {
+      height: 8px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, .12);
+      margin-top: 10px;
+    }
+
+    .upload-progress-bar span {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, var(--accent), var(--primary));
+    }
+
+    .crop-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 3000;
+      background: rgba(0, 0, 0, .88);
+      padding: 18px;
+    }
+
+    .crop-shell {
+      max-width: 980px;
+      margin: 0 auto;
+      height: calc(100vh - 36px);
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+    }
+
+    .crop-toolbar,
+    .crop-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      color: #fff;
+    }
+
+    .crop-stage {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 220px;
+      gap: 14px;
+    }
+
+    .crop-canvas-wrap {
+      min-height: 320px;
+      border-radius: 16px;
+      overflow: hidden;
+      background: #050505;
+      border: 1px solid rgba(255, 255, 255, .14);
+      touch-action: none;
+    }
+
+    #cropCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: move;
+    }
+
+    .crop-side {
+      border-radius: 16px;
+      padding: 14px;
+      background: rgba(255, 255, 255, .06);
+      color: #fff;
+      overflow: auto;
+    }
+
+    .crop-side img {
+      width: 100%;
+      border-radius: 10px;
+      margin: 10px 0;
+      background: #000;
+    }
+
+    .crop-btn {
+      border: 1px solid rgba(255, 255, 255, .18);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: rgba(255, 255, 255, .08);
+      color: #fff;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .crop-btn.primary {
+      background: linear-gradient(90deg, var(--primary), var(--secondary));
+    }
+
+    @media (max-width: 780px) {
+      .marker-options,
+      .crop-stage {
+        grid-template-columns: 1fr;
+      }
+      .crop-shell {
+        height: calc(100vh - 20px);
+      }
+    }
+
     @keyframes slideIn {
       from {
         transform: translateX(20px);
@@ -981,6 +1160,8 @@
           <div class="help-text" id="pairLimitMessage" style="margin-bottom:16px; color:#d1d5db; font-size:0.95rem;">
             {% if is_admin %}
             Admin mode: unlimited image-video pairs allowed per project.
+            {% elif dev_test_entitled %}
+            Development test account: unlimited image-video pairs allowed locally.
             {% else %}
             Your current plan allows up to {{ max_pairs_per_project }} image-video pair(s) per project.
             {% endif %}
@@ -1027,13 +1208,80 @@
 
       </div>
     </form>
+    <div class="upload-progress" id="uploadProgress">
+      <div id="uploadProgressText">Preparing upload...</div>
+      <div class="upload-progress-bar"><span id="uploadProgressFill"></span></div>
+    </div>
+  </div>
+
+  <div class="crop-modal" id="cropModal" aria-hidden="true">
+    <div class="crop-shell">
+      <div class="crop-toolbar">
+        <div>
+          <strong>Crop marker area</strong>
+          <div style="font-size:12px;color:rgba(255,255,255,.68);margin-top:4px;">Select the exact card, poster, label, artwork, package or printed area that should trigger the video.</div>
+        </div>
+        <button type="button" class="crop-btn" onclick="closeCropModal()">Close</button>
+      </div>
+      <div class="crop-stage">
+        <div class="crop-canvas-wrap">
+          <canvas id="cropCanvas"></canvas>
+        </div>
+        <aside class="crop-side">
+          <strong>This area will become the marker</strong>
+          <img id="cropPreview" alt="Marker crop preview">
+          <div class="marker-status" id="cropQuality"><strong>Usable marker</strong><span>Adjust crop to evaluate marker quality.</span></div>
+          <ul style="font-size:12px;line-height:1.55;color:rgba(255,255,255,.70);padding-left:18px;margin-top:12px;">
+            <li>Crop tightly around the intended marker.</li>
+            <li>Exclude tables, walls, floors, hands and nearby objects.</li>
+            <li>Use an image with clear visual detail.</li>
+            <li>Avoid blur, glare and large blank areas.</li>
+          </ul>
+        </aside>
+      </div>
+      <div class="crop-actions">
+        <div>
+          <button type="button" class="crop-btn" onclick="resetCrop()">Reset</button>
+          <button type="button" class="crop-btn" onclick="rotateCropImage()">Rotate 90 degrees</button>
+          <button type="button" class="crop-btn" onclick="setFullImageMode(activeCropPairId)">Use full image as marker</button>
+        </div>
+        <button type="button" class="crop-btn primary" onclick="useCurrentMarker()">Use this marker</button>
+      </div>
+    </div>
   </div>
 
   <script>
     let pairCounter = 0;
     let currentFiles = {};
     const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
-    const MAX_PAIRS_PER_PROJECT = IS_ADMIN ? Infinity : Number({{ max_pairs_per_project or 0 }});
+    const IS_DEV_TEST = {{ 'true' if dev_test_entitled else 'false' }};
+    const MAX_PAIRS_PER_PROJECT = (IS_ADMIN || IS_DEV_TEST) ? Infinity : Number({{ max_pairs_per_project or 0 }});
+    const MARKER_LONG_EDGE = 1400;
+    const MARKER_JPEG_QUALITY = 0.86;
+    let activeCropPairId = null;
+    let activeCropImage = null;
+    let cropDrag = null;
+    const cropCanvas = () => document.getElementById('cropCanvas');
+    const cropCtx = () => cropCanvas().getContext('2d');
+
+    function createEmptyPairState() {
+      return {
+        image: null,
+        video: null,
+        imageUrl: null,
+        videoUrl: null,
+        markerMode: 'crop',
+        crop: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+        rotation: 0,
+        originalWidth: 0,
+        originalHeight: 0,
+        processedFile: null,
+        processedPreviewUrl: null,
+        processedWidth: 0,
+        processedHeight: 0,
+        quality: { status: 'Preparing marker', guidance: ['Select an image to choose the marker area.'] }
+      };
+    }
 
     document.addEventListener('DOMContentLoaded', function () {
       addPair();
@@ -1053,7 +1301,7 @@
 
     function addPair() {
       const currentCount = document.querySelectorAll('.pair-item').length;
-      if (!IS_ADMIN && currentCount >= MAX_PAIRS_PER_PROJECT) {
+      if (!IS_ADMIN && !IS_DEV_TEST && currentCount >= MAX_PAIRS_PER_PROJECT) {
         alert(`Your current plan allows up to ${MAX_PAIRS_PER_PROJECT} image-video pair(s) per project.`);
         return;
       }
@@ -1127,12 +1375,26 @@
               </div>
             </div>
           </div>
+          <div class="marker-tools" id="marker-tools-${pairId}">
+            <div class="marker-options">
+              <button type="button" class="marker-option active" id="marker-crop-${pairId}" onclick="setCropMode(${pairId})">
+                <strong>Crop marker area</strong>
+                <span>Select the exact card, poster, label, artwork, package or printed area that should trigger the video.</span>
+              </button>
+              <button type="button" class="marker-option" id="marker-full-${pairId}" onclick="setFullImageMode(${pairId})">
+                <strong>Use full image as marker</strong>
+                <span>Use everything visible in this image as the marker, including its background.</span>
+              </button>
+            </div>
+            <div class="marker-preview" id="marker-preview-${pairId}">This area will become the marker</div>
+            <div class="marker-status" id="marker-quality-${pairId}"><strong>Preparing marker</strong><span>Select an image to choose the marker area.</span></div>
+          </div>
         </div>
       `;
 
       document.getElementById('pairsContainer').insertAdjacentHTML('beforeend', pairHTML);
 
-      currentFiles[pairId] = { image: null, video: null, imageUrl: null, videoUrl: null };
+      currentFiles[pairId] = createEmptyPairState();
 
       updateFormFields();
       updatePreview();
@@ -1264,6 +1526,299 @@
       });
     }
 
+    async function loadImageForPair(pairId) {
+      const pair = currentFiles[pairId];
+      if (!pair || !pair.image) return null;
+      const img = new Image();
+      img.decoding = 'async';
+      img.src = pair.imageUrl;
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+      pair.originalWidth = img.naturalWidth;
+      pair.originalHeight = img.naturalHeight;
+      return img;
+    }
+
+    async function setCropMode(pairId) {
+      const pair = currentFiles[pairId];
+      if (!pair || !pair.image) return;
+      pair.markerMode = 'crop';
+      updateMarkerControls(pairId);
+      await openCropModal(pairId);
+    }
+
+    async function setFullImageMode(pairId) {
+      const pair = currentFiles[pairId];
+      if (!pair || !pair.image) return;
+      pair.markerMode = 'full_image';
+      pair.crop = { x: 0, y: 0, width: 1, height: 1 };
+      pair.quality = { status: 'Usable marker', guidance: ['The scanner will use the whole image, including its background.'] };
+      await prepareMarkerPreview(pairId);
+      updateMarkerControls(pairId);
+      updateFormFields();
+      if (activeCropPairId === pairId) closeCropModal();
+    }
+
+    function updateMarkerControls(pairId) {
+      const pair = currentFiles[pairId];
+      if (!pair) return;
+      document.getElementById(`marker-crop-${pairId}`)?.classList.toggle('active', pair.markerMode === 'crop');
+      document.getElementById(`marker-full-${pairId}`)?.classList.toggle('active', pair.markerMode === 'full_image');
+      const quality = document.getElementById(`marker-quality-${pairId}`);
+      if (quality) {
+        quality.innerHTML = `<strong>${pair.quality.status}</strong><span>${pair.quality.guidance.join(' ')}</span>`;
+      }
+    }
+
+    async function openCropModal(pairId) {
+      activeCropPairId = pairId;
+      activeCropImage = await loadImageForPair(pairId);
+      const modal = document.getElementById('cropModal');
+      modal.style.display = 'block';
+      modal.setAttribute('aria-hidden', 'false');
+      resizeCropCanvas();
+      drawCropCanvas();
+      updateCropPreview();
+    }
+
+    function closeCropModal() {
+      const modal = document.getElementById('cropModal');
+      modal.style.display = 'none';
+      modal.setAttribute('aria-hidden', 'true');
+      cropDrag = null;
+    }
+
+    function resetCrop() {
+      const pair = currentFiles[activeCropPairId];
+      if (!pair) return;
+      pair.crop = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+      pair.rotation = 0;
+      drawCropCanvas();
+      updateCropPreview();
+    }
+
+    function rotateCropImage() {
+      const pair = currentFiles[activeCropPairId];
+      if (!pair) return;
+      pair.rotation = (pair.rotation + 90) % 360;
+      drawCropCanvas();
+      updateCropPreview();
+    }
+
+    function cropDrawRect() {
+      const pair = currentFiles[activeCropPairId];
+      const canvas = cropCanvas();
+      const image = activeCropImage;
+      if (!pair || !image) return null;
+      const scale = Math.min(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight);
+      const drawW = image.naturalWidth * scale;
+      const drawH = image.naturalHeight * scale;
+      const offsetX = (canvas.width - drawW) / 2;
+      const offsetY = (canvas.height - drawH) / 2;
+      return {
+        imageX: offsetX,
+        imageY: offsetY,
+        imageW: drawW,
+        imageH: drawH,
+        x: offsetX + pair.crop.x * drawW,
+        y: offsetY + pair.crop.y * drawH,
+        w: pair.crop.width * drawW,
+        h: pair.crop.height * drawH
+      };
+    }
+
+    function resizeCropCanvas() {
+      const canvas = cropCanvas();
+      const wrap = canvas.parentElement;
+      const rect = wrap.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = Math.max(320, Math.floor(rect.width * dpr));
+      canvas.height = Math.max(320, Math.floor(rect.height * dpr));
+    }
+
+    function drawCropCanvas() {
+      const canvas = cropCanvas();
+      const ctx = cropCtx();
+      const pair = currentFiles[activeCropPairId];
+      if (!pair || !activeCropImage) return;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const r = cropDrawRect();
+      ctx.save();
+      ctx.translate(r.imageX + r.imageW / 2, r.imageY + r.imageH / 2);
+      ctx.rotate((pair.rotation * Math.PI) / 180);
+      ctx.drawImage(activeCropImage, -r.imageW / 2, -r.imageH / 2, r.imageW, r.imageH);
+      ctx.restore();
+      ctx.fillStyle = 'rgba(0,0,0,.58)';
+      ctx.fillRect(r.imageX, r.imageY, r.imageW, r.imageH);
+      ctx.clearRect(r.x, r.y, r.w, r.h);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(r.x, r.y, r.w, r.h);
+      ctx.clip();
+      ctx.translate(r.imageX + r.imageW / 2, r.imageY + r.imageH / 2);
+      ctx.rotate((pair.rotation * Math.PI) / 180);
+      ctx.drawImage(activeCropImage, -r.imageW / 2, -r.imageH / 2, r.imageW, r.imageH);
+      ctx.restore();
+      ctx.strokeStyle = '#00d4ff';
+      ctx.lineWidth = 3;
+      ctx.strokeRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = '#fff';
+      const handles = cropHandles(r);
+      handles.forEach(h => ctx.fillRect(h.x - 6, h.y - 6, 12, 12));
+    }
+
+    function cropHandles(r) {
+      return [
+        { name: 'nw', x: r.x, y: r.y }, { name: 'n', x: r.x + r.w / 2, y: r.y },
+        { name: 'ne', x: r.x + r.w, y: r.y }, { name: 'e', x: r.x + r.w, y: r.y + r.h / 2 },
+        { name: 'se', x: r.x + r.w, y: r.y + r.h }, { name: 's', x: r.x + r.w / 2, y: r.y + r.h },
+        { name: 'sw', x: r.x, y: r.y + r.h }, { name: 'w', x: r.x, y: r.y + r.h / 2 }
+      ];
+    }
+
+    function cropPointer(event) {
+      const canvas = cropCanvas();
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const touch = event.touches ? event.touches[0] : event;
+      return { x: (touch.clientX - rect.left) * scaleX, y: (touch.clientY - rect.top) * scaleY };
+    }
+
+    function updateCropFromDrag(point) {
+      const pair = currentFiles[activeCropPairId];
+      const r = cropDrawRect();
+      if (!pair || !r || !cropDrag) return;
+      const minSize = 0.04;
+      let x1 = cropDrag.start.x;
+      let y1 = cropDrag.start.y;
+      let x2 = cropDrag.start.x + cropDrag.start.w;
+      let y2 = cropDrag.start.y + cropDrag.start.h;
+      const dx = (point.x - cropDrag.point.x) / r.imageW;
+      const dy = (point.y - cropDrag.point.y) / r.imageH;
+      if (cropDrag.mode === 'move') {
+        x1 += dx; x2 += dx; y1 += dy; y2 += dy;
+      } else {
+        if (cropDrag.mode.includes('w')) x1 += dx;
+        if (cropDrag.mode.includes('e')) x2 += dx;
+        if (cropDrag.mode.includes('n')) y1 += dy;
+        if (cropDrag.mode.includes('s')) y2 += dy;
+      }
+      x1 = Math.max(0, Math.min(x1, 1 - minSize));
+      y1 = Math.max(0, Math.min(y1, 1 - minSize));
+      x2 = Math.max(x1 + minSize, Math.min(x2, 1));
+      y2 = Math.max(y1 + minSize, Math.min(y2, 1));
+      pair.crop = { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+      drawCropCanvas();
+      updateCropPreview();
+    }
+
+    async function updateCropPreview() {
+      if (!activeCropPairId) return;
+      const pair = currentFiles[activeCropPairId];
+      if (!pair || !activeCropImage) return;
+      const previewUrl = await renderMarkerDataUrl(pair, 360, 0.86);
+      document.getElementById('cropPreview').src = previewUrl;
+      pair.quality = evaluateMarkerQuality(pair);
+      document.getElementById('cropQuality').innerHTML = `<strong>${pair.quality.status}</strong><span>${pair.quality.guidance.join(' ')}</span>`;
+      updateMarkerControls(activeCropPairId);
+    }
+
+    async function useCurrentMarker() {
+      if (!activeCropPairId) return;
+      const pair = currentFiles[activeCropPairId];
+      pair.markerMode = 'crop';
+      await prepareMarkerPreview(activeCropPairId);
+      updateMarkerControls(activeCropPairId);
+      closeCropModal();
+      updateFormFields();
+    }
+
+    function drawCroppedMarkerToCanvas(canvas, img, pair, longEdge) {
+      const crop = pair.markerMode === 'full_image' ? { x: 0, y: 0, width: 1, height: 1 } : pair.crop;
+      const sx = Math.round(crop.x * img.naturalWidth);
+      const sy = Math.round(crop.y * img.naturalHeight);
+      const sw = Math.max(1, Math.round(crop.width * img.naturalWidth));
+      const sh = Math.max(1, Math.round(crop.height * img.naturalHeight));
+      const scale = Math.min(1, longEdge / Math.max(sw, sh));
+      const outW = Math.max(1, Math.round(sw * scale));
+      const outH = Math.max(1, Math.round(sh * scale));
+      const rotated = (pair.rotation || 0) % 180 !== 0;
+      canvas.width = rotated ? outH : outW;
+      canvas.height = rotated ? outW : outH;
+      const ctx = canvas.getContext('2d');
+      ctx.save();
+      ctx.translate(canvas.width / 2, canvas.height / 2);
+      ctx.rotate(((pair.rotation || 0) * Math.PI) / 180);
+      ctx.drawImage(img, sx, sy, sw, sh, -outW / 2, -outH / 2, outW, outH);
+      ctx.restore();
+    }
+
+    async function renderMarkerDataUrl(pair, longEdge, quality) {
+      const img = activeCropImage || await loadImageForPair(activeCropPairId);
+      const canvas = document.createElement('canvas');
+      drawCroppedMarkerToCanvas(canvas, img, pair, longEdge);
+      return canvas.toDataURL('image/jpeg', quality);
+    }
+
+    async function renderMarkerBlob(pairId, longEdge, quality) {
+      activeCropPairId = pairId;
+      const pair = currentFiles[pairId];
+      const img = await loadImageForPair(pairId);
+      const canvas = document.createElement('canvas');
+      drawCroppedMarkerToCanvas(canvas, img, pair, longEdge);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+      pair.processedWidth = canvas.width;
+      pair.processedHeight = canvas.height;
+      pair.processedFile = new File([blob], `marker-${pairId}.jpg`, { type: 'image/jpeg' });
+      return pair.processedFile;
+    }
+
+    async function prepareMarkerPreview(pairId) {
+      const pair = currentFiles[pairId];
+      if (!pair || !pair.image) return;
+      const previous = pair.processedPreviewUrl;
+      activeCropPairId = pairId;
+      activeCropImage = await loadImageForPair(pairId);
+      pair.processedPreviewUrl = await renderMarkerDataUrl(pair, 360, 0.86);
+      if (previous) URL.revokeObjectURL(previous);
+      const preview = document.getElementById(`marker-preview-${pairId}`);
+      if (preview) preview.innerHTML = `<img src="${pair.processedPreviewUrl}" alt="This area will become the marker">`;
+      pair.quality = evaluateMarkerQuality(pair);
+      updateMarkerControls(pairId);
+    }
+
+    function evaluateMarkerQuality(pair) {
+      const crop = pair.markerMode === 'full_image' ? { width: 1, height: 1 } : pair.crop;
+      const markerW = Math.round((pair.originalWidth || 0) * crop.width);
+      const markerH = Math.round((pair.originalHeight || 0) * crop.height);
+      const guidance = [];
+      let score = 2;
+      if (markerW < 360 || markerH < 360) { score--; guidance.push('Marker is too small.'); }
+      if (crop.width * crop.height > 0.82 && pair.markerMode === 'crop') guidance.push('Crop closer to the intended marker.');
+      const aspect = Math.max(markerW, markerH) / Math.max(Math.min(markerW, markerH), 1);
+      if (aspect > 4) { score--; guidance.push('Large blank or narrow areas may cause unstable tracking.'); }
+      if (!guidance.length) guidance.push(pair.markerMode === 'full_image' ? 'The scanner will use the whole image, including its background.' : 'Marker has enough size for local testing.');
+      return { status: score >= 2 ? 'Good marker' : (score >= 1 ? 'Usable marker' : 'Weak marker'), guidance };
+    }
+
+    cropCanvas().addEventListener('mousedown', (event) => {
+      const point = cropPointer(event);
+      const pair = currentFiles[activeCropPairId];
+      const r = cropDrawRect();
+      if (!pair || !r) return;
+      const hit = cropHandles(r).find(h => Math.abs(point.x - h.x) <= 16 && Math.abs(point.y - h.y) <= 16);
+      cropDrag = { mode: hit ? hit.name : 'move', point, start: { ...pair.crop } };
+    });
+    window.addEventListener('mousemove', (event) => { if (cropDrag) updateCropFromDrag(cropPointer(event)); });
+    window.addEventListener('mouseup', () => { cropDrag = null; });
+    cropCanvas().addEventListener('touchstart', (event) => { event.preventDefault(); cropCanvas().dispatchEvent(new MouseEvent('mousedown', { clientX: event.touches[0].clientX, clientY: event.touches[0].clientY })); }, { passive: false });
+    cropCanvas().addEventListener('touchmove', (event) => { event.preventDefault(); if (cropDrag) updateCropFromDrag(cropPointer(event)); }, { passive: false });
+    cropCanvas().addEventListener('wheel', (event) => { event.preventDefault(); }, { passive: false });
+    window.addEventListener('resize', () => { if (activeCropPairId) { resizeCropCanvas(); drawCropCanvas(); } });
+
     function handleFileSelect(input, pairId, type) {
       const file = input.files[0];
       if (!file) return;
@@ -1291,7 +1846,7 @@
       }
 
       const fileUrl = URL.createObjectURL(file);
-      if (!currentFiles[pairId]) currentFiles[pairId] = { image: null, video: null, imageUrl: null, videoUrl: null };
+      if (!currentFiles[pairId]) currentFiles[pairId] = createEmptyPairState();
 
       // Revoke old URLs
       if (type === 'image' && currentFiles[pairId].imageUrl) URL.revokeObjectURL(currentFiles[pairId].imageUrl);
@@ -1300,6 +1855,9 @@
       if (type === 'image') {
         currentFiles[pairId].image = file;
         currentFiles[pairId].imageUrl = fileUrl;
+        currentFiles[pairId].markerMode = 'crop';
+        currentFiles[pairId].crop = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+        currentFiles[pairId].rotation = 0;
 
         const area = document.getElementById(`image-area-${pairId}`);
         const preview = document.getElementById(`image-preview-${pairId}`);
@@ -1307,6 +1865,7 @@
           area.classList.add('has-file');
           preview.innerHTML = `<img src="${fileUrl}" alt="Image Preview">`;
         }
+        openCropModal(pairId);
       } else {
         currentFiles[pairId].video = file;
         currentFiles[pairId].videoUrl = fileUrl;
@@ -1318,6 +1877,19 @@
           // no controls in upload tile; hover shows "Replace" and click opens picker
           preview.innerHTML = `<video src="${fileUrl}" muted playsinline></video>`;
         }
+        const probe = document.createElement('video');
+        probe.preload = 'metadata';
+        probe.src = fileUrl;
+        probe.onloadedmetadata = () => {
+          currentFiles[pairId].videoMeta = {
+            duration: Math.round(probe.duration || 0),
+            size: file.size,
+            mime: file.type,
+            width: probe.videoWidth,
+            height: probe.videoHeight
+          };
+          console.log('[CLIENT VIDEO READY]', { pair_id: pairId, ...currentFiles[pairId].videoMeta });
+        };
       }
 
       updatePreview();
@@ -1328,7 +1900,7 @@
     function updateFormFields() {
       const submitBtn = document.getElementById('submitBtn');
       const projectName = document.getElementById('projectName').value.trim();
-      const hasFiles = Object.values(currentFiles).some(pair => pair.image && pair.video);
+      const hasFiles = Object.values(currentFiles).some(pair => pair.image && pair.video && pair.crop);
 
       submitBtn.disabled = !(hasFiles && projectName);
       submitBtn.style.opacity = submitBtn.disabled ? '0.6' : '1';
@@ -1341,7 +1913,7 @@
       const addPairBtn = document.getElementById('addPairBtn');
       const pairLimitMessage = document.getElementById('pairLimitMessage');
 
-      if (IS_ADMIN) {
+      if (IS_ADMIN || IS_DEV_TEST) {
         if (addPairBtn) {
           addPairBtn.disabled = false;
           addPairBtn.innerHTML = '<i class="fas fa-plus"></i>&nbsp; Add Another Moment';
@@ -1349,7 +1921,7 @@
         }
 
         if (pairLimitMessage) {
-          pairLimitMessage.textContent = `Admin mode: unlimited image-video pairs allowed per project. Current moments: ${pairCount}.`;
+          pairLimitMessage.textContent = `${IS_ADMIN ? 'Admin mode' : 'Development test account'}: unlimited image-video pairs allowed per project. Current moments: ${pairCount}.`;
         }
 
         return;
@@ -1503,26 +2075,144 @@
       updateFormFields();
     }
 
-    // Form validation (keep logic)
-    document.getElementById('projectForm').addEventListener('submit', function (e) {
+    function logClientStage(stage, data) {
+      console.log(`[${stage}]`, data);
+    }
+
+    function setUploadProgress(text, pct) {
+      document.getElementById('uploadProgress').style.display = 'block';
+      document.getElementById('uploadProgressText').textContent = text;
+      document.getElementById('uploadProgressFill').style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
+    }
+
+    function appendMarkerMeta(fd, index, pair) {
+      const crop = pair.markerMode === 'full_image' ? { x: 0, y: 0, width: 1, height: 1 } : pair.crop;
+      fd.append(`marker_${index}_mode`, pair.markerMode);
+      fd.append(`marker_${index}_crop_x`, String(crop.x));
+      fd.append(`marker_${index}_crop_y`, String(crop.y));
+      fd.append(`marker_${index}_crop_width`, String(crop.width));
+      fd.append(`marker_${index}_crop_height`, String(crop.height));
+      fd.append(`marker_${index}_rotation`, String(pair.rotation || 0));
+      fd.append(`marker_${index}_original_width`, String(pair.originalWidth || 0));
+      fd.append(`marker_${index}_original_height`, String(pair.originalHeight || 0));
+      fd.append(`marker_${index}_processed_width`, String(pair.processedWidth || 0));
+      fd.append(`marker_${index}_processed_height`, String(pair.processedHeight || 0));
+      fd.append(`marker_${index}_source_size_bytes`, String(pair.image?.size || 0));
+      fd.append(`marker_${index}_processed_size_bytes`, String(pair.processedFile?.size || 0));
+      fd.append(`marker_${index}_display_orientation`, (pair.originalWidth >= pair.originalHeight) ? 'landscape' : 'portrait');
+    }
+
+    let uploadActive = false;
+
+    document.getElementById('projectForm').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      if (uploadActive) return;
       const projectName = document.getElementById('projectName').value.trim();
-      const hasValidPairs = Object.values(currentFiles).some(pair => pair.image && pair.video);
+      const pairIds = Object.keys(currentFiles).map(n => parseInt(n, 10)).sort((a, b) => a - b);
+      const readyPairs = pairIds.map(id => ({ id, pair: currentFiles[id] })).filter(item => item.pair.image && item.pair.video);
+      const uploadId = (crypto.randomUUID ? crypto.randomUUID() : `upload-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+      const totalStart = performance.now();
 
       if (!projectName) {
-        e.preventDefault();
         alert('Please enter a Story name.');
         return;
       }
 
-      if (!hasValidPairs) {
-        e.preventDefault();
+      if (!readyPairs.length) {
         alert('Please add at least one complete memory with your photo and video.');
         return;
       }
 
       const submitBtn = document.getElementById('submitBtn');
-      submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating Your Story...';
+      uploadActive = true;
       submitBtn.disabled = true;
+      submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing marker...';
+      setUploadProgress('Preparing marker 0/' + readyPairs.length, 2);
+
+      const fd = new FormData();
+      fd.append('name', projectName);
+      fd.append('upload_id', uploadId);
+      const originalBytes = readyPairs.reduce((sum, item) => sum + (item.pair.image?.size || 0), 0);
+      const videoBytes = readyPairs.reduce((sum, item) => sum + (item.pair.video?.size || 0), 0);
+      let optimizedBytes = 0;
+
+      logClientStage('CLIENT PREP START', {
+        upload_id: uploadId,
+        pair_count: readyPairs.length,
+        original_image_bytes: originalBytes,
+        video_bytes: videoBytes,
+        user_agent: navigator.userAgent
+      });
+
+      for (let index = 0; index < readyPairs.length; index++) {
+        const pair = readyPairs[index].pair;
+        setUploadProgress(`Preparing marker ${index + 1}/${readyPairs.length}`, 8 + index * 12);
+        const prepStart = performance.now();
+        if (pair.markerMode === 'full_image') pair.crop = { x: 0, y: 0, width: 1, height: 1 };
+        logClientStage('CLIENT CROP DONE', { upload_id: uploadId, pair_index: index, marker_mode: pair.markerMode, crop: pair.crop });
+        const markerFile = await renderMarkerBlob(readyPairs[index].id, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
+        optimizedBytes += markerFile.size;
+        logClientStage('CLIENT IMAGE COMPRESS DONE', {
+          upload_id: uploadId,
+          pair_index: index,
+          original_image_bytes: pair.image.size,
+          optimized_marker_bytes: markerFile.size,
+          processed_width: pair.processedWidth,
+          processed_height: pair.processedHeight,
+          preparation_duration_ms: Math.round(performance.now() - prepStart),
+          marker_quality: pair.quality?.status
+        });
+        fd.append('images', markerFile, `marker-${index}.jpg`);
+        fd.append('videos', pair.video, pair.video.name || `video-${index}.mp4`);
+        appendMarkerMeta(fd, index, pair);
+      }
+
+      setUploadProgress('Ready to upload', 35);
+      const uploadStart = performance.now();
+      logClientStage('CLIENT UPLOAD START', {
+        upload_id: uploadId,
+        pair_count: readyPairs.length,
+        original_image_bytes: originalBytes,
+        optimized_marker_bytes: optimizedBytes,
+        video_bytes: videoBytes,
+        preparation_duration_ms: Math.round(uploadStart - totalStart)
+      });
+
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', this.action, true);
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) return;
+        const pct = 35 + (event.loaded / event.total) * 55;
+        setUploadProgress(`Uploading ${Math.round(event.loaded / 1024)}KB / ${Math.round(event.total / 1024)}KB`, pct);
+        logClientStage('CLIENT UPLOAD PROGRESS', { upload_id: uploadId, loaded: event.loaded, total: event.total });
+      };
+      xhr.onload = () => {
+        const uploadDuration = performance.now() - uploadStart;
+        logClientStage('CLIENT UPLOAD RESPONSE', {
+          upload_id: uploadId,
+          status: xhr.status,
+          response_url: xhr.responseURL,
+          upload_duration_ms: Math.round(uploadDuration),
+          total_duration_ms: Math.round(performance.now() - totalStart)
+        });
+        setUploadProgress('Uploaded. Processing...', 100);
+        if (xhr.status >= 200 && xhr.status < 400) {
+          window.location.href = xhr.responseURL || '/dashboard';
+        } else {
+          uploadActive = false;
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="fas fa-qrcode"></i> Get My Scan Code';
+          alert('Upload failed. Please try again.');
+        }
+      };
+      xhr.onerror = () => {
+        uploadActive = false;
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-qrcode"></i> Get My Scan Code';
+        setUploadProgress('Failed. Please retry.', 0);
+        alert('Network upload failed. Please retry.');
+      };
+      xhr.send(fd);
     });
   </script>
 </body>
