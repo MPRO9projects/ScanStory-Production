@@ -629,6 +629,13 @@ def _limit_reached(limit_value, used_value):
 
 
 MARKER_MIN_PIXELS = int(os.environ.get("SCANSTORY_MARKER_MIN_PIXELS", "240"))
+VIDEO_UPLOAD_WARNINGS = {
+    "recommended_size_bytes": int(os.environ.get("SCANSTORY_VIDEO_RECOMMENDED_SIZE_BYTES", str(15 * 1024 * 1024))),
+    "warning_size_bytes": int(os.environ.get("SCANSTORY_VIDEO_WARNING_SIZE_BYTES", str(30 * 1024 * 1024))),
+    "recommended_duration_seconds": int(os.environ.get("SCANSTORY_VIDEO_RECOMMENDED_DURATION_SECONDS", "30")),
+    "warning_duration_seconds": int(os.environ.get("SCANSTORY_VIDEO_WARNING_DURATION_SECONDS", "60")),
+    "recommended_max_resolution_height": int(os.environ.get("SCANSTORY_VIDEO_RECOMMENDED_MAX_HEIGHT", "1080")),
+}
 
 
 def _upload_log(stage, upload_id, **fields):
@@ -638,6 +645,14 @@ def _upload_log(stage, upload_id, **fields):
         f"upload_id={upload_id} pid={os.getpid()} thread_id={threading.get_ident()} {payload}".strip()
     )
     sys.stdout.flush()
+
+
+def _video_log_fields(video_file=None, **fields):
+    if video_file is not None:
+        fields.setdefault("filename", video_file.filename)
+        fields.setdefault("mime_type", video_file.mimetype)
+        fields.setdefault("video_size", video_file.content_length)
+    return fields
 
 
 def _parse_marker_meta(index):
@@ -3087,6 +3102,7 @@ def user_create_project_page():
         user=user,
         max_pairs_per_project=max_pairs_per_project,
         dev_test_entitled=dev_test_entitled,
+        video_upload_warnings=VIDEO_UPLOAD_WARNINGS,
     )
 
 
@@ -3101,6 +3117,7 @@ def handle_upload():
     upload_id = (request.form.get("upload_id") or str(uuid.uuid4())).strip()[:80]
     request_start = time.time()
     _upload_log("UPLOAD REQUEST ENTER", upload_id, user_id=user.id, content_length=request.content_length)
+    _upload_log("VIDEO SERVER REQUEST ENTER", upload_id, user_id=user.id, content_length=request.content_length)
 
     if not user.can_create_project and not dev_test_entitled:
         flash("Project limit reached. Please upgrade your plan.", "error")
@@ -3117,6 +3134,19 @@ def handle_upload():
     images = request.files.getlist("images")
     videos = request.files.getlist("videos")
     _upload_log("UPLOAD BODY READY", upload_id, user_id=user.id, pair_count=len(images), duration_ms=round((time.time() - request_start) * 1000))
+    body_ready_at = time.time()
+    for i, video_file in enumerate(videos):
+        _upload_log(
+            "VIDEO SERVER BODY READY",
+            upload_id,
+            **_video_log_fields(
+                video_file,
+                user_id=user.id,
+                pair_index=i,
+                content_length=request.content_length,
+                body_duration_ms=round((body_ready_at - request_start) * 1000),
+            ),
+        )
 
     # Validation
     _upload_log("UPLOAD VALIDATION START", upload_id, user_id=user.id, pair_count=len(images))
@@ -3188,7 +3218,33 @@ def handle_upload():
         # ✅ FIX: Standardize image to 1200px (match ORB_MAX_DIM)
         
         vid_path = os.path.join(VIDEOS_DIR, vid_filename)
+        video_persist_start = time.time()
+        _upload_log(
+            "VIDEO SERVER PERSIST START",
+            upload_id,
+            **_video_log_fields(
+                video_file,
+                user_id=user.id,
+                project_id=project.id,
+                pair_index=i,
+                content_length=request.content_length,
+            ),
+        )
         video_file.save(vid_path)
+        video_size = os.path.getsize(vid_path) if os.path.exists(vid_path) else video_file.content_length
+        _upload_log(
+            "VIDEO SERVER PERSIST DONE",
+            upload_id,
+            **_video_log_fields(
+                video_file,
+                user_id=user.id,
+                project_id=project.id,
+                pair_index=i,
+                content_length=request.content_length,
+                video_size=video_size,
+                persistence_duration_ms=round((time.time() - video_persist_start) * 1000),
+            ),
+        )
         
         # Create pair record (NOT processed)
         pair = ProjectPair(
@@ -3200,7 +3256,7 @@ def handle_upload():
             original_image_name=image_file.filename,
             original_video_name=video_file.filename,
             image_size=marker_meta["processed_size_bytes"] or image_file.content_length,
-            video_size=video_file.content_length,
+            video_size=video_size,
             marker_mode=marker_meta["mode"],
             marker_crop_x=marker_meta["crop_x"],
             marker_crop_y=marker_meta["crop_y"],
@@ -3225,7 +3281,10 @@ def handle_upload():
         pairs_data.append({
             "pair_index": i,
             "image_filename": img_filename,
-            "video_filename": vid_filename
+            "video_filename": vid_filename,
+            "video_size": video_size,
+            "original_video_name": video_file.filename,
+            "video_mime_type": video_file.mimetype,
         })
 
     # ✅ STEP 3: Update user count
@@ -3273,9 +3332,19 @@ def handle_upload():
         import threading
         from concurrent.futures import ThreadPoolExecutor
         
-        def process_single_pair_bg(project_id, pair_index, img_filename, upload_id):
+        def process_single_pair_bg(project_id, pair_index, img_filename, upload_id, video_info=None):
             """Process ONE pair in background - YOUR EXACT LOGIC"""
             pair_start = time.time()
+            video_info = video_info or {}
+            _upload_log(
+                "VIDEO BG START",
+                upload_id,
+                project_id=project_id,
+                pair_index=pair_index,
+                filename=video_info.get("original_video_name"),
+                mime_type=video_info.get("video_mime_type"),
+                video_size=video_info.get("video_size"),
+            )
             try:
                 # Get image path
                 img_path = os.path.join(IMAGES_DIR, img_filename)
@@ -3323,12 +3392,35 @@ def handle_upload():
                         display_pid = proj.user_project_index if proj and proj.user_project_index else project_id
                         print(f"[BG] Processed pair {pair_index} for project {display_pid} (global {project_id})")
                         _upload_log("BG PAIR DONE", upload_id, project_id=project_id, pair_index=pair_index, duration_ms=round((time.time() - pair_start) * 1000), status="completed")
+                        _upload_log(
+                            "VIDEO BG DONE",
+                            upload_id,
+                            project_id=project_id,
+                            pair_index=pair_index,
+                            filename=video_info.get("original_video_name"),
+                            mime_type=video_info.get("video_mime_type"),
+                            video_size=video_info.get("video_size"),
+                            background_duration_ms=round((time.time() - pair_start) * 1000),
+                            status="completed",
+                        )
                 
                 return True
                 
             except Exception as e:
                 print(f"[BG ERROR] Failed pair {pair_index}: {e}")
                 _upload_log("BG PAIR DONE", upload_id, project_id=project_id, pair_index=pair_index, duration_ms=round((time.time() - pair_start) * 1000), status="failed", error=str(e)[:120])
+                _upload_log(
+                    "VIDEO BG DONE",
+                    upload_id,
+                    project_id=project_id,
+                    pair_index=pair_index,
+                    filename=video_info.get("original_video_name"),
+                    mime_type=video_info.get("video_mime_type"),
+                    video_size=video_info.get("video_size"),
+                    background_duration_ms=round((time.time() - pair_start) * 1000),
+                    status="failed",
+                    error=str(e)[:120],
+                )
                 with app.app_context():
                     pair = ProjectPair.query.filter_by(
                         project_id=project_id,
@@ -3361,7 +3453,8 @@ def handle_upload():
                                 project_id,
                                 pair_data["pair_index"],
                                 pair_data["image_filename"],
-                                upload_id
+                                upload_id,
+                                pair_data,
                             )
                             futures.append(future)
                         
@@ -5936,7 +6029,8 @@ def admin_create_project_page():
         is_admin=True,
         unlimited_pairs=True,
         max_pairs_per_project=None,
-        get_system_config=get_system_config
+        get_system_config=get_system_config,
+        video_upload_warnings=VIDEO_UPLOAD_WARNINGS,
     )
 @app.route("/admin/projects/upload", methods=["POST"])
 @admin_required

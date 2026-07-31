@@ -68,6 +68,20 @@ def test_create_project_ui_defaults_to_crop_and_allows_full_image():
     assert "CLIENT PREP START" in html
     assert "CLIENT IMAGE COMPRESS DONE" in html
     assert "CLIENT UPLOAD PROGRESS" in html
+    assert "video-meta-${pairId}" in html
+    assert "VIDEO_WARNING_CONFIG" in html
+    assert "VIDEO CLIENT SELECTED" in html
+    assert "VIDEO METADATA READY" in html
+    assert "VIDEO CLIENT UPLOAD START" in html
+    assert "VIDEO CLIENT PROGRESS" in html
+    assert "VIDEO CLIENT UPLOAD RESPONSE" in html
+    assert "Metadata unavailable" in html
+    assert "Large file" in html
+    assert "Very large file" in html
+    assert "Unsupported type" in html
+    assert "uploadActive = true" in html
+    assert "if (uploadActive) return" in html
+    assert "estimated_remaining_seconds" in html
     assert "marker_${index}_crop_x" in html
     assert "MAX_PAIRS_PER_PROJECT = (IS_ADMIN || IS_DEV_TEST) ? Infinity" in html
 
@@ -97,6 +111,58 @@ def test_marker_mode_is_stored_per_pair_and_mixed_modes_work(client, app_module,
     assert pairs[1].marker_crop_y == 0
     assert pairs[1].marker_crop_width == 1
     assert pairs[1].marker_crop_height == 1
+
+
+def test_video_server_timing_logs_use_same_upload_id(client, app_module, login_user, monkeypatch):
+    logs = []
+    _patch_upload_processing(app_module, monkeypatch)
+    monkeypatch.setattr(app_module, "_upload_log", lambda stage, upload_id, **fields: logs.append((stage, upload_id, fields)))
+
+    response = client.post(
+        "/upload",
+        data=_upload_data(name="video-timing", modes=("crop",)),
+        content_type="multipart/form-data",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    stages = [stage for stage, _upload_id, _fields in logs]
+    assert "VIDEO SERVER REQUEST ENTER" in stages
+    assert "VIDEO SERVER BODY READY" in stages
+    assert "VIDEO SERVER PERSIST START" in stages
+    assert "VIDEO SERVER PERSIST DONE" in stages
+    assert {upload_id for _stage, upload_id, _fields in logs} == {"upload-video-timing"}
+
+    body_ready = next(fields for stage, _upload_id, fields in logs if stage == "VIDEO SERVER BODY READY")
+    persist_done = next(fields for stage, _upload_id, fields in logs if stage == "VIDEO SERVER PERSIST DONE")
+    assert body_ready["content_length"] is not None
+    assert body_ready["body_duration_ms"] >= 0
+    assert persist_done["video_size"] == len(b"video")
+    assert persist_done["persistence_duration_ms"] >= 0
+    source = Path("app.py").read_text(encoding="utf-8", errors="ignore")
+    assert "VIDEO BG START" in source
+    assert "VIDEO BG DONE" in source
+    assert "background_duration_ms" in source
+
+
+def test_one_two_and_three_pair_uploads_remain_compatible(client, app_module, login_user, monkeypatch):
+    login_user.subscribed_project_limit = 10
+    app_module.db.session.commit()
+    monkeypatch.setattr(app_module, "get_plan_pairs_limit", lambda _user: 10)
+
+    for pair_count in (1, 2, 3):
+        _patch_upload_processing(app_module, monkeypatch)
+        response = client.post(
+            "/upload",
+            data=_upload_data(name=f"pairs-{pair_count}", modes=tuple(["crop"] * pair_count)),
+            content_type="multipart/form-data",
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302
+        project = app_module.Project.query.order_by(app_module.Project.id.desc()).first()
+        pairs = app_module.ProjectPair.query.filter_by(project_id=project.id).all()
+        assert len(pairs) == pair_count
 
 
 def test_legacy_upload_without_marker_metadata_behaves_as_full_image(client, app_module, login_user, monkeypatch):

@@ -977,6 +977,36 @@
       object-fit: contain;
     }
 
+    .video-metadata {
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, .12);
+      background: rgba(0, 0, 0, .18);
+      color: rgba(255, 255, 255, .78);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .video-metadata strong {
+      display: block;
+      color: #fff;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      margin-bottom: 6px;
+    }
+
+    .video-metadata.warning {
+      border-color: rgba(251, 191, 36, .42);
+      background: rgba(251, 191, 36, .10);
+    }
+
+    .video-metadata.error {
+      border-color: rgba(248, 113, 113, .42);
+      background: rgba(248, 113, 113, .10);
+    }
+
     .upload-progress {
       display: none;
       margin-top: 16px;
@@ -999,6 +1029,13 @@
       height: 100%;
       width: 0;
       background: linear-gradient(90deg, var(--accent), var(--primary));
+    }
+
+    .upload-progress-detail {
+      margin-top: 8px;
+      color: rgba(255, 255, 255, .68);
+      font-size: 12px;
+      line-height: 1.4;
     }
 
     .crop-modal {
@@ -1210,6 +1247,7 @@
     </form>
     <div class="upload-progress" id="uploadProgress">
       <div id="uploadProgressText">Preparing upload...</div>
+      <div class="upload-progress-detail" id="uploadProgressDetail"></div>
       <div class="upload-progress-bar"><span id="uploadProgressFill"></span></div>
     </div>
   </div>
@@ -1258,6 +1296,7 @@
     const MAX_PAIRS_PER_PROJECT = (IS_ADMIN || IS_DEV_TEST) ? Infinity : Number({{ max_pairs_per_project or 0 }});
     const MARKER_LONG_EDGE = 1400;
     const MARKER_JPEG_QUALITY = 0.86;
+    const VIDEO_WARNING_CONFIG = {{ video_upload_warnings | tojson }};
     let activeCropPairId = null;
     let activeCropImage = null;
     let cropDrag = null;
@@ -1279,6 +1318,7 @@
         processedPreviewUrl: null,
         processedWidth: 0,
         processedHeight: 0,
+        videoMeta: null,
         quality: { status: 'Preparing marker', guidance: ['Select an image to choose the marker area.'] }
       };
     }
@@ -1375,6 +1415,10 @@
               </div>
             </div>
           </div>
+          <div class="video-metadata" id="video-meta-${pairId}">
+            <strong>Video status</strong>
+            <span>Select a video to inspect upload details.</span>
+          </div>
           <div class="marker-tools" id="marker-tools-${pairId}">
             <div class="marker-options">
               <button type="button" class="marker-option active" id="marker-crop-${pairId}" onclick="setCropMode(${pairId})">
@@ -1443,6 +1487,8 @@
         const videoArea = pair.querySelector('#video-area-' + oldId) || pair.querySelector('[id^="video-area-"]');
         if (imageArea) imageArea.id = `image-area-${newId}`;
         if (videoArea) videoArea.id = `video-area-${newId}`;
+        const videoMeta = pair.querySelector('#video-meta-' + oldId) || pair.querySelector('[id^="video-meta-"]');
+        if (videoMeta) videoMeta.id = `video-meta-${newId}`;
 
         // update inputs
         const imageInput = pair.querySelector('input[type="file"][accept^="image"]');
@@ -1790,6 +1836,129 @@
       updateMarkerControls(pairId);
     }
 
+    function isoNow() {
+      return new Date().toISOString();
+    }
+
+    function browserInfo() {
+      return {
+        user_agent: navigator.userAgent,
+        platform: navigator.platform || '',
+        device_memory_gb: navigator.deviceMemory || null,
+        connection: navigator.connection ? {
+          effective_type: navigator.connection.effectiveType || null,
+          downlink: navigator.connection.downlink || null,
+          rtt: navigator.connection.rtt || null
+        } : null
+      };
+    }
+
+    function formatBytes(bytes) {
+      const value = Number(bytes || 0);
+      if (value >= 1024 * 1024 * 1024) return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+      if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+      if (value >= 1024) return `${Math.round(value / 1024)} KB`;
+      return `${value} B`;
+    }
+
+    function formatDuration(seconds) {
+      if (!Number.isFinite(seconds) || seconds <= 0) return 'unknown duration';
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.round(seconds % 60);
+      return mins ? `${mins}m ${String(secs).padStart(2, '0')}s` : `${secs}s`;
+    }
+
+    function resolutionClass(width, height) {
+      const shortEdge = Math.min(Number(width || 0), Number(height || 0));
+      const longEdge = Math.max(Number(width || 0), Number(height || 0));
+      if (shortEdge >= 2160 || longEdge >= 3840) return '4K';
+      if (shortEdge >= 1080 || longEdge >= 1920) return '1080p';
+      if (shortEdge >= 720 || longEdge >= 1280) return '720p';
+      if (width && height) return `${width}x${height}`;
+      return 'unknown resolution';
+    }
+
+    function videoOrientation(width, height) {
+      if (!width || !height) return 'unknown';
+      return width >= height ? 'landscape' : 'portrait';
+    }
+
+    function videoStatus(meta) {
+      if (!meta) return { label: 'Metadata unavailable', warning: false, message: 'Video metadata could not be detected by this browser.' };
+      if (meta.unsupported) return { label: 'Unsupported type', warning: true, error: true, message: 'This video type is not supported by the current upload rules.' };
+      if (meta.size >= VIDEO_WARNING_CONFIG.warning_size_bytes || meta.duration >= VIDEO_WARNING_CONFIG.warning_duration_seconds) {
+        return { label: 'Very large file', warning: true, message: 'For faster uploads, consider a shorter 720p or 1080p video.' };
+      }
+      if (
+        meta.size >= VIDEO_WARNING_CONFIG.recommended_size_bytes ||
+        meta.duration >= VIDEO_WARNING_CONFIG.recommended_duration_seconds ||
+        Math.min(meta.width || 0, meta.height || 0) > VIDEO_WARNING_CONFIG.recommended_max_resolution_height
+      ) {
+        return { label: 'Large file', warning: true, message: meta.resolutionClass === '4K' ? '4K video may take significantly longer to upload and process.' : 'This video is large and may take longer to upload.' };
+      }
+      return { label: 'Ready', warning: false, message: 'Video is ready for upload.' };
+    }
+
+    function updateVideoMetadataCard(pairId) {
+      const pair = currentFiles[pairId];
+      const card = document.getElementById(`video-meta-${pairId}`);
+      if (!card) return;
+      const meta = pair?.videoMeta;
+      const status = videoStatus(meta);
+      card.classList.toggle('warning', !!status.warning);
+      card.classList.toggle('error', !!status.error);
+      if (!pair?.video) {
+        card.innerHTML = '<strong>Video status</strong><span>Select a video to inspect upload details.</span>';
+        return;
+      }
+      card.innerHTML = `
+        <strong>${status.label}</strong>
+        <span>${pair.video.name || 'video'} - ${formatBytes(pair.video.size)} - ${pair.video.type || 'unknown type'}</span><br>
+        <span>${meta?.width || '?'} x ${meta?.height || '?'} - ${meta?.resolutionClass || 'unknown resolution'} - ${meta?.orientation || 'unknown orientation'} - ${formatDuration(meta?.duration)}</span><br>
+        <span>${status.message}</span>
+      `;
+    }
+
+    function detectVideoMetadata(pairId, file, fileUrl) {
+      const pair = currentFiles[pairId];
+      const baseMeta = {
+        filename: file.name || '',
+        size: file.size || 0,
+        mime: file.type || '',
+        duration: null,
+        width: null,
+        height: null,
+        orientation: 'unknown',
+        resolutionClass: 'unknown resolution'
+      };
+      pair.videoMeta = baseMeta;
+      logClientStage('VIDEO CLIENT SELECTED', { pair_index: pairId - 1, ...baseMeta, ...browserInfo() });
+      updateVideoMetadataCard(pairId);
+
+      const probe = document.createElement('video');
+      probe.preload = 'metadata';
+      probe.src = fileUrl;
+      probe.onloadedmetadata = () => {
+        const meta = {
+          ...baseMeta,
+          duration: Number.isFinite(probe.duration) ? probe.duration : null,
+          width: probe.videoWidth || null,
+          height: probe.videoHeight || null
+        };
+        meta.orientation = videoOrientation(meta.width, meta.height);
+        meta.resolutionClass = resolutionClass(meta.width, meta.height);
+        pair.videoMeta = meta;
+        logClientStage('VIDEO METADATA READY', { pair_index: pairId - 1, ...meta, ...browserInfo() });
+        logClientStage('CLIENT VIDEO READY', { pair_id: pairId, ...meta });
+        updateVideoMetadataCard(pairId);
+      };
+      probe.onerror = () => {
+        pair.videoMeta = baseMeta;
+        logClientStage('VIDEO METADATA READY', { pair_index: pairId - 1, ...baseMeta, metadata_unavailable: true, ...browserInfo() });
+        updateVideoMetadataCard(pairId);
+      };
+    }
+
     function evaluateMarkerQuality(pair) {
       const crop = pair.markerMode === 'full_image' ? { width: 1, height: 1 } : pair.crop;
       const markerW = Math.round((pair.originalWidth || 0) * crop.width);
@@ -1877,19 +2046,7 @@
           // no controls in upload tile; hover shows "Replace" and click opens picker
           preview.innerHTML = `<video src="${fileUrl}" muted playsinline></video>`;
         }
-        const probe = document.createElement('video');
-        probe.preload = 'metadata';
-        probe.src = fileUrl;
-        probe.onloadedmetadata = () => {
-          currentFiles[pairId].videoMeta = {
-            duration: Math.round(probe.duration || 0),
-            size: file.size,
-            mime: file.type,
-            width: probe.videoWidth,
-            height: probe.videoHeight
-          };
-          console.log('[CLIENT VIDEO READY]', { pair_id: pairId, ...currentFiles[pairId].videoMeta });
-        };
+        detectVideoMetadata(pairId, file, fileUrl);
       }
 
       updatePreview();
@@ -2076,13 +2233,37 @@
     }
 
     function logClientStage(stage, data) {
-      console.log(`[${stage}]`, data);
+      console.log(`[${stage}]`, { ts: isoNow(), ...data });
     }
 
-    function setUploadProgress(text, pct) {
+    function setUploadProgress(text, pct, detail = '') {
       document.getElementById('uploadProgress').style.display = 'block';
       document.getElementById('uploadProgressText').textContent = text;
+      document.getElementById('uploadProgressDetail').textContent = detail;
       document.getElementById('uploadProgressFill').style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
+    }
+
+    function formatRate(bytesPerSecond) {
+      if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return 'calculating speed';
+      return `${formatBytes(bytesPerSecond)}/s`;
+    }
+
+    function buildUploadItems(readyPairs) {
+      const items = [];
+      let cursor = 0;
+      readyPairs.forEach(({ pair }, index) => {
+        const markerSize = pair.processedFile?.size || 0;
+        items.push({ pairIndex: index, fileType: 'marker', filename: pair.processedFile?.name || `marker-${index}.jpg`, size: markerSize, start: cursor, end: cursor + markerSize });
+        cursor += markerSize;
+        const videoSize = pair.video?.size || 0;
+        items.push({ pairIndex: index, fileType: 'video', filename: pair.video?.name || `video-${index}.mp4`, size: videoSize, start: cursor, end: cursor + videoSize });
+        cursor += videoSize;
+      });
+      return items;
+    }
+
+    function currentUploadItem(loaded, items) {
+      return items.find(item => loaded >= item.start && loaded <= item.end) || items[items.length - 1] || null;
     }
 
     function appendMarkerMeta(fd, index, pair) {
@@ -2169,6 +2350,16 @@
 
       setUploadProgress('Ready to upload', 35);
       const uploadStart = performance.now();
+      const uploadItems = buildUploadItems(readyPairs);
+      const videoSummaries = readyPairs.map(({ pair }, index) => ({
+        pair_index: index,
+        filename: pair.video?.name || '',
+        mime_type: pair.video?.type || '',
+        video_bytes: pair.video?.size || 0,
+        duration: pair.videoMeta?.duration,
+        width: pair.videoMeta?.width,
+        height: pair.videoMeta?.height
+      }));
       logClientStage('CLIENT UPLOAD START', {
         upload_id: uploadId,
         pair_count: readyPairs.length,
@@ -2177,24 +2368,64 @@
         video_bytes: videoBytes,
         preparation_duration_ms: Math.round(uploadStart - totalStart)
       });
+      logClientStage('VIDEO CLIENT UPLOAD START', {
+        upload_id: uploadId,
+        pair_count: readyPairs.length,
+        videos: videoSummaries,
+        ...browserInfo()
+      });
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', this.action, true);
       xhr.upload.onprogress = (event) => {
         if (!event.lengthComputable) return;
+        const now = performance.now();
+        const elapsedMs = now - uploadStart;
+        const elapsedSeconds = Math.max(elapsedMs / 1000, 0.001);
+        const avgBytesPerSecond = event.loaded / elapsedSeconds;
+        const percent = event.total ? (event.loaded / event.total) * 100 : 0;
+        const remainingBytes = Math.max((event.total || 0) - event.loaded, 0);
+        const enoughForEta = elapsedMs >= 3000 && event.loaded >= 512 * 1024 && avgBytesPerSecond > 0;
+        const etaSeconds = enoughForEta ? remainingBytes / avgBytesPerSecond : null;
+        const item = currentUploadItem(event.loaded, uploadItems);
         const pct = 35 + (event.loaded / event.total) * 55;
-        setUploadProgress(`Uploading ${Math.round(event.loaded / 1024)}KB / ${Math.round(event.total / 1024)}KB`, pct);
-        logClientStage('CLIENT UPLOAD PROGRESS', { upload_id: uploadId, loaded: event.loaded, total: event.total });
+        const itemText = item ? `Moment #${item.pairIndex + 1} ${item.fileType} ${item.filename}` : 'Uploading project files';
+        const etaText = etaSeconds === null ? 'ETA calculating' : `about ${formatDuration(etaSeconds)} remaining`;
+        setUploadProgress(
+          `${itemText}: ${formatBytes(event.loaded)} / ${formatBytes(event.total)} (${Math.round(percent)}%)`,
+          pct,
+          `Elapsed ${formatDuration(elapsedSeconds)} - ${formatRate(avgBytesPerSecond)} average - ${etaText} - Overall project ${Math.round(percent)}%`
+        );
+        const progressPayload = {
+          upload_id: uploadId,
+          pair_index: item?.pairIndex,
+          file_type: item?.fileType,
+          filename: item?.filename,
+          loaded: event.loaded,
+          total: event.total,
+          percent: Math.round(percent),
+          elapsed_upload_ms: Math.round(elapsedMs),
+          average_bytes_per_second: Math.round(avgBytesPerSecond),
+          estimated_remaining_seconds: etaSeconds === null ? null : Math.round(etaSeconds),
+          ...browserInfo()
+        };
+        logClientStage('CLIENT UPLOAD PROGRESS', progressPayload);
+        logClientStage('VIDEO CLIENT PROGRESS', progressPayload);
       };
       xhr.onload = () => {
         const uploadDuration = performance.now() - uploadStart;
-        logClientStage('CLIENT UPLOAD RESPONSE', {
+        const responsePayload = {
           upload_id: uploadId,
           status: xhr.status,
           response_url: xhr.responseURL,
           upload_duration_ms: Math.round(uploadDuration),
-          total_duration_ms: Math.round(performance.now() - totalStart)
-        });
+          average_bytes_per_second: Math.round((optimizedBytes + videoBytes) / Math.max(uploadDuration / 1000, 0.001)),
+          total_duration_ms: Math.round(performance.now() - totalStart),
+          videos: videoSummaries,
+          ...browserInfo()
+        };
+        logClientStage('CLIENT UPLOAD RESPONSE', responsePayload);
+        logClientStage('VIDEO CLIENT UPLOAD RESPONSE', responsePayload);
         setUploadProgress('Uploaded. Processing...', 100);
         if (xhr.status >= 200 && xhr.status < 400) {
           window.location.href = xhr.responseURL || '/dashboard';
