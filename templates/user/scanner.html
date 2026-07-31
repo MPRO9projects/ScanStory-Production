@@ -629,9 +629,16 @@
 
     const DETECT_W = runtimeConfig.frameWidth || (deviceInfo.isLowEnd ? 480 : 720);
     const DETECT_INTERVAL_MS = runtimeConfig.detectIntervalMs || (deviceInfo.isLowEnd ? 400 : 300);
-    const MIN_GOOD_POINTS = scannerMode === 'lightweight' ? 14 : (deviceInfo.isLowEnd ? 18 : 25);
+    const MIN_GOOD_POINTS = scannerMode === 'lightweight' ? 12 : (deviceInfo.isLowEnd ? 16 : 20);
     const MAX_ERR = scannerMode === 'lightweight' ? 55 : (deviceInfo.isLowEnd ? 45 : 35);
     const detectionPolicy = runtime.createRequestPolicy(scannerMode === 'fallback' ? 'standard' : scannerMode);
+    const diagnosticsEnabled = new URLSearchParams(location.search).get('scanner_debug') === '1';
+    const scannerDiagnostics = runtime.createDiagnostics(diagnosticsEnabled, function (event) {
+      console.debug('[scanner]', event);
+    });
+    const MAX_TRACK_POINTS = scannerMode === 'full' ? 180 : (scannerMode === 'standard' ? 120 : 70);
+    const TRACK_FRAME_INTERVAL_MS = scannerMode === 'lightweight' ? 90 : (scannerMode === 'standard' ? 66 : 50);
+    const RECOVERY_RETRY_LIMIT = scannerMode === 'lightweight' ? 5 : 4;
     let detectLoopTimer = null;
     let trackLoopActive = false;
 
@@ -642,6 +649,7 @@
     let scannerSessionId = null;
     let sessionActive = false;
     let sessionEnded = false;
+    let sessionEnding = false;
 
     function generateScannerSessionId() {
       return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
@@ -655,12 +663,19 @@
       scannerSessionId = generateScannerSessionId();
       sessionActive = true;
       sessionEnded = false;
+      sessionEnding = false;
       console.log('✅ Scanner session started:', scannerSessionId);
     }
 
     async function endScannerSession() {
       if (sessionEnded || !sessionActive || !scannerSessionId) return;
+      sessionEnding = true;
       sessionEnded = true;
+      scannerGeneration++;
+      invalidateDetection();
+      stopDetectLoop();
+      stopTrackingLoop();
+      if (typeof clearTrackingGeometry === 'function') clearTrackingGeometry('session_end');
 
       console.log('🔚 Ending scanner session:', scannerSessionId);
 
@@ -752,8 +767,7 @@
           statusDiv.className = "status scan";
           startDetectLoop();
           startScannerStatusCycle();
-          trackLoopActive = true;
-          requestAnimationFrame(trackFrame);
+          startTrackingLoop();
           document.getElementById('loadingSpinner').style.display = 'none';
         },
         onAbort: function (reason) {
@@ -806,33 +820,40 @@
       try {
         if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
       } catch (_) {}
+      invalidateDetection();
+      stopDetectLoop();
+      stopTrackingLoop();
       tracking = false;
       detectInFlight = false;
       if (typeof stopOverlayImmediate === 'function') stopOverlayImmediate();
       const safe = runtime.ERRORS[code] || runtime.ERRORS.UNSUPPORTED_DEVICE;
       statusDiv.textContent = safe;
       statusDiv.className = "status error";
-      scannerStatusLabel.textContent = safe;
-      scannerStatusWord.textContent = "Fallback Available";
       const ar = document.getElementById('arLoadingOverlay');
       if (ar) ar.classList.add('hide');
       if (scannerState.state !== 'fallback') {
-        try { scannerState.transition('fallback'); } catch (_) {}
+        safeTransition('fallback', code);
       }
+      // More specific than the generic fallback label — applied after the state-driven default.
+      scannerStatusLabel.textContent = safe;
     }
 
     window.addEventListener('pagehide', function () {
+      sessionEnding = true;
+      scannerGeneration++;
       if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
-      if (detectLoopTimer) clearInterval(detectLoopTimer);
-      trackLoopActive = false;
+      invalidateDetection();
+      stopDetectLoop();
+      stopTrackingLoop();
     });
 
     document.addEventListener('visibilitychange', function () {
       if (document.hidden) {
-        try { scannerState.transition('paused'); } catch (_) {}
+        safeTransition('paused', 'tab_hidden');
         if (typeof stopOverlayImmediate === 'function') stopOverlayImmediate();
+        stopDetectLoop();
       } else if (scannerState.state === 'paused') {
-        try { scannerState.transition(cameraStream ? 'ready_to_scan' : 'requesting_camera'); } catch (_) {}
+        recoverScanner('visibilitychange', false);
       }
     });
 
@@ -840,8 +861,11 @@
     const SMOOTH = deviceInfo.isLowEnd ? 0.50 : 0.35; // was 0.7/0.65 — high value caused ~90ms visible lag
     const FLIP_X = false;
     const FLIP_Y = false;
-    const FORCE_REDETECT_MS = 3000;   // re-anchor from server every 3s to prevent optical-flow drift
+    // --- Recovery/grace timing — all tunable in one place (spec section 4) ---
+    const FORCE_REDETECT_MS = 12000;  // bounded server re-anchor; healthy local tracking owns the overlay
+    const HEALTHY_TRACK_SUPPRESS_MS = 1200;
     const TRACKING_GRACE_FRAMES = 3;  // frames of bad optical flow before dropping tracking
+    const TRACKING_GRACE_MS = 900;    // wall-clock ceiling on grace — frame count alone can hang on throttled/low-FPS devices
 
     overlay.style.transform = `scale(${FLIP_X ? -1 : 1}, ${FLIP_Y ? -1 : 1})`;
 
@@ -858,40 +882,53 @@
     const scannerStatusWord = document.getElementById('scannerStatusWord');
     const scannerStatusLabel = document.getElementById('scannerStatusLabel');
 
-    const scannerStatusWords = [
-      "Preparing Camera",
-      "Reading Marker",
-      "Scanning Visual",
-      "Matching Image",
-      "Loading AR Story",
-      "Tracking Surface",
-      "Unlocking Experience"
-    ];
+    // Status word/label are driven ONLY by the actual FSM state (see STATE_STATUS_TEXT +
+    // applyStatusForState, wired to the state machine's onChange below). Previously this
+    // cycled through all words on a blind 1400ms interval regardless of real state, so e.g.
+    // "Tracking Surface" or "Matching Image" could show while the scanner was actually
+    // paused/recovering — that's the "uncontrolled switching" this replaces.
+    const STATE_STATUS_TEXT = {
+      requesting_camera: ["Preparing Camera", "Requesting camera access..."],
+      initializing_camera: ["Preparing Camera", "Starting camera stream..."],
+      loading_opencv: ["Preparing Camera", "Loading vision engine..."],
+      loading_wasm: ["Preparing Camera", "Loading vision engine..."],
+      initializing_scanner: ["Preparing Camera", "Starting scanner..."],
+      ready_to_scan: ["Reading Marker", "Scanning for AR markers..."],
+      detecting: ["Matching Image", "Analyzing captured frame..."],
+      tracking: ["Tracking Surface", "AR experience is live"],
+      target_lost: ["Reading Marker", "Marker lost — reacquiring..."],
+      recovering: ["Reconfiguring", "Stabilizing camera view..."],
+      // 'paused' is reused for two different real meanings — the tab is actually
+      // backgrounded, vs. recoverScanner routing a camera/orientation reconfiguration
+      // through 'paused' because that's the only state with a transition back to
+      // ready_to_scan. Disambiguate by reason rather than inventing new FSM states mid-fix.
+      paused: ["Reconfiguring", "Stabilizing camera view..."],
+      "paused:tab_hidden": ["Paused", "Scanner paused"],
+      fallback: ["Fallback Available", ""]
+    };
 
-    let scannerWordIndex = 0;
-    let scannerStatusInterval = null;
-
-    function startScannerStatusCycle() {
-      if (scannerStatusInterval) return;
-      scannerWordIndex = 0;
-      scannerStatusOverlay.classList.remove('hidden');
-      scannerStatusWord.textContent = scannerStatusWords[0];
-
-      scannerStatusInterval = setInterval(() => {
-        scannerWordIndex = (scannerWordIndex + 1) % scannerStatusWords.length;
+    function setStatusWord(word, label) {
+      if (scannerStatusWord.textContent !== word) {
         scannerStatusWord.style.animation = 'none';
         setTimeout(() => {
-          scannerStatusWord.textContent = scannerStatusWords[scannerWordIndex];
+          scannerStatusWord.textContent = word;
           scannerStatusWord.style.animation = 'statusWordPulse 1s cubic-bezier(0.175, 0.885, 0.32, 1.275), gradientShift 6s ease infinite';
         }, 10);
-      }, 1400);
+      }
+      if (label !== undefined) scannerStatusLabel.textContent = label;
+    }
+
+    function applyStatusForState(state, reason) {
+      const cfg = (reason && STATE_STATUS_TEXT[state + ':' + reason]) || STATE_STATUS_TEXT[state];
+      if (cfg) setStatusWord(cfg[0], cfg[1]);
+    }
+
+    function startScannerStatusCycle() {
+      scannerStatusOverlay.classList.remove('hidden');
+      applyStatusForState(scannerState.state);
     }
 
     function stopScannerStatusCycle() {
-      if (scannerStatusInterval) {
-        clearInterval(scannerStatusInterval);
-        scannerStatusInterval = null;
-      }
       scannerStatusOverlay.classList.add('hidden');
     }
 
@@ -910,11 +947,144 @@
     let currentPairId = -1;
     let detectionFailCount = 0;
     let cameraStream = null;
+    let scannerGeneration = 1;
+    let animationFrameId = null;
+    let activeDetectionController = null;
+    let orientationRecoveryTimer = null;
+    let orientationRevision = 0;
+    let latestAcceptedRequestId = 0;
+    let recoveryAttempt = 0;
+    let lastTrackFrameTs = 0;
+    let trackingGeneration = 0;
+    let activePairEpoch = 0; // bumped only when the displayed pair actually changes (marker A/B guard)
+
+    function safeTransition(state, reason) {
+      const from = scannerState.state;
+      try { scannerState.transition(state); } catch (_) {}
+      applyStatusForState(scannerState.state, reason);
+      scannerDiagnostics.push('[SCAN STATE]', { from, to: state, reason: reason || null, generation: scannerGeneration });
+    }
+
+    function activeTrackCount() {
+      return cameraStream ? cameraStream.getTracks().filter(track => track.readyState === 'live').length : 0;
+    }
+
+    function invalidateDetection() {
+      if (activeDetectionController) {
+        try { activeDetectionController.abort(); } catch (_) {}
+        activeDetectionController = null;
+      }
+      detectInFlight = false;
+    }
+
+    function clearTrackingGeometry(reason) {
+      tracking = false;
+      currCorners = null;
+      lastOrdered = null;
+      smoothCorners = null;
+      trackingBadFrames = 0;
+      if (prevGray) { prevGray.delete(); prevGray = null; }
+      if (prevPts) { prevPts.delete(); prevPts = null; }
+      overlayWrap.style.transform = "";
+      stopOverlayImmediate();
+      scannerDiagnostics.push('geometry_cleared', { reason, generation: scannerGeneration });
+    }
+
+    function stopTrackingLoop() {
+      trackLoopActive = false;
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        animationFrameId = null;
+      }
+    }
+
+    function startTrackingLoop() {
+      if (trackLoopActive) return;
+      trackLoopActive = true;
+      trackingGeneration = scannerGeneration;
+      animationFrameId = requestAnimationFrame(trackFrame);
+    }
+
+    function stopDetectLoop() {
+      if (detectLoopTimer) {
+        clearInterval(detectLoopTimer);
+        detectLoopTimer = null;
+      }
+    }
+
+    function isCameraHealthy() {
+      if (!cameraStream || cam.readyState < 2 || cam.videoWidth <= 0 || cam.videoHeight <= 0) return false;
+      return cameraStream.getVideoTracks().some(track => track.readyState === 'live');
+    }
+
+    function resizeScannerSurfaces() {
+      const r = cam.getBoundingClientRect();
+      if (r.height > 0) {
+        wrap.style.height = r.height + "px";
+        overlayWrap.style.height = r.height + "px";
+      }
+      scannerDiagnostics.push('geometry_resized', {
+        videoWidth: cam.videoWidth,
+        videoHeight: cam.videoHeight,
+        displayWidth: Math.round(r.width),
+        displayHeight: Math.round(r.height),
+        generation: scannerGeneration
+      });
+    }
+
+    async function recoverScanner(reason, restartCamera) {
+      scannerGeneration++;
+      recoveryAttempt++;
+      scannerDiagnostics.push('[CAMERA RECOVERY]', { reason, restartCamera, generation: scannerGeneration, attempt: recoveryAttempt });
+      invalidateDetection();
+      stopDetectLoop();
+      stopTrackingLoop();
+      clearTrackingGeometry(reason);
+      safeTransition('paused', reason);
+      statusDiv.textContent = "Reconfiguring scanner...";
+      statusDiv.className = "status scan";
+      scannerStatusOverlay.classList.remove('hidden');
+      await new Promise(resolve => setTimeout(resolve, 250));
+      if (restartCamera || !isCameraHealthy()) {
+        await restartCameraStream();
+      } else {
+        resizeScannerSurfaces();
+      }
+      safeTransition('ready_to_scan', reason);
+      startDetectLoop();
+      startTrackingLoop();
+    }
+
+    async function restartCameraStream() {
+      try {
+        if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
+      } catch (_) {}
+      cameraStream = null;
+      cam.srcObject = null;
+      await setupCamera();
+    }
+
+    function scheduleOrientationRecovery(reason) {
+      if (orientationRecoveryTimer) clearTimeout(orientationRecoveryTimer);
+      orientationRecoveryTimer = setTimeout(() => {
+        orientationRecoveryTimer = null;
+        orientationRevision++;
+        recoverScanner(reason, false);
+      }, 350);
+    }
 
     // Camera setup with better error handling
     async function setupCamera() {
       try {
         if (scannerState.state === 'fallback') return;
+        if (isCameraHealthy()) {
+          resizeScannerSurfaces();
+          return;
+        }
+        if (cameraStream) {
+          try { cameraStream.getTracks().forEach(track => track.stop()); } catch (_) {}
+          cameraStream = null;
+        }
         // ✅ HTTPS / camera API safety check
         if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           progressInfo.textContent = "Camera unavailable";
@@ -932,19 +1102,15 @@
         };
 
         cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
-        try { scannerState.transition('initializing_camera'); } catch (_) {}
+        safeTransition('initializing_camera');
         cameraStream.getVideoTracks().forEach(track => {
-          track.addEventListener('ended', () => enterFallback('CAMERA_UNAVAILABLE'));
+          track.addEventListener('ended', () => recoverScanner('stream_ended', true));
         });
         cam.srcObject = cameraStream;
 
         cam.onloadedmetadata = async () => {
           await cam.play();
-          requestAnimationFrame(() => {
-            const r = cam.getBoundingClientRect();
-            wrap.style.height = r.height + "px";
-            overlayWrap.style.height = r.height + "px";
-          });
+          requestAnimationFrame(resizeScannerSurfaces);
           tryAutoEnableAudio();
           statusDiv.textContent = cvReady ? "🎯 Scan AR marker" : "Waiting for OpenCV…";
         };
@@ -1092,6 +1258,10 @@
     }
 
     function applyWarp(cornersFrame) {
+      if (!runtime.isValidQuad(cornersFrame, frameW, frameH)) {
+        clearTrackingGeometry('invalid_quad');
+        return false;
+      }
       let pts = cornersFrame.map(p => frameToElement(p.x, p.y, frameW, frameH));
       pts = sortAroundCenter(pts);
       pts = rotateToTL(pts);
@@ -1111,6 +1281,40 @@
       const [p1, p2, p3, p4] = smoothCorners;
       const m = quadToMatrix3d(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y, elW, elH);
       overlayWrap.style.transform = `matrix3d(${m.join(",")})`;
+      return true;
+    }
+
+    function quadArea2(pts) {
+      let sum = 0;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i];
+        const b = pts[(i + 1) % pts.length];
+        sum += a.x * b.y - b.x * a.y;
+      }
+      return Math.abs(sum) / 2;
+    }
+
+    function quadCenter(pts) {
+      return pts.reduce((acc, p) => ({ x: acc.x + p.x / pts.length, y: acc.y + p.y / pts.length }), { x: 0, y: 0 });
+    }
+
+    function poseCompatibility(nextCorners) {
+      if (!currCorners || currCorners.length !== 4) return { ok: true, reason: 'first_pose' };
+      const prevArea = Math.max(quadArea2(currCorners), 1);
+      const nextArea = Math.max(quadArea2(nextCorners), 1);
+      const areaRatio = nextArea / prevArea;
+      const prevCenter = quadCenter(currCorners);
+      const nextCenter = quadCenter(nextCorners);
+      const frameMin = Math.max(Math.min(frameW, frameH), 1);
+      const centerJump = Math.hypot(nextCenter.x - prevCenter.x, nextCenter.y - prevCenter.y) / frameMin;
+      let maxCornerJump = 0;
+      for (let i = 0; i < 4; i++) {
+        maxCornerJump = Math.max(maxCornerJump, Math.hypot(nextCorners[i].x - currCorners[i].x, nextCorners[i].y - currCorners[i].y) / frameMin);
+      }
+      if (areaRatio > 2.5 || areaRatio < 0.4) return { ok: false, reason: 'area_jump', areaRatio, centerJump, maxCornerJump };
+      if (centerJump > 0.35) return { ok: false, reason: 'center_jump', areaRatio, centerJump, maxCornerJump };
+      if (maxCornerJump > 0.55) return { ok: false, reason: 'corner_jump', areaRatio, centerJump, maxCornerJump };
+      return { ok: true, reason: 'compatible', areaRatio, centerJump, maxCornerJump };
     }
 
     function matFromVideoGray() {
@@ -1137,10 +1341,74 @@
       return arr;
     }
 
+    let graceEnteredAt = 0;
+
+    function deleteMats(...mats) {
+      for (const m of mats) {
+        if (m) { try { m.delete(); } catch (_) {} }
+      }
+    }
+
+    // Single exit path for "local tracking failed this frame" — fixes a leak where the
+    // H.empty() branch used to fall through to shared cleanup without freeing `gray`,
+    // and without releasing the previous prevGray/prevPts (audit finding).
+    function dropTracking(reason, extraMats) {
+      scannerDiagnostics.push('[TRACK LOST]', { reason, generation: scannerGeneration, badFrames: trackingBadFrames });
+      clearTrackingGeometry(reason);
+      safeTransition('target_lost', reason);
+      safeTransition('recovering', reason);
+      startScannerStatusCycle();
+      statusDiv.textContent = "🎯 Scan AR marker";
+      statusDiv.className = "status scan";
+      deleteMats(...(extraMats || []));
+      graceEnteredAt = 0;
+    }
+
+    function handleDetectionTimeout() {
+      detectionFailCount++;
+      invalidateDetection();
+      scannerDiagnostics.push('detect_timeout', {
+        generation: scannerGeneration,
+        failures: detectionFailCount,
+        recoveryAttempt,
+        tracks: activeTrackCount()
+      });
+      if (detectionFailCount >= RECOVERY_RETRY_LIMIT) {
+        enterFallback('DETECTION_TIMEOUT');
+        return;
+      }
+      clearTrackingGeometry('detect_timeout');
+      safeTransition('recovering');
+      statusDiv.textContent = "Recognition timed out. Trying again...";
+      statusDiv.className = "status scan";
+      startDetectLoop();
+      startTrackingLoop();
+    }
+
+    function enterGrace(reason) {
+      if (trackingBadFrames === 0) graceEnteredAt = performance.now();
+      trackingBadFrames++;
+      scannerDiagnostics.push('[TRACK WEAK]', {
+        reason, badFrames: trackingBadFrames, graceMs: Math.round(performance.now() - graceEnteredAt),
+        generation: scannerGeneration
+      });
+    }
+
+    function graceExpired() {
+      return trackingBadFrames >= TRACKING_GRACE_FRAMES || (performance.now() - graceEnteredAt) >= TRACKING_GRACE_MS;
+    }
+
     function trackFrame() {
       if (!trackLoopActive) return;
-      requestAnimationFrame(trackFrame);
+      if (trackingGeneration !== scannerGeneration) {
+        stopTrackingLoop();
+        return;
+      }
+      animationFrameId = requestAnimationFrame(trackFrame);
       if (!cvReady || !tracking || cam.readyState < 2) return;
+      const now = performance.now();
+      if (now - lastTrackFrameTs < TRACK_FRAME_INTERVAL_MS) return;
+      lastTrackFrameTs = now;
 
       try {
         const gray = matFromVideoGray();
@@ -1163,29 +1431,21 @@
         }
 
         if ((goodPrev.length / 2) < MIN_GOOD_POINTS) {
-          trackingBadFrames++;
-          // Grace period: require TRACKING_GRACE_FRAMES consecutive bad frames before dropping
-          if (trackingBadFrames < TRACKING_GRACE_FRAMES) {
-            gray.delete(); nextPts.delete(); status.delete(); err.delete();
+          enterGrace('insufficient_flow_points');
+          // Grace period: stay locked briefly on either a frame-count or wall-clock ceiling —
+          // frame count alone can hang on throttled/low-FPS devices (spec section 4).
+          if (!graceExpired()) {
+            deleteMats(gray, nextPts, status, err);
             return; // skip this frame, keep tracking state
           }
-          trackingBadFrames = 0;
-          tracking = false;
-          try { scannerState.transition('target_lost'); scannerState.transition('recovering'); } catch (_) {}
-          lastOrdered = null;
-          smoothCorners = null;
-          stopOverlayImmediate();
-          startScannerStatusCycle();
-          statusDiv.textContent = "🎯 Scan AR marker";
-          statusDiv.className = "status scan";
-
-          prevGray.delete(); prevGray = null;
-          prevPts.delete(); prevPts = null;
-          gray.delete();
-          nextPts.delete(); status.delete(); err.delete();
+          dropTracking('insufficient_flow_points', [gray, nextPts, status, err]);
           return;
         }
+        if (trackingBadFrames > 0) {
+          scannerDiagnostics.push('[TRACK RECOVERED]', { generation: scannerGeneration, badFrames: trackingBadFrames });
+        }
         trackingBadFrames = 0; // reset on good frame
+        graceEnteredAt = 0;
 
         const prevMat = cv.matFromArray(goodPrev.length / 2, 1, cv.CV_32FC2, goodPrev);
         const nextMat = cv.matFromArray(goodNext.length / 2, 1, cv.CV_32FC2, goodNext);
@@ -1193,54 +1453,56 @@
         const H = cv.findHomography(prevMat, nextMat, cv.RANSAC, RANSAC_REPROJ, mask);
 
         if (H.empty()) {
-          tracking = false;
-          try { scannerState.transition('target_lost'); scannerState.transition('recovering'); } catch (_) {}
-          lastOrdered = null;
-          smoothCorners = null;
-          stopOverlayImmediate();
-          startScannerStatusCycle();
-          statusDiv.textContent = "🎯 Scan AR marker";
-          statusDiv.className = "status scan";
-        } else {
-          const cornerMat = cornersToMat(currCorners);
-          const newCornerMat = new cv.Mat();
-          cv.perspectiveTransform(cornerMat, newCornerMat, H);
-          const newCorners = matToCorners(newCornerMat);
-          cornerMat.delete(); newCornerMat.delete();
+          dropTracking('homography_empty', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          return;
+        }
 
-          // Drop tracking if ALL corners drift >40% outside frame — target has left view
-          const pad = 0.40;
-          const inBounds = newCorners.every(p =>
-            p.x > -pad * frameW && p.x < frameW * (1 + pad) &&
-            p.y > -pad * frameH && p.y < frameH * (1 + pad)
-          );
-          if (!inBounds) {
-            tracking = false;
-          try { scannerState.transition('target_lost'); scannerState.transition('recovering'); } catch (_) {}
-          lastOrdered = null;
-          smoothCorners = null;
-          stopOverlayImmediate(); startScannerStatusCycle();
-            statusDiv.textContent = "🎯 Scan AR marker";
-            statusDiv.className = "status scan";
-            prevGray.delete(); prevGray = null;
-            prevPts.delete(); prevPts = null;
-            gray.delete(); nextPts.delete(); status.delete(); err.delete();
-            prevMat.delete(); nextMat.delete(); mask.delete(); H.delete();
+        const cornerMat = cornersToMat(currCorners);
+        const newCornerMat = new cv.Mat();
+        cv.perspectiveTransform(cornerMat, newCornerMat, H);
+        const newCorners = matToCorners(newCornerMat);
+        cornerMat.delete(); newCornerMat.delete();
+
+        // Drop tracking if ALL corners drift >40% outside frame — target has left view
+        const pad = 0.40;
+        const inBounds = newCorners.every(p =>
+          p.x > -pad * frameW && p.x < frameW * (1 + pad) &&
+          p.y > -pad * frameH && p.y < frameH * (1 + pad)
+        );
+        if (!inBounds) {
+          dropTracking('out_of_bounds', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          return;
+        }
+
+        const localPoseQuality = poseCompatibility(newCorners);
+        if (!localPoseQuality.ok) {
+          scannerDiagnostics.push('tracking_pose_rejected', localPoseQuality);
+          enterGrace('pose_rejected_' + localPoseQuality.reason);
+          if (!graceExpired()) {
+            deleteMats(gray, nextPts, status, err, prevMat, nextMat, mask, H);
             return;
           }
-
-          currCorners = newCorners;
-          applyWarp(currCorners);
-          playOverlay();
-
-          prevGray.delete();
-          prevGray = gray;
-          prevPts.delete();
-          prevPts = nextMat.clone();
-          lastLockTs = performance.now();
-          statusDiv.textContent = `🎬 AR IS ON LIVE${currentPairId + 1}`;
-          statusDiv.className = "status track";
+          dropTracking('pose_rejected_' + localPoseQuality.reason, [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          return;
         }
+
+        currCorners = newCorners;
+        if (!(runtime.isValidQuad(currCorners, frameW, frameH) && applyWarp(currCorners))) {
+          dropTracking('tracking_geometry_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          return;
+        }
+        playOverlay();
+
+        prevGray.delete();
+        prevGray = gray;
+        prevPts.delete();
+        prevPts = nextMat.clone();
+        lastLockTs = performance.now();
+        statusDiv.textContent = `🎬 AR IS ON LIVE${currentPairId + 1}`;
+        statusDiv.className = "status track";
+        scannerDiagnostics.push('[TRACK UPDATE]', {
+          generation: scannerGeneration, pairId: currentPairId, points: goodNext.length / 2
+        });
 
         nextPts.delete(); status.delete(); err.delete();
         prevMat.delete(); nextMat.delete();
@@ -1253,13 +1515,15 @@
     }
 
     async function detectOnceFromServer() {
-      if (detectInFlight || !cvReady || cam.readyState < 2) return;
+      if (sessionEnding || detectInFlight || !cvReady || cam.readyState < 2) return;
       if (!detectionPolicy.canStart(performance.now(), !document.hidden, Boolean(cameraStream), tracking)) return;
       const requestId = detectionPolicy.start(performance.now());
+      const requestGeneration = scannerGeneration;
+      const requestOrientationRevision = orientationRevision;
+      const requestPairEpoch = activePairEpoch;
+      const requestStart = performance.now();
       detectInFlight = true;
-      try {
-        if (scannerState.state === 'ready_to_scan' || scannerState.state === 'recovering') scannerState.transition('detecting');
-      } catch (_) {}
+      if (scannerState.state === 'ready_to_scan' || scannerState.state === 'recovering') safeTransition('detecting', 'server_request');
       loadingSpinner.style.display = "block";
 
       // Cap capture to max 1200px (server's ORB_MAX_DIM) to avoid sending oversized images
@@ -1286,13 +1550,38 @@
         if (scannerSessionId) {
           fd.append("scan_session_id", scannerSessionId);
         }
+        fd.append("scanner_generation", String(requestGeneration));
+        fd.append("source_frame_width", String(capW));
+        fd.append("source_frame_height", String(capH));
+        fd.append("orientation_revision", String(requestOrientationRevision));
 
         const controller = new AbortController();
+        activeDetectionController = controller;
         const timeoutId = setTimeout(() => controller.abort(), runtimeConfig.requestTimeoutMs || 8000);
         const r = await fetch("/detect_init", { method: "POST", body: fd, signal: controller.signal });
         clearTimeout(timeoutId);
+        if (activeDetectionController === controller) activeDetectionController = null;
         const data = await r.json();
+        scannerDiagnostics.push('detect_response', {
+          requestId,
+          generation: requestGeneration,
+          activeGeneration: scannerGeneration,
+          durationMs: Math.round(performance.now() - requestStart)
+        });
+        const isStaleGeneration = requestGeneration !== scannerGeneration || String(data.scanner_generation || "") !== String(requestGeneration);
+        const isStaleFrameSize = Number(data.source_frame_width || 0) !== capW || Number(data.source_frame_height || 0) !== capH;
+        const isStaleOrientation = String(data.orientation_revision || "") !== String(requestOrientationRevision);
+        if (isStaleGeneration || isStaleFrameSize || isStaleOrientation) {
+          scannerDiagnostics.push('[STALE RESULT IGNORED]', {
+            requestId,
+            code: isStaleGeneration ? 'stale_generation' : (isStaleOrientation ? 'stale_orientation' : 'stale_frame_size'),
+            requestGeneration, activeGeneration: scannerGeneration
+          });
+          detectionPolicy.finish(requestId);
+          return;
+        }
         if (detectionPolicy.finish(requestId) === 'stale') return;
+        latestAcceptedRequestId = requestId;
         const validation = runtime.validateDetectionResponse(data);
         if (!validation.ok) {
           enterFallback(validation.code);
@@ -1320,9 +1609,53 @@
 
         const newVideoUrl = data.video_url;
         const newPairId = data.matched_pair_id || 0;
-        const isSame = (currentVideoUrl === newVideoUrl && currentPairId === newPairId);
+        const wasTracking = tracking;
+        const wasSameTarget = (currentVideoUrl === newVideoUrl && currentPairId === newPairId);
 
-        if (!isSame) {
+        frameW = Number(data.frame_width);
+        frameH = Number(data.frame_height);
+        cap.width = frameW;
+        cap.height = frameH;
+
+        const newCorners = data.corners.map(p => ({ x: Number(p.x), y: Number(p.y) }));
+        if (!runtime.isValidQuad(newCorners, frameW, frameH)) {
+          clearTrackingGeometry('invalid_detection_geometry');
+          return;
+        }
+        scannerDiagnostics.push('[SCAN CANDIDATE]', {
+          requestId, pairId: newPairId, sessionId: scannerSessionId,
+          inliers: data.inliers, homographyQuality: data.homography_quality || null
+        });
+        const poseQuality = poseCompatibility(newCorners);
+        scannerDiagnostics.push('pose_quality', {
+          requestId,
+          pairId: newPairId,
+          backend: data.homography_quality || null,
+          temporal: poseQuality
+        });
+        if (!poseQuality.ok && tracking && currCorners) {
+          scannerDiagnostics.push('[SCAN MATCH REJECT]', { requestId, pairId: newPairId, reason: poseQuality.reason, keptTracking: true });
+          statusDiv.textContent = "Tracking marker";
+          statusDiv.className = "status track";
+          return;
+        }
+        if (!poseQuality.ok) {
+          scannerDiagnostics.push('[SCAN MATCH REJECT]', { requestId, pairId: newPairId, reason: poseQuality.reason, keptTracking: false });
+          clearTrackingGeometry('pose_rejected_' + poseQuality.reason);
+          return;
+        }
+
+        if (!wasSameTarget) {
+          // Marker A/B guard: a slower, older request must not overwrite a pair that a
+          // faster/newer request already switched to while this one was in flight.
+          if (requestPairEpoch !== activePairEpoch) {
+            scannerDiagnostics.push('[STALE RESULT IGNORED]', {
+              requestId, code: 'stale_pair_epoch', requestPairEpoch, activePairEpoch, pairId: newPairId
+            });
+            return;
+          }
+          activePairEpoch++;
+          scannerDiagnostics.push('[MARKER SWITCH]', { fromPairId: currentPairId, toPairId: newPairId, epoch: activePairEpoch });
           overlay.src = newVideoUrl;
           overlay.currentTime = 0;
           videoFinished = false;
@@ -1339,14 +1672,7 @@
             playOverlay();
           }
         }
-
-        frameW = Number(data.frame_width);
-        frameH = Number(data.frame_height);
-        cap.width = frameW;
-        cap.height = frameH;
-
-        const newCorners = data.corners.map(p => ({ x: Number(p.x), y: Number(p.y) }));
-        const pts = (data.init_points || []).map(p => [Number(p.x), Number(p.y)]);
+        const pts = (data.init_points || []).slice(0, MAX_TRACK_POINTS).map(p => [Number(p.x), Number(p.y)]);
 
         if (prevPts) prevPts.delete();
         if (prevGray) prevGray.delete();
@@ -1381,21 +1707,23 @@
 
         // When re-anchoring while already tracking same pair, preserve smoothCorners
         // to avoid a visible jump — only reset when switching pairs or first detection
-        const isSameTarget = (currentPairId === (data.matched_pair_id || 0)) && tracking;
+        const isSameTarget = wasSameTarget && wasTracking;
         currCorners = newCorners;
         if (!isSameTarget) {
           lastOrdered = null;
           smoothCorners = null;
         }
+        scannerDiagnostics.push('[SCAN MATCH ACCEPT]', { requestId, pairId: newPairId, wasTracking, sameTarget: isSameTarget });
+        if (!wasTracking) scannerDiagnostics.push('[TRACK START]', { pairId: newPairId, generation: scannerGeneration });
         tracking = true;
-        try { scannerState.transition('tracking'); } catch (_) {}
+        safeTransition('tracking', 'match_accept');
         trackingBadFrames = 0;
+        graceEnteredAt = 0;
         lastDetectTs = performance.now();
         lastLockTs = lastDetectTs;
 
         stopScannerStatusCycle();
-        applyWarp(currCorners);
-        playOverlay();
+        if (applyWarp(currCorners)) playOverlay();
 
         statusDiv.textContent = `🎬 Tracking Pair #${newPairId + 1}`;
         statusDiv.className = "status track";
@@ -1403,8 +1731,9 @@
       } catch (e) {
         console.error("Detection error:", e);
         detectionPolicy.finish(requestId);
+        if (activeDetectionController) activeDetectionController = null;
         if (e && e.name === 'AbortError') {
-          enterFallback('DETECTION_TIMEOUT');
+          handleDetectionTimeout();
         } else {
           statusDiv.textContent = "Detection error";
           statusDiv.className = "status scan";
@@ -1417,26 +1746,29 @@
 
     function startDetectLoop() {
       if (detectLoopTimer) return;
+      const loopGeneration = scannerGeneration;
       detectLoopTimer = setInterval(() => {
+        if (sessionEnding) {
+          stopDetectLoop();
+          return;
+        }
+        if (loopGeneration !== scannerGeneration) {
+          stopDetectLoop();
+          return;
+        }
         const now = performance.now();
         const driftMs = now - lastLockTs;
         const sinceLastDetect = now - lastDetectTs;
-        // Re-detect when: not tracking, tracking lost for >1.5s, OR re-anchor interval reached
-        if (!tracking || driftMs > 1500 || sinceLastDetect > FORCE_REDETECT_MS) {
+        const trackingHealthy = tracking && driftMs <= HEALTHY_TRACK_SUPPRESS_MS;
+        // Re-detect on confidence loss; otherwise do only a bounded re-anchor.
+        if (!tracking || driftMs > 1500 || (trackingHealthy && sinceLastDetect > FORCE_REDETECT_MS)) {
           detectOnceFromServer();
         }
       }, DETECT_INTERVAL_MS);
     }
 
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) {
-        if (overlay) overlay.pause();
-      } else {
-        if (tracking && overlay && overlay.src) {
-          overlay.play().catch(() => { });
-        }
-      }
-    });
+    window.addEventListener('orientationchange', () => scheduleOrientationRecovery('orientationchange'));
+    window.addEventListener('resize', () => scheduleOrientationRecovery('resize'));
 
     // ================================================
     // AR ENGINE INITIALIZATION OVERLAY

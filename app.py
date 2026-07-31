@@ -1671,15 +1671,28 @@ def _quad_metrics(corners_xy):
     }
 
 def evaluate_homography_quality(src_arr, dst_arr, homography, mask, marker_w, marker_h, frame_w, frame_h, scale=1.0):
-    """Reject high-match false poses caused by clustered inliers or unstable projection."""
+    """Reject high-match false poses caused by clustered inliers or unstable projection.
+
+    ``reason`` is the original (test-stable) classification string. ``code`` is a
+    finer-grained rejection code — distinguishes e.g. an absolute inlier-count
+    shortfall from a low inlier *ratio*, or reference-image clustering from
+    projected-ROI clustering — without changing any accept/reject threshold or
+    the legacy ``reason`` values other call sites already depend on.
+    """
     if homography is None or mask is None or src_arr is None or dst_arr is None:
-        return False, {"reason": "missing_homography"}
+        return False, {"reason": "missing_homography", "code": "missing_homography"}
     inlier_mask = mask.reshape(-1).astype(bool)
     total = int(len(src_arr))
     inliers = int(np.sum(inlier_mask))
     inlier_ratio = inliers / float(max(total, 1))
-    if inliers < max(MIN_INLIERS_ABS, int(MIN_INLIERS_RATIO * total)) or inlier_ratio < 0.30:
-        return False, {"reason": "weak_inliers", "inliers": inliers, "inlier_ratio": inlier_ratio}
+    min_inliers_needed = max(MIN_INLIERS_ABS, int(MIN_INLIERS_RATIO * total))
+    if inliers < min_inliers_needed:
+        return False, {
+            "reason": "weak_inliers", "code": "insufficient_inliers",
+            "inliers": inliers, "inlier_ratio": inlier_ratio, "required": min_inliers_needed,
+        }
+    if inlier_ratio < 0.30:
+        return False, {"reason": "weak_inliers", "code": "low_inlier_ratio", "inliers": inliers, "inlier_ratio": inlier_ratio}
 
     src_in = np.asarray(src_arr[inlier_mask], dtype=np.float32).reshape(-1, 1, 2)
     dst_in = np.asarray(dst_arr[inlier_mask], dtype=np.float32).reshape(-1, 2)
@@ -1692,7 +1705,10 @@ def evaluate_homography_quality(src_arr, dst_arr, homography, mask, marker_w, ma
     detect_frame_h = max(float(frame_h) * float(scale), 1.0)
     normalized_limit = max(8.0, min(detect_frame_w, detect_frame_h) * 0.018)
     if median_error > normalized_limit or mean_error > normalized_limit * 1.6 or max_error > normalized_limit * 4.0:
-        return False, {"reason": "reprojection_error", "mean_error": mean_error, "median_error": median_error, "max_error": max_error}
+        return False, {
+            "reason": "reprojection_error", "code": "high_reprojection_error",
+            "mean_error": mean_error, "median_error": median_error, "max_error": max_error,
+        }
 
     rect = np.array([[0, 0], [marker_w, 0], [marker_w, marker_h], [0, marker_h]], dtype=np.float32).reshape(-1, 1, 2)
     projected_corners = cv2.perspectiveTransform(rect, homography).reshape(4, 2)
@@ -1707,9 +1723,16 @@ def evaluate_homography_quality(src_arr, dst_arr, homography, mask, marker_w, ma
         roi_cells, roi_score = _grid_coverage(dst_in_marker_roi, marker_w, marker_h, grid=3)
     except Exception:
         roi_cells, roi_score = 0, 0.0
-    if ref_cells < 3 or roi_cells < 3:
+    if ref_cells < 3:
         return False, {
-            "reason": "clustered_inliers",
+            "reason": "clustered_inliers", "code": "clustered_reference_points",
+            "reference_grid_cells": ref_cells,
+            "projected_roi_grid_cells": roi_cells,
+            "frame_grid_cells": frame_cells,
+        }
+    if roi_cells < 3:
+        return False, {
+            "reason": "clustered_inliers", "code": "clustered_roi_points",
             "reference_grid_cells": ref_cells,
             "projected_roi_grid_cells": roi_cells,
             "frame_grid_cells": frame_cells,
@@ -1717,7 +1740,7 @@ def evaluate_homography_quality(src_arr, dst_arr, homography, mask, marker_w, ma
     corners = [(float(p[0] / scale), float(p[1] / scale)) for p in projected_corners]
     if not valid_corners(corners, frame_w, frame_h):
         return False, {
-            "reason": "invalid_corners",
+            "reason": "invalid_corners", "code": "invalid_quad",
             "corners": corners,
             "inliers": inliers,
             "inlier_ratio": inlier_ratio,
@@ -1728,12 +1751,13 @@ def evaluate_homography_quality(src_arr, dst_arr, homography, mask, marker_w, ma
     metrics = _quad_metrics(corners)
     marker_aspect = max(float(marker_w) / max(float(marker_h), 1.0), float(marker_h) / max(float(marker_w), 1.0))
     if metrics["edge_ratio"] > 8.0 or metrics["diagonal_ratio"] > 6.0:
-        return False, {"reason": "distorted_quad", **metrics}
+        return False, {"reason": "distorted_quad", "code": "excessive_perspective", **metrics}
     if metrics["edge_ratio"] > marker_aspect * 6.0:
-        return False, {"reason": "aspect_distortion", **metrics}
+        return False, {"reason": "aspect_distortion", "code": "implausible_scale", **metrics}
 
     return True, {
         "reason": "accepted",
+        "code": "accepted",
         "inliers": inliers,
         "inlier_ratio": inlier_ratio,
         "mean_error": mean_error,
@@ -1750,6 +1774,27 @@ def evaluate_homography_quality(src_arr, dst_arr, homography, mask, marker_w, ma
         "diagonal_ratio": metrics["diagonal_ratio"],
         "corners": corners,
     }
+
+
+CANDIDATE_MARGIN_MIN_ABS = 4
+CANDIDATE_MARGIN_MIN_RATIO = 0.15
+
+
+def resolve_candidate_margin(best_good, second_good):
+    """Reject an ambiguous winner: two distinct candidate pairs both cleared
+    MIN_GOOD_MATCHES but are too close in match count to trust a single pick.
+
+    Does not change what counts as a "good" match for any individual candidate —
+    only refuses to choose between two candidates that are both individually
+    plausible. Returns (ok, code).
+    """
+    if second_good < MIN_GOOD_MATCHES:
+        return True, None
+    margin = best_good - second_good
+    required_margin = max(CANDIDATE_MARGIN_MIN_ABS, int(best_good * CANDIDATE_MARGIN_MIN_RATIO))
+    if margin < required_margin:
+        return False, "candidate_margin_too_small"
+    return True, None
 
 def _resize_gray_for_detect(img_bgr, max_dim=DETECT_MAX_DIM):
     h, w = img_bgr.shape[:2]
@@ -4017,43 +4062,66 @@ def detect_init():
         best_match = None
         best_match_id = -1
         best_good = 0
-        
+        second_good = 0
+
         for pid in top_ids:
             feats = load_features(project_id, pid)
             if feats is None:
                 continue
-            
+
             best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.75)
-            
+
             if not good_matches or len(good_matches) < MIN_GOOD_MATCHES:
                 best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.80)
-            
+
             if not good_matches or len(good_matches) < MIN_GOOD_MATCHES:
                 best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.90)
-            
+
             if good_matches and len(good_matches) > best_good:
+                second_good = best_good
                 best_good = len(good_matches)
                 best_match = (best_tag, good_matches, stored_kp, feats)
                 best_match_id = pid
                 print(f"  - Pair {pid}: {len(good_matches)} good matches")
+            elif good_matches and len(good_matches) > second_good:
+                second_good = len(good_matches)
         t_after_match = time.time()
-        print(f"⏱ match_time={(t_after_match - t_after_quick):.3f}s; best_good={best_good}")
-        
+        print(f"⏱ match_time={(t_after_match - t_after_quick):.3f}s; best_good={best_good}; second_good={second_good}")
+
         if not best_match or best_good < MIN_GOOD_MATCHES:
             print(f"❌ Detection failed: best_good={best_good}")
             if scan_log and not is_admin_project:
                 db.session.commit()
             return jsonify({
-                "detected": False, 
+                "detected": False,
                 "reason": f"Mobile detection failed: Found {best_good} matches",
-                "frame_width": frame_w, 
+                "frame_width": frame_w,
                 "frame_height": frame_h,
                 "scanner_generation": scanner_generation,
                 "source_frame_width": source_frame_width,
                 "source_frame_height": source_frame_height,
                 "orientation_revision": orientation_revision,
             }), 200
-        
+
+        margin_ok, margin_code = resolve_candidate_margin(best_good, second_good)
+        if not margin_ok:
+            print(f"❌ Ambiguous candidates: best_good={best_good} second_good={second_good}")
+            if scan_log and not is_admin_project:
+                db.session.commit()
+            return jsonify({
+                "detected": False,
+                "reason": "Ambiguous match: two candidates too close to trust",
+                "code": margin_code,
+                "best_good": best_good,
+                "second_good": second_good,
+                "frame_width": frame_w,
+                "frame_height": frame_h,
+                "scanner_generation": scanner_generation,
+                "source_frame_width": source_frame_width,
+                "source_frame_height": source_frame_height,
+                "orientation_revision": orientation_revision,
+            }), 200
+
         print(f"✅ Best match: pair {best_match_id} with {best_good} matches")
         t_after_homography = time.time()
         print(f"⏱ homography_time={(t_after_homography - t_after_match):.3f}s; total_time={(t_after_homography - t_start):.3f}s")
@@ -4077,18 +4145,17 @@ def detect_init():
             print(f"❌ Homography failed")
             if scan_log and not is_admin_project:
                 db.session.commit()
-            return jsonify({"detected": False, "reason": "Homography failed"}), 200
-        
-        inliers = int(np.sum(mask))
-        min_inliers_needed = max(MIN_INLIERS_ABS, int(MIN_INLIERS_RATIO * len(src_arr)))
-        print(f"📐 Inliers: {inliers}/{len(src_arr)} (need >={min_inliers_needed})")
+            return jsonify({"detected": False, "reason": "Homography failed", "code": "missing_homography"}), 200
 
-        if inliers < min_inliers_needed:
-            print(f"❌ Weak homography: {inliers} inliers < required {min_inliers_needed}")
-            if scan_log and not is_admin_project:
-                db.session.commit()
-            return jsonify({"detected": False, "reason": "Weak homography"}), 200
-        
+        inliers = int(np.sum(mask))
+        print(f"📐 Inliers: {inliers}/{len(src_arr)}")
+
+        # NOTE: the inlier-count/ratio gate lives in evaluate_homography_quality() below —
+        # it uses the exact same MIN_INLIERS_ABS/MIN_INLIERS_RATIO thresholds, so nothing is
+        # weakened by not duplicating the check here. Duplicating it here used to short-circuit
+        # BEFORE evaluate_homography_quality ran, which meant every weak-inlier rejection came
+        # back as a bare "Weak homography" string instead of a structured reason/code (see e.g.
+        # a real-device log of "45 good matches, 6 inliers, required 13" with no further detail).
         tw, th = feats["w"], feats["h"]
         quality_ok, homography_quality = evaluate_homography_quality(
             src_arr, dst_arr, H, mask, tw, th, frame_w, frame_h, scale=scale
@@ -4096,12 +4163,13 @@ def detect_init():
         print(f"Homography quality: {homography_quality}")
 
         if not quality_ok:
-            print(f"Rejected pose: {homography_quality.get('reason')}")
+            print(f"Rejected pose: {homography_quality.get('reason')} ({homography_quality.get('code')})")
             if scan_log and not is_admin_project:
                 db.session.commit()
             return jsonify({
                 "detected": False,
                 "reason": f"Rejected pose: {homography_quality.get('reason')}",
+                "code": homography_quality.get("code"),
                 "frame_width": frame_w,
                 "frame_height": frame_h,
                 "scanner_generation": scanner_generation,
