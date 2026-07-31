@@ -141,8 +141,60 @@
     return { ok: true, code: "MATCH" };
   }
 
+  function createDiagnostics(enabled, sink) {
+    const active = Boolean(enabled);
+    const limit = 80;
+    const events = [];
+    return {
+      push(name, data) {
+        if (!active) return;
+        const safe = Object.assign({ event: name, at: Math.round(performance.now()) }, data || {});
+        delete safe.frame;
+        delete safe.image;
+        delete safe.blob;
+        events.push(safe);
+        if (events.length > limit) events.shift();
+        if (sink) sink(safe);
+      },
+      snapshot() {
+        return events.slice();
+      }
+    };
+  }
+
+  function quadArea(points) {
+    let area = 0;
+    for (let i = 0; i < points.length; i++) {
+      const a = points[i];
+      const b = points[(i + 1) % points.length];
+      area += a.x * b.y - b.x * a.y;
+    }
+    return Math.abs(area / 2);
+  }
+
+  function isValidQuad(points, frameWidth, frameHeight) {
+    if (!Array.isArray(points) || points.length !== 4 || frameWidth <= 0 || frameHeight <= 0) return false;
+    const pad = 0.2;
+    for (const point of points) {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) return false;
+      if (point.x < -frameWidth * pad || point.x > frameWidth * (1 + pad)) return false;
+      if (point.y < -frameHeight * pad || point.y > frameHeight * (1 + pad)) return false;
+    }
+    const area = quadArea(points);
+    const frameArea = frameWidth * frameHeight;
+    if (area < frameArea * 0.01 || area > frameArea * 0.95) return false;
+    const edges = points.map((point, index) => {
+      const next = points[(index + 1) % points.length];
+      return Math.hypot(next.x - point.x, next.y - point.y);
+    });
+    const minEdge = Math.min.apply(null, edges);
+    const maxEdge = Math.max.apply(null, edges);
+    return minEdge >= Math.min(frameWidth, frameHeight) * 0.03 && maxEdge / Math.max(minEdge, 1) <= 12;
+  }
+
   root.ScanStoryScannerRuntime = {
     STATES, TRANSITIONS, TIMEOUTS, MODES, ERRORS,
-    createStateMachine, detectCapabilities, selectRuntimeMode, createRequestPolicy, validateDetectionResponse
+    createStateMachine, detectCapabilities, selectRuntimeMode, createRequestPolicy,
+    validateDetectionResponse, createDiagnostics, isValidQuad
   };
 })(window);
