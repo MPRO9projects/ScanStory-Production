@@ -595,6 +595,23 @@
 
   <div id="status" class="status scan">Loading OpenCV…</div>
 
+  {% if scanner_diagnostics_enabled %}
+  <!-- Dev/testing only. scanner_diagnostics_enabled is computed server-side (never true in
+       production) — this markup does not exist in the response at all when it's False, so
+       the ?scanner_debug=1 query flag can never conjure it up in prod. -->
+  <div id="scannerDiagPanel" style="display:none;margin-top:10px;max-width:520px;margin-left:auto;margin-right:auto;text-align:left;background:#0a0a0a;border:1px solid rgba(0,212,255,0.25);border-radius:8px;font-family:monospace;font-size:11px;color:#9fe;">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.08);">
+      <strong style="color:#00d4ff;">Scanner Diagnostics (dev only)</strong>
+      <div>
+        <button type="button" id="diagExportBtn" style="font-size:10px;margin-right:6px;">Export Diagnostics JSON</button>
+        <button type="button" id="diagResetBtn" style="font-size:10px;margin-right:6px;">Reset Diagnostics</button>
+        <button type="button" id="diagCollapseBtn" style="font-size:10px;">_</button>
+      </div>
+    </div>
+    <pre id="diagFields" style="margin:0;padding:8px 10px;max-height:260px;overflow:auto;white-space:pre-wrap;"></pre>
+  </div>
+  {% endif %}
+
   <script src="{{ url_for('static', filename='js/scanner-runtime.js') }}"></script>
   <script>
     // ================================================
@@ -636,6 +653,28 @@
     const scannerDiagnostics = runtime.createDiagnostics(diagnosticsEnabled, function (event) {
       console.debug('[scanner]', event);
     });
+    // Dev-only diagnostics panel state — cheap counters/last-values only, piggybacked onto
+    // existing diagnostics push sites below. No frame pixels, no PII, nothing beyond what
+    // scannerDiagnostics already computes. The panel DOM only exists when the server
+    // rendered it (scanner_diagnostics_enabled, dev/testing only) — see the template below.
+    const diagPanelEl = document.getElementById('scannerDiagPanel');
+    const diagPanelActive = Boolean(diagnosticsEnabled && diagPanelEl);
+    const diagState = {
+      consecutiveAccepted: 0,
+      consecutiveRejected: 0,
+      lastRejectionReason: null,
+      lastMarkerType: null,
+      lastGoodMatches: null,
+      lastKeypoints: null,
+      lastHomography: null,
+      lastDurationMs: null,
+      avgDurationMs: null,
+      durationSampleCount: 0,
+      durationSampleSum: 0,
+      staleCount: 0,
+      requestSeq: 0,
+      visibleAreaRatio: null
+    };
     const MAX_TRACK_POINTS = scannerMode === 'full' ? 180 : (scannerMode === 'standard' ? 120 : 70);
     const TRACK_FRAME_INTERVAL_MS = scannerMode === 'lightweight' ? 90 : (scannerMode === 'standard' ? 66 : 50);
     const RECOVERY_RETRY_LIMIT = scannerMode === 'lightweight' ? 5 : 4;
@@ -1353,6 +1392,9 @@
     // H.empty() branch used to fall through to shared cleanup without freeing `gray`,
     // and without releasing the previous prevGray/prevPts (audit finding).
     function dropTracking(reason, extraMats) {
+      diagState.lastRejectionReason = reason;
+      diagState.consecutiveRejected++;
+      diagState.consecutiveAccepted = 0;
       scannerDiagnostics.push('[TRACK LOST]', { reason, generation: scannerGeneration, badFrames: trackingBadFrames });
       clearTrackingGeometry(reason);
       safeTransition('target_lost', reason);
@@ -1388,6 +1430,9 @@
     function enterGrace(reason) {
       if (trackingBadFrames === 0) graceEnteredAt = performance.now();
       trackingBadFrames++;
+      diagState.lastRejectionReason = reason;
+      diagState.consecutiveRejected++;
+      diagState.consecutiveAccepted = 0;
       scannerDiagnostics.push('[TRACK WEAK]', {
         reason, badFrames: trackingBadFrames, graceMs: Math.round(performance.now() - graceEnteredAt),
         generation: scannerGeneration
@@ -1492,6 +1537,9 @@
           return;
         }
         playOverlay();
+        diagState.consecutiveAccepted++;
+        diagState.consecutiveRejected = 0;
+        if (frameW > 0 && frameH > 0) diagState.visibleAreaRatio = quadArea2(currCorners) / (frameW * frameH);
 
         prevGray.delete();
         prevGray = gray;
@@ -1562,16 +1610,23 @@
         clearTimeout(timeoutId);
         if (activeDetectionController === controller) activeDetectionController = null;
         const data = await r.json();
+        const durationMs = Math.round(performance.now() - requestStart);
+        diagState.requestSeq++;
+        diagState.lastDurationMs = durationMs;
+        diagState.durationSampleCount++;
+        diagState.durationSampleSum += durationMs;
+        diagState.avgDurationMs = Math.round(diagState.durationSampleSum / diagState.durationSampleCount);
         scannerDiagnostics.push('detect_response', {
           requestId,
           generation: requestGeneration,
           activeGeneration: scannerGeneration,
-          durationMs: Math.round(performance.now() - requestStart)
+          durationMs
         });
         const isStaleGeneration = requestGeneration !== scannerGeneration || String(data.scanner_generation || "") !== String(requestGeneration);
         const isStaleFrameSize = Number(data.source_frame_width || 0) !== capW || Number(data.source_frame_height || 0) !== capH;
         const isStaleOrientation = String(data.orientation_revision || "") !== String(requestOrientationRevision);
         if (isStaleGeneration || isStaleFrameSize || isStaleOrientation) {
+          diagState.staleCount++;
           scannerDiagnostics.push('[STALE RESULT IGNORED]', {
             requestId,
             code: isStaleGeneration ? 'stale_generation' : (isStaleOrientation ? 'stale_orientation' : 'stale_frame_size'),
@@ -1622,6 +1677,10 @@
           clearTrackingGeometry('invalid_detection_geometry');
           return;
         }
+        diagState.lastMarkerType = data.marker_mode || null;
+        diagState.lastGoodMatches = (typeof data.good_matches === 'number') ? data.good_matches : null;
+        diagState.lastKeypoints = (typeof data.keypoints === 'number') ? data.keypoints : null;
+        diagState.lastHomography = data.homography_quality || null;
         scannerDiagnostics.push('[SCAN CANDIDATE]', {
           requestId, pairId: newPairId, sessionId: scannerSessionId,
           inliers: data.inliers, homographyQuality: data.homography_quality || null
@@ -1634,12 +1693,14 @@
           temporal: poseQuality
         });
         if (!poseQuality.ok && tracking && currCorners) {
+          diagState.lastRejectionReason = poseQuality.reason;
           scannerDiagnostics.push('[SCAN MATCH REJECT]', { requestId, pairId: newPairId, reason: poseQuality.reason, keptTracking: true });
           statusDiv.textContent = "Tracking marker";
           statusDiv.className = "status track";
           return;
         }
         if (!poseQuality.ok) {
+          diagState.lastRejectionReason = poseQuality.reason;
           scannerDiagnostics.push('[SCAN MATCH REJECT]', { requestId, pairId: newPairId, reason: poseQuality.reason, keptTracking: false });
           clearTrackingGeometry('pose_rejected_' + poseQuality.reason);
           return;
@@ -1649,6 +1710,7 @@
           // Marker A/B guard: a slower, older request must not overwrite a pair that a
           // faster/newer request already switched to while this one was in flight.
           if (requestPairEpoch !== activePairEpoch) {
+            diagState.staleCount++;
             scannerDiagnostics.push('[STALE RESULT IGNORED]', {
               requestId, code: 'stale_pair_epoch', requestPairEpoch, activePairEpoch, pairId: newPairId
             });
@@ -1713,6 +1775,7 @@
           lastOrdered = null;
           smoothCorners = null;
         }
+        diagState.lastRejectionReason = null;
         scannerDiagnostics.push('[SCAN MATCH ACCEPT]', { requestId, pairId: newPairId, wasTracking, sameTarget: isSameTarget });
         if (!wasTracking) scannerDiagnostics.push('[TRACK START]', { pairId: newPairId, generation: scannerGeneration });
         tracking = true;
@@ -1808,6 +1871,97 @@
         cameraStream.getTracks().forEach(track => track.stop());
       }
     });
+
+    // ================================================
+    // DEV-ONLY DIAGNOSTICS PANEL
+    // Only runs at all when the server rendered the panel (dev/testing, never production)
+    // AND ?scanner_debug=1 is present. Reads existing state/diagState — no new expensive
+    // work, no frame pixels, no PII. Reset clears diagnostics only, never the camera/scanner.
+    // ================================================
+    if (diagPanelActive) {
+      diagPanelEl.style.display = 'block';
+      const diagFieldsEl = document.getElementById('diagFields');
+      let diagCollapsed = false;
+
+      document.getElementById('diagCollapseBtn').addEventListener('click', function () {
+        diagCollapsed = !diagCollapsed;
+        diagFieldsEl.style.display = diagCollapsed ? 'none' : 'block';
+      });
+
+      document.getElementById('diagResetBtn').addEventListener('click', function () {
+        scannerDiagnostics.reset();
+        diagState.consecutiveAccepted = 0;
+        diagState.consecutiveRejected = 0;
+        diagState.lastRejectionReason = null;
+        diagState.staleCount = 0;
+        diagState.durationSampleCount = 0;
+        diagState.durationSampleSum = 0;
+        diagState.avgDurationMs = null;
+        diagState.lastDurationMs = null;
+        diagState.requestSeq = 0;
+        renderDiagPanel();
+      });
+
+      document.getElementById('diagExportBtn').addEventListener('click', function () {
+        const payload = {
+          exportedAt: new Date().toISOString(),
+          sessionId: scannerSessionId,
+          generation: scannerGeneration,
+          state: scannerState.state,
+          counters: Object.assign({}, diagState),
+          history: scannerDiagnostics.snapshot()
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'scanner-diagnostics-' + Date.now() + '.json';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+      });
+
+      function renderDiagPanel() {
+        const activeLoops = (detectLoopTimer ? 1 : 0) + (trackLoopActive ? 1 : 0);
+        const confidence = trackingBadFrames > 0 ? Math.max(0, 1 - trackingBadFrames / TRACKING_GRACE_FRAMES) : (tracking ? 1 : 0);
+        const hq = diagState.lastHomography || {};
+        const lines = [
+          `state: ${scannerState.state}`,
+          `camera ready: ${isCameraHealthy()}`,
+          `session: ${scannerSessionId || '-'}`,
+          `generation: ${scannerGeneration}`,
+          `orientation revision: ${orientationRevision}`,
+          `viewport: ${window.innerWidth}x${window.innerHeight}`,
+          `frame: ${frameW}x${frameH}`,
+          `active loops: ${activeLoops}`,
+          `request seq: ${diagState.requestSeq}`,
+          `candidate pair id: ${currentPairId}`,
+          `marker type: ${diagState.lastMarkerType || '-'}`,
+          `keypoints: ${diagState.lastKeypoints ?? '-'}`,
+          `good matches: ${diagState.lastGoodMatches ?? '-'}`,
+          `inliers: ${hq.inliers ?? '-'}`,
+          `inlier ratio: ${typeof hq.inlier_ratio === 'number' ? hq.inlier_ratio.toFixed(2) : '-'}`,
+          `reprojection error: ${typeof hq.mean_error === 'number' ? hq.mean_error.toFixed(2) : '-'}`,
+          `quad valid: ${currCorners ? runtime.isValidQuad(currCorners, frameW, frameH) : '-'}`,
+          `visible area ratio: ${diagState.visibleAreaRatio != null ? diagState.visibleAreaRatio.toFixed(3) : '-'}`,
+          `rejection reason: ${diagState.lastRejectionReason || '-'}`,
+          `tracking: ${tracking}`,
+          `tracking confidence: ${confidence.toFixed(2)}`,
+          `consecutive accepted frames: ${diagState.consecutiveAccepted}`,
+          `consecutive rejected frames: ${diagState.consecutiveRejected}`,
+          `recovery state: ${scannerState.state === 'recovering' || scannerState.state === 'target_lost'}`,
+          `last accepted: ${lastLockTs ? Math.round(performance.now() - lastLockTs) + 'ms ago' : '-'}`,
+          `processing duration: ${diagState.lastDurationMs ?? '-'}ms`,
+          `avg processing duration: ${diagState.avgDurationMs ?? '-'}ms`,
+          `dropped/stale result count: ${diagState.staleCount}`
+        ];
+        diagFieldsEl.textContent = lines.join('\n');
+      }
+
+      setInterval(renderDiagPanel, 500); // cheap read-only render, no scanner-loop impact
+      renderDiagPanel();
+    }
   </script>
 </body>
 

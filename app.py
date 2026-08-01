@@ -759,6 +759,15 @@ def _production_mode_flag_active():
     return (os.environ.get("FLASK_ENV") or "").strip().lower() in ("production", "prod")
 
 
+def scanner_diagnostics_enabled():
+    """Dev/testing-only gate for the scanner diagnostics panel. Rendered server-side into
+    the template — if this is False the panel's HTML never reaches the page, so the
+    client-side ?scanner_debug=1 query flag alone can never surface it in production."""
+    if _production_mode_flag_active():
+        return False
+    return bool(SCANSTORY_TESTING or app.debug or (os.environ.get("FLASK_ENV") or "").strip().lower() == "development")
+
+
 def dev_test_entitlement_enabled():
     return (
         (os.environ.get("FLASK_ENV") or "").strip().lower() == "development"
@@ -3920,7 +3929,8 @@ def scanner(project_id):
         user_name=user_name,
         admin_name=admin_name,
         creator_type=creator_type,
-        creator_name=creator_name
+        creator_name=creator_name,
+        scanner_diagnostics_enabled=scanner_diagnostics_enabled()
     )
 @app.route("/detect_init", methods=["POST"])
 def detect_init():
@@ -4350,6 +4360,8 @@ def detect_init():
             "orientation_revision": orientation_revision,
             "variant": best_tag,
             "inliers": inliers,
+            "good_matches": best_good,
+            "keypoints": len(test_kp),
             "homography_quality": homography_quality,
             "marker_mode": marker_mode,
             "top_checked": top_ids,

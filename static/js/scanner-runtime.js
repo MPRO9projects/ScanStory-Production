@@ -158,6 +158,9 @@
       },
       snapshot() {
         return events.slice();
+      },
+      reset() {
+        events.length = 0;
       }
     };
   }
