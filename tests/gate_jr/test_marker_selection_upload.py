@@ -77,6 +77,14 @@ def test_create_project_ui_defaults_to_crop_and_allows_full_image():
     assert "VIDEO CLIENT UPLOAD START" in html
     assert "VIDEO CLIENT PROGRESS" in html
     assert "VIDEO CLIENT UPLOAD RESPONSE" in html
+    assert "UPLOAD CLIENT SUBMIT" in html
+    assert "UPLOAD CLIENT VALIDATION DONE" in html
+    assert "UPLOAD CLIENT FORM DATA READY" in html
+    assert "UPLOAD CLIENT REQUEST OPEN" in html
+    assert "UPLOAD CLIENT FIRST PROGRESS" in html
+    assert "UPLOAD CLIENT TRANSFER COMPLETE" in html
+    assert "UPLOAD CLIENT SERVER RESPONSE" in html
+    assert "UPLOAD CLIENT COMPLETE" in html
     assert "Metadata unavailable" in html
     assert "Large file" in html
     assert "Very large file" in html
@@ -86,6 +94,147 @@ def test_create_project_ui_defaults_to_crop_and_allows_full_image():
     assert "estimated_remaining_seconds" in html
     assert "marker_${index}_crop_x" in html
     assert "MAX_PAIRS_PER_PROJECT = (IS_ADMIN || IS_DEV_TEST) ? Infinity" in html
+
+
+def test_upload_phase_labels_are_visible_and_sequential():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    for label in (
+        "Preparing project",
+        "Preparing marker",
+        "Uploading video",
+        "Saving project",
+        "Processing marker",
+        "Project ready",
+    ):
+        assert label in html
+    assert "setUploadProgress('Processing marker...', 98" in html
+    assert "setUploadProgress('Saving project...', 92" in html
+    assert "setUploadProgress('Project ready', 100" in html
+
+
+def test_real_upload_progress_calculates_percentage_speed_and_eta():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    progress_start = html.index("xhr.upload.onprogress")
+    progress_block = html[progress_start:html.index("xhr.upload.onload", progress_start)]
+    assert "if (!event.lengthComputable) return" in progress_block
+    assert "const percent = event.total ? (event.loaded / event.total) * 100 : 0" in progress_block
+    assert "const avgBytesPerSecond = event.loaded / elapsedSeconds" in progress_block
+    assert "const etaSeconds = enoughForEta ? remainingBytes / avgBytesPerSecond : null" in progress_block
+    assert "UPLOAD CLIENT FIRST PROGRESS" in progress_block
+    assert "UPLOAD CLIENT PROGRESS" in progress_block
+    assert "Uploading video — ${Math.round(percent)}%" in progress_block
+    assert "${formatBytes(event.loaded)} of ${formatBytes(event.total)}" in progress_block
+    assert "${formatRate(avgBytesPerSecond)} · ${etaText}" in progress_block
+
+
+def test_upload_never_shows_fake_100_before_server_completion():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    assert "setUploadProgress('Uploaded. Processing...', 100)" not in html
+    assert "Math.min(90, 35 + (event.loaded / event.total) * 55)" in html
+    assert "setUploadProgress('Processing marker...', 98" in html
+
+
+def test_duplicate_submit_prevention_and_one_active_request():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    assert "let uploadActive = false" in html
+    assert "let activeUploadXhr = null" in html
+    assert "let activeUploadId = null" in html
+    assert "if (uploadActive) return" in html
+    assert "uploadActive = true" in html
+    assert "activeUploadXhr = xhr" in html
+    assert "activeUploadId = uploadId" in html
+
+
+def test_upload_failure_and_abort_restore_controls():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    assert "function resetUploadSubmit(submitBtn)" in html
+    assert "xhr.onerror = () =>" in html
+    assert "xhr.onabort = () =>" in html
+    assert "UPLOAD CLIENT FAILED" in html
+    assert "UPLOAD CLIENT ABORTED" in html
+    assert "resetUploadSubmit(submitBtn)" in html
+    assert "submitBtn.innerHTML = '<i class=\"fas fa-qrcode\"></i> Get My Scan Code'" in html
+
+
+def test_beforeunload_only_active_during_upload_and_removed_after_completion():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    assert "function enableUploadNavigationWarning()" in html
+    assert "function disableUploadNavigationWarning()" in html
+    assert "window.addEventListener('beforeunload', warnDuringUpload)" in html
+    assert "window.removeEventListener('beforeunload', warnDuringUpload)" in html
+    assert "if (!uploadActive || !activeUploadXhr) return" in html
+    assert "enableUploadNavigationWarning();" in html
+    assert "disableUploadNavigationWarning();" in html
+
+
+def test_success_redirect_happens_once():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    success_start = html.index("if (xhr.status >= 200 && xhr.status < 400)")
+    success_block = html[success_start:html.index("} else {", success_start)]
+    assert "if (!uploadRedirected)" in success_block
+    assert "uploadRedirected = true" in success_block
+    assert "UPLOAD CLIENT REDIRECT" in success_block
+    assert "window.location.href = xhr.responseURL || '/dashboard'" in success_block
+
+
+def test_production_does_not_emit_upload_client_diagnostics():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    app_source = Path("app.py").read_text(encoding="utf-8", errors="ignore")
+    assert "const UPLOAD_CLIENT_DEBUG_ENABLED = {{ 'true' if upload_debug_enabled else 'false' }}" in html
+    assert "if (uploadLog && !UPLOAD_CLIENT_DEBUG_ENABLED) return" in html
+    assert "upload_debug_enabled=(app.config.get(\"TESTING\") or os.environ.get(\"FLASK_ENV\") == \"development\")" in app_source
+
+
+def test_dedicated_upload_progress_container_is_above_submit_button():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    progress_markup = """
+          <div class="upload-progress" id="uploadProgress" aria-live="polite" aria-atomic="true">
+            <div class="upload-progress-phase" id="uploadProgressText">Preparing upload...</div>
+            <div class="upload-progress-amount" id="uploadProgressAmount"></div>
+            <div class="upload-progress-detail" id="uploadProgressDetail"></div>
+            <div class="upload-progress-bar" aria-hidden="true"><span id="uploadProgressFill"></span></div>
+          </div>
+"""
+    assert progress_markup in html
+    right_panel_start = html.index('<div class="panel">\n          <div class="panel-title"><i class="fas fa-eye"></i> Story Preview</div>')
+    right_panel = html[right_panel_start:html.index("</form>", right_panel_start)]
+    assert right_panel.index('id="uploadProgress"') < right_panel.index('id="submitBtn"')
+    assert right_panel.index('id="uploadProgress"') < right_panel.index('<div class="action-buttons">')
+    assert "progress.scrollIntoView({ block: 'nearest', inline: 'nearest' })" in html
+
+
+def test_upload_progress_dom_update_logs_visibility_in_development():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    assert "function uploadProgressDomSnapshot(selector = '#uploadProgress')" in html
+    assert "console.log('[UPLOAD CLIENT DOM UPDATE]'" in html
+    assert "console.log('[UPLOAD CLIENT PROGRESS EVENT]'" in html
+    assert "phase_text: document.querySelector('#uploadProgressText')?.textContent || ''" in html
+    assert "amount_text: document.querySelector('#uploadProgressAmount')?.textContent || ''" in html
+    assert "detail_text: document.querySelector('#uploadProgressDetail')?.textContent || ''" in html
+    assert "in_viewport: rect.top < window.innerHeight && rect.bottom > 0" in html
+
+
+def test_upload_client_diagnostics_use_safe_metrics_only():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("function uploadClientLog(stage, state, extra = {})")
+    block = html[start:html.index("function resetUploadSubmit", start)]
+    for key in (
+        "upload_id",
+        "pair_count",
+        "video_size_bytes",
+        "bytes_uploaded",
+        "percentage",
+        "elapsed_ms",
+        "estimated_upload_speed",
+        "estimated_remaining_time",
+        "http_status",
+        "current_phase",
+    ):
+        assert key in block
+    assert "user_agent" not in block
+    assert "filename" not in block
+    assert "email" not in block
+    assert "token" not in block
 
 
 def test_new_image_initializes_visible_crop_after_dimensions_load():

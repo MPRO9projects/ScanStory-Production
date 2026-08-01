@@ -3152,6 +3152,7 @@ def user_create_project_page():
             request.args.get("crop_debug") == "1"
             and (app.config.get("TESTING") or os.environ.get("FLASK_ENV") == "development")
         ),
+        upload_debug_enabled=(app.config.get("TESTING") or os.environ.get("FLASK_ENV") == "development"),
     )
 
 
@@ -6107,6 +6108,7 @@ def admin_create_project_page():
             request.args.get("crop_debug") == "1"
             and (app.config.get("TESTING") or os.environ.get("FLASK_ENV") == "development")
         ),
+        upload_debug_enabled=(app.config.get("TESTING") or os.environ.get("FLASK_ENV") == "development"),
     )
 @app.route("/admin/projects/upload", methods=["POST"])
 @admin_required

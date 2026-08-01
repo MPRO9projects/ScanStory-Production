@@ -1009,11 +1009,27 @@
 
     .upload-progress {
       display: none;
-      margin-top: 16px;
+      margin: 0 0 14px;
       padding: 14px;
       border-radius: 16px;
       border: 1px solid rgba(0, 212, 255, .20);
       background: rgba(0, 212, 255, .08);
+      scroll-margin: 24px;
+    }
+
+    .upload-progress-phase {
+      color: #fff;
+      font-weight: 900;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+
+    .upload-progress-amount {
+      margin-top: 6px;
+      color: rgba(255, 255, 255, .86);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.35;
     }
 
     .upload-progress-bar {
@@ -1036,6 +1052,17 @@
       color: rgba(255, 255, 255, .68);
       font-size: 12px;
       line-height: 1.4;
+    }
+
+    @media (max-width: 640px) {
+      .upload-progress {
+        margin-bottom: 12px;
+        padding: 12px;
+      }
+      .upload-progress-phase,
+      .upload-progress-amount {
+        font-size: 12px;
+      }
     }
 
     .crop-modal {
@@ -1303,6 +1330,13 @@
             </p>
           </div>
 
+          <div class="upload-progress" id="uploadProgress" aria-live="polite" aria-atomic="true">
+            <div class="upload-progress-phase" id="uploadProgressText">Preparing upload...</div>
+            <div class="upload-progress-amount" id="uploadProgressAmount"></div>
+            <div class="upload-progress-detail" id="uploadProgressDetail"></div>
+            <div class="upload-progress-bar" aria-hidden="true"><span id="uploadProgressFill"></span></div>
+          </div>
+
           <div class="action-buttons">
             <button type="submit" class="action-btn upload-btn" id="submitBtn" disabled>
               <i class="fas fa-qrcode"></i> Get My Scan Code
@@ -1315,11 +1349,6 @@
 
       </div>
     </form>
-    <div class="upload-progress" id="uploadProgress">
-      <div id="uploadProgressText">Preparing upload...</div>
-      <div class="upload-progress-detail" id="uploadProgressDetail"></div>
-      <div class="upload-progress-bar"><span id="uploadProgressFill"></span></div>
-    </div>
   </div>
 
   <div class="crop-modal" id="cropModal" aria-hidden="true">
@@ -1370,6 +1399,7 @@
     const MARKER_JPEG_QUALITY = 0.86;
     const VIDEO_WARNING_CONFIG = {{ video_upload_warnings | tojson }};
     const CROP_DEBUG_ENABLED = {{ 'true' if crop_debug_enabled else 'false' }};
+    const UPLOAD_CLIENT_DEBUG_ENABLED = {{ 'true' if upload_debug_enabled else 'false' }};
     let activeCropPairId = null;
     let activeCropImage = null;
     let cropDrag = null;
@@ -2610,14 +2640,112 @@
     }
 
     function logClientStage(stage, data) {
+      const uploadLog = stage.startsWith('UPLOAD CLIENT') || stage.startsWith('CLIENT ') || stage.startsWith('VIDEO CLIENT');
+      if (uploadLog && !UPLOAD_CLIENT_DEBUG_ENABLED) return;
       console.log(`[${stage}]`, { ts: isoNow(), ...data });
     }
 
-    function setUploadProgress(text, pct, detail = '') {
-      document.getElementById('uploadProgress').style.display = 'block';
-      document.getElementById('uploadProgressText').textContent = text;
-      document.getElementById('uploadProgressDetail').textContent = detail;
-      document.getElementById('uploadProgressFill').style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
+    function uploadProgressDomSnapshot(selector = '#uploadProgress') {
+      const target = document.querySelector(selector);
+      if (!target) return { selector, found: false, visible: false };
+      const rect = target.getBoundingClientRect();
+      const style = getComputedStyle(target);
+      return {
+        selector,
+        found: true,
+        visible: style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0,
+        in_viewport: rect.top < window.innerHeight && rect.bottom > 0,
+        display: style.display,
+        visibility: style.visibility,
+        rect: {
+          top: Math.round(rect.top),
+          bottom: Math.round(rect.bottom),
+          width: Math.round(rect.width),
+          height: Math.round(rect.height)
+        },
+        phase_text: document.querySelector('#uploadProgressText')?.textContent || '',
+        amount_text: document.querySelector('#uploadProgressAmount')?.textContent || '',
+        detail_text: document.querySelector('#uploadProgressDetail')?.textContent || ''
+      };
+    }
+
+    function logUploadProgressDom(phase, selector = '#uploadProgress') {
+      if (!UPLOAD_CLIENT_DEBUG_ENABLED) return;
+      console.log('[UPLOAD CLIENT DOM UPDATE]', { ts: isoNow(), phase, ...uploadProgressDomSnapshot(selector) });
+    }
+
+    function setUploadProgress(text, pct, detail = '', amount = '') {
+      const selector = '#uploadProgress';
+      const progress = document.querySelector(selector);
+      const phase = document.querySelector('#uploadProgressText');
+      const amountEl = document.querySelector('#uploadProgressAmount');
+      const detailEl = document.querySelector('#uploadProgressDetail');
+      const fill = document.querySelector('#uploadProgressFill');
+      if (!progress || !phase || !amountEl || !detailEl || !fill) {
+        if (UPLOAD_CLIENT_DEBUG_ENABLED) console.log('[UPLOAD CLIENT DOM UPDATE]', { ts: isoNow(), selector, found: false, phase: text });
+        return;
+      }
+      progress.style.display = 'block';
+      phase.textContent = text;
+      amountEl.textContent = amount;
+      amountEl.style.display = amount ? 'block' : 'none';
+      detailEl.textContent = detail;
+      detailEl.style.display = detail ? 'block' : 'none';
+      fill.style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
+      progress.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      logUploadProgressDom(text, selector);
+    }
+
+    function uploadClientLog(stage, state, extra = {}) {
+      const elapsedMs = state?.totalStart ? Math.round(performance.now() - state.totalStart) : 0;
+      const loaded = Number.isFinite(extra.bytes_uploaded) ? extra.bytes_uploaded : state?.lastLoaded || 0;
+      const total = Number.isFinite(extra.total_bytes) ? extra.total_bytes : state?.totalBytes || 0;
+      const percent = total > 0 ? Math.round((loaded / total) * 100) : null;
+      const speed = Number.isFinite(extra.estimated_upload_speed) ? extra.estimated_upload_speed : null;
+      const remaining = Number.isFinite(extra.estimated_remaining_time) ? extra.estimated_remaining_time : null;
+      logClientStage(stage, {
+        upload_id: state?.uploadId,
+        pair_count: state?.pairCount || 0,
+        video_size_bytes: state?.videoBytes || 0,
+        bytes_uploaded: loaded,
+        percentage: percent,
+        elapsed_ms: elapsedMs,
+        estimated_upload_speed: speed,
+        estimated_remaining_time: remaining,
+        http_status: extra.http_status ?? null,
+        current_phase: extra.current_phase || state?.phase || '',
+      });
+    }
+
+    function resetUploadSubmit(submitBtn) {
+      uploadActive = false;
+      activeUploadXhr = null;
+      activeUploadId = null;
+      disableUploadNavigationWarning();
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="fas fa-qrcode"></i> Get My Scan Code';
+      }
+      updateFormFields();
+    }
+
+    function enableUploadNavigationWarning() {
+      if (uploadBeforeUnloadActive) return;
+      uploadBeforeUnloadActive = true;
+      window.addEventListener('beforeunload', warnDuringUpload);
+    }
+
+    function disableUploadNavigationWarning() {
+      if (!uploadBeforeUnloadActive) return;
+      uploadBeforeUnloadActive = false;
+      window.removeEventListener('beforeunload', warnDuringUpload);
+    }
+
+    function warnDuringUpload(event) {
+      if (!uploadActive || !activeUploadXhr) return;
+      event.preventDefault();
+      event.returnValue = '';
+      return '';
     }
 
     function formatRate(bytesPerSecond) {
@@ -2661,6 +2789,10 @@
     }
 
     let uploadActive = false;
+    let activeUploadXhr = null;
+    let activeUploadId = null;
+    let uploadBeforeUnloadActive = false;
+    let uploadRedirected = false;
 
     document.getElementById('projectForm').addEventListener('submit', async function (e) {
       e.preventDefault();
@@ -2670,28 +2802,45 @@
       const readyPairs = pairIds.map(id => ({ id, pair: currentFiles[id] })).filter(item => item.pair.image && item.pair.video);
       const uploadId = (crypto.randomUUID ? crypto.randomUUID() : `upload-${Date.now()}-${Math.random().toString(16).slice(2)}`);
       const totalStart = performance.now();
+      const videoBytes = readyPairs.reduce((sum, item) => sum + (item.pair.video?.size || 0), 0);
+      const uploadState = {
+        uploadId,
+        pairCount: readyPairs.length,
+        videoBytes,
+        totalBytes: videoBytes,
+        lastLoaded: 0,
+        totalStart,
+        phase: 'Preparing project',
+        firstProgressSeen: false,
+        transferCompleteLogged: false
+      };
+      uploadClientLog('UPLOAD CLIENT SUBMIT', uploadState, { current_phase: 'Preparing project' });
 
       if (!projectName) {
+        uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: 'Preparing project' });
         alert('Please enter a Story name.');
         return;
       }
 
       if (!readyPairs.length) {
+        uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: 'Preparing project' });
         alert('Please add at least one complete memory with your photo and video.');
         return;
       }
+      uploadClientLog('UPLOAD CLIENT VALIDATION DONE', uploadState, { current_phase: 'Preparing project' });
 
       const submitBtn = document.getElementById('submitBtn');
       uploadActive = true;
+      activeUploadId = uploadId;
+      uploadRedirected = false;
       submitBtn.disabled = true;
-      submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing marker...';
-      setUploadProgress('Preparing marker 0/' + readyPairs.length, 2);
+      submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing project...';
+      setUploadProgress('Preparing project', 2, 'Checking files before upload.');
 
       const fd = new FormData();
       fd.append('name', projectName);
       fd.append('upload_id', uploadId);
       const originalBytes = readyPairs.reduce((sum, item) => sum + (item.pair.image?.size || 0), 0);
-      const videoBytes = readyPairs.reduce((sum, item) => sum + (item.pair.video?.size || 0), 0);
       let optimizedBytes = 0;
 
       logClientStage('CLIENT PREP START', {
@@ -2702,35 +2851,47 @@
         user_agent: navigator.userAgent
       });
 
-      for (let index = 0; index < readyPairs.length; index++) {
-        const pair = readyPairs[index].pair;
-        setUploadProgress(`Preparing marker ${index + 1}/${readyPairs.length}`, 8 + index * 12);
-        const prepStart = performance.now();
-        if (pair.markerMode === 'full_image') pair.crop = { x: 0, y: 0, width: 1, height: 1 };
-        logClientStage('CLIENT CROP DONE', { upload_id: uploadId, pair_index: index, marker_mode: pair.markerMode, crop: pair.crop });
-        const markerFile = await renderMarkerBlob(readyPairs[index].id, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
-        optimizedBytes += markerFile.size;
-        logClientStage('CLIENT IMAGE COMPRESS DONE', {
-          upload_id: uploadId,
-          pair_index: index,
-          original_image_bytes: pair.image.size,
-          optimized_marker_bytes: markerFile.size,
-          processed_width: pair.processedWidth,
-          processed_height: pair.processedHeight,
-          preparation_duration_ms: Math.round(performance.now() - prepStart),
-          marker_quality: pair.quality?.status
-        });
-        fd.append('images', markerFile, `marker-${index}.jpg`);
-        fd.append('videos', pair.video, pair.video.name || `video-${index}.mp4`);
-        appendMarkerMeta(fd, index, pair);
+      try {
+        for (let index = 0; index < readyPairs.length; index++) {
+          const pair = readyPairs[index].pair;
+          uploadState.phase = 'Preparing marker';
+          submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing marker...';
+          setUploadProgress(`Preparing marker ${index + 1}/${readyPairs.length}`, 8 + index * 12, 'Creating the scannable marker image.');
+          const prepStart = performance.now();
+          if (pair.markerMode === 'full_image') pair.crop = { x: 0, y: 0, width: 1, height: 1 };
+          logClientStage('CLIENT CROP DONE', { upload_id: uploadId, pair_index: index, marker_mode: pair.markerMode, crop: pair.crop });
+          const markerFile = await renderMarkerBlob(readyPairs[index].id, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
+          optimizedBytes += markerFile.size;
+          logClientStage('CLIENT IMAGE COMPRESS DONE', {
+            upload_id: uploadId,
+            pair_index: index,
+            original_image_bytes: pair.image.size,
+            optimized_marker_bytes: markerFile.size,
+            processed_width: pair.processedWidth,
+            processed_height: pair.processedHeight,
+            preparation_duration_ms: Math.round(performance.now() - prepStart),
+            marker_quality: pair.quality?.status
+          });
+          fd.append('images', markerFile, `marker-${index}.jpg`);
+          fd.append('videos', pair.video, pair.video.name || `video-${index}.mp4`);
+          appendMarkerMeta(fd, index, pair);
+        }
+      } catch (err) {
+        uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: uploadState.phase });
+        resetUploadSubmit(submitBtn);
+        setUploadProgress('Upload failed', 0, 'Marker preparation failed. Please retry.');
+        alert('Marker preparation failed. Please retry.');
+        return;
       }
 
-      setUploadProgress('Ready to upload', 35);
+      uploadState.totalBytes = optimizedBytes + videoBytes;
+      uploadState.phase = 'Uploading video';
+      uploadClientLog('UPLOAD CLIENT FORM DATA READY', uploadState, { current_phase: 'Uploading video' });
+      setUploadProgress('Uploading video', 35, 'Waiting for upload progress...', `0 B of ${formatBytes(uploadState.totalBytes)}`);
       const uploadStart = performance.now();
       const uploadItems = buildUploadItems(readyPairs);
       const videoSummaries = readyPairs.map(({ pair }, index) => ({
         pair_index: index,
-        filename: pair.video?.name || '',
         mime_type: pair.video?.type || '',
         video_bytes: pair.video?.size || 0,
         duration: pair.videoMeta?.duration,
@@ -2753,7 +2914,12 @@
       });
 
       const xhr = new XMLHttpRequest();
+      activeUploadXhr = xhr;
       xhr.open('POST', this.action, true);
+      uploadClientLog('UPLOAD CLIENT REQUEST OPEN', uploadState, { current_phase: 'Uploading video' });
+      xhr.upload.onloadstart = () => {
+        enableUploadNavigationWarning();
+      };
       xhr.upload.onprogress = (event) => {
         if (!event.lengthComputable) return;
         const now = performance.now();
@@ -2765,19 +2931,29 @@
         const enoughForEta = elapsedMs >= 3000 && event.loaded >= 512 * 1024 && avgBytesPerSecond > 0;
         const etaSeconds = enoughForEta ? remainingBytes / avgBytesPerSecond : null;
         const item = currentUploadItem(event.loaded, uploadItems);
-        const pct = 35 + (event.loaded / event.total) * 55;
-        const itemText = item ? `Moment #${item.pairIndex + 1} ${item.fileType} ${item.filename}` : 'Uploading project files';
-        const etaText = etaSeconds === null ? 'ETA calculating' : `about ${formatDuration(etaSeconds)} remaining`;
+        const pct = Math.min(90, 35 + (event.loaded / event.total) * 55);
+        const etaText = etaSeconds === null ? 'ETA calculating' : `About ${formatDuration(etaSeconds)} remaining`;
+        uploadState.lastLoaded = event.loaded;
+        uploadState.totalBytes = event.total;
+        if (UPLOAD_CLIENT_DEBUG_ENABLED) {
+          console.log('[UPLOAD CLIENT PROGRESS EVENT]', {
+            ts: isoNow(),
+            selector: '#uploadProgress',
+            loaded: event.loaded,
+            total: event.total,
+            length_computable: event.lengthComputable
+          });
+        }
         setUploadProgress(
-          `${itemText}: ${formatBytes(event.loaded)} / ${formatBytes(event.total)} (${Math.round(percent)}%)`,
+          `Uploading video — ${Math.round(percent)}%`,
           pct,
-          `Elapsed ${formatDuration(elapsedSeconds)} - ${formatRate(avgBytesPerSecond)} average - ${etaText} - Overall project ${Math.round(percent)}%`
+          `${formatRate(avgBytesPerSecond)} · ${etaText}`,
+          `${formatBytes(event.loaded)} of ${formatBytes(event.total)}`
         );
         const progressPayload = {
           upload_id: uploadId,
           pair_index: item?.pairIndex,
           file_type: item?.fileType,
-          filename: item?.filename,
           loaded: event.loaded,
           total: event.total,
           percent: Math.round(percent),
@@ -2786,40 +2962,84 @@
           estimated_remaining_seconds: etaSeconds === null ? null : Math.round(etaSeconds),
           ...browserInfo()
         };
+        if (!uploadState.firstProgressSeen) {
+          uploadState.firstProgressSeen = true;
+          uploadClientLog('UPLOAD CLIENT FIRST PROGRESS', uploadState, {
+            bytes_uploaded: event.loaded,
+            total_bytes: event.total,
+            estimated_upload_speed: Math.round(avgBytesPerSecond),
+            estimated_remaining_time: etaSeconds === null ? null : Math.round(etaSeconds),
+            current_phase: 'Uploading video'
+          });
+        }
+        uploadClientLog('UPLOAD CLIENT PROGRESS', uploadState, {
+          bytes_uploaded: event.loaded,
+          total_bytes: event.total,
+          estimated_upload_speed: Math.round(avgBytesPerSecond),
+          estimated_remaining_time: etaSeconds === null ? null : Math.round(etaSeconds),
+          current_phase: 'Uploading video'
+        });
         logClientStage('CLIENT UPLOAD PROGRESS', progressPayload);
         logClientStage('VIDEO CLIENT PROGRESS', progressPayload);
       };
+      xhr.upload.onload = () => {
+        if (uploadState.transferCompleteLogged) return;
+        disableUploadNavigationWarning();
+        uploadState.transferCompleteLogged = true;
+        uploadState.lastLoaded = uploadState.totalBytes;
+        uploadState.phase = 'Saving project';
+        uploadClientLog('UPLOAD CLIENT TRANSFER COMPLETE', uploadState, { bytes_uploaded: uploadState.totalBytes, current_phase: 'Saving project' });
+        setUploadProgress('Saving project...', 92, 'Upload transfer complete. Waiting for server response.', `${formatBytes(uploadState.totalBytes)} of ${formatBytes(uploadState.totalBytes)}`);
+      };
       xhr.onload = () => {
+        disableUploadNavigationWarning();
         const uploadDuration = performance.now() - uploadStart;
         const responsePayload = {
           upload_id: uploadId,
           status: xhr.status,
-          response_url: xhr.responseURL,
           upload_duration_ms: Math.round(uploadDuration),
           average_bytes_per_second: Math.round((optimizedBytes + videoBytes) / Math.max(uploadDuration / 1000, 0.001)),
           total_duration_ms: Math.round(performance.now() - totalStart),
           videos: videoSummaries,
           ...browserInfo()
         };
+        uploadState.phase = xhr.status >= 200 && xhr.status < 400 ? 'Processing marker' : 'Saving project';
+        uploadClientLog('UPLOAD CLIENT SERVER RESPONSE', uploadState, { http_status: xhr.status, current_phase: uploadState.phase });
         logClientStage('CLIENT UPLOAD RESPONSE', responsePayload);
         logClientStage('VIDEO CLIENT UPLOAD RESPONSE', responsePayload);
-        setUploadProgress('Uploaded. Processing...', 100);
         if (xhr.status >= 200 && xhr.status < 400) {
-          window.location.href = xhr.responseURL || '/dashboard';
+          setUploadProgress('Processing marker...', 98, 'Project saved. Opening the ready page.', `${formatBytes(uploadState.totalBytes)} of ${formatBytes(uploadState.totalBytes)}`);
+          if (!uploadRedirected) {
+            uploadRedirected = true;
+            uploadClientLog('UPLOAD CLIENT REDIRECT', uploadState, { http_status: xhr.status, current_phase: 'Project ready' });
+            uploadClientLog('UPLOAD CLIENT COMPLETE', uploadState, { http_status: xhr.status, current_phase: 'Project ready' });
+            window.setTimeout(() => {
+              setUploadProgress('Project ready', 100, 'Redirecting to your project.', `${formatBytes(uploadState.totalBytes)} of ${formatBytes(uploadState.totalBytes)}`);
+              window.setTimeout(() => {
+                window.location.href = xhr.responseURL || '/dashboard';
+              }, 180);
+            }, 250);
+          }
         } else {
-          uploadActive = false;
-          submitBtn.disabled = false;
-          submitBtn.innerHTML = '<i class="fas fa-qrcode"></i> Get My Scan Code';
+          uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { http_status: xhr.status, current_phase: uploadState.phase });
+          resetUploadSubmit(submitBtn);
+          setUploadProgress('Upload failed', 0, 'Server rejected the upload. Please retry.');
           alert('Upload failed. Please try again.');
         }
       };
       xhr.onerror = () => {
-        uploadActive = false;
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = '<i class="fas fa-qrcode"></i> Get My Scan Code';
-        setUploadProgress('Failed. Please retry.', 0);
+        uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: uploadState.phase });
+        resetUploadSubmit(submitBtn);
+        setUploadProgress('Upload failed', 0, 'Network upload failed. Please retry.');
         alert('Network upload failed. Please retry.');
       };
+      xhr.onabort = () => {
+        uploadClientLog('UPLOAD CLIENT ABORTED', uploadState, { current_phase: uploadState.phase });
+        resetUploadSubmit(submitBtn);
+        setUploadProgress('Upload aborted', 0, 'The upload was canceled before completion.');
+        alert('Upload aborted before completion.');
+      };
+      enableUploadNavigationWarning();
       xhr.send(fd);
     });
   </script>
