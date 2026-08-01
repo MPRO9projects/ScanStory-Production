@@ -45,6 +45,8 @@
       pointer-events: none;
       transform-origin: 0 0;
       will-change: transform;
+      opacity: 0;
+      transition: opacity 120ms linear;
     }
 
     #overlay {
@@ -52,6 +54,16 @@
       height: 100%;
       object-fit: fill;  /* fill = stretch video to exactly cover overlayWrap before perspective warp */
       transform-origin: top left;
+    }
+
+    #poseDebugCanvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 45;
+      pointer-events: none;
+      display: none;
     }
 
     #wm-logo {
@@ -574,6 +586,9 @@
       <video id="overlay" autoplay playsinline loop preload="auto"></video>
       <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" id="wm-logo" alt="ScanStory">
     </div>
+    {% if scanner_diagnostics_enabled %}
+    <canvas id="poseDebugCanvas"></canvas>
+    {% endif %}
 
     <div id="scannerStatusOverlay">
       <div class="scanner-mist-container">
@@ -1311,6 +1326,12 @@
     const TRACKING_GRACE_FRAMES = 3;  // frames of bad optical flow before dropping tracking
     const TRACKING_GRACE_MS = 900;    // wall-clock ceiling on grace — frame count alone can hang on throttled/low-FPS devices
 
+    const POSE_HOLD_MS = 500;
+    const POSE_STILL_TAU_MS = 220;
+    const POSE_MOVING_TAU_MS = 80;
+    const OVERLAY_SOURCE_WIDTH = 1000;
+    const OVERLAY_SOURCE_HEIGHT = 1000;
+
     overlay.style.transform = `scale(${FLIP_X ? -1 : 1}, ${FLIP_Y ? -1 : 1})`;
 
     let videoFinished = true;
@@ -1413,10 +1434,22 @@
     let orientationRecoveryTimer = null;
     let orientationRevision = 0;
     let latestAcceptedRequestId = 0;
+    let latestAppliedSequence = 0;
     let recoveryAttempt = 0;
     let lastTrackFrameTs = 0;
     let trackingGeneration = 0;
     let activePairEpoch = 0; // bumped only when the displayed pair actually changes (marker A/B guard)
+    let rawOverlayCorners = null;
+    let orderedOverlayCorners = null;
+    let lastSmoothTs = 0;
+    let poseHoldTimer = null;
+    let poseHoldUntil = 0;
+    let overlayState = 'hidden';
+    let overlayRenderCount = 0;
+    let poseDebugCtx = null;
+    let overlayPoseSeq = 0;
+    let lastTrustedPoseTs = 0;
+    let lastSmoothGeneration = 0;
 
     const TRANSITION_HISTORY_LIMIT = 20;
     const scannerTransitionHistory = []; // bounded — recent transitions for diagnostics only
@@ -1468,16 +1501,25 @@
       detectInFlight = false;
     }
 
-    function clearTrackingGeometry(reason) {
+    function clearTrackingGeometry(reason, options = {}) {
       tracking = false;
       currCorners = null;
       lastOrdered = null;
       smoothCorners = null;
+      rawOverlayCorners = null;
+      orderedOverlayCorners = null;
+      lastSmoothTs = 0;
+      lastTrustedPoseTs = 0;
+      lastSmoothGeneration = 0;
       trackingBadFrames = 0;
       if (prevGray) { prevGray.delete(); prevGray = null; }
       if (prevPts) { prevPts.delete(); prevPts = null; }
-      overlayWrap.style.transform = "";
-      stopOverlayImmediate();
+      if (options.holdPose) {
+        requestPoseHold(reason);
+      } else {
+        overlayWrap.style.transform = "";
+        stopOverlayImmediate();
+      }
       scannerDiagnostics.push('geometry_cleared', { reason, generation: scannerGeneration });
     }
 
@@ -1748,17 +1790,89 @@
     // ================================================
     // STATUS WORD CYCLING ANIMATION
     // ================================================
+    function drawPoseDebug(converted) {
+      if (!diagPanelActive) return;
+      const canvas = document.getElementById('poseDebugCanvas');
+      if (!canvas) return;
+      const rect = wrap.getBoundingClientRect();
+      const dpr = window.devicePixelRatio || 1;
+      canvas.style.display = 'block';
+      canvas.width = Math.max(1, Math.round(rect.width * dpr));
+      canvas.height = Math.max(1, Math.round(rect.height * dpr));
+      if (!poseDebugCtx) poseDebugCtx = canvas.getContext('2d');
+      const ctx2 = poseDebugCtx;
+      ctx2.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx2.clearRect(0, 0, rect.width, rect.height);
+      function drawPoly(points, stroke, fill) {
+        if (!points || points.length !== 4) return;
+        ctx2.beginPath();
+        ctx2.moveTo(points[0].x, points[0].y);
+        for (let i = 1; i < points.length; i++) ctx2.lineTo(points[i].x, points[i].y);
+        ctx2.closePath();
+        ctx2.strokeStyle = stroke;
+        ctx2.lineWidth = 2;
+        ctx2.stroke();
+        points.forEach((p, i) => {
+          ctx2.fillStyle = fill;
+          ctx2.beginPath();
+          ctx2.arc(p.x, p.y, 4, 0, Math.PI * 2);
+          ctx2.fill();
+          ctx2.fillText(String(i), p.x + 5, p.y - 5);
+        });
+      }
+      drawPoly(converted.visible, '#ff007a', '#ff007a');
+      drawPoly(smoothCorners, '#00d4ff', '#00d4ff');
+      diagState.lastCoordinateMapping = converted.mapping;
+      diagState.rawCorners = converted.raw;
+      diagState.candidateCorners = converted.visible;
+      diagState.normalizedCorners = converted.ordered;
+      diagState.overlayPermutation = converted.permutation;
+      diagState.overlayCorrespondenceCost = converted.correspondenceCost;
+      diagState.overlayPoseValidation = converted.validation;
+      diagState.smoothedCorners = smoothCorners;
+      diagState.polygonArea = smoothCorners ? quadArea2(smoothCorners) : null;
+      diagState.poseCenter = smoothCorners ? quadCenter(smoothCorners) : null;
+      diagState.videoElementCount = document.querySelectorAll('#overlay').length;
+      diagState.overlayRenderCount = overlayRenderCount;
+    }
+
     function stopOverlayImmediate() {
+      if (poseHoldTimer) { clearTimeout(poseHoldTimer); poseHoldTimer = null; }
+      poseHoldUntil = 0;
+      overlayState = 'hidden';
       overlayWrap.style.display = "none";
+      overlayWrap.style.opacity = "0";
       try { overlay.pause(); } catch (e) { }
       infoBadge.style.display = "none";
       progressInfo.textContent = "";
+    }
+
+    function requestPoseHold(reason) {
+      if (overlayWrap.style.display !== "block" || !overlay.src) {
+        stopOverlayImmediate();
+        return;
+      }
+      overlayState = 'held';
+      poseHoldUntil = performance.now() + POSE_HOLD_MS;
+      overlayWrap.style.opacity = "0.72";
+      scannerDiagnostics.push('[POSE HOLD]', { reason, holdMs: POSE_HOLD_MS, generation: scannerGeneration });
+      if (poseHoldTimer) clearTimeout(poseHoldTimer);
+      poseHoldTimer = setTimeout(() => {
+        if (!tracking && performance.now() >= poseHoldUntil) {
+          overlayWrap.style.opacity = "0";
+          setTimeout(() => {
+            if (!tracking) stopOverlayImmediate();
+          }, 140);
+        }
+      }, POSE_HOLD_MS);
     }
 
     function playOverlay() {
       if (overlayWrap.style.display !== "block") {
         overlayWrap.style.display = "block";
       }
+      overlayWrap.style.opacity = "1";
+      overlayState = 'tracking';
       if (overlay.paused && overlay.src) {
         overlay.play().catch(e => console.log('Play failed:', e));
       }
@@ -1782,57 +1896,143 @@
       }
     }
 
-    function centroid(pts) {
-      let x = 0, y = 0;
-      for (const p of pts) { x += p.x; y += p.y; }
-      return { x: x / pts.length, y: y / pts.length };
-    }
-
-    function sortAroundCenter(pts) {
-      const c = centroid(pts);
-      return pts.slice().sort((a, b) => {
-        const aa = Math.atan2(a.y - c.y, a.x - c.x);
-        const bb = Math.atan2(b.y - c.y, b.x - c.x);
-        return aa - bb;
-      });
-    }
-
-    function rotateToTL(pts) {
-      let bestI = 0, bestV = Infinity;
-      for (let i = 0; i < 4; i++) {
-        const v = pts[i].x + pts[i].y;
-        if (v < bestV) { bestV = v; bestI = i; }
-      }
-      return pts.slice(bestI).concat(pts.slice(0, bestI));
-    }
-
     function dist2(a, b) { const dx = a.x - b.x, dy = a.y - b.y; return dx * dx + dy * dy; }
-    function rotateArray(arr, k) { return arr.slice(k).concat(arr.slice(0, k)); }
 
-    function bestMatchToPrevious(ordered, prev) {
-      let best = ordered, bestScore = Infinity;
-      for (let k = 0; k < 4; k++) {
-        const cand = rotateArray(ordered, k);
-        let s = 0; for (let i = 0; i < 4; i++) s += dist2(cand[i], prev[i]);
-        if (s < bestScore) { bestScore = s; best = cand; }
+    function cloneCorners(pts) {
+      if (!Array.isArray(pts) || pts.length !== 4) return null;
+      const copy = pts.map(p => ({ x: Number(p.x), y: Number(p.y) }));
+      return copy.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)) ? copy : null;
+    }
+
+    function correspondenceCost(candidate, previous) {
+      let s = 0;
+      for (let i = 0; i < 4; i++) s += dist2(candidate[i], previous[i]);
+      return s;
+    }
+
+    function signedQuadArea(pts) {
+      let sum = 0;
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i];
+        const b = pts[(i + 1) % pts.length];
+        sum += a.x * b.y - b.x * a.y;
       }
-      const rev = [ordered[0], ordered[3], ordered[2], ordered[1]];
-      for (let k = 0; k < 4; k++) {
-        const cand = rotateArray(rev, k);
-        let s = 0; for (let i = 0; i < 4; i++) s += dist2(cand[i], prev[i]);
-        if (s < bestScore) { bestScore = s; best = cand; }
+      return sum / 2;
+    }
+
+    function segmentsIntersect(a, b, c, d) {
+      function ccw(p1, p2, p3) {
+        return (p3.y - p1.y) * (p2.x - p1.x) > (p2.y - p1.y) * (p3.x - p1.x);
       }
-      return best;
+      return ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d);
+    }
+
+    function isSelfIntersectingQuad(pts) {
+      return segmentsIntersect(pts[0], pts[1], pts[2], pts[3]) || segmentsIntersect(pts[1], pts[2], pts[3], pts[0]);
+    }
+
+    function edgeLengths(pts) {
+      return pts.map((p, i) => Math.hypot(pts[(i + 1) % 4].x - p.x, pts[(i + 1) % 4].y - p.y));
+    }
+
+    function diagonalsCrossInside(pts) {
+      return segmentsIntersect(pts[0], pts[2], pts[1], pts[3]);
+    }
+
+    function validateOverlayQuad(pts) {
+      const clean = cloneCorners(pts);
+      if (!clean) return { ok: false, reason: 'non_finite_or_not_four' };
+      const edges = edgeLengths(clean);
+      if (edges.some(edge => edge < 1)) return { ok: false, reason: 'zero_edge', edges };
+      const signedArea = signedQuadArea(clean);
+      const area = Math.abs(signedArea);
+      if (area < 16) return { ok: false, reason: 'collapsed_area', signedArea, area, edges };
+      const selfIntersecting = isSelfIntersectingQuad(clean);
+      if (selfIntersecting) return { ok: false, reason: 'self_intersecting_quad', signedArea, area, edges, selfIntersecting };
+      const diagonalsCross = diagonalsCrossInside(clean);
+      if (!diagonalsCross) return { ok: false, reason: 'diagonals_do_not_cross_inside', signedArea, area, edges, selfIntersecting, diagonalsCross };
+      return { ok: true, reason: 'valid_quad', signedArea, area, edges, selfIntersecting, diagonalsCross };
+    }
+
+    function matrixIsFinite(values) {
+      return Array.isArray(values) && values.length === 16 && values.every(Number.isFinite);
+    }
+
+    function isOverlayFrameQuadRenderable(pts, fw, fh) {
+      const validation = validateOverlayQuad(pts);
+      if (!validation.ok || fw <= 0 || fh <= 0) return false;
+      const pad = 0.45;
+      const giantArea = fw * fh * 1.4;
+      if (validation.area > giantArea) return false;
+      return pts.every(p =>
+        p.x > -pad * fw && p.x < fw * (1 + pad) &&
+        p.y > -pad * fh && p.y < fh * (1 + pad)
+      );
+    }
+
+    function normalizeCornerOrder(pts, previous) {
+      const ordered = cloneCorners(pts);
+      const validation = validateOverlayQuad(ordered);
+      if (!validation.ok) return null;
+      return validation.signedArea > 0 ? ordered : null;
+    }
+
+    function resolveCornerCorrespondence(pts, previous) {
+      const ordered = cloneCorners(pts);
+      const validation = validateOverlayQuad(ordered);
+      if (!validation.ok) return { ordered: null, validation, permutation: null, correspondenceCost: null };
+      if (!previous) {
+        if (validation.signedArea <= 0) {
+          return { ordered: null, validation: Object.assign({}, validation, { ok: false, reason: 'reversed_or_reflected_winding' }), permutation: null, correspondenceCost: null };
+        }
+        return { ordered, validation, permutation: 0, correspondenceCost: 0 };
+      }
+      if (validation.signedArea <= 0) {
+        return { ordered: null, validation: Object.assign({}, validation, { ok: false, reason: 'reversed_or_reflected_winding' }), permutation: null, correspondenceCost: null };
+      }
+      return { ordered, validation, permutation: 0, correspondenceCost: correspondenceCost(ordered, previous) };
+    }
+
+    function cameraDisplayMapping(sourceWidth, sourceHeight) {
+      const elW = wrap.clientWidth;
+      const elH = wrap.clientHeight;
+      const fit = getComputedStyle(cam).objectFit || 'cover';
+      const fitScale = fit === 'contain' ? Math.min(elW / sourceWidth, elH / sourceHeight) : Math.max(elW / sourceWidth, elH / sourceHeight);
+      const s = Number.isFinite(fitScale) && fitScale > 0 ? fitScale : 1;
+      const dispW = sourceWidth * s, dispH = sourceHeight * s;
+      const offX = (elW - dispW) / 2;
+      const offY = (elH - dispH) / 2;
+      return {
+        sourceWidth, sourceHeight,
+        displayWidth: elW,
+        displayHeight: elH,
+        objectFit: fit,
+        scale: s,
+        offsetX: offX,
+        offsetY: offY,
+        devicePixelRatio: window.devicePixelRatio || 1,
+        mirroredX: FLIP_X || getComputedStyle(cam).transform.includes('-1'),
+        mirroredY: FLIP_Y
+      };
     }
 
     function frameToElement(x, y, fw, fh) {
-      const elW = wrap.clientWidth;
-      const elH = wrap.clientHeight;
-      const s = Math.max(elW / fw, elH / fh);
-      const dispW = fw * s, dispH = fh * s;
-      const offX = (elW - dispW) / 2;
-      const offY = (elH - dispH) / 2;
-      return { x: x * s + offX, y: y * s + offY };
+      const mapping = cameraDisplayMapping(fw, fh);
+      const mappedX = mapping.mirroredX ? (mapping.sourceWidth - x) : x;
+      const mappedY = mapping.mirroredY ? (mapping.sourceHeight - y) : y;
+      return { x: mappedX * mapping.scale + mapping.offsetX, y: mappedY * mapping.scale + mapping.offsetY };
+    }
+
+    function convertBackendCornersToOverlay(rawCorners, sourceWidth, sourceHeight, previousOrdered) {
+      const mapping = cameraDisplayMapping(sourceWidth, sourceHeight);
+      const raw = rawCorners.map(p => ({ x: Number(p.x), y: Number(p.y) }));
+      const visible = raw.map(p => {
+        const x = mapping.mirroredX ? (sourceWidth - p.x) : p.x;
+        const y = mapping.mirroredY ? (sourceHeight - p.y) : p.y;
+        return { x: x * mapping.scale + mapping.offsetX, y: y * mapping.scale + mapping.offsetY };
+      });
+      const resolved = resolveCornerCorrespondence(visible, previousOrdered);
+      return Object.assign({ mapping, raw, visible }, resolved);
     }
 
     function quadToMatrix3d(x1, y1, x2, y2, x3, y3, x4, y4, w, h) {
@@ -1863,30 +2063,178 @@
       ];
     }
 
-    function applyWarp(cornersFrame) {
-      if (!runtime.isValidQuad(cornersFrame, frameW, frameH)) {
-        clearTrackingGeometry('invalid_quad');
+    function smoothPoseCorners(targetCorners, now, generation) {
+      const targetValidation = validateOverlayQuad(targetCorners);
+      if (!targetValidation.ok) return { corners: null, mode: 'held', validation: targetValidation };
+      const elapsedSinceTrusted = lastTrustedPoseTs ? now - lastTrustedPoseTs : 0;
+      if (!smoothCorners || !lastSmoothTs || lastSmoothGeneration !== generation || elapsedSinceTrusted > 1500) {
+        const mode = !smoothCorners || !lastSmoothTs ? 'snapped_first_pose' : (lastSmoothGeneration !== generation ? 'snapped_generation_change' : 'snapped_long_gap');
+        lastSmoothTs = now;
+        lastSmoothGeneration = generation;
+        return {
+          corners: targetCorners.map(p => ({ x: p.x, y: p.y })),
+          mode,
+          validation: targetValidation,
+          elapsedSinceTrusted
+        };
+      }
+      const dt = Math.max(1, now - lastSmoothTs);
+      const prevCenter = quadCenter(smoothCorners);
+      const nextCenter = quadCenter(targetCorners);
+      const speed = Math.hypot(nextCenter.x - prevCenter.x, nextCenter.y - prevCenter.y) / dt;
+      const tau = speed > 0.35 ? POSE_MOVING_TAU_MS : POSE_STILL_TAU_MS;
+      const alpha = 1 - Math.exp(-dt / tau);
+      const interpolated = targetCorners.map((p, i) => ({
+        x: smoothCorners[i].x + (p.x - smoothCorners[i].x) * alpha,
+        y: smoothCorners[i].y + (p.y - smoothCorners[i].y) * alpha,
+      }));
+      const interpolatedValidation = validateOverlayQuad(interpolated);
+      if (!interpolatedValidation.ok) return { corners: null, mode: 'held', validation: interpolatedValidation, elapsedSinceTrusted, alpha };
+      lastSmoothTs = now;
+      lastSmoothGeneration = generation;
+      return { corners: interpolated, mode: 'smoothed', validation: interpolatedValidation, elapsedSinceTrusted, alpha };
+    }
+
+    function applyWarp(cornersFrame, context = {}) {
+      const now = performance.now();
+      const requestSequence = Number(context.requestSequence || 0);
+      if (context.responseGeneration != null && Number(context.responseGeneration) !== scannerGeneration) {
+        scannerDiagnostics.push('[OVERLAY RESPONSE STALE]', {
+          requestSequence,
+          latestAppliedSequence,
+          code: 'stale_generation',
+          responseGeneration: context.responseGeneration,
+          activeGeneration: scannerGeneration
+        });
         return false;
       }
-      let pts = cornersFrame.map(p => frameToElement(p.x, p.y, frameW, frameH));
-      pts = sortAroundCenter(pts);
-      pts = rotateToTL(pts);
-      if (lastOrdered) pts = bestMatchToPrevious(pts, lastOrdered);
-      lastOrdered = pts;
-
-      if (!smoothCorners) smoothCorners = pts;
-      else {
-        smoothCorners = pts.map((p, i) => ({
-          x: smoothCorners[i].x * SMOOTH + p.x * (1 - SMOOTH),
-          y: smoothCorners[i].y * SMOOTH + p.y * (1 - SMOOTH),
-        }));
+      if (requestSequence && requestSequence <= latestAppliedSequence) {
+        scannerDiagnostics.push('[OVERLAY RESPONSE STALE]', {
+          requestSequence,
+          latestAppliedSequence,
+          responseGeneration: context.responseGeneration,
+          activeGeneration: scannerGeneration
+        });
+        return false;
       }
+      if (!isOverlayFrameQuadRenderable(cornersFrame, frameW, frameH)) {
+        requestPoseHold('invalid_quad');
+        return false;
+      }
+      const converted = convertBackendCornersToOverlay(cornersFrame, frameW, frameH, lastOrdered);
+      rawOverlayCorners = converted.visible;
+      if (!converted.ordered) {
+        diagState.lastRejectionReason = converted.validation ? converted.validation.reason : 'corner_order_invalid';
+        scannerDiagnostics.push('[OVERLAY POSE REJECT]', {
+          seq: ++overlayPoseSeq,
+          reason: diagState.lastRejectionReason,
+          rawCorners: converted.raw,
+          candidateCorners: converted.visible,
+          previousTrustedCorners: lastOrdered,
+          validation: converted.validation,
+          generation: scannerGeneration
+        });
+        requestPoseHold('corner_order_invalid');
+        return false;
+      }
+      orderedOverlayCorners = converted.ordered;
+      const previousTrustedCorners = lastOrdered ? lastOrdered.map(p => ({ x: p.x, y: p.y })) : null;
+      const elapsedSincePreviousTrusted = lastTrustedPoseTs ? now - lastTrustedPoseTs : null;
+      const smoothing = smoothPoseCorners(orderedOverlayCorners, now, scannerGeneration);
+      if (!smoothing.corners) {
+        diagState.lastRejectionReason = smoothing.validation ? smoothing.validation.reason : 'interpolated_quad_invalid';
+        scannerDiagnostics.push('[OVERLAY INTERPOLATION HOLD]', {
+          seq: ++overlayPoseSeq,
+          requestSequence,
+          latestAppliedSequence,
+          reason: diagState.lastRejectionReason,
+          rawCorners: converted.raw,
+          convertedViewportCorners: converted.visible,
+          resolvedCorners: converted.ordered,
+          previousTrustedCorners,
+          validation: smoothing.validation,
+          elapsedSincePreviousTrusted,
+          responseGeneration: context.responseGeneration,
+          activeGeneration: scannerGeneration
+        });
+        requestPoseHold('interpolated_quad_invalid');
+        return false;
+      }
+      const nextSmoothCorners = smoothing.corners;
 
       const elW = wrap.clientWidth;
       const elH = wrap.clientHeight;
-      const [p1, p2, p3, p4] = smoothCorners;
+      const [p1, p2, p3, p4] = nextSmoothCorners;
       const m = quadToMatrix3d(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y, elW, elH);
+      if (!matrixIsFinite(m)) {
+        diagState.lastRejectionReason = 'non_finite_matrix';
+        scannerDiagnostics.push('[OVERLAY MATRIX REJECT]', {
+          seq: ++overlayPoseSeq,
+          requestSequence,
+          latestAppliedSequence,
+          rawCorners: converted.raw,
+          convertedViewportCorners: converted.visible,
+          resolvedCorners: converted.ordered,
+          smoothedCorners: nextSmoothCorners,
+          matrix3d: m,
+          responseGeneration: context.responseGeneration,
+          activeGeneration: scannerGeneration
+        });
+        requestPoseHold('non_finite_matrix');
+        return false;
+      }
+      lastOrdered = orderedOverlayCorners;
+      smoothCorners = nextSmoothCorners;
       overlayWrap.style.transform = `matrix3d(${m.join(",")})`;
+      overlayWrap.style.opacity = "1";
+      overlayState = 'tracking';
+      overlayRenderCount++;
+      if (requestSequence) latestAppliedSequence = requestSequence;
+      lastTrustedPoseTs = now;
+      diagState.overlayMatrix3d = m;
+      diagState.overlayPoseMode = smoothing.mode;
+      diagState.overlayResponseSequence = requestSequence || null;
+      diagState.latestAppliedSequence = latestAppliedSequence;
+      if (poseHoldTimer) { clearTimeout(poseHoldTimer); poseHoldTimer = null; }
+      scannerDiagnostics.push('[OVERLAY POSE ACCEPT]', {
+        seq: ++overlayPoseSeq,
+        requestSequence,
+        latestAppliedSequence,
+        responseGeneration: context.responseGeneration,
+        responseTimestamp: context.responseTimestamp,
+        responseAgeMs: context.responseTimestamp ? Math.round(Date.now() - context.responseTimestamp) : null,
+        responseAgeWhenAppliedMs: typeof context.responseAgeWhenAppliedMs === 'number' ? Math.round(context.responseAgeWhenAppliedMs) : null,
+        rawCorners: converted.raw,
+        convertedViewportCorners: converted.visible,
+        candidateCorners: converted.visible,
+        resolvedCorners: converted.ordered,
+        chosenPermutation: converted.permutation,
+        previousTrustedCorners,
+        smoothedCorners: smoothCorners,
+        matrix3d: m,
+        signedPolygonArea: converted.validation.signedArea,
+        winding: converted.validation.signedArea > 0 ? 'clockwise_screen' : 'counter_clockwise_screen',
+        selfIntersecting: converted.validation.selfIntersecting,
+        diagonalsCross: converted.validation.diagonalsCross,
+        validation: converted.validation,
+        rejectionReason: null,
+        elapsedSincePreviousTrusted,
+        poseApplicationMode: smoothing.mode,
+        polygonArea: converted.validation.area,
+        perCornerDisplacement: previousTrustedCorners ? converted.ordered.map((p, i) => Math.round(Math.sqrt(dist2(p, previousTrustedCorners[i])))) : [0, 0, 0, 0],
+        correspondenceCost: converted.correspondenceCost,
+        sourceFrame: { width: context.sourceFrameWidth || frameW, height: context.sourceFrameHeight || frameH },
+        sourceVideo: { width: overlay.videoWidth || 0, height: overlay.videoHeight || 0 },
+        cameraVideo: { width: cam.videoWidth || 0, height: cam.videoHeight || 0 },
+        viewport: { width: window.innerWidth || 0, height: window.innerHeight || 0 },
+        screenOrientationAngle: screen.orientation ? screen.orientation.angle : (window.orientation || 0),
+        sourceRect: { width: elW, height: elH },
+        videoIntrinsic: { width: overlay.videoWidth || 0, height: overlay.videoHeight || 0 },
+        markerCrop: { width: OVERLAY_SOURCE_WIDTH, height: OVERLAY_SOURCE_HEIGHT },
+        finalTransform: { width: elW, height: elH },
+        generation: scannerGeneration
+      });
+      drawPoseDebug(converted);
       return true;
     }
 
@@ -1906,6 +2254,8 @@
 
     function poseCompatibility(nextCorners) {
       if (!currCorners || currCorners.length !== 4) return { ok: true, reason: 'first_pose' };
+      if (signedQuadArea(currCorners) <= 0 || signedQuadArea(nextCorners) <= 0) return { ok: false, reason: 'winding_flip' };
+      if (isSelfIntersectingQuad(nextCorners)) return { ok: false, reason: 'self_intersecting_quad' };
       const prevArea = Math.max(quadArea2(currCorners), 1);
       const nextArea = Math.max(quadArea2(nextCorners), 1);
       const areaRatio = nextArea / prevArea;
@@ -1917,10 +2267,22 @@
       for (let i = 0; i < 4; i++) {
         maxCornerJump = Math.max(maxCornerJump, Math.hypot(nextCorners[i].x - currCorners[i].x, nextCorners[i].y - currCorners[i].y) / frameMin);
       }
-      if (areaRatio > 2.5 || areaRatio < 0.4) return { ok: false, reason: 'area_jump', areaRatio, centerJump, maxCornerJump };
-      if (centerJump > 0.35) return { ok: false, reason: 'center_jump', areaRatio, centerJump, maxCornerJump };
-      if (maxCornerJump > 0.55) return { ok: false, reason: 'corner_jump', areaRatio, centerJump, maxCornerJump };
-      return { ok: true, reason: 'compatible', areaRatio, centerJump, maxCornerJump };
+      const prevEdges = currCorners.map((p, i) => Math.hypot(currCorners[(i + 1) % 4].x - p.x, currCorners[(i + 1) % 4].y - p.y));
+      const nextEdges = nextCorners.map((p, i) => Math.hypot(nextCorners[(i + 1) % 4].x - p.x, nextCorners[(i + 1) % 4].y - p.y));
+      const edgeRatios = nextEdges.map((edge, i) => edge / Math.max(prevEdges[i], 1));
+      const maxEdgeRatio = Math.max(...edgeRatios);
+      const minEdgeRatio = Math.min(...edgeRatios);
+      const prevDiagA = Math.hypot(currCorners[2].x - currCorners[0].x, currCorners[2].y - currCorners[0].y);
+      const prevDiagB = Math.hypot(currCorners[3].x - currCorners[1].x, currCorners[3].y - currCorners[1].y);
+      const nextDiagA = Math.hypot(nextCorners[2].x - nextCorners[0].x, nextCorners[2].y - nextCorners[0].y);
+      const nextDiagB = Math.hypot(nextCorners[3].x - nextCorners[1].x, nextCorners[3].y - nextCorners[1].y);
+      const diagonalRatioChange = Math.max(nextDiagA / Math.max(prevDiagA, 1), nextDiagB / Math.max(prevDiagB, 1));
+      if (areaRatio > 2.5 || areaRatio < 0.4) return { ok: false, reason: 'area_jump', areaRatio, centerJump, maxCornerJump, maxEdgeRatio, minEdgeRatio, diagonalRatioChange };
+      if (centerJump > 0.35) return { ok: false, reason: 'center_jump', areaRatio, centerJump, maxCornerJump, maxEdgeRatio, minEdgeRatio, diagonalRatioChange };
+      if (maxCornerJump > 0.55) return { ok: false, reason: 'corner_jump', areaRatio, centerJump, maxCornerJump, maxEdgeRatio, minEdgeRatio, diagonalRatioChange };
+      if (maxEdgeRatio > 2.0 || minEdgeRatio < 0.5) return { ok: false, reason: 'edge_ratio_jump', areaRatio, centerJump, maxCornerJump, maxEdgeRatio, minEdgeRatio, diagonalRatioChange };
+      if (diagonalRatioChange > 2.0) return { ok: false, reason: 'diagonal_jump', areaRatio, centerJump, maxCornerJump, maxEdgeRatio, minEdgeRatio, diagonalRatioChange };
+      return { ok: true, reason: 'compatible', areaRatio, centerJump, maxCornerJump, maxEdgeRatio, minEdgeRatio, diagonalRatioChange };
     }
 
     function matFromVideoGray() {
@@ -1963,7 +2325,7 @@
       diagState.consecutiveRejected++;
       diagState.consecutiveAccepted = 0;
       scannerDiagnostics.push('[TRACK LOST]', { reason, generation: scannerGeneration, badFrames: trackingBadFrames });
-      clearTrackingGeometry(reason);
+      clearTrackingGeometry(reason, { holdPose: true });
       safeTransition('target_lost', reason);
       safeTransition('recovering', reason);
       startScannerStatusCycle();
@@ -2077,8 +2439,13 @@
         const cornerMat = cornersToMat(currCorners);
         const newCornerMat = new cv.Mat();
         cv.perspectiveTransform(cornerMat, newCornerMat, H);
-        const newCorners = matToCorners(newCornerMat);
+        const newCornersRaw = matToCorners(newCornerMat);
         cornerMat.delete(); newCornerMat.delete();
+        const newCorners = normalizeCornerOrder(newCornersRaw, currCorners);
+        if (!newCorners) {
+          dropTracking('corner_order_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          return;
+        }
 
         // Drop tracking if ALL corners drift >40% outside frame — target has left view
         const pad = 0.40;
@@ -2104,7 +2471,7 @@
         }
 
         currCorners = newCorners;
-        if (!(runtime.isValidQuad(currCorners, frameW, frameH) && applyWarp(currCorners))) {
+        if (!applyWarp(currCorners)) {
           dropTracking('tracking_geometry_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
           return;
         }
@@ -2260,7 +2627,7 @@
         if (!data.detected) {
           detectionFailCount++;
           if (!tracking) {
-            stopOverlayImmediate();
+            requestPoseHold('no_detection');
             statusDiv.textContent = "Scan AR marker";
             statusDiv.className = "status scan";
           }
@@ -2273,6 +2640,19 @@
 
         // Reset fail count on successful detection
         detectionFailCount = 0;
+        if (requestId <= latestAppliedSequence) {
+          diagState.staleCount++;
+          scannerDiagnostics.push('[STALE RESULT IGNORED]', {
+            requestId,
+            latestAppliedSequence,
+            code: 'stale_applied_sequence',
+            requestGeneration,
+            activeGeneration: scannerGeneration
+          });
+          return;
+        }
+        const responseTimestamp = Date.now();
+        const responseAgeWhenAppliedMs = performance.now() - requestStart;
 
         const newVideoUrl = data.video_url;
         const newPairId = data.matched_pair_id || 0;
@@ -2284,9 +2664,14 @@
         cap.width = frameW;
         cap.height = frameH;
 
-        const newCorners = data.corners.map(p => ({ x: Number(p.x), y: Number(p.y) }));
-        if (!runtime.isValidQuad(newCorners, frameW, frameH)) {
-          clearTrackingGeometry('invalid_detection_geometry');
+        const newCornersRaw = data.corners.map(p => ({ x: Number(p.x), y: Number(p.y) }));
+        const newCorners = normalizeCornerOrder(newCornersRaw, currCorners);
+        if (!newCorners) {
+          requestPoseHold('corner_order_invalid');
+          return;
+        }
+        if (!isOverlayFrameQuadRenderable(newCorners, frameW, frameH)) {
+          requestPoseHold('invalid_detection_geometry');
           return;
         }
         diagState.lastMarkerType = data.marker_mode || null;
@@ -2399,7 +2784,15 @@
         diagState.lastAcceptedDetectionAt = Date.now();
 
         stopScannerStatusCycle();
-        if (applyWarp(currCorners)) playOverlay();
+        if (applyWarp(currCorners, {
+          requestSequence: requestId,
+          latestAppliedSequence,
+          responseGeneration: requestGeneration,
+          responseTimestamp,
+          responseAgeWhenAppliedMs,
+          sourceFrameWidth: frameW,
+          sourceFrameHeight: frameH
+        })) playOverlay();
 
         statusDiv.textContent = `🎬 Tracking Pair #${newPairId + 1}`;
         statusDiv.className = "status track";
@@ -2700,9 +3093,9 @@
       });
 
       document.getElementById('diagExportBtn').addEventListener('click', function () {
-        // Privacy: no frame pixels, no marker image data, no deviceId/groupId, no auth/
-        // session cookies, no email/name — just states, counts, ids (random session uuid),
-        // dimensions, and timing.
+        // Privacy: no frame pixels, no marker image data, no camera hardware identifiers,
+        // no auth/session cookies, no email/name — just states, counts, ids (random
+        // session uuid), dimensions, and timing.
         const track = cameraStream ? cameraStream.getVideoTracks()[0] : null;
         const settings = track && track.getSettings ? track.getSettings() : {};
         const payload = {
@@ -2773,6 +3166,12 @@
         const recentTransitions = scannerTransitionHistory.slice(-8)
           .map(t => `    ${t.from} -> ${t.to} (${t.reason || 'no reason'})`).join('\n') || '    (none yet)';
 
+        // Geometry-diagnostic locals (Agent 1 / b63b511) — merged in alongside the
+        // lifecycle/session locals above rather than replacing them; see the "-- Geometry
+        // --" section below for what these feed.
+        const mapping = diagState.lastCoordinateMapping || {};
+        const poseAge = lastLockTs ? Math.round(performance.now() - lastLockTs) : null;
+
         const lines = [
           '-- Browser/Runtime --',
           `platform: ${navigator.platform || '-'}`,
@@ -2796,6 +3195,48 @@
           `next scan scheduled: ${diagState.nextScanScheduledAt ? Math.round(diagState.nextScanScheduledAt - Date.now()) + 'ms' : '-'}`,
           `last request start/finish: ${diagState.lastRequestStartAt || '-'} / ${diagState.lastRequestFinishAt || '-'}`,
           `latency: ${diagState.lastDurationMs ?? '-'}ms   avg: ${diagState.avgDurationMs ?? '-'}ms`,
+          '',
+          // -- Geometry (Agent 1 / b63b511) -- everything below is new instrumentation for
+          // the fixed-corner-order overlay pipeline: coordinate mapping, the raw ->
+          // candidate -> normalized corner pipeline (resolveCornerCorrespondence /
+          // normalizeCornerOrder never reorder/permute — "chosen permutation" stays 0/'-'
+          // always, which is itself the proof no cyclic search runs), the smoothing/snap
+          // state machine (pose mode shows snapped_first_pose/snapped_generation_change/
+          // snapped_long_gap/smoothed/held), the applied-sequence guard
+          // (response/latest-applied seq — rejects a stale response even when generation
+          // happens to match), the finite-matrix safeguard, and the single-video-element
+          // reuse count. Lines that duplicated the existing "-- Detection --" section
+          // below (candidate pair id, marker type, keypoints, good matches, inliers,
+          // ratio, reprojection error, quad valid, visible area ratio, rejection reason,
+          // tracking/confidence, consecutive accepted/rejected) were dropped here to avoid
+          // showing the same values twice under two different labels.
+          '-- Geometry --',
+          `frame: ${frameW}x${frameH}`,
+          `camera intrinsic: ${cam.videoWidth || 0}x${cam.videoHeight || 0}`,
+          `display: ${mapping.displayWidth || wrap.clientWidth}x${mapping.displayHeight || wrap.clientHeight}`,
+          `object-fit: ${mapping.objectFit || getComputedStyle(cam).objectFit}`,
+          `object-fit scale: ${typeof mapping.scale === 'number' ? mapping.scale.toFixed(4) : '-'}`,
+          `object-fit offset: ${typeof mapping.offsetX === 'number' ? mapping.offsetX.toFixed(1) : '-'},${typeof mapping.offsetY === 'number' ? mapping.offsetY.toFixed(1) : '-'}`,
+          `devicePixelRatio: ${window.devicePixelRatio || 1}`,
+          `mirrored: ${mapping.mirroredX ? 'x' : '-'}${mapping.mirroredY ? 'y' : ''}`,
+          `raw corners: ${diagState.rawCorners ? JSON.stringify(diagState.rawCorners.map(p => [Math.round(p.x), Math.round(p.y)])) : '-'}`,
+          `candidate corners: ${diagState.candidateCorners ? JSON.stringify(diagState.candidateCorners.map(p => [Math.round(p.x), Math.round(p.y)])) : '-'}`,
+          `normalized corners: ${diagState.normalizedCorners ? JSON.stringify(diagState.normalizedCorners.map(p => [Math.round(p.x), Math.round(p.y)])) : '-'}`,
+          `chosen permutation: ${diagState.overlayPermutation ?? '-'}`,
+          `correspondence cost: ${typeof diagState.overlayCorrespondenceCost === 'number' ? Math.round(diagState.overlayCorrespondenceCost) : '-'}`,
+          `pose validation: ${diagState.overlayPoseValidation ? diagState.overlayPoseValidation.reason : '-'}`,
+          `pose mode (smoothed/snapped_*/held): ${diagState.overlayPoseMode || '-'}`,
+          `response seq: ${diagState.overlayResponseSequence ?? '-'}`,
+          `latest applied seq: ${diagState.latestAppliedSequence ?? latestAppliedSequence}`,
+          `matrix finite: ${diagState.overlayMatrix3d ? diagState.overlayMatrix3d.every(Number.isFinite) : '-'}`,
+          `smoothed corners: ${diagState.smoothedCorners ? JSON.stringify(diagState.smoothedCorners.map(p => [Math.round(p.x), Math.round(p.y)])) : '-'}`,
+          `polygon area: ${typeof diagState.polygonArea === 'number' ? Math.round(diagState.polygonArea) : '-'}`,
+          `center: ${diagState.poseCenter ? Math.round(diagState.poseCenter.x) + ',' + Math.round(diagState.poseCenter.y) : '-'}`,
+          `pose age: ${poseAge != null ? poseAge + 'ms' : '-'}`,
+          `overlay state: ${overlayState}`,
+          `video elements: ${diagState.videoElementCount ?? document.querySelectorAll('#overlay').length}` + ' (must stay 1 — reused, never recreated)',
+          `render loops: detect=${detectLoopTimer ? 1 : 0} track=${trackLoopActive ? 1 : 0}`,
+          `overlay renders: ${overlayRenderCount}`,
           `recovery state: ${scannerState.state === 'recovering' || scannerState.state === 'target_lost'}`,
           `last accepted: ${lastLockTs ? Math.round(performance.now() - lastLockTs) + 'ms ago' : '-'}`,
           `entry context: ${diagState.scannerEntryContext}   back destination: ${diagState.resolvedBackDestination}`,

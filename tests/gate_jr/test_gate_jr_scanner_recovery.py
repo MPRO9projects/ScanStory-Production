@@ -519,7 +519,433 @@ def test_grace_recovery_and_timeout_both_go_through_single_exit_paths():
     assert "dropTracking('insufficient_flow_points', [gray, nextPts, status, err]);" in html
     assert "dropTracking('homography_empty', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);" in html
     assert "'[TRACK LOST]'" in html
-    assert "clearTrackingGeometry(reason);" in html  # dropTracking always clears geometry -> stops overlay
+    assert "clearTrackingGeometry(reason, { holdPose: true });" in html  # dropTracking holds the last pose briefly
+
+
+def test_overlay_coordinate_conversion_has_one_canonical_path():
+    html = _scanner_html()
+    assert "function cameraDisplayMapping(sourceWidth, sourceHeight)" in html
+    assert "function convertBackendCornersToOverlay(rawCorners, sourceWidth, sourceHeight, previousOrdered)" in html
+    assert "const fit = getComputedStyle(cam).objectFit || 'cover'" in html
+    assert "fit === 'contain' ? Math.min(elW / sourceWidth, elH / sourceHeight) : Math.max(elW / sourceWidth, elH / sourceHeight)" in html
+    assert "offsetX: offX" in html
+    assert "offsetY: offY" in html
+    assert "devicePixelRatio: window.devicePixelRatio || 1" in html
+    assert "mirroredX: FLIP_X || getComputedStyle(cam).transform.includes('-1')" in html
+    assert "const converted = convertBackendCornersToOverlay(cornersFrame, frameW, frameH, lastOrdered)" in html
+
+
+def test_overlay_conversion_covers_cover_contain_portrait_landscape_and_dpr():
+    html = _scanner_html()
+    assert "objectFit: fit" in html
+    assert "fit === 'contain'" in html
+    assert "Math.max(elW / sourceWidth, elH / sourceHeight)" in html
+    assert "Math.min(elW / sourceWidth, elH / sourceHeight)" in html
+    assert "sourceWidth, sourceHeight" in html
+    assert "displayWidth: elW" in html
+    assert "displayHeight: elH" in html
+    assert "devicePixelRatio: window.devicePixelRatio || 1" in html
+
+
+def test_corner_ordering_and_self_intersection_are_guarded():
+    html = _scanner_html()
+    assert "function normalizeCornerOrder(pts, previous)" in html
+    assert "function resolveCornerCorrespondence(pts, previous)" in html
+    assert "function bestCyclicMatchToPrevious" not in html
+    assert "sortAroundCenter" not in html
+    assert "rotateToTL" not in html
+    assert "rotateArray" not in html
+    assert "reversed_or_reflected_winding" in html
+    assert "isSelfIntersectingQuad(clean)" in html
+    assert "diagonalsCrossInside(clean)" in html
+    assert "dropTracking('corner_order_invalid'" in html
+    assert "requestPoseHold('corner_order_invalid')" in html
+
+
+def test_overlay_uses_four_corner_perspective_matrix_without_video_recreation():
+    html = _scanner_html()
+    apply_start = html.index("function applyWarp(")
+    apply_block = html[apply_start:html.index("function quadArea2", apply_start)]
+    assert "function quadToMatrix3d" in html
+    assert "const nextSmoothCorners = smoothing.corners" in apply_block
+    assert "const [p1, p2, p3, p4] = nextSmoothCorners" in apply_block
+    assert "quadToMatrix3d(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y, elW, elH)" in apply_block
+    assert "overlayWrap.style.transform = `matrix3d(${m.join(\",\")})`" in apply_block
+    assert html.count('id="overlay"') == 1
+    assert "document.querySelectorAll('#overlay').length" in html
+    assert "overlay.src = newVideoUrl" in html
+    assert html.index("if (!wasSameTarget)") < html.index("overlay.src = newVideoUrl")
+
+
+def test_time_based_smoothing_and_outlier_suppression_are_present():
+    html = _scanner_html()
+    smooth_start = html.index("function smoothPoseCorners(")
+    smooth_block = html[smooth_start:html.index("function applyWarp", smooth_start)]
+    assert "const POSE_STILL_TAU_MS = 220" in html
+    assert "const POSE_MOVING_TAU_MS = 80" in html
+    assert "function smoothPoseCorners(targetCorners, now, generation)" in html
+    assert "const alpha = 1 - Math.exp(-dt / tau)" in smooth_block
+    assert "const interpolatedValidation = validateOverlayQuad(interpolated)" in smooth_block
+    assert "elapsedSinceTrusted > 1500" in smooth_block
+    assert "reason: 'winding_flip'" in html
+    assert "reason: 'self_intersecting_quad'" in html
+    assert "reason: 'edge_ratio_jump'" in html
+    assert "reason: 'diagonal_jump'" in html
+
+
+def test_temporary_pose_hold_does_not_restart_video_on_marker_loss():
+    html = _scanner_html()
+    assert "const POSE_HOLD_MS = 500" in html
+    assert "function requestPoseHold(reason)" in html
+    assert "overlayState = 'held'" in html
+    assert "overlayWrap.style.opacity = \"0.72\"" in html
+    assert "clearTrackingGeometry(reason, { holdPose: true });" in html
+    assert "requestPoseHold('no_detection')" in html
+    hold_block = html[html.index("function requestPoseHold(reason)"):html.index("function playOverlay()", html.index("function requestPoseHold(reason)"))]
+    assert "overlay.pause()" not in hold_block
+    assert "currentTime = 0" not in hold_block
+
+
+def test_reacquisition_same_video_preserves_playback_position():
+    html = _scanner_html()
+    same_target_start = html.index("} else {\n          if (videoFinished)")
+    same_target_block = html[same_target_start:html.index("const pts = (data.init_points", same_target_start)]
+    assert "overlay.currentTime = 0" in same_target_block
+    assert "if (videoFinished)" in same_target_block
+    assert "} else {\n            playOverlay();" in same_target_block
+    assert "const wasSameTarget = (currentVideoUrl === newVideoUrl && currentPairId === newPairId)" in html
+
+
+def test_scanner_debug_reports_coordinate_space_and_overlay_stability():
+    html = _scanner_html()
+    assert 'id="poseDebugCanvas"' in html
+    assert "function drawPoseDebug(converted)" in html
+    assert "'[OVERLAY POSE ACCEPT]'" in html
+    assert "'[OVERLAY POSE REJECT]'" in html
+    for field in [
+        "camera intrinsic:",
+        "display:",
+        "object-fit:",
+        "object-fit offset:",
+        "devicePixelRatio:",
+        "raw corners:",
+        "candidate corners:",
+        "normalized corners:",
+        "chosen permutation:",
+        "correspondence cost:",
+        "pose validation:",
+        "smoothed corners:",
+        "polygon area:",
+        "center:",
+        "pose age:",
+        "overlay state:",
+        "video elements:",
+        "render loops:",
+    ]:
+        assert field in html
+
+
+def test_overlay_backend_raw_order_is_primary_not_screen_relative_sorting():
+    """No corner-sorting/reordering logic anywhere in the corner-correspondence pipeline.
+    Scoped to that pipeline specifically (resolveCornerCorrespondence through
+    normalizeCornerOrder/applyWarp) rather than the whole file — the integration merge
+    added an unrelated, legitimate `.sort()` elsewhere (rejection-reason-count display
+    ordering in the diagnostics panel, nothing to do with corner geometry), which a
+    whole-file check would false-positive on."""
+    html = _scanner_html()
+    assert "const ordered = cloneCorners(pts)" in html
+    assert "return validation.signedArea > 0 ? ordered : null" in html
+    assert "const resolved = resolveCornerCorrespondence(visible, previousOrdered)" in html
+    assert "return { ordered, validation, permutation: 0, correspondenceCost: correspondenceCost(ordered, previous) }" in html
+    assert "const newCornersRaw = data.corners.map(p => ({ x: Number(p.x), y: Number(p.y) }))" in html
+    assert "const newCorners = normalizeCornerOrder(newCornersRaw, currCorners)" in html
+    pipeline_start = html.index("function cloneCorners(pts)")
+    pipeline_end = html.index("function cameraDisplayMapping(")
+    pipeline = html[pipeline_start:pipeline_end]
+    assert ".sort((a, b)" not in pipeline
+    assert "x + pts[i].y" not in pipeline
+
+
+def test_overlay_correspondence_does_not_rotate_valid_backend_order():
+    html = _scanner_html()
+    start = html.index("function resolveCornerCorrespondence(pts, previous)")
+    block = html[start:html.index("function cameraDisplayMapping", start)]
+    assert "permutation: 0" in html
+    assert "correspondenceCost(ordered, previous)" in html
+    assert "for (let k = 0; k < 4; k++)" not in block
+    assert "const cand = rotateArray" not in block
+    assert "no_winding_preserving_cyclic_match" not in html
+    assert "[ordered[0], ordered[3], ordered[2], ordered[1]]" not in html
+
+
+def test_overlay_validation_rejects_folded_reflected_and_collapsed_quads():
+    html = _scanner_html()
+    assert "function validateOverlayQuad(pts)" in html
+    assert "reason: 'non_finite_or_not_four'" in html
+    assert "reason: 'zero_edge'" in html
+    assert "reason: 'collapsed_area'" in html
+    assert "reason: 'self_intersecting_quad'" in html
+    assert "reason: 'diagonals_do_not_cross_inside'" in html
+    assert "reason: 'winding_flip'" in html
+    assert "reason: 'edge_ratio_jump'" in html
+    assert "reason: 'diagonal_jump'" in html
+
+
+def test_overlay_smoothing_happens_after_correspondence_resolution():
+    html = _scanner_html()
+    apply_start = html.index("function applyWarp(")
+    apply_block = html[apply_start:html.index("function quadArea2", apply_start)]
+    assert apply_block.index("convertBackendCornersToOverlay(cornersFrame, frameW, frameH, lastOrdered)") < apply_block.index("smoothPoseCorners(orderedOverlayCorners")
+    assert apply_block.index("if (!converted.ordered)") < apply_block.index("smoothPoseCorners(orderedOverlayCorners")
+    assert apply_block.index("const nextSmoothCorners = smoothing.corners") < apply_block.index("quadToMatrix3d(")
+    assert "Never smooth before correspondence is resolved" not in html
+
+
+def test_overlay_partially_offscreen_quads_are_preserved_not_individually_clamped():
+    html = _scanner_html()
+    assert "function isOverlayFrameQuadRenderable(pts, fw, fh)" in html
+    assert "const pad = 0.45" in html
+    assert "validation.area > giantArea" in html
+    assert ".x = Math.max" not in html
+    assert ".y = Math.max" not in html
+    assert "Math.min(Math.max" not in html
+
+
+def test_overlay_video_source_rectangle_maps_to_destination_corner_order():
+    html = _scanner_html()
+    apply_start = html.index("function applyWarp(")
+    apply_block = html[apply_start:html.index("function quadArea2", apply_start)]
+    assert "object-fit: fill" in html
+    assert "const nextSmoothCorners = smoothing.corners" in apply_block
+    assert "const [p1, p2, p3, p4] = nextSmoothCorners" in apply_block
+    assert "quadToMatrix3d(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y, elW, elH)" in apply_block
+    assert "const a11 = x2 - x1 + a13 * x2" in html
+    assert "const a21 = x4 - x1 + a23 * x4" in html
+    assert "sourceRect: { width: elW, height: elH }" in html
+    assert "markerCrop: { width: OVERLAY_SOURCE_WIDTH, height: OVERLAY_SOURCE_HEIGHT }" in html
+
+
+def test_overlay_diagnostics_are_bounded_and_privacy_safe():
+    html = _scanner_html()
+    runtime_source = Path("static/js/scanner-runtime.js").read_text(encoding="utf-8")
+    assert "const limit = 80" in runtime_source
+    assert "if (events.length > limit) events.shift()" in runtime_source
+    assert "delete safe.frame" in runtime_source
+    assert "delete safe.image" in runtime_source
+    assert "delete safe.blob" in runtime_source
+    assert "rawCorners: converted.raw" in html
+    assert "candidateCorners: converted.visible" in html
+    assert "requestSequence" in html
+    assert "latestAppliedSequence" in html
+    assert "responseGeneration" in html
+    assert "responseTimestamp" in html
+    assert "responseAgeWhenAppliedMs" in html
+    assert "convertedViewportCorners" in html
+    assert "resolvedCorners" in html
+    assert "previousTrustedCorners" in html
+    assert "smoothedCorners" in html
+    assert "matrix3d" in html
+    assert "sourceFrame" in html
+    assert "sourceVideo" in html
+    assert "cameraVideo" in html
+    assert "viewport" in html
+    assert "screenOrientationAngle" in html
+    assert "poseApplicationMode" in html
+    assert "groupId" not in html
+    assert "deviceId" not in html
+
+
+def _signed_area(points):
+    return sum(
+        points[i][0] * points[(i + 1) % 4][1] - points[(i + 1) % 4][0] * points[i][1]
+        for i in range(4)
+    ) / 2
+
+
+def _dist2(a, b):
+    return (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2
+
+
+def _rotate(points, steps):
+    return points[steps:] + points[:steps]
+
+
+def _segments_intersect(a, b, c, d):
+    def ccw(p1, p2, p3):
+        return (p3[1] - p1[1]) * (p2[0] - p1[0]) > (p2[1] - p1[1]) * (p3[0] - p1[0])
+
+    return ccw(a, c, d) != ccw(b, c, d) and ccw(a, b, c) != ccw(a, b, d)
+
+
+def _is_bowtie(points):
+    return _segments_intersect(points[0], points[1], points[2], points[3]) or _segments_intersect(points[1], points[2], points[3], points[0])
+
+
+def _validate_model_quad(points):
+    if len(points) != 4:
+        return False
+    if not all(np.isfinite(x) and np.isfinite(y) for x, y in points):
+        return False
+    if _signed_area(points) <= 0:
+        return False
+    if _is_bowtie(points):
+        return False
+    return True
+
+
+def _interpolate_quad(start, end, alpha):
+    return [
+        (start[i][0] + (end[i][0] - start[i][0]) * alpha, start[i][1] + (end[i][1] - start[i][1]) * alpha)
+        for i in range(4)
+    ]
+
+
+def _resolve_backend_authoritative(points, previous=None):
+    if _signed_area(points) <= 0:
+        return None
+    if _is_bowtie(points):
+        return None
+    return points
+
+
+def _rotated_quad(cx, cy, w, h, degrees):
+    theta = np.deg2rad(degrees)
+    base = [(-w / 2, -h / 2), (w / 2, -h / 2), (w / 2, h / 2), (-w / 2, h / 2)]
+    return [
+        (
+            cx + x * np.cos(theta) - y * np.sin(theta),
+            cy + x * np.sin(theta) + y * np.cos(theta),
+        )
+        for x, y in base
+    ]
+
+
+def test_overlay_correspondence_model_handles_clockwise_rotation_identity_change():
+    poses = [_rotated_quad(300, 300, 240, 160, deg) for deg in (0, 45, 90)]
+    trusted = _resolve_backend_authoritative(poses[0])
+    for pose in poses[1:]:
+        trusted = _resolve_backend_authoritative(pose, trusted)
+        assert trusted == pose
+    assert min(range(4), key=lambda i: poses[-1][i][0] + poses[-1][i][1]) != 0
+
+
+def test_overlay_correspondence_model_handles_counter_clockwise_rotation_identity_change():
+    poses = [_rotated_quad(300, 300, 240, 160, deg) for deg in (0, -45, -90)]
+    trusted = _resolve_backend_authoritative(poses[0])
+    for pose in poses[1:]:
+        trusted = _resolve_backend_authoritative(pose, trusted)
+        assert trusted == pose
+    assert min(range(4), key=lambda i: poses[-1][i][0] + poses[-1][i][1]) != 0
+
+
+def test_overlay_correspondence_model_does_not_use_cyclic_permutation_for_valid_raw_order():
+    previous = [(100, 100), (300, 100), (300, 260), (100, 260)]
+    cyclic = [previous[2], previous[3], previous[0], previous[1]]
+    assert _resolve_backend_authoritative(cyclic, previous) == cyclic
+    reflected = [previous[0], previous[3], previous[2], previous[1]]
+    assert _resolve_backend_authoritative(reflected, previous) is None
+
+
+def test_overlay_correspondence_model_keeps_large_valid_rotation_and_rejects_bowtie():
+    previous = _rotated_quad(300, 300, 240, 160, 0)
+    valid_large_rotation = _rotated_quad(300, 300, 240, 160, 88)
+    assert _resolve_backend_authoritative(valid_large_rotation, previous) == valid_large_rotation
+    bowtie = [(100, 100), (300, 260), (300, 100), (100, 260)]
+    assert _is_bowtie(bowtie)
+    assert _resolve_backend_authoritative(bowtie, previous) is None
+
+
+def test_overlay_correspondence_model_preserves_90_and_180_degree_raw_indices():
+    previous = _rotated_quad(300, 300, 240, 160, 0)
+    for degrees in (90, 135, 180):
+        pose = _rotated_quad(300, 300, 240, 160, degrees)
+        assert _resolve_backend_authoritative(pose, previous) == pose
+
+
+def test_overlay_correspondence_model_has_no_90_degree_source_content_remap():
+    previous = _rotated_quad(300, 300, 240, 160, 0)
+    rotated = _rotated_quad(300, 300, 240, 160, 90)
+    resolved = _resolve_backend_authoritative(rotated, previous)
+    assert resolved[0] == rotated[0]
+    assert resolved[1] == rotated[1]
+    assert resolved[2] == rotated[2]
+    assert resolved[3] == rotated[3]
+
+
+def test_overlay_rejects_stale_applied_sequence_before_state_mutation():
+    html = _scanner_html()
+    stale_start = html.index("if (requestId <= latestAppliedSequence)")
+    mutation_start = html.index("const newVideoUrl = data.video_url")
+    assert stale_start < mutation_start
+    assert "code: 'stale_applied_sequence'" in html
+    assert "latestAppliedSequence = requestSequence" in html
+
+
+def test_overlay_rejects_generation_mismatch_and_never_smooths_across_generation():
+    html = _scanner_html()
+    apply_start = html.index("function applyWarp(cornersFrame, context = {})")
+    apply_block = html[apply_start:html.index("function quadArea2", apply_start)]
+    smooth_start = html.index("function smoothPoseCorners(targetCorners, now, generation)")
+    smooth_block = html[smooth_start:html.index("function applyWarp", smooth_start)]
+    assert "Number(context.responseGeneration) !== scannerGeneration" in apply_block
+    assert "code: 'stale_generation'" in apply_block
+    assert "lastSmoothGeneration !== generation" in smooth_block
+    assert "snapped_generation_change" in smooth_block
+
+
+def test_overlay_long_gap_snaps_instead_of_cross_gap_smoothing():
+    html = _scanner_html()
+    smooth_start = html.index("function smoothPoseCorners(targetCorners, now, generation)")
+    smooth_block = html[smooth_start:html.index("function applyWarp", smooth_start)]
+    assert "elapsedSinceTrusted > 1500" in smooth_block
+    assert "snapped_long_gap" in smooth_block
+    assert "const targetValidation = validateOverlayQuad(targetCorners)" in smooth_block
+
+
+def test_overlay_validates_interpolated_frame_before_rendering():
+    html = _scanner_html()
+    smooth_start = html.index("function smoothPoseCorners(targetCorners, now, generation)")
+    smooth_block = html[smooth_start:html.index("function applyWarp", smooth_start)]
+    apply_start = html.index("function applyWarp(cornersFrame, context = {})")
+    apply_block = html[apply_start:html.index("function quadArea2", apply_start)]
+    assert "const interpolatedValidation = validateOverlayQuad(interpolated)" in smooth_block
+    assert "if (!interpolatedValidation.ok) return { corners: null, mode: 'held'" in smooth_block
+    assert "'[OVERLAY INTERPOLATION HOLD]'" in apply_block
+    assert "requestPoseHold('interpolated_quad_invalid')" in apply_block
+
+
+def test_overlay_non_finite_matrix_is_never_applied():
+    html = _scanner_html()
+    apply_start = html.index("function applyWarp(cornersFrame, context = {})")
+    apply_block = html[apply_start:html.index("function quadArea2", apply_start)]
+    assert "function matrixIsFinite(values)" in html
+    assert "if (!matrixIsFinite(m))" in apply_block
+    assert "'[OVERLAY MATRIX REJECT]'" in apply_block
+    assert apply_block.index("if (!matrixIsFinite(m))") < apply_block.index("overlayWrap.style.transform")
+
+
+def test_overlay_model_valid_direct_interpolation_remains_valid():
+    start = [(100, 100), (300, 110), (290, 260), (95, 250)]
+    end = [(120, 120), (320, 125), (310, 275), (115, 270)]
+    assert _validate_model_quad(start)
+    assert _validate_model_quad(end)
+    assert _validate_model_quad(_interpolate_quad(start, end, 0.5))
+
+
+def test_overlay_model_large_rotation_after_long_gap_must_not_render_collapsed_intermediate():
+    start = _rotated_quad(300, 300, 240, 160, 0)
+    end = _rotated_quad(300, 300, 240, 160, 180)
+    midpoint = _interpolate_quad(start, end, 0.5)
+    assert _validate_model_quad(start)
+    assert _validate_model_quad(end)
+    assert not _validate_model_quad(midpoint)
+
+
+def test_overlay_source_keeps_partially_offscreen_valid_quad_supported():
+    html = _scanner_html()
+    assert "const pad = 0.45" in html
+    assert "p.x > -pad * fw" in html
+    assert "p.y > -pad * fh" in html
 
 
 def test_no_duplicate_loop_survives_hidden_visible_recovery():
