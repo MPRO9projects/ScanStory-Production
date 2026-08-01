@@ -1302,6 +1302,12 @@
     let cropDrag = null;
     const cropCanvas = () => document.getElementById('cropCanvas');
     const cropCtx = () => cropCanvas().getContext('2d');
+    const DEFAULT_MARKER_CROP = Object.freeze({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 });
+    const MIN_MARKER_CROP_FRACTION = 0.08;
+
+    function defaultMarkerCrop() {
+      return { ...DEFAULT_MARKER_CROP };
+    }
 
     function createEmptyPairState() {
       return {
@@ -1310,7 +1316,7 @@
         imageUrl: null,
         videoUrl: null,
         markerMode: 'crop',
-        crop: { x: 0.1, y: 0.1, width: 0.8, height: 0.8 },
+        crop: defaultMarkerCrop(),
         rotation: 0,
         originalWidth: 0,
         originalHeight: 0,
@@ -1584,13 +1590,54 @@
       });
       pair.originalWidth = img.naturalWidth;
       pair.originalHeight = img.naturalHeight;
+      sanitizeCrop(pair, img);
       return img;
+    }
+
+    function finiteNumber(value) {
+      return Number.isFinite(Number(value)) ? Number(value) : null;
+    }
+
+    function sanitizeCrop(pair, image = null, forceDefault = false) {
+      if (!pair) return defaultMarkerCrop();
+      const naturalWidth = Number(image?.naturalWidth || pair.originalWidth || 0);
+      const naturalHeight = Number(image?.naturalHeight || pair.originalHeight || 0);
+      if (!naturalWidth || !naturalHeight) {
+        pair.crop = defaultMarkerCrop();
+        return pair.crop;
+      }
+
+      if (pair.markerMode === 'full_image') {
+        pair.crop = { x: 0, y: 0, width: 1, height: 1 };
+        return pair.crop;
+      }
+
+      const crop = forceDefault ? defaultMarkerCrop() : (pair.crop || defaultMarkerCrop());
+      let x = finiteNumber(crop.x);
+      let y = finiteNumber(crop.y);
+      let width = finiteNumber(crop.width);
+      let height = finiteNumber(crop.height);
+      const minWidth = Math.min(0.5, Math.max(MIN_MARKER_CROP_FRACTION, 1 / naturalWidth));
+      const minHeight = Math.min(0.5, Math.max(MIN_MARKER_CROP_FRACTION, 1 / naturalHeight));
+
+      if (x === null || y === null || width === null || height === null || width < minWidth || height < minHeight) {
+        pair.crop = defaultMarkerCrop();
+        return pair.crop;
+      }
+
+      width = Math.min(1, Math.max(minWidth, width));
+      height = Math.min(1, Math.max(minHeight, height));
+      x = Math.min(Math.max(0, x), 1 - width);
+      y = Math.min(Math.max(0, y), 1 - height);
+      pair.crop = { x, y, width, height };
+      return pair.crop;
     }
 
     async function setCropMode(pairId) {
       const pair = currentFiles[pairId];
       if (!pair || !pair.image) return;
       pair.markerMode = 'crop';
+      sanitizeCrop(pair);
       updateMarkerControls(pairId);
       await openCropModal(pairId);
     }
@@ -1621,6 +1668,7 @@
     async function openCropModal(pairId) {
       activeCropPairId = pairId;
       activeCropImage = await loadImageForPair(pairId);
+      sanitizeCrop(currentFiles[pairId], activeCropImage);
       const modal = document.getElementById('cropModal');
       modal.style.display = 'block';
       modal.setAttribute('aria-hidden', 'false');
@@ -1639,7 +1687,7 @@
     function resetCrop() {
       const pair = currentFiles[activeCropPairId];
       if (!pair) return;
-      pair.crop = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+      pair.crop = defaultMarkerCrop();
       pair.rotation = 0;
       drawCropCanvas();
       updateCropPreview();
@@ -1649,6 +1697,7 @@
       const pair = currentFiles[activeCropPairId];
       if (!pair) return;
       pair.rotation = (pair.rotation + 90) % 360;
+      sanitizeCrop(pair, activeCropImage);
       drawCropCanvas();
       updateCropPreview();
     }
@@ -1658,7 +1707,10 @@
       const canvas = cropCanvas();
       const image = activeCropImage;
       if (!pair || !image) return null;
+      if (!image.naturalWidth || !image.naturalHeight || !canvas.width || !canvas.height) return null;
+      sanitizeCrop(pair, image);
       const scale = Math.min(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight);
+      if (!Number.isFinite(scale) || scale <= 0) return null;
       const drawW = image.naturalWidth * scale;
       const drawH = image.naturalHeight * scale;
       const offsetX = (canvas.width - drawW) / 2;
@@ -1691,6 +1743,7 @@
       if (!pair || !activeCropImage) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const r = cropDrawRect();
+      if (!r) return;
       ctx.save();
       ctx.translate(r.imageX + r.imageW / 2, r.imageY + r.imageH / 2);
       ctx.rotate((pair.rotation * Math.PI) / 180);
@@ -1727,17 +1780,19 @@
     function cropPointer(event) {
       const canvas = cropCanvas();
       const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
       const touch = event.touches ? event.touches[0] : event;
+      if (!touch) return null;
       return { x: (touch.clientX - rect.left) * scaleX, y: (touch.clientY - rect.top) * scaleY };
     }
 
     function updateCropFromDrag(point) {
       const pair = currentFiles[activeCropPairId];
       const r = cropDrawRect();
-      if (!pair || !r || !cropDrag) return;
-      const minSize = 0.04;
+      if (!pair || !r || !cropDrag || !point || !r.imageW || !r.imageH) return;
+      const minSize = MIN_MARKER_CROP_FRACTION;
       let x1 = cropDrag.start.x;
       let y1 = cropDrag.start.y;
       let x2 = cropDrag.start.x + cropDrag.start.w;
@@ -1757,6 +1812,7 @@
       x2 = Math.max(x1 + minSize, Math.min(x2, 1));
       y2 = Math.max(y1 + minSize, Math.min(y2, 1));
       pair.crop = { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+      sanitizeCrop(pair, activeCropImage);
       drawCropCanvas();
       updateCropPreview();
     }
@@ -1765,6 +1821,7 @@
       if (!activeCropPairId) return;
       const pair = currentFiles[activeCropPairId];
       if (!pair || !activeCropImage) return;
+      sanitizeCrop(pair, activeCropImage);
       const previewUrl = await renderMarkerDataUrl(pair, 360, 0.86);
       document.getElementById('cropPreview').src = previewUrl;
       pair.quality = evaluateMarkerQuality(pair);
@@ -1776,6 +1833,7 @@
       if (!activeCropPairId) return;
       const pair = currentFiles[activeCropPairId];
       pair.markerMode = 'crop';
+      sanitizeCrop(pair, activeCropImage);
       await prepareMarkerPreview(activeCropPairId);
       updateMarkerControls(activeCropPairId);
       closeCropModal();
@@ -1783,6 +1841,7 @@
     }
 
     function drawCroppedMarkerToCanvas(canvas, img, pair, longEdge) {
+      sanitizeCrop(pair, img);
       const crop = pair.markerMode === 'full_image' ? { x: 0, y: 0, width: 1, height: 1 } : pair.crop;
       const sx = Math.round(crop.x * img.naturalWidth);
       const sy = Math.round(crop.y * img.naturalHeight);
@@ -1828,6 +1887,7 @@
       const previous = pair.processedPreviewUrl;
       activeCropPairId = pairId;
       activeCropImage = await loadImageForPair(pairId);
+      sanitizeCrop(pair, activeCropImage);
       pair.processedPreviewUrl = await renderMarkerDataUrl(pair, 360, 0.86);
       if (previous) URL.revokeObjectURL(previous);
       const preview = document.getElementById(`marker-preview-${pairId}`);
@@ -1975,6 +2035,7 @@
 
     cropCanvas().addEventListener('mousedown', (event) => {
       const point = cropPointer(event);
+      if (!point) return;
       const pair = currentFiles[activeCropPairId];
       const r = cropDrawRect();
       if (!pair || !r) return;
@@ -1988,7 +2049,7 @@
     cropCanvas().addEventListener('wheel', (event) => { event.preventDefault(); }, { passive: false });
     window.addEventListener('resize', () => { if (activeCropPairId) { resizeCropCanvas(); drawCropCanvas(); } });
 
-    function handleFileSelect(input, pairId, type) {
+    async function handleFileSelect(input, pairId, type) {
       const file = input.files[0];
       if (!file) return;
 
@@ -2025,8 +2086,18 @@
         currentFiles[pairId].image = file;
         currentFiles[pairId].imageUrl = fileUrl;
         currentFiles[pairId].markerMode = 'crop';
-        currentFiles[pairId].crop = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+        currentFiles[pairId].crop = defaultMarkerCrop();
         currentFiles[pairId].rotation = 0;
+        currentFiles[pairId].originalWidth = 0;
+        currentFiles[pairId].originalHeight = 0;
+        currentFiles[pairId].processedFile = null;
+        currentFiles[pairId].processedWidth = 0;
+        currentFiles[pairId].processedHeight = 0;
+        if (currentFiles[pairId].processedPreviewUrl) {
+          URL.revokeObjectURL(currentFiles[pairId].processedPreviewUrl);
+          currentFiles[pairId].processedPreviewUrl = null;
+        }
+        currentFiles[pairId].quality = { status: 'Preparing marker', guidance: ['Loading image before crop.'] };
 
         const area = document.getElementById(`image-area-${pairId}`);
         const preview = document.getElementById(`image-preview-${pairId}`);
@@ -2034,7 +2105,14 @@
           area.classList.add('has-file');
           preview.innerHTML = `<img src="${fileUrl}" alt="Image Preview">`;
         }
-        openCropModal(pairId);
+        try {
+          const image = await loadImageForPair(pairId);
+          sanitizeCrop(currentFiles[pairId], image, true);
+          await openCropModal(pairId);
+        } catch (err) {
+          currentFiles[pairId].quality = { status: 'Weak marker', guidance: ['Could not read image dimensions. Try another image.'] };
+          updateMarkerControls(pairId);
+        }
       } else {
         currentFiles[pairId].video = file;
         currentFiles[pairId].videoUrl = fileUrl;

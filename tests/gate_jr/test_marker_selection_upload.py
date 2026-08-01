@@ -86,6 +86,61 @@ def test_create_project_ui_defaults_to_crop_and_allows_full_image():
     assert "MAX_PAIRS_PER_PROJECT = (IS_ADMIN || IS_DEV_TEST) ? Infinity" in html
 
 
+def test_new_image_initializes_visible_crop_after_dimensions_load():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    assert "const DEFAULT_MARKER_CROP = Object.freeze({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 })" in html
+    assert "function defaultMarkerCrop()" in html
+    assert "const image = await loadImageForPair(pairId)" in html
+    assert "sanitizeCrop(currentFiles[pairId], image, true)" in html
+    assert "await openCropModal(pairId)" in html
+
+
+def test_replacing_image_resets_invalid_prior_crop_and_dimensions():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    assert "currentFiles[pairId].crop = defaultMarkerCrop()" in html
+    assert "currentFiles[pairId].rotation = 0" in html
+    assert "currentFiles[pairId].originalWidth = 0" in html
+    assert "currentFiles[pairId].originalHeight = 0" in html
+    assert "currentFiles[pairId].processedWidth = 0" in html
+    assert "currentFiles[pairId].processedHeight = 0" in html
+
+
+def test_minimum_crop_dimensions_are_enforced_client_side():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    assert "const MIN_MARKER_CROP_FRACTION = 0.08" in html
+    assert "const minWidth = Math.min(0.5, Math.max(MIN_MARKER_CROP_FRACTION, 1 / naturalWidth))" in html
+    assert "const minHeight = Math.min(0.5, Math.max(MIN_MARKER_CROP_FRACTION, 1 / naturalHeight))" in html
+    assert "width < minWidth || height < minHeight" in html
+    assert "width = Math.min(1, Math.max(minWidth, width))" in html
+    assert "height = Math.min(1, Math.max(minHeight, height))" in html
+
+
+def test_rotation_keeps_crop_valid():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    rotate_start = html.index("function rotateCropImage()")
+    rotate_block = html[rotate_start:html.index("function cropDrawRect()", rotate_start)]
+    assert "pair.rotation = (pair.rotation + 90) % 360" in rotate_block
+    assert "sanitizeCrop(pair, activeCropImage)" in rotate_block
+
+
+def test_zero_size_canvas_or_image_layout_does_not_persist_invalid_crop():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    assert "if (!image.naturalWidth || !image.naturalHeight || !canvas.width || !canvas.height) return null" in html
+    assert "if (!Number.isFinite(scale) || scale <= 0) return null" in html
+    assert "if (!rect.width || !rect.height) return null" in html
+    assert "if (!point) return" in html
+
+
+def test_mobile_touch_interaction_cannot_collapse_crop_to_point():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    assert "const touch = event.touches ? event.touches[0] : event" in html
+    assert "if (!touch) return null" in html
+    assert "const minSize = MIN_MARKER_CROP_FRACTION" in html
+    assert "x2 = Math.max(x1 + minSize, Math.min(x2, 1))" in html
+    assert "y2 = Math.max(y1 + minSize, Math.min(y2, 1))" in html
+    assert "sanitizeCrop(pair, activeCropImage)" in html
+
+
 def test_marker_mode_is_stored_per_pair_and_mixed_modes_work(client, app_module, login_user, monkeypatch):
     _patch_upload_processing(app_module, monkeypatch)
 
