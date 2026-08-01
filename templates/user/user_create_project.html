@@ -1087,6 +1087,8 @@
       height: 100%;
       display: block;
       cursor: move;
+      touch-action: none;
+      user-select: none;
     }
 
     .crop-side {
@@ -1104,6 +1106,23 @@
       background: #000;
     }
 
+    .crop-debug-panel {
+      display: none;
+      margin-top: 10px;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(0, 212, 255, .35);
+      background: rgba(0, 0, 0, .42);
+      color: rgba(255, 255, 255, .82);
+      font: 11px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .crop-debug-panel.active {
+      display: block;
+    }
+
     .crop-btn {
       border: 1px solid rgba(255, 255, 255, .18);
       border-radius: 12px;
@@ -1118,13 +1137,64 @@
       background: linear-gradient(90deg, var(--primary), var(--secondary));
     }
 
+    .mobile-label,
+    .crop-toolbar .mobile-confirm {
+      display: none;
+    }
+
     @media (max-width: 780px) {
       .marker-options,
       .crop-stage {
         grid-template-columns: 1fr;
       }
       .crop-shell {
-        height: calc(100vh - 20px);
+        height: 100dvh;
+        max-height: 100dvh;
+        gap: 0;
+      }
+      .crop-modal {
+        padding: 0;
+        overflow: hidden;
+      }
+      .crop-toolbar {
+        position: sticky;
+        top: 0;
+        z-index: 5;
+        flex-wrap: nowrap;
+        padding: calc(10px + env(safe-area-inset-top, 0px)) 12px 10px;
+        background: rgba(0, 0, 0, .92);
+        border-bottom: 1px solid rgba(255, 255, 255, .12);
+      }
+      .crop-toolbar > div {
+        display: none;
+      }
+      .crop-toolbar .crop-btn {
+        min-height: 42px;
+      }
+      .crop-toolbar .mobile-confirm {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        margin-left: auto;
+      }
+      .desktop-label {
+        display: none;
+      }
+      .mobile-label {
+        display: inline;
+      }
+      .crop-stage {
+        min-height: 0;
+        overflow: auto;
+        padding: 12px;
+      }
+      .crop-actions {
+        padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+        background: rgba(0, 0, 0, .88);
+        border-top: 1px solid rgba(255, 255, 255, .12);
+      }
+      .crop-actions > .crop-btn.primary {
+        display: none;
       }
     }
 
@@ -1259,7 +1329,8 @@
           <strong>Crop marker area</strong>
           <div style="font-size:12px;color:rgba(255,255,255,.68);margin-top:4px;">Select the exact card, poster, label, artwork, package or printed area that should trigger the video.</div>
         </div>
-        <button type="button" class="crop-btn" onclick="closeCropModal()">Close</button>
+        <button type="button" class="crop-btn" onclick="closeCropModal()"><span class="desktop-label">Close</span><span class="mobile-label">Cancel</span></button>
+        <button type="button" class="crop-btn primary mobile-confirm" onclick="useCurrentMarker()">Use this marker</button>
       </div>
       <div class="crop-stage">
         <div class="crop-canvas-wrap">
@@ -1269,6 +1340,7 @@
           <strong>This area will become the marker</strong>
           <img id="cropPreview" alt="Marker crop preview">
           <div class="marker-status" id="cropQuality"><strong>Usable marker</strong><span>Adjust crop to evaluate marker quality.</span></div>
+          <div class="crop-debug-panel{% if crop_debug_enabled %} active{% endif %}" id="cropDebugPanel">Crop debug waiting...</div>
           <ul style="font-size:12px;line-height:1.55;color:rgba(255,255,255,.70);padding-left:18px;margin-top:12px;">
             <li>Crop tightly around the intended marker.</li>
             <li>Exclude tables, walls, floors, hands and nearby objects.</li>
@@ -1297,9 +1369,13 @@
     const MARKER_LONG_EDGE = 1400;
     const MARKER_JPEG_QUALITY = 0.86;
     const VIDEO_WARNING_CONFIG = {{ video_upload_warnings | tojson }};
+    const CROP_DEBUG_ENABLED = {{ 'true' if crop_debug_enabled else 'false' }};
     let activeCropPairId = null;
     let activeCropImage = null;
     let cropDrag = null;
+    let cropListenersAttached = false;
+    let cropAttachedCanvas = null;
+    let cropScrollLock = null;
     const cropCanvas = () => document.getElementById('cropCanvas');
     const cropCtx = () => cropCanvas().getContext('2d');
     const DEFAULT_MARKER_CROP = Object.freeze({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 });
@@ -1307,6 +1383,66 @@
 
     function defaultMarkerCrop() {
       return { ...DEFAULT_MARKER_CROP };
+    }
+
+    function plainRect(rect) {
+      if (!rect) return null;
+      return {
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        top: Math.round(rect.top),
+        left: Math.round(rect.left),
+        right: Math.round(rect.right),
+        bottom: Math.round(rect.bottom)
+      };
+    }
+
+    function cropDebugState(extra = {}) {
+      const canvas = document.getElementById('cropCanvas');
+      const pair = currentFiles[activeCropPairId];
+      const rect = canvas ? plainRect(canvas.getBoundingClientRect()) : null;
+      const display = canvas && activeCropImage ? cropDrawRect() : null;
+      return {
+        event: extra.event || '',
+        pointer_x: extra.pointer?.x ?? null,
+        pointer_y: extra.pointer?.y ?? null,
+        drag_mode: extra.mode ?? cropDrag?.mode ?? null,
+        pointer_id: extra.pointerId ?? cropDrag?.pointerId ?? null,
+        crop: pair?.crop ? { ...pair.crop } : null,
+        canvas_count: document.querySelectorAll('#cropCanvas').length,
+        canvas_rect: rect,
+        canvas_width: canvas?.width ?? null,
+        canvas_height: canvas?.height ?? null,
+        image: activeCropImage ? { width: activeCropImage.naturalWidth, height: activeCropImage.naturalHeight } : null,
+        display_bounds: display ? { imageX: display.imageX, imageY: display.imageY, imageW: display.imageW, imageH: display.imageH } : null,
+        top_element: extra.clientX != null && extra.clientY != null && document.elementFromPoint
+          ? (document.elementFromPoint(extra.clientX, extra.clientY)?.id || document.elementFromPoint(extra.clientX, extra.clientY)?.className || document.elementFromPoint(extra.clientX, extra.clientY)?.tagName)
+          : null,
+        ...extra
+      };
+    }
+
+    function cropDebug(tag, extra = {}) {
+      if (!CROP_DEBUG_ENABLED) return;
+      const state = cropDebugState(extra);
+      console.log(tag, state);
+      const panel = document.getElementById('cropDebugPanel');
+      if (panel) {
+        panel.textContent = `${tag}\n${JSON.stringify({
+          event: state.event,
+          pointer_x: state.pointer_x,
+          pointer_y: state.pointer_y,
+          drag_mode: state.drag_mode,
+          crop: state.crop,
+          canvas_count: state.canvas_count,
+          canvas_rect: state.canvas_rect,
+          display_bounds: state.display_bounds,
+          top_element: state.top_element,
+          blocked_reason: state.reason || null
+        }, null, 2)}`;
+      }
     }
 
     function createEmptyPairState() {
@@ -1669,10 +1805,18 @@
       activeCropPairId = pairId;
       activeCropImage = await loadImageForPair(pairId);
       sanitizeCrop(currentFiles[pairId], activeCropImage);
+      attachCropPointerListeners();
+      lockBackgroundScroll();
       const modal = document.getElementById('cropModal');
       modal.style.display = 'block';
       modal.setAttribute('aria-hidden', 'false');
       resizeCropCanvas();
+      cropDebug('[CROP INIT]', {
+        event: 'modal-opened',
+        canvas_found: !!cropCanvas(),
+        listeners_attached: cropListenersAttached,
+        canvas_replaced: cropAttachedCanvas !== cropCanvas(),
+      });
       drawCropCanvas();
       updateCropPreview();
     }
@@ -1681,7 +1825,28 @@
       const modal = document.getElementById('cropModal');
       modal.style.display = 'none';
       modal.setAttribute('aria-hidden', 'true');
+      cropDebug('[CROP POINTER UP]', { event: 'modal-close' });
       cropDrag = null;
+      unlockBackgroundScroll();
+    }
+
+    function lockBackgroundScroll() {
+      if (cropScrollLock) return;
+      cropScrollLock = {
+        bodyOverflow: document.body.style.overflow,
+        htmlOverflow: document.documentElement.style.overflow,
+        scrollY: window.scrollY || window.pageYOffset || 0
+      };
+      document.body.style.overflow = 'hidden';
+      document.documentElement.style.overflow = 'hidden';
+    }
+
+    function unlockBackgroundScroll() {
+      if (!cropScrollLock) return;
+      document.body.style.overflow = cropScrollLock.bodyOverflow;
+      document.documentElement.style.overflow = cropScrollLock.htmlOverflow;
+      window.scrollTo(0, cropScrollLock.scrollY);
+      cropScrollLock = null;
     }
 
     function resetCrop() {
@@ -1707,10 +1872,16 @@
       const canvas = cropCanvas();
       const image = activeCropImage;
       if (!pair || !image) return null;
-      if (!image.naturalWidth || !image.naturalHeight || !canvas.width || !canvas.height) return null;
+      if (!image.naturalWidth || !image.naturalHeight || !canvas.width || !canvas.height) {
+        cropDebug('[CROP BLOCKED]', { event: 'cropDrawRect', reason: 'missing image or canvas dimensions' });
+        return null;
+      }
       sanitizeCrop(pair, image);
       const scale = Math.min(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight);
-      if (!Number.isFinite(scale) || scale <= 0) return null;
+      if (!Number.isFinite(scale) || scale <= 0) {
+        cropDebug('[CROP BLOCKED]', { event: 'cropDrawRect', reason: 'invalid display scale' });
+        return null;
+      }
       const drawW = image.naturalWidth * scale;
       const drawH = image.naturalHeight * scale;
       const offsetX = (canvas.width - drawW) / 2;
@@ -1740,10 +1911,16 @@
       const canvas = cropCanvas();
       const ctx = cropCtx();
       const pair = currentFiles[activeCropPairId];
-      if (!pair || !activeCropImage) return;
+      if (!pair || !activeCropImage) {
+        cropDebug('[CROP BLOCKED]', { event: 'drawCropCanvas', reason: 'missing pair or active image' });
+        return;
+      }
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       const r = cropDrawRect();
-      if (!r) return;
+      if (!r) {
+        cropDebug('[CROP BLOCKED]', { event: 'drawCropCanvas', reason: 'missing crop draw rect' });
+        return;
+      }
       ctx.save();
       ctx.translate(r.imageX + r.imageW / 2, r.imageY + r.imageH / 2);
       ctx.rotate((pair.rotation * Math.PI) / 180);
@@ -1766,6 +1943,7 @@
       ctx.fillStyle = '#fff';
       const handles = cropHandles(r);
       handles.forEach(h => ctx.fillRect(h.x - 6, h.y - 6, 12, 12));
+      cropDebug('[CROP UPDATE]', { event: 'canvas-redraw' });
     }
 
     function cropHandles(r) {
@@ -1780,32 +1958,77 @@
     function cropPointer(event) {
       const canvas = cropCanvas();
       const rect = canvas.getBoundingClientRect();
-      if (!rect.width || !rect.height) return null;
+      if (!rect.width || !rect.height) {
+        cropDebug('[CROP BLOCKED]', { event: 'cropPointer', reason: 'zero canvas bounding rect', clientX: event.clientX, clientY: event.clientY });
+        return null;
+      }
       const scaleX = canvas.width / rect.width;
       const scaleY = canvas.height / rect.height;
-      const touch = event.touches ? event.touches[0] : event;
-      if (!touch) return null;
-      return { x: (touch.clientX - rect.left) * scaleX, y: (touch.clientY - rect.top) * scaleY };
+      if (!Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) {
+        cropDebug('[CROP BLOCKED]', { event: 'cropPointer', reason: 'invalid pointer coordinates' });
+        return null;
+      }
+      return { x: (event.clientX - rect.left) * scaleX, y: (event.clientY - rect.top) * scaleY };
+    }
+
+    function cropHitTolerance() {
+      const canvas = cropCanvas();
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width) return 24;
+      return 24 * (canvas.width / rect.width);
+    }
+
+    function cropDragMode(point, r) {
+      const tolerance = cropHitTolerance();
+      const handle = cropHandles(r).find(h => Math.abs(point.x - h.x) <= tolerance && Math.abs(point.y - h.y) <= tolerance);
+      if (handle) return handle.name;
+      const insideCrop = point.x >= r.x && point.x <= r.x + r.w && point.y >= r.y && point.y <= r.y + r.h;
+      return insideCrop ? 'move' : null;
+    }
+
+    function stopCropDrag(event = null) {
+      const canvas = cropCanvas();
+      if (event && cropDrag?.pointerId === event.pointerId && canvas.releasePointerCapture) {
+        try { canvas.releasePointerCapture(event.pointerId); } catch (_ignored) { }
+      }
+      cropDrag = null;
     }
 
     function updateCropFromDrag(point) {
       const pair = currentFiles[activeCropPairId];
       const r = cropDrawRect();
-      if (!pair || !r || !cropDrag || !point || !r.imageW || !r.imageH) return;
+      if (!pair || !r || !cropDrag || !point || !r.imageW || !r.imageH) {
+        cropDebug('[CROP BLOCKED]', { event: 'updateCropFromDrag', reason: 'missing drag prerequisites', pointer: point });
+        return;
+      }
       const minSize = MIN_MARKER_CROP_FRACTION;
+      const beforeCrop = { ...pair.crop };
       let x1 = cropDrag.start.x;
       let y1 = cropDrag.start.y;
-      let x2 = cropDrag.start.x + cropDrag.start.w;
-      let y2 = cropDrag.start.y + cropDrag.start.h;
+      let x2 = cropDrag.start.x + cropDrag.start.width;
+      let y2 = cropDrag.start.y + cropDrag.start.height;
       const dx = (point.x - cropDrag.point.x) / r.imageW;
       const dy = (point.y - cropDrag.point.y) / r.imageH;
       if (cropDrag.mode === 'move') {
-        x1 += dx; x2 += dx; y1 += dy; y2 += dy;
+        const width = Math.max(minSize, cropDrag.start.width);
+        const height = Math.max(minSize, cropDrag.start.height);
+        x1 = Math.max(0, Math.min(cropDrag.start.x + dx, 1 - width));
+        y1 = Math.max(0, Math.min(cropDrag.start.y + dy, 1 - height));
+        x2 = x1 + width;
+        y2 = y1 + height;
       } else {
         if (cropDrag.mode.includes('w')) x1 += dx;
         if (cropDrag.mode.includes('e')) x2 += dx;
         if (cropDrag.mode.includes('n')) y1 += dy;
         if (cropDrag.mode.includes('s')) y2 += dy;
+        if (cropDrag.mode.includes('w') && x2 - x1 < minSize) x1 = x2 - minSize;
+        if (cropDrag.mode.includes('e') && x2 - x1 < minSize) x2 = x1 + minSize;
+        if (cropDrag.mode.includes('n') && y2 - y1 < minSize) y1 = y2 - minSize;
+        if (cropDrag.mode.includes('s') && y2 - y1 < minSize) y2 = y1 + minSize;
+        if (x1 < 0) { x2 -= x1; x1 = 0; }
+        if (y1 < 0) { y2 -= y1; y1 = 0; }
+        if (x2 > 1) { x1 -= x2 - 1; x2 = 1; }
+        if (y2 > 1) { y1 -= y2 - 1; y2 = 1; }
       }
       x1 = Math.max(0, Math.min(x1, 1 - minSize));
       y1 = Math.max(0, Math.min(y1, 1 - minSize));
@@ -1813,6 +2036,7 @@
       y2 = Math.max(y1 + minSize, Math.min(y2, 1));
       pair.crop = { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
       sanitizeCrop(pair, activeCropImage);
+      cropDebug('[CROP UPDATE]', { event: 'crop-after-update', pointer: point, before_crop: beforeCrop, after_crop: { ...pair.crop } });
       drawCropCanvas();
       updateCropPreview();
     }
@@ -2033,20 +2257,95 @@
       return { status: score >= 2 ? 'Good marker' : (score >= 1 ? 'Usable marker' : 'Weak marker'), guidance };
     }
 
-    cropCanvas().addEventListener('mousedown', (event) => {
-      const point = cropPointer(event);
-      if (!point) return;
-      const pair = currentFiles[activeCropPairId];
-      const r = cropDrawRect();
-      if (!pair || !r) return;
-      const hit = cropHandles(r).find(h => Math.abs(point.x - h.x) <= 16 && Math.abs(point.y - h.y) <= 16);
-      cropDrag = { mode: hit ? hit.name : 'move', point, start: { ...pair.crop } };
-    });
-    window.addEventListener('mousemove', (event) => { if (cropDrag) updateCropFromDrag(cropPointer(event)); });
-    window.addEventListener('mouseup', () => { cropDrag = null; });
-    cropCanvas().addEventListener('touchstart', (event) => { event.preventDefault(); cropCanvas().dispatchEvent(new MouseEvent('mousedown', { clientX: event.touches[0].clientX, clientY: event.touches[0].clientY })); }, { passive: false });
-    cropCanvas().addEventListener('touchmove', (event) => { event.preventDefault(); if (cropDrag) updateCropFromDrag(cropPointer(event)); }, { passive: false });
-    cropCanvas().addEventListener('wheel', (event) => { event.preventDefault(); }, { passive: false });
+    function attachCropPointerListeners() {
+      const canvas = cropCanvas();
+      if (!canvas) {
+        cropDebug('[CROP BLOCKED]', { event: 'attach-listeners', reason: 'cropCanvas not found' });
+        return;
+      }
+      if (cropListenersAttached && cropAttachedCanvas === canvas) {
+        cropDebug('[CROP INIT]', { event: 'listeners-already-attached', canvas_found: true });
+        return;
+      }
+      if (cropListenersAttached && cropAttachedCanvas !== canvas) {
+        cropDebug('[CROP BLOCKED]', { event: 'attach-listeners', reason: 'cropCanvas element was replaced' });
+      }
+
+      canvas.addEventListener('pointerdown', (event) => {
+        event.preventDefault();
+        const point = cropPointer(event);
+        cropDebug('[CROP POINTER DOWN]', { event: 'pointerdown', pointer: point, pointerId: event.pointerId, clientX: event.clientX, clientY: event.clientY });
+        if (!point) return;
+        const pair = currentFiles[activeCropPairId];
+        const r = cropDrawRect();
+        if (!pair || !r) {
+          cropDebug('[CROP BLOCKED]', { event: 'pointerdown', reason: 'missing pair or draw rect', pointer: point, pointerId: event.pointerId });
+          return;
+        }
+        const mode = cropDragMode(point, r);
+        cropDebug('[CROP HIT TEST]', { event: 'pointerdown-hit-test', pointer: point, mode, pointerId: event.pointerId });
+        if (!mode) {
+          cropDebug('[CROP BLOCKED]', { event: 'pointerdown', reason: 'no hit target', pointer: point, pointerId: event.pointerId });
+          return;
+        }
+        sanitizeCrop(pair, activeCropImage);
+        cropDrag = { pointerId: event.pointerId, mode, point, start: { ...pair.crop } };
+        if (event.currentTarget.setPointerCapture) {
+          try {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            cropDebug('[CROP INIT]', { event: 'setPointerCapture-success', pointer: point, mode, pointerId: event.pointerId });
+          } catch (err) {
+            cropDebug('[CROP BLOCKED]', { event: 'setPointerCapture-failed', reason: err.message, pointer: point, mode, pointerId: event.pointerId });
+          }
+        }
+      });
+      canvas.addEventListener('pointermove', (event) => {
+        if (!cropDrag || cropDrag.pointerId !== event.pointerId) return;
+        event.preventDefault();
+        const point = cropPointer(event);
+        cropDebug('[CROP POINTER MOVE]', { event: 'canvas-pointermove', pointer: point, pointerId: event.pointerId });
+        updateCropFromDrag(point);
+      });
+      canvas.addEventListener('pointerup', (event) => {
+        if (!cropDrag || cropDrag.pointerId !== event.pointerId) return;
+        event.preventDefault();
+        cropDebug('[CROP POINTER UP]', { event: 'canvas-pointerup', pointer: cropPointer(event), pointerId: event.pointerId });
+        stopCropDrag(event);
+      });
+      canvas.addEventListener('pointercancel', (event) => {
+        if (!cropDrag || cropDrag.pointerId !== event.pointerId) return;
+        cropDebug('[CROP POINTER UP]', { event: 'canvas-pointercancel', pointer: cropPointer(event), pointerId: event.pointerId });
+        stopCropDrag(event);
+      });
+      window.addEventListener('pointermove', (event) => {
+        if (!cropDrag || cropDrag.pointerId !== event.pointerId) return;
+        const point = cropPointer(event);
+        cropDebug('[CROP POINTER MOVE]', { event: 'window-pointermove', pointer: point, pointerId: event.pointerId });
+        updateCropFromDrag(point);
+      });
+      window.addEventListener('pointerup', (event) => {
+        if (!cropDrag || cropDrag.pointerId !== event.pointerId) return;
+        cropDebug('[CROP POINTER UP]', { event: 'window-pointerup', pointer: cropPointer(event), pointerId: event.pointerId });
+        stopCropDrag(event);
+      });
+      window.addEventListener('pointercancel', (event) => {
+        if (!cropDrag || cropDrag.pointerId !== event.pointerId) return;
+        cropDebug('[CROP POINTER UP]', { event: 'window-pointercancel', pointer: cropPointer(event), pointerId: event.pointerId });
+        stopCropDrag(event);
+      });
+      canvas.addEventListener('wheel', (event) => { event.preventDefault(); }, { passive: false });
+      cropListenersAttached = true;
+      cropAttachedCanvas = canvas;
+      cropDebug('[CROP INIT]', {
+        event: 'pointer-listeners-attached',
+        canvas_found: true,
+        touch_action: getComputedStyle(canvas).touchAction,
+        pointer_events: getComputedStyle(canvas).pointerEvents,
+        z_index: getComputedStyle(canvas).zIndex,
+      });
+    }
+
+    attachCropPointerListeners();
     window.addEventListener('resize', () => { if (activeCropPairId) { resizeCropCanvas(); drawCropCanvas(); } });
 
     async function handleFileSelect(input, pairId, type) {

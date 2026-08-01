@@ -3148,6 +3148,10 @@ def user_create_project_page():
         max_pairs_per_project=max_pairs_per_project,
         dev_test_entitled=dev_test_entitled,
         video_upload_warnings=VIDEO_UPLOAD_WARNINGS,
+        crop_debug_enabled=(
+            request.args.get("crop_debug") == "1"
+            and (app.config.get("TESTING") or os.environ.get("FLASK_ENV") == "development")
+        ),
     )
 
 
@@ -6099,6 +6103,10 @@ def admin_create_project_page():
         max_pairs_per_project=None,
         get_system_config=get_system_config,
         video_upload_warnings=VIDEO_UPLOAD_WARNINGS,
+        crop_debug_enabled=(
+            request.args.get("crop_debug") == "1"
+            and (app.config.get("TESTING") or os.environ.get("FLASK_ENV") == "development")
+        ),
     )
 @app.route("/admin/projects/upload", methods=["POST"])
 @admin_required
