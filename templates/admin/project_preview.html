@@ -117,7 +117,9 @@
             </div>
         </div>
         <!-- CHANGE 2: Scanner URL with admin_id parameter -->
-        <a href="{{ url_for('scanner', project_id=project.id, admin_id=admin.id, admin_name=admin.name) }}" target="_blank" 
+        {# admin_scanner_test_entry mints a signed, ownership-verified token so this resolves
+           scanner_entry_context=admin_test server-side — see app.py. #}
+        <a href="{{ url_for('admin_scanner_test_entry', project_id=project.id) }}" target="_blank"
            class="bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 px-5 py-2 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-cyan-500/30 transition flex items-center gap-2">
             <i class="fas fa-qrcode"></i> Scan AR
         </a>
@@ -229,8 +231,9 @@
                     <i class="fas fa-arrow-left"></i>
                     <span class="text-xs font-bold uppercase tracking-wider">Dashboard</span>
                 </a>
-                <!-- CHANGE 2: Scanner URL with admin_id parameter -->
-                <a href="{{ url_for('scanner', project_id=project.id, admin_id=admin.id, admin_name=admin.name) }}" target="_blank"
+                {# admin_scanner_test_entry mints a signed, ownership-verified token so this
+                   resolves scanner_entry_context=admin_test server-side — see app.py. #}
+                <a href="{{ url_for('admin_scanner_test_entry', project_id=project.id) }}" target="_blank"
                    class="download-btn inline-flex items-center gap-2">
                     <i class="fas fa-external-link-alt"></i>
                     Open Scanner

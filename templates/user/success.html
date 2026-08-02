@@ -381,8 +381,12 @@
 
         <!-- Action Buttons -->
         <div class="space-y-4 mt-8">
-            <a href="{{ project.scanner_url }}" target="_blank" class="action-btn block">
-                <i class="fas fa-rocket mr-2"></i> Open AR Scanner
+            {# test_scanner_url is a signed, ownership-verified, short-lived entry point (see
+               scanner_test_entry/admin_scanner_test_entry in app.py) — clicking this resolves
+               scanner_entry_context=creator_test/admin_test server-side, unlike the public
+               project.scanner_url shown above, which always resolves public_viewer. #}
+            <a href="{{ test_scanner_url }}" target="_blank" class="action-btn block">
+                <i class="fas fa-vial mr-2"></i> Test Scanner
             </a>
 
             <!-- ✅ CHANGED: Condition for creating another project -->

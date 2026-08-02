@@ -47,11 +47,15 @@ def test_no_duplicate_loops_or_camera_streams_are_guarded():
 
 
 def test_timeout_recovers_without_immediate_camera_restart_or_capability_panel():
+    """Repeated recognition timeouts used to fall through to enterFallback('DETECTION_TIMEOUT')
+    — the exact same panel as a genuinely dead camera. See
+    test_scanner_lifecycle.py::test_recognition_timeout_never_restarts_a_healthy_camera for
+    the dedicated coverage of the fix (showRecognitionHelp instead)."""
     html = _scanner_html()
     assert "function handleDetectionTimeout()" in html
     assert "startDetectLoop()" in html
     assert "startTrackingLoop()" in html
-    assert "enterFallback('DETECTION_TIMEOUT')" in html
+    assert "showRecognitionHelp('repeated_detection_timeout')" in html
     assert "Recognition timed out. Trying again..." in html
 
 
@@ -208,7 +212,12 @@ def test_detection_response_metadata_and_session_end_stale_guards():
 
 def test_healthy_tracking_suppresses_repeated_detect_init_and_limits_inflight():
     html = _scanner_html()
-    assert "const FORCE_REDETECT_MS = 12000" in html
+    # FORCE_REDETECT_MS was 12000 — real-device logs showed detect requests going silent
+    # for up to ~18s while local tracking was "healthy". 3000 still left a 5-6s residual gap
+    # on lightweight mode once detectionPolicy's own 2x(detectIntervalMs) gate is accounted
+    # for; 1800 keeps the worst case under 4000ms on every mode (see
+    # test_scanner_lifecycle.py's scan-loop tests for the gap-focused coverage).
+    assert "const FORCE_REDETECT_MS = 1800" in html
     assert "const HEALTHY_TRACK_SUPPRESS_MS = 1200" in html
     assert "const trackingHealthy = tracking && driftMs <= HEALTHY_TRACK_SUPPRESS_MS" in html
     assert "(trackingHealthy && sinceLastDetect > FORCE_REDETECT_MS)" in html
@@ -514,11 +523,13 @@ def test_grace_recovery_and_timeout_both_go_through_single_exit_paths():
 
 
 def test_no_duplicate_loop_survives_hidden_visible_recovery():
-    """Hidden->visible must recover through the same guarded start functions duplicate-
-    loop protection already covers, not a separate unguarded path."""
+    """Hidden->visible must recover without ever duplicating the loop. The loop is no
+    longer even stopped on hidden (see test_scanner_lifecycle.py's gap-fix tests) — restore
+    either does nothing (stream alive, loop was never stopped) or goes through the same
+    guarded recoverScanner/startDetectLoop path duplicate-loop protection already covers."""
     html = _scanner_html()
     assert "safeTransition('paused', 'tab_hidden')" in html
-    assert "recoverScanner('visibilitychange', false)" in html
+    assert "recoverScanner('visibilitychange', true)" in html
     assert "if (trackLoopActive) return" in html
     assert "if (detectLoopTimer) return" in html
 
@@ -536,9 +547,22 @@ def test_status_word_is_state_driven_not_a_blind_round_robin():
 
 def test_state_transitions_carry_reason_codes_to_diagnostics():
     html = _scanner_html()
-    assert "function safeTransition(state, reason)" in html
+    # safeTransition is now a thin alias over transitionScannerState(nextState, reason,
+    # metadata) — extended to support a stale-generation guard and redundant-transition
+    # skip (see test_transition_scanner_state_guards_redundant_and_stale_transitions).
+    assert "function transitionScannerState(nextState, reason, metadata)" in html
+    assert "function safeTransition(state, reason, metadata)" in html
     assert "'[SCAN STATE]'" in html
     assert "reason: reason || null" in html
+
+
+def test_transition_scanner_state_guards_redundant_and_stale_transitions():
+    html = _scanner_html()
+    assert "if (from === nextState) return false;" in html
+    assert "typeof metadata.generation === 'number' && metadata.generation !== scannerGeneration" in html
+    assert "code: 'stale_transition'" in html
+    assert "const scannerTransitionHistory = []" in html
+    assert "TRANSITION_HISTORY_LIMIT" in html
 
 
 def test_scan_candidate_and_match_accept_reject_diagnostics_present():

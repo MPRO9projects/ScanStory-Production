@@ -493,7 +493,15 @@
 
 <body>
   <div class="header">
-    <a href="/" class="back-btn" id="backBtn">← Back</a>
+    {# Root-cause fix (round 1): this used to hardcode href="/". Round-2 fix: session.get
+       ('user_id')/session.get('admin_id') alone are NOT safe — the public QR link for a
+       project embeds the OWNER's id as a query param, and the scanner view force-sets
+       session['user_id'] from that param on every request, so a random public visitor's
+       session looks identical to the creator's the instant they scan the code. The real
+       destination is resolved entirely server-side (resolve_scanner_entry_context() in
+       app.py), from project ownership + the session as it stood BEFORE that force-login
+       line ran — never from a client-supplied return URL. #}
+    <a href="{{ resolved_back_destination }}" class="back-btn" id="backBtn">← Back</a>
     <h3>SCANSTORY</h3>
     <div style="width:80px"></div>
   </div>
@@ -595,25 +603,132 @@
 
   <div id="status" class="status scan">Loading OpenCV…</div>
 
+  <!-- Real fallback UI (Part D): "Fallback available" must never appear without a visible
+       action. This panel is the only thing shown when the scanner state machine reaches
+       'fallback' — no non-AR video-playback fallback exists in this codebase for a project
+       with multiple image/video pairs (there is no single "the" video to play), so this
+       is a recovery-failed state with two real actions, not a fake claim of a fallback
+       flow that isn't actually wired up. -->
+  <div id="fallbackPanel" style="display:none;margin:12px auto 0;max-width:520px;padding:16px 18px;border-radius:12px;background:rgba(255,60,60,0.08);border:1px solid rgba(255,90,90,0.35);text-align:center;">
+    <div id="fallbackMessage" style="color:#ff9090;font-weight:700;margin-bottom:14px;font-size:14px;"></div>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+      <button type="button" id="fallbackRetryBtn"
+        style="min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(0,212,255,0.5);background:rgba(0,212,255,0.12);color:#00d4ff;font-weight:700;cursor:pointer;">
+        Retry Camera
+      </button>
+      {# Same server-resolved destination as Back — see resolve_scanner_entry_context() in
+         app.py. Both controls must always agree on where "away from the scanner" goes. #}
+      <a id="fallbackReturnBtn" href="{{ resolved_back_destination }}"
+        style="min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);color:#fff;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;">
+        Return to Project
+      </a>
+    </div>
+  </div>
+
+  <!-- Recognition-timeout help (distinct from camera failure): a healthy camera that just
+       hasn't found a marker after repeated tries. Deliberately styled and worded
+       differently from #fallbackPanel — "Continue Scanning" never touches the camera or
+       loops, unlike "Retry Camera" above, which calls the guarded recovery path. -->
+  <div id="recognitionHelpPanel" style="display:none;margin:12px auto 0;max-width:520px;padding:16px 18px;border-radius:12px;background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.3);text-align:center;">
+    <div id="recognitionHelpMessage" style="color:#00d4ff;font-weight:700;margin-bottom:14px;font-size:14px;">
+      Recognition is taking too long. Try moving closer or improving lighting.
+    </div>
+    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+      <button type="button" id="recognitionContinueBtn"
+        style="min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(0,212,255,0.5);background:rgba(0,212,255,0.12);color:#00d4ff;font-weight:700;cursor:pointer;">
+        Continue Scanning
+      </button>
+      <a id="recognitionReturnBtn" href="{{ resolved_back_destination }}"
+        style="min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);color:#fff;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;">
+        Return
+      </a>
+    </div>
+  </div>
+
   {% if scanner_diagnostics_enabled %}
   <!-- Dev/testing only. scanner_diagnostics_enabled is computed server-side (never true in
        production) — this markup does not exist in the response at all when it's False, so
-       the ?scanner_debug=1 query flag can never conjure it up in prod. -->
-  <div id="scannerDiagPanel" style="display:none;margin-top:10px;max-width:520px;margin-left:auto;margin-right:auto;text-align:left;background:#0a0a0a;border:1px solid rgba(0,212,255,0.25);border-radius:8px;font-family:monospace;font-size:11px;color:#9fe;">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 10px;border-bottom:1px solid rgba(255,255,255,0.08);">
-      <strong style="color:#00d4ff;">Scanner Diagnostics (dev only)</strong>
-      <div>
-        <button type="button" id="diagExportBtn" style="font-size:10px;margin-right:6px;">Export Diagnostics JSON</button>
-        <button type="button" id="diagResetBtn" style="font-size:10px;margin-right:6px;">Reset Diagnostics</button>
-        <button type="button" id="diagCollapseBtn" style="font-size:10px;">_</button>
+       the ?scanner_debug=1 query flag can never conjure it up in prod.
+       Bottom sheet: collapsed by default (does not cover the scanning area), tap the
+       summary bar to expand. Collapsed view = state/streams/loops/latest result only;
+       expanded view scrolls and holds everything else. -->
+  <div id="scannerDiagPanel" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:60;background:#0a0a0a;border-top:1px solid rgba(0,212,255,0.35);font-family:monospace;color:#9fe;box-shadow:0 -4px 16px rgba(0,0,0,0.5);">
+    <button type="button" id="diagCollapseBtn" style="width:100%;min-height:44px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 12px;background:transparent;border:none;color:#00d4ff;font-family:monospace;font-size:12px;-webkit-tap-highlight-color:transparent;">
+      <span id="diagSummaryLine" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Scanner Diagnostics</span>
+      <span id="diagCollapseIcon" aria-hidden="true">▲</span>
+    </button>
+    <div id="diagExpanded" style="display:none;max-height:65vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border-top:1px solid rgba(255,255,255,0.08);">
+      <div style="display:flex;gap:8px;padding:8px 12px;position:sticky;top:0;background:#0a0a0a;">
+        <button type="button" id="diagExportBtn" style="min-height:36px;padding:0 12px;font-size:11px;">Export Diagnostics JSON</button>
+        <button type="button" id="diagResetBtn" style="min-height:36px;padding:0 12px;font-size:11px;">Reset Diagnostics</button>
       </div>
+      <pre id="diagFields" style="margin:0;padding:4px 12px 20px;white-space:pre-wrap;font-size:11px;line-height:1.6;"></pre>
     </div>
-    <pre id="diagFields" style="margin:0;padding:8px 10px;max-height:260px;overflow:auto;white-space:pre-wrap;"></pre>
   </div>
   {% endif %}
 
   <script src="{{ url_for('static', filename='js/scanner-runtime.js') }}"></script>
   <script>
+    // Global startup safety net (real-device regression fix): a top-level temporal-dead-
+    // zone ReferenceError (diagState's object literal reading a const declared further
+    // down the script) once aborted ALL script execution silently — the phone got stuck on
+    // "Initializing AR Engine" with no opencv.js request and no camera stream, because
+    // nothing past that line ever ran. window's 'error' event fires for ANY uncaught
+    // exception anywhere in this script, including that one, so this is registered as the
+    // very first thing, before anything that could itself throw.
+    let scannerStartupFailed = false;
+    let lastStartupCheckpoint = 'script_load';
+    function markStartupCheckpoint(name) {
+      lastStartupCheckpoint = name;
+      console.log('[startup]', name);
+    }
+    window.addEventListener('error', function (event) {
+      if (scannerStartupFailed) return; // only handle the FIRST fatal error
+      scannerStartupFailed = true;
+      console.error('[startup] FATAL at checkpoint:', lastStartupCheckpoint, event.error || event.message);
+      try {
+        const arOverlay = document.getElementById('arLoadingOverlay');
+        if (arOverlay) arOverlay.classList.add('hide');
+        const statusDivEl = document.getElementById('status');
+        if (statusDivEl) { statusDivEl.textContent = 'Scanner failed to initialize'; statusDivEl.className = 'status error'; }
+        const overlayStatus = document.getElementById('scannerStatusOverlay');
+        if (overlayStatus) overlayStatus.classList.remove('hidden');
+        const labelEl = document.getElementById('scannerStatusLabel');
+        if (labelEl) labelEl.textContent = 'Failed at: ' + lastStartupCheckpoint; // sanitized stage name only — no stack/message in the DOM
+        if (!document.getElementById('startupRetryBtn') && statusDivEl && statusDivEl.parentNode) {
+          const retryBtn = document.createElement('button');
+          retryBtn.id = 'startupRetryBtn';
+          retryBtn.type = 'button';
+          retryBtn.textContent = 'Retry';
+          retryBtn.style.cssText = 'margin-top:10px;min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(0,212,255,0.5);background:rgba(0,212,255,0.12);color:#00d4ff;font-weight:700;cursor:pointer;';
+          retryBtn.addEventListener('click', function () { window.location.reload(); });
+          statusDivEl.parentNode.insertBefore(retryBtn, statusDivEl.nextSibling);
+        }
+        // Return uses the same server-resolved destination as Back/Return elsewhere —
+        // wrapped in this try/catch since RESOLVED_BACK_DESTINATION may not be initialized
+        // yet if the fatal error happened before its own declaration line ran (exactly the
+        // TDZ class of bug this handler exists to catch) — degrades to no Return link
+        // rather than a second uncaught error.
+        if (!document.getElementById('startupReturnBtn') && statusDivEl && statusDivEl.parentNode && typeof RESOLVED_BACK_DESTINATION !== 'undefined') {
+          const returnBtn = document.createElement('a');
+          returnBtn.id = 'startupReturnBtn';
+          returnBtn.href = RESOLVED_BACK_DESTINATION;
+          returnBtn.textContent = 'Return';
+          returnBtn.style.cssText = 'margin-top:10px;margin-left:10px;min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);color:#fff;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;cursor:pointer;';
+          returnBtn.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            if (typeof finalizeScannerAndNavigate === 'function') {
+              finalizeScannerAndNavigate(RESOLVED_BACK_DESTINATION, 'startup_failure_return');
+            } else {
+              window.location.href = RESOLVED_BACK_DESTINATION;
+            }
+          });
+          statusDivEl.parentNode.insertBefore(returnBtn, statusDivEl.nextSibling);
+        }
+      } catch (_) {}
+    });
+    markStartupCheckpoint('scanner_script_entered');
+
     // ================================================
     // DEVICE DETECTION
     // ================================================
@@ -630,6 +745,7 @@
     const scannerMode = runtime.selectRuntimeMode(runtimeCapabilities, runtimeOverride, sessionStorage.getItem('scanstoryScannerPriorFailure') === '1');
     const runtimeConfig = runtime.MODES[scannerMode];
     if (scannerMode === 'fallback') { scannerState.transition('fallback'); } else { scannerState.transition('requesting_camera'); }
+    markStartupCheckpoint('scanner_state_initialized');
 
     const deviceInfo = {
       isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
@@ -659,6 +775,25 @@
     // rendered it (scanner_diagnostics_enabled, dev/testing only) — see the template below.
     const diagPanelEl = document.getElementById('scannerDiagPanel');
     const diagPanelActive = Boolean(diagnosticsEnabled && diagPanelEl);
+    // Root-cause fix (startup regression): these three MUST be declared before diagState
+    // below, because diagState's object literal reads them immediately as part of its own
+    // synchronous evaluation. const is not hoisted the way function declarations are —
+    // reading a const before its declaration line has run throws
+    // "ReferenceError: Cannot access '...' before initialization" (temporal dead zone),
+    // which is a top-level, uncaught exception: it aborts ALL script execution from that
+    // point on, including loadOpenCV()/setupCamera() further down. That is exactly why the
+    // phone got stuck on "Initializing AR Engine" with no opencv.js request and no camera
+    // stream — the script never got that far. Server-resolved only — see
+    // resolve_scanner_entry_context() in app.py. Never derived or overridden client-side.
+    const SCANNER_ENTRY_CONTEXT = {{ scanner_entry_context | tojson }};
+    const RESOLVED_BACK_DESTINATION = {{ resolved_back_destination | tojson }};
+    const BACK_DESTINATION_REASON = {{ back_destination_reason | tojson }};
+    // entry_route_type/entry_authorization_result (round-3 correction pass): what route the
+    // visit actually came through and what resolve_scanner_entry_context() proved about it —
+    // e.g. 'creator_test_route'/'authorized' vs 'public_scanner_route'/'not_owner' for a
+    // forged-but-rejected test token. Server-resolved only, same as the three above.
+    const ENTRY_ROUTE_TYPE = {{ entry_route_type | tojson }};
+    const ENTRY_AUTHORIZATION_RESULT = {{ entry_authorization_result | tojson }};
     const diagState = {
       consecutiveAccepted: 0,
       consecutiveRejected: 0,
@@ -673,13 +808,97 @@
       durationSampleSum: 0,
       staleCount: 0,
       requestSeq: 0,
-      visibleAreaRatio: null
+      latestAppliedSeq: 0,
+      visibleAreaRatio: null,
+      // Camera lifecycle (Phase 4/10) — dev-only, no raw device identifiers.
+      cameraStartCount: 0,
+      cameraRestartCount: 0,
+      cameraStartInProgress: false,
+      restartReason: null,
+      lastCameraStartTimestamp: null,
+      lastCameraStopTimestamp: null,
+      // Detection accept/reject totals + reason distribution (Phase 10/11).
+      totalAccepted: 0,
+      totalRejected: 0,
+      rejectionReasonCounts: {},
+      // Scan-loop ownership (Phase 5/10).
+      scanLoopStartCount: 0,
+      scanLoopStopCount: 0,
+      nextScanScheduledAt: null,
+      lastScheduledAt: null,
+      lastExpectedRunAt: null,
+      selectedDelayMs: null,
+      selectedDelayReason: null,
+      lastRequestStartAt: null,
+      lastRequestFinishAt: null,
+      lastAcceptedDetectionAt: null,
+      lastRequestGapMs: null,
+      watchdogAbortCount: 0,
+      // Request watchdog (this pass) — the actual root cause of the observed 7-9s real-
+      // device silent gaps: detectOnceFromServer()'s own fetch abort ceiling
+      // (runtimeConfig.requestTimeoutMs, 7000-9000ms) was far past this watchdog's 4000ms
+      // deadline, and the watchdog itself always treated "a request is already in flight"
+      // as reason to do nothing — so a single stalled request could hold the loop silent for
+      // its full 7-9s internal timeout with no diagnostic trail and no forced recovery. The
+      // watchdog now aborts a request that has been in flight past its own deadline instead
+      // of waiting on it. See watchdogTick().
+      watchdogDeadline: null,
+      watchdogTriggered: false,
+      requestInFlight: false,
+      recoveryInProgress: false,
+      trackingAgeMs: null,
+      currentScanLoopToken: null,
+      // Recovery / fallback (this pass).
+      recoveryAttemptCount: 0,
+      fallbackVisible: false,
+      fallbackReason: null,
+      // Recognition-timeout help — distinct from camera fallback above.
+      recognitionHelpVisible: false,
+      recognitionHelpReason: null,
+      // Skip-reason streak (Part G).
+      lastSkipReason: null,
+      consecutiveSkipCount: 0,
+      lastTransitionReason: null,
+      // Back-navigation / session-end (Part E / round-2 entry-context fix).
+      backNavigationDestination: null,
+      sessionEndSent: false,
+      sessionEndAttemptCount: 0,
+      sessionEndDeliveryMethod: null,
+      sessionEndAcknowledged: false,
+      sessionEndDuplicateSuppressed: 0,
+      navigationTriggeredAt: null,
+      navigationDestination: null,
+      scannerEntryContext: SCANNER_ENTRY_CONTEXT,
+      resolvedBackDestination: RESOLVED_BACK_DESTINATION,
+      backDestinationReason: BACK_DESTINATION_REASON,
+      entryRouteType: ENTRY_ROUTE_TYPE,
+      entryAuthorizationResult: ENTRY_AUTHORIZATION_RESULT
     };
+    markStartupCheckpoint('scanner_constants_initialized');
+
+    function recordRejection(reason) {
+      diagState.totalRejected++;
+      diagState.lastRejectionReason = reason;
+      const key = reason || 'unknown';
+      diagState.rejectionReasonCounts[key] = (diagState.rejectionReasonCounts[key] || 0) + 1;
+    }
+
+    function recordAcceptance() {
+      diagState.totalAccepted++;
+      diagState.lastRejectionReason = null;
+    }
     const MAX_TRACK_POINTS = scannerMode === 'full' ? 180 : (scannerMode === 'standard' ? 120 : 70);
     const TRACK_FRAME_INTERVAL_MS = scannerMode === 'lightweight' ? 90 : (scannerMode === 'standard' ? 66 : 50);
     const RECOVERY_RETRY_LIMIT = scannerMode === 'lightweight' ? 5 : 4;
-    let detectLoopTimer = null;
+    let detectLoopTimer = null;   // truthy while a scan tick is scheduled — read by diagnostics as "is the loop alive"
     let trackLoopActive = false;
+    // Loop-ownership token, deliberately SEPARATE from scannerGeneration. scannerGeneration
+    // bumps for many legitimate reasons (detect-response staleness, pair-epoch guards) that
+    // must NOT be treated as "cancel the scan loop" — only an explicit stopScanLoopChain()
+    // call (a real camera restart or session end) advances scanLoopToken. A scheduled tick
+    // carrying an old token is stale and skipped; a scheduled tick carrying the CURRENT
+    // token runs even if scannerGeneration has moved on for an unrelated reason.
+    let scanLoopToken = 0;
 
     // ================================================
     // SCANNER SESSION COUNTING (FIXED)
@@ -707,41 +926,101 @@
     }
 
     async function endScannerSession() {
-      if (sessionEnded || !sessionActive || !scannerSessionId) return;
+      diagState.sessionEndAttemptCount++;
+      if (sessionEnded || !sessionActive || !scannerSessionId) {
+        // Deduplication (Part E): Back button, browser Back, pagehide, and beforeunload
+        // can all reach this within the same page lifecycle — only the first one actually
+        // sends anything; every later caller just observes the guard and returns. The guard
+        // flips to true synchronously below, before any await, so two callers racing on the
+        // same tick (e.g. beforeunload firing while Back's own call is still pending) cannot
+        // both pass it — session-end is sent at most once per scanner session, ever.
+        diagState.sessionEndDuplicateSuppressed++;
+        scannerDiagnostics.push('scanner_session_end_deduplicated', { sessionId: scannerSessionId, alreadyEnded: sessionEnded });
+        return;
+      }
+      scannerDiagnostics.push('scanner_session_end_started', { sessionId: scannerSessionId, generation: scannerGeneration });
+      // Exit order (round-4 fix, matches the required 9-step sequence exactly — this is
+      // what makes "no detect_init applies after scanner exit" provable rather than
+      // incidental):
+      // 1. mark ending
       sessionEnding = true;
       sessionEnded = true;
+      // 2. invalidate/increment the scan-loop generation AND token
       scannerGeneration++;
+      // 3. clear every scheduled scan/watchdog timer (stopDetectLoop bumps scanLoopToken,
+      //    clears detectLoopTimer, and stops the watchdog chain together)
+      stopDetectLoop('session_end');
+      // 4-5. abort any in-flight request and clear its in-flight flag
       invalidateDetection();
-      stopDetectLoop();
+      // 6. stop tracking + overlay work
       stopTrackingLoop();
       if (typeof clearTrackingGeometry === 'function') clearTrackingGeometry('session_end');
+      if (typeof stopOverlayImmediate === 'function') stopOverlayImmediate();
+      // 7. stop the camera stream — Root-cause fix (Back button, Part E): this used to leave
+      //    the camera stream and any playing overlay video running; Back/pagehide/
+      //    beforeunload all funnel through here now, so this is the one place that must
+      //    fully release both.
+      stopCameraStream('session_end');
 
       console.log('🔚 Ending scanner session:', scannerSessionId);
 
+      // This endpoint (see /api/scanner/session/end in app.py) only reads project_id/
+      // session_id — it never reads or depends on the caller's authentication, so this
+      // finalization can never touch login state (no logout, no session mutation either
+      // side).
       const formData = new FormData();
       formData.append('project_id', PROJECT_ID);
       formData.append('session_id', scannerSessionId);
 
-      // Use sendBeacon for reliable delivery during page unload
+      // Use sendBeacon for reliable delivery during page unload — navigation can proceed
+      // immediately without waiting on it. sendBeacon's return value only means "queued for
+      // delivery by the browser", not "the server received and processed it" — there is no
+      // stronger acknowledgment available on this path, which is the honest tradeoff for
+      // surviving page unload.
       if (navigator.sendBeacon) {
         const blob = new Blob([new URLSearchParams(formData).toString()], {
           type: 'application/x-www-form-urlencoded'
         });
         const sent = navigator.sendBeacon('/api/scanner/session/end', blob);
+        diagState.sessionEndSent = sent;
+        diagState.sessionEndDeliveryMethod = 'sendBeacon';
+        diagState.sessionEndAcknowledged = false;
         console.log('📡 Session end sent via beacon:', sent);
       } else {
+        // keepalive:true is the fetch equivalent of sendBeacon's unload-survival guarantee
+        // for browsers where navigator.sendBeacon is unavailable.
         try {
           await fetch('/api/scanner/session/end', {
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: new URLSearchParams(formData).toString()
+            body: new URLSearchParams(formData).toString(),
+            keepalive: true
           });
+          diagState.sessionEndSent = true;
+          diagState.sessionEndDeliveryMethod = 'fetch_keepalive';
+          diagState.sessionEndAcknowledged = true; // fetch actually resolved — a real response was received
           console.log('📡 Session end sent via fetch');
         } catch (error) {
+          diagState.sessionEndDeliveryMethod = 'fetch_keepalive_failed';
           console.error('Error ending session:', error);
         }
       }
       sessionActive = false;
+    }
+
+    // Shared by Back, "Return to Project" (camera fallback), and "Return" (recognition
+    // help) — Back and Return must always funnel through the SAME finalize-then-navigate
+    // path so there is exactly one place that can race session-end against navigation, not
+    // three independently-guessed ones. Never calls /logout/ or touches authentication.
+    function finalizeScannerAndNavigate(href, reason) {
+      diagState.navigationTriggeredAt = Date.now();
+      diagState.navigationDestination = href;
+      scannerDiagnostics.push('scanner_navigation_triggered', { destination: href, reason, generation: scannerGeneration });
+      const go = function () {
+        scannerDiagnostics.push('scanner_navigated', { destination: href, reason });
+        window.location.href = href;
+      };
+      endScannerSession().then(go).catch(go);
     }
 
     // Start session on page load
@@ -752,15 +1031,27 @@
       endScannerSession();
     });
 
-    // Handle back button
+    // Handle back button. Deliberately does NOT call any logout/session-clearing helper —
+    // href is the session-aware authenticated destination rendered server-side above
+    // (admin dashboard / user dashboard / public landing, whichever actually applies).
     document.getElementById('backBtn')?.addEventListener('click', function (e) {
       e.preventDefault();
       const href = this.href;
-      endScannerSession().then(() => {
-        window.location.href = href;
-      }).catch(() => {
-        window.location.href = href;
-      });
+      diagState.backNavigationDestination = href;
+      scannerDiagnostics.push('scanner_back_clicked', { destination: href, generation: scannerGeneration });
+      finalizeScannerAndNavigate(href, 'back_button');
+    });
+
+    // "Return to Project" (camera fallback) and "Return" (recognition help) — same shared
+    // finalize-then-navigate path as Back, so no scanner exit route can skip session-end or
+    // race navigation against it differently from the others.
+    document.getElementById('fallbackReturnBtn')?.addEventListener('click', function (e) {
+      e.preventDefault();
+      finalizeScannerAndNavigate(this.href, 'fallback_return');
+    });
+    document.getElementById('recognitionReturnBtn')?.addEventListener('click', function (e) {
+      e.preventDefault();
+      finalizeScannerAndNavigate(this.href, 'recognition_return');
     });
 
     // ================================================
@@ -835,6 +1126,7 @@
     }
 
     if (scannerMode !== 'fallback') {
+      markStartupCheckpoint('opencv_load_requested');
       loadOpenCV();
     }
 
@@ -853,14 +1145,72 @@
     const infoBadge = document.getElementById("infoBadge");
     const matchIndicator = document.getElementById("matchIndicator");
     const progressInfo = document.getElementById("progressInfo");
+    const fallbackPanelEl = document.getElementById("fallbackPanel");
+    const fallbackMessageEl = document.getElementById("fallbackMessage");
+    const fallbackRetryBtn = document.getElementById("fallbackRetryBtn");
+    let fallbackRetryInProgress = false;
+    const recognitionHelpPanelEl = document.getElementById("recognitionHelpPanel");
+    const recognitionContinueBtn = document.getElementById("recognitionContinueBtn");
+
+    // Recognition timeout vs. camera failure (this pass) — these must never be
+    // indistinguishable to the user. showRecognitionHelp() never touches the camera stream,
+    // scan loop, or tracking loop; only showFallbackPanel()/enterFallback() do that.
+    function showRecognitionHelp(reason) {
+      scannerDiagnostics.push('recognition_help_shown', { reason, generation: scannerGeneration });
+      diagState.recognitionHelpVisible = true;
+      diagState.recognitionHelpReason = reason;
+      statusDiv.textContent = "Recognition is taking too long";
+      statusDiv.className = "status scan";
+      recognitionHelpPanelEl.style.display = 'block';
+    }
+
+    function hideRecognitionHelp(reason) {
+      if (recognitionHelpPanelEl.style.display === 'none') return;
+      scannerDiagnostics.push('recognition_help_hidden', { reason, generation: scannerGeneration });
+      diagState.recognitionHelpVisible = false;
+      diagState.recognitionHelpReason = null;
+      recognitionHelpPanelEl.style.display = 'none';
+    }
+
+    function continueScanningFromRecognitionHelp() {
+      scannerDiagnostics.push('recognition_help_continue_clicked', { generation: scannerGeneration });
+      // Deliberately does NOT call setupCamera/restartCameraStream/recoverScanner — the
+      // camera and the scan/tracking loops were never stopped by showRecognitionHelp(),
+      // so there is nothing to restart. Just clears the failure streak and resumes the
+      // normal "scanning" status text.
+      detectionFailCount = 0;
+      hideRecognitionHelp('continue_clicked');
+      statusDiv.textContent = "🎯 Scan AR marker";
+      statusDiv.className = "status scan";
+    }
+
+    recognitionContinueBtn.addEventListener('click', continueScanningFromRecognitionHelp);
+    markStartupCheckpoint('scanner_dom_initialized');
+
+    function showFallbackPanel(code, message) {
+      scannerDiagnostics.push('fallback_shown', { code, generation: scannerGeneration });
+      diagState.fallbackVisible = true;
+      diagState.fallbackReason = code;
+      fallbackMessageEl.textContent = message;
+      fallbackPanelEl.style.display = 'block';
+      fallbackRetryBtn.disabled = false;
+      fallbackRetryBtn.textContent = 'Retry Camera';
+    }
+
+    function hideFallbackPanel(reason) {
+      if (fallbackPanelEl.style.display === 'none') return;
+      scannerDiagnostics.push('fallback_hidden', { reason, generation: scannerGeneration });
+      diagState.fallbackVisible = false;
+      diagState.fallbackReason = null;
+      fallbackPanelEl.style.display = 'none';
+    }
 
     function enterFallback(code) {
+      scannerDiagnostics.push('camera_health_failed', { code, generation: scannerGeneration });
       sessionStorage.setItem('scanstoryScannerPriorFailure', '1');
-      try {
-        if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
-      } catch (_) {}
+      stopCameraStream(code);
       invalidateDetection();
-      stopDetectLoop();
+      stopDetectLoop(code);
       stopTrackingLoop();
       tracking = false;
       detectInFlight = false;
@@ -875,24 +1225,71 @@
       }
       // More specific than the generic fallback label — applied after the state-driven default.
       scannerStatusLabel.textContent = safe;
+      showFallbackPanel(code, safe);
     }
 
-    window.addEventListener('pagehide', function () {
-      sessionEnding = true;
-      scannerGeneration++;
-      if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
-      invalidateDetection();
-      stopDetectLoop();
-      stopTrackingLoop();
+    async function retryCameraFromFallback() {
+      if (fallbackRetryInProgress || diagState.cameraStartInProgress) return; // no concurrent starts
+      fallbackRetryInProgress = true;
+      scannerDiagnostics.push('fallback_retry_clicked', { generation: scannerGeneration });
+      fallbackRetryBtn.disabled = true;
+      fallbackRetryBtn.textContent = 'Retrying…';
+      try {
+        sessionStorage.removeItem('scanstoryScannerPriorFailure');
+        detectionFailCount = 0;
+        recoveryAttempt = 0;
+        scannerGeneration++;
+        if (scannerState.state === 'fallback') safeTransition('requesting_camera', 'fallback_retry');
+        await setupCamera();
+        if (!isStreamDead()) {
+          startDetectLoop();
+          startTrackingLoop();
+          hideFallbackPanel('retry_succeeded');
+        } else {
+          fallbackRetryBtn.disabled = false;
+          fallbackRetryBtn.textContent = 'Retry Camera';
+        }
+      } finally {
+        fallbackRetryInProgress = false;
+      }
+    }
+
+    fallbackRetryBtn.addEventListener('click', retryCameraFromFallback);
+
+    window.addEventListener('pagehide', function (event) {
+      scannerDiagnostics.push('pagehide', { persisted: event.persisted, generation: scannerGeneration });
+      if (event.persisted) {
+        // bfcache freeze, not a real unload — pageshow will resume this exact session (see
+        // the pageshow handler below). Ending the session here would permanently strand
+        // sessionEnding=true and the scan loop would never resume on restore.
+        stopDetectLoop('pagehide_bfcache');
+        stopTrackingLoop();
+        return;
+      }
+      // Real unload — routes through the SAME idempotent endScannerSession() the Back
+      // button and beforeunload use, so only the first of these three ever actually stops
+      // the camera/loops and sends the session-end beacon (Part E dedup).
+      endScannerSession();
     });
 
     document.addEventListener('visibilitychange', function () {
+      scannerDiagnostics.push('visibilitychange', { hidden: document.hidden, generation: scannerGeneration });
       if (document.hidden) {
+        // Root-cause fix: this used to stop the scan loop directly here — meaning ANY
+        // transient hidden state (notification shade, a system permission dialog, control
+        // center) killed the scan loop, requiring a full recoverScanner cycle to resume
+        // even though the camera never needed touching. The loop now just SKIPS ticks
+        // while hidden (scanTick's 'tab_hidden' reason) and keeps running underneath.
         safeTransition('paused', 'tab_hidden');
         if (typeof stopOverlayImmediate === 'function') stopOverlayImmediate();
-        stopDetectLoop();
       } else if (scannerState.state === 'paused') {
-        recoverScanner('visibilitychange', false);
+        if (isStreamDead()) {
+          recoverScanner('visibilitychange', true);
+        } else {
+          // Loop was never stopped — just leave 'paused' so status text and the next
+          // (already-scheduled) tick resume normally.
+          safeTransition('ready_to_scan', 'visibilitychange');
+        }
       }
     });
 
@@ -901,7 +1298,15 @@
     const FLIP_X = false;
     const FLIP_Y = false;
     // --- Recovery/grace timing — all tunable in one place (spec section 4) ---
-    const FORCE_REDETECT_MS = 12000;  // bounded server re-anchor; healthy local tracking owns the overlay
+    // FORCE_REDETECT_MS was 12000 — a real-device backend log showed detect requests going
+    // silent for up to ~18s at a time while local tracking was "healthy". First lowered to
+    // 3000, but real-device logs still showed 5-6s gaps: on lightweight mode,
+    // detectIntervalMs is 650ms, and detectionPolicy.canStart() itself gates on
+    // 2x that (1300ms) while tracking — so the worst case was
+    // 3000 + 1300 + 650 = 4950ms, right at the edge of "5 second" gaps. 1800 keeps the same
+    // worst case at 1800 + 1300 + 650 = 3750ms, comfortably under the 4000ms ceiling even
+    // on the slowest supported mode, without compounding with the other two delays.
+    const FORCE_REDETECT_MS = 1800;   // bounded server re-anchor; healthy local tracking owns the overlay
     const HEALTHY_TRACK_SUPPRESS_MS = 1200;
     const TRACKING_GRACE_FRAMES = 3;  // frames of bad optical flow before dropping tracking
     const TRACKING_GRACE_MS = 900;    // wall-clock ceiling on grace — frame count alone can hang on throttled/low-FPS devices
@@ -926,24 +1331,39 @@
     // cycled through all words on a blind 1400ms interval regardless of real state, so e.g.
     // "Tracking Surface" or "Matching Image" could show while the scanner was actually
     // paused/recovering — that's the "uncontrolled switching" this replaces.
+    // Critical rule (Phase 3): once camera_ready is reached, "Preparing Camera" must only
+    // reappear for a GENUINE restart. That is true today only because 'initializing_camera'
+    // is entered exclusively from inside setupCameraInner(), right where a real
+    // getUserMedia() call is made — never from a marker-loss path. requesting_camera is
+    // shown before permission is granted; it is a different moment from starting the
+    // stream, so it gets its own text instead of also saying "Preparing Camera".
     const STATE_STATUS_TEXT = {
-      requesting_camera: ["Preparing Camera", "Requesting camera access..."],
+      requesting_camera: ["Allow Camera Access", "Waiting for camera permission..."],
       initializing_camera: ["Preparing Camera", "Starting camera stream..."],
       loading_opencv: ["Preparing Camera", "Loading vision engine..."],
       loading_wasm: ["Preparing Camera", "Loading vision engine..."],
       initializing_scanner: ["Preparing Camera", "Starting scanner..."],
-      ready_to_scan: ["Reading Marker", "Scanning for AR markers..."],
-      detecting: ["Matching Image", "Analyzing captured frame..."],
+      ready_to_scan: ["Point Camera At Marker", "Scanning for AR markers..."],
+      detecting: ["Point Camera At Marker", "Scanning for AR markers..."],
       tracking: ["Tracking Surface", "AR experience is live"],
-      target_lost: ["Reading Marker", "Marker lost — reacquiring..."],
-      recovering: ["Reconfiguring", "Stabilizing camera view..."],
-      // 'paused' is reused for two different real meanings — the tab is actually
-      // backgrounded, vs. recoverScanner routing a camera/orientation reconfiguration
-      // through 'paused' because that's the only state with a transition back to
-      // ready_to_scan. Disambiguate by reason rather than inventing new FSM states mid-fix.
+      // target_lost/recovering are entered ONLY from dropTracking/handleDetectionTimeout
+      // (ordinary marker-loss reasons like insufficient_flow_points, homography_empty,
+      // pose_rejected_*, detect_timeout) — never from recoverScanner, which uses
+      // paused/ready_to_scan instead. So these two are unambiguously detection-loss text,
+      // and never need to read as camera initialization.
+      target_lost: ["Marker Lost", "Marker lost — searching..."],
+      recovering: ["Reacquiring Marker", "Reacquiring marker..."],
+      // 'paused' is only ever entered from recoverScanner (never from a marker-loss path —
+      // dropTracking/handleDetectionTimeout do not use it), so its default text can stay
+      // camera-lifecycle-flavored; 'tab_hidden' is the one genuinely different meaning
+      // (the tab itself is backgrounded, not the camera reconfiguring).
       paused: ["Reconfiguring", "Stabilizing camera view..."],
-      "paused:tab_hidden": ["Paused", "Scanner paused"],
-      fallback: ["Fallback Available", ""]
+      "paused:tab_hidden": ["Scanner Paused", "Scanner paused"],
+      // The previous status word here claimed a fallback was available with zero action
+      // anywhere on the page (Part D) — the fallback panel (#fallbackPanel,
+      // showFallbackPanel/hideFallbackPanel) is the real, visible, tappable
+      // recovery-failed UI now; this word must not re-claim a fallback exists on its own.
+      fallback: ["Camera Unavailable", "Tap Retry Camera below to try again"]
     };
 
     function setStatusWord(word, label) {
@@ -973,6 +1393,7 @@
 
     let tracking = false;
     let detectInFlight = false;
+    let clientRequestSeq = 0; // real-device gap investigation: numbers every detect_init request client-side
     let frameW = 0, frameH = 0;
     let prevGray = null;
     let prevPts = null;
@@ -997,11 +1418,42 @@
     let trackingGeneration = 0;
     let activePairEpoch = 0; // bumped only when the displayed pair actually changes (marker A/B guard)
 
-    function safeTransition(state, reason) {
+    const TRANSITION_HISTORY_LIMIT = 20;
+    const scannerTransitionHistory = []; // bounded — recent transitions for diagnostics only
+
+    // Single authoritative entry point for every scanner-state change. Guards against:
+    // redundant same-state transitions (no-op, no duplicate diagnostics/status re-render),
+    // invalid transitions (caught, reported, state left unchanged), and stale async work —
+    // pass metadata.generation from the moment an async op *started* and a transition
+    // requested after a newer generation has already superseded it is dropped instead of
+    // clobbering current state.
+    function transitionScannerState(nextState, reason, metadata) {
+      metadata = metadata || {};
+      if (typeof metadata.generation === 'number' && metadata.generation !== scannerGeneration) {
+        scannerDiagnostics.push('[STALE RESULT IGNORED]', {
+          code: 'stale_transition', attempted: nextState, reason,
+          requestGeneration: metadata.generation, activeGeneration: scannerGeneration
+        });
+        return false;
+      }
       const from = scannerState.state;
-      try { scannerState.transition(state); } catch (_) {}
+      if (from === nextState) return false; // redundant — avoid duplicate work/noise
+      try {
+        scannerState.transition(nextState);
+      } catch (err) {
+        scannerDiagnostics.push('[SCAN STATE]', { from, to: nextState, reason: reason || null, rejected: true });
+        return false;
+      }
       applyStatusForState(scannerState.state, reason);
-      scannerDiagnostics.push('[SCAN STATE]', { from, to: state, reason: reason || null, generation: scannerGeneration });
+      const record = { from, to: nextState, reason: reason || null, generation: scannerGeneration, at: Math.round(performance.now()) };
+      scannerTransitionHistory.push(record);
+      if (scannerTransitionHistory.length > TRANSITION_HISTORY_LIMIT) scannerTransitionHistory.shift();
+      scannerDiagnostics.push('[SCAN STATE]', record);
+      return true;
+    }
+
+    function safeTransition(state, reason, metadata) {
+      return transitionScannerState(state, reason, metadata);
     }
 
     function activeTrackCount() {
@@ -1030,30 +1482,51 @@
     }
 
     function stopTrackingLoop() {
-      trackLoopActive = false;
       if (animationFrameId) {
         cancelAnimationFrame(animationFrameId);
         animationFrameId = null;
+        diagState.scanLoopStopCount++;
       }
+      trackLoopActive = false;
     }
 
     function startTrackingLoop() {
-      if (trackLoopActive) return;
+      if (trackLoopActive) return; // repeated calls are a no-op — one loop, ever
       trackLoopActive = true;
       trackingGeneration = scannerGeneration;
+      diagState.scanLoopStartCount++;
       animationFrameId = requestAnimationFrame(trackFrame);
     }
 
-    function stopDetectLoop() {
+    function stopDetectLoop(reason) {
+      scanLoopToken++; // invalidate any pending scheduled tick immediately, even if detectLoopTimer is currently null
       if (detectLoopTimer) {
-        clearInterval(detectLoopTimer);
+        clearTimeout(detectLoopTimer);
         detectLoopTimer = null;
+        diagState.scanLoopStopCount++;
       }
+      if (typeof stopWatchdog === 'function') stopWatchdog(); // watchdog is owned by the same loop lifecycle
+      scannerDiagnostics.push('loop_cancelled', { reason: reason || null, token: scanLoopToken });
     }
 
     function isCameraHealthy() {
       if (!cameraStream || cam.readyState < 2 || cam.videoWidth <= 0 || cam.videoHeight <= 0) return false;
       return cameraStream.getVideoTracks().some(track => track.readyState === 'live');
+    }
+
+    // Root-cause fix: `isCameraHealthy()` above depends on cam.videoWidth/videoHeight and
+    // cam.readyState, which are known to read stale/zero for a tick or two right after a
+    // real device rotation or viewport resize — even though the MediaStream never actually
+    // died. Using that flaky signal to decide "tear down and recreate the stream" is what
+    // made ordinary rotation-while-scanning look like a camera restart ("Preparing Camera"
+    // during what was really just marker loss). Restart DECISIONS must only ever look at
+    // whether the stream is unambiguously dead — a track that has ended, or no stream/track
+    // at all. That fact cannot be racy: the browser only reports 'ended' once, permanently.
+    function isStreamDead() {
+      if (!cameraStream) return true;
+      const tracks = cameraStream.getVideoTracks();
+      if (!tracks.length) return true;
+      return tracks.every(track => track.readyState === 'ended');
     }
 
     function resizeScannerSurfaces() {
@@ -1071,12 +1544,43 @@
       });
     }
 
-    async function recoverScanner(reason, restartCamera) {
+    // One shared recovery promise (Part C.4): if recoverScanner is called again while a
+    // recovery is already in flight (e.g. an orientation debounce and a stream 'ended'
+    // event landing close together), the second caller awaits the SAME recovery instead of
+    // racing a concurrent restart. scanTick also checks this to skip with 'recovery_pending'
+    // rather than misreporting 'video_not_ready' while a real recovery is under way.
+    let recoverScannerPromise = null;
+    const CAMERA_RECOVERY_MAX_ATTEMPTS = 2; // immediate + one short delayed retry, then give up to fallback — never infinite
+    const CAMERA_RECOVERY_RETRY_DELAY_MS = 600;
+
+    function recoverScanner(reason, restartCamera) {
+      if (recoverScannerPromise) return recoverScannerPromise;
+      recoverScannerPromise = recoverScannerInner(reason, restartCamera).finally(() => { recoverScannerPromise = null; });
+      return recoverScannerPromise;
+    }
+
+    async function recoverScannerInner(reason, restartCamera) {
+      // Root-cause fix: this used to unconditionally stop the scan/tracking loops and wait
+      // 250ms+ for EVERY orientation/resize/visibility-restore event, even when the camera
+      // stream was perfectly fine — a real-device log showed exactly this stacking into
+      // multi-second gaps in detect requests. Now: if nothing actually needs restarting,
+      // just resettle geometry and return — loop ownership (scanLoopToken), scannerGeneration,
+      // and tracking state are never touched, so the scan loop never even notices.
+      const needsRestart = restartCamera || isStreamDead();
+      if (!needsRestart) {
+        scannerDiagnostics.push('camera_restart_avoided_stream_alive', { reason, generation: scannerGeneration });
+        resizeScannerSurfaces();
+        return;
+      }
       scannerGeneration++;
       recoveryAttempt++;
+      diagState.recoveryAttemptCount = recoveryAttempt;
+      scannerDiagnostics.push('camera_restart_requested', { reason, restartCamera, generation: scannerGeneration, attempt: recoveryAttempt });
+      scannerDiagnostics.push('recovery_started', { reason, generation: scannerGeneration });
+      scannerDiagnostics.push('automatic_recovery_started', { reason, generation: scannerGeneration });
       scannerDiagnostics.push('[CAMERA RECOVERY]', { reason, restartCamera, generation: scannerGeneration, attempt: recoveryAttempt });
       invalidateDetection();
-      stopDetectLoop();
+      stopDetectLoop('camera_restart');
       stopTrackingLoop();
       clearTrackingGeometry(reason);
       safeTransition('paused', reason);
@@ -1084,46 +1588,88 @@
       statusDiv.className = "status scan";
       scannerStatusOverlay.classList.remove('hidden');
       await new Promise(resolve => setTimeout(resolve, 250));
-      if (restartCamera || !isCameraHealthy()) {
-        await restartCameraStream();
-      } else {
-        resizeScannerSurfaces();
+
+      // Bounded retry: immediate attempt, then (if still dead) one short delayed retry.
+      // Never loops forever — after CAMERA_RECOVERY_MAX_ATTEMPTS it gives up to fallback.
+      let recovered = false;
+      for (let attempt = 1; attempt <= CAMERA_RECOVERY_MAX_ATTEMPTS; attempt++) {
+        await restartCameraStream(reason);
+        if (!isStreamDead()) { recovered = true; break; }
+        if (attempt < CAMERA_RECOVERY_MAX_ATTEMPTS) {
+          await new Promise(resolve => setTimeout(resolve, CAMERA_RECOVERY_RETRY_DELAY_MS));
+        }
       }
+
+      if (!recovered) {
+        scannerDiagnostics.push('automatic_recovery_failed', { reason, attempts: CAMERA_RECOVERY_MAX_ATTEMPTS, generation: scannerGeneration });
+        enterFallback('CAMERA_UNAVAILABLE');
+        return;
+      }
+
       safeTransition('ready_to_scan', reason);
       startDetectLoop();
       startTrackingLoop();
+      scannerDiagnostics.push('automatic_recovery_succeeded', { reason, generation: scannerGeneration });
+      scannerDiagnostics.push('recovery_completed', { reason, generation: scannerGeneration });
     }
 
-    async function restartCameraStream() {
-      try {
-        if (cameraStream) cameraStream.getTracks().forEach(track => track.stop());
-      } catch (_) {}
+    // Idempotent — safe to call even if the stream is already gone. Single place that
+    // ever tears down a MediaStream, so "cleanup is idempotent" holds by construction
+    // instead of by convention across several inline copies.
+    function stopCameraStream(reason) {
+      if (!cameraStream) return;
+      try { cameraStream.getTracks().forEach(track => track.stop()); } catch (_) {}
       cameraStream = null;
       cam.srcObject = null;
+      diagState.lastCameraStopTimestamp = Date.now();
+      scannerDiagnostics.push('[CAMERA RECOVERY]', { phase: 'stop', reason: reason || 'stop' });
+    }
+
+    async function restartCameraStream(reason) {
+      diagState.cameraRestartCount++;
+      diagState.restartReason = reason || null;
+      stopCameraStream(reason);
       await setupCamera();
     }
 
     function scheduleOrientationRecovery(reason) {
+      scannerDiagnostics.push(reason, { generation: scannerGeneration }); // 'orientationchange' or 'resize' event, raw
       if (orientationRecoveryTimer) clearTimeout(orientationRecoveryTimer);
       orientationRecoveryTimer = setTimeout(() => {
         orientationRecoveryTimer = null;
         orientationRevision++;
+        // recoverScanner(reason, false) only actually restarts the camera/loop if the
+        // stream is truly dead — see camera_restart_avoided_stream_alive vs.
+        // camera_restart_requested in the diagnostics history for which happened.
         recoverScanner(reason, false);
       }, 350);
     }
 
-    // Camera setup with better error handling
-    async function setupCamera() {
+    // Camera setup with better error handling.
+    // Guarded against concurrent invocation: if a start is already in flight (e.g. an
+    // orientation-triggered restart and a visibility-restore restart land close together),
+    // later callers await the SAME in-flight operation instead of issuing a second
+    // getUserMedia() — Phase 4's "getUserMedia cannot run concurrently" requirement.
+    let cameraStartPromise = null;
+
+    function setupCamera() {
+      if (cameraStartPromise) return cameraStartPromise;
+      diagState.cameraStartInProgress = true;
+      cameraStartPromise = setupCameraInner().finally(() => {
+        cameraStartPromise = null;
+        diagState.cameraStartInProgress = false;
+      });
+      return cameraStartPromise;
+    }
+
+    async function setupCameraInner() {
       try {
         if (scannerState.state === 'fallback') return;
         if (isCameraHealthy()) {
           resizeScannerSurfaces();
           return;
         }
-        if (cameraStream) {
-          try { cameraStream.getTracks().forEach(track => track.stop()); } catch (_) {}
-          cameraStream = null;
-        }
+        stopCameraStream('restart');
         // ✅ HTTPS / camera API safety check
         if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           progressInfo.textContent = "Camera unavailable";
@@ -1141,6 +1687,8 @@
         };
 
         cameraStream = await navigator.mediaDevices.getUserMedia(constraints);
+        diagState.cameraStartCount++;
+        diagState.lastCameraStartTimestamp = Date.now();
         safeTransition('initializing_camera');
         cameraStream.getVideoTracks().forEach(track => {
           track.addEventListener('ended', () => recoverScanner('stream_ended', true));
@@ -1150,8 +1698,26 @@
         cam.onloadedmetadata = async () => {
           await cam.play();
           requestAnimationFrame(resizeScannerSurfaces);
+          // Root-cause fix ("scrolling revives the preview"): a single rAF right after
+          // play() can fire before the browser has actually settled layout for the newly
+          // visible <video>, so getBoundingClientRect() in resizeScannerSurfaces() reads a
+          // stale/zero size — the preview then LOOKS frozen until something else (a scroll)
+          // forces a reflow. A follow-up call a moment later re-measures once layout has
+          // genuinely settled, without depending on the user doing anything.
+          setTimeout(resizeScannerSurfaces, 300);
           tryAutoEnableAudio();
           statusDiv.textContent = cvReady ? "🎯 Scan AR marker" : "Waiting for OpenCV…";
+          // Root-cause fix: this never used to transition the state machine at all, so it
+          // stayed at 'initializing_camera' — showing "Preparing Camera" — for the entire
+          // rest of the session, even while the camera was live and detect/tracking loops
+          // were running and succeeding normally. TRANSITIONS only allows a straight chain
+          // from initializing_camera to ready_to_scan (see scanner-runtime.js); the
+          // intermediate states have no real async work of their own tied to them, so they
+          // are walked through immediately here rather than left permanently unreachable.
+          safeTransition('loading_opencv', 'camera_ready');
+          safeTransition('loading_wasm', 'camera_ready');
+          safeTransition('initializing_scanner', 'camera_ready');
+          safeTransition('ready_to_scan', 'camera_ready');
         };
       } catch (err) {
         console.error('Camera error:', err);
@@ -1160,6 +1726,7 @@
       }
     }
 
+    markStartupCheckpoint('camera_setup_requested');
     setupCamera();
 
     async function tryAutoEnableAudio() {
@@ -1392,7 +1959,7 @@
     // H.empty() branch used to fall through to shared cleanup without freeing `gray`,
     // and without releasing the previous prevGray/prevPts (audit finding).
     function dropTracking(reason, extraMats) {
-      diagState.lastRejectionReason = reason;
+      recordRejection(reason);
       diagState.consecutiveRejected++;
       diagState.consecutiveAccepted = 0;
       scannerDiagnostics.push('[TRACK LOST]', { reason, generation: scannerGeneration, badFrames: trackingBadFrames });
@@ -1416,7 +1983,12 @@
         tracks: activeTrackCount()
       });
       if (detectionFailCount >= RECOVERY_RETRY_LIMIT) {
-        enterFallback('DETECTION_TIMEOUT');
+        // Root-cause fix (recognition vs. camera failure): this used to fall through to
+        // the camera-failure fallback — the exact same "Camera Unavailable" + Retry Camera
+        // panel as a genuinely dead stream. Repeated recognition timeouts do NOT mean the
+        // camera failed; the stream is very likely still perfectly healthy, it just hasn't
+        // found a marker. Must never restart a healthy camera.
+        showRecognitionHelp('repeated_detection_timeout');
         return;
       }
       clearTrackingGeometry('detect_timeout');
@@ -1430,7 +2002,7 @@
     function enterGrace(reason) {
       if (trackingBadFrames === 0) graceEnteredAt = performance.now();
       trackingBadFrames++;
-      diagState.lastRejectionReason = reason;
+      recordRejection(reason);
       diagState.consecutiveRejected++;
       diagState.consecutiveAccepted = 0;
       scannerDiagnostics.push('[TRACK WEAK]', {
@@ -1537,6 +2109,7 @@
           return;
         }
         playOverlay();
+        diagState.totalAccepted++;
         diagState.consecutiveAccepted++;
         diagState.consecutiveRejected = 0;
         if (frameW > 0 && frameH > 0) diagState.visibleAreaRatio = quadArea2(currCorners) / (frameW * frameH);
@@ -1562,7 +2135,12 @@
       }
     }
 
-    async function detectOnceFromServer() {
+    async function detectOnceFromServer(triggeredByWatchdog) {
+      // detectInFlightBeforeStart is captured at the absolute top, before the early-return
+      // guard below — it should always be false for any request that actually proceeds to
+      // send (the guard on the next line returns otherwise), which is itself the useful
+      // sanity check: if the server ever logs this true, the in-flight guard was bypassed.
+      const detectInFlightBeforeStart = detectInFlight;
       if (sessionEnding || detectInFlight || !cvReady || cam.readyState < 2) return;
       if (!detectionPolicy.canStart(performance.now(), !document.hidden, Boolean(cameraStream), tracking)) return;
       const requestId = detectionPolicy.start(performance.now());
@@ -1570,6 +2148,7 @@
       const requestOrientationRevision = orientationRevision;
       const requestPairEpoch = activePairEpoch;
       const requestStart = performance.now();
+      clientRequestSeq++;
       detectInFlight = true;
       if (scannerState.state === 'ready_to_scan' || scannerState.state === 'recovering') safeTransition('detecting', 'server_request');
       loadingSpinner.style.display = "block";
@@ -1603,6 +2182,23 @@
         fd.append("source_frame_height", String(capH));
         fd.append("orientation_revision", String(requestOrientationRevision));
 
+        // Client timing metadata (real-device gap investigation) — logged server-side at
+        // the top of detect_init() so a silent multi-second gap is explained by DATA next
+        // time, not guessed from server response timestamps alone.
+        fd.append("request_seq", String(clientRequestSeq));
+        fd.append("client_request_started_at", String(Date.now()));
+        fd.append("elapsed_since_previous_request_start_ms", String(diagState.lastRequestGapMs));
+        fd.append("selected_delay_ms", String(diagState.selectedDelayMs));
+        fd.append("selected_delay_reason", String(diagState.selectedDelayReason));
+        fd.append("tracking_active", String(tracking));
+        fd.append("tracking_age_ms", String(diagState.trackingAgeMs));
+        fd.append("detect_in_flight_before_start", String(detectInFlightBeforeStart));
+        fd.append("watchdog_triggered", String(Boolean(triggeredByWatchdog)));
+        fd.append("watchdog_abort_requested", String(diagState.watchdogAbortCount));
+        fd.append("page_visible", String(!document.hidden));
+        fd.append("stream_healthy", String(!isStreamDead()));
+        fd.append("scan_loop_token", String(scanLoopToken));
+
         const controller = new AbortController();
         activeDetectionController = controller;
         const timeoutId = setTimeout(() => controller.abort(), runtimeConfig.requestTimeoutMs || 8000);
@@ -1610,6 +2206,18 @@
         clearTimeout(timeoutId);
         if (activeDetectionController === controller) activeDetectionController = null;
         const data = await r.json();
+        // Exit-safety (round-4 fix): a request already in flight when endScannerSession()
+        // ran can still resolve AFTER navigation begins. isStaleGeneration below (generation
+        // bump on exit) already catches this indirectly, but this explicit sessionEnding
+        // check is the direct, independently-provable guarantee — no post-exit response can
+        // update overlay/state/scheduling, full stop, regardless of whether the generation
+        // math happens to line up.
+        if (sessionEnding) {
+          diagState.staleCount++;
+          scannerDiagnostics.push('[STALE RESULT IGNORED]', { requestId, code: 'session_ended' });
+          detectionPolicy.finish(requestId);
+          return;
+        }
         const durationMs = Math.round(performance.now() - requestStart);
         diagState.requestSeq++;
         diagState.lastDurationMs = durationMs;
@@ -1637,6 +2245,7 @@
         }
         if (detectionPolicy.finish(requestId) === 'stale') return;
         latestAcceptedRequestId = requestId;
+        diagState.latestAppliedSeq = requestId;
         const validation = runtime.validateDetectionResponse(data);
         if (!validation.ok) {
           enterFallback(validation.code);
@@ -1655,7 +2264,10 @@
             statusDiv.textContent = "Scan AR marker";
             statusDiv.className = "status scan";
           }
-          if (detectionFailCount >= 25) enterFallback('DETECTION_TIMEOUT');
+          // Same fix as handleDetectionTimeout: 25 consecutive "no marker found" responses
+          // is a recognition problem (nothing wrong with the camera/stream), not a camera
+          // failure — must not show the same panel as a genuinely dead stream.
+          if (detectionFailCount >= 25) showRecognitionHelp('repeated_no_detection');
           return;
         }
 
@@ -1693,14 +2305,14 @@
           temporal: poseQuality
         });
         if (!poseQuality.ok && tracking && currCorners) {
-          diagState.lastRejectionReason = poseQuality.reason;
+          recordRejection(poseQuality.reason);
           scannerDiagnostics.push('[SCAN MATCH REJECT]', { requestId, pairId: newPairId, reason: poseQuality.reason, keptTracking: true });
           statusDiv.textContent = "Tracking marker";
           statusDiv.className = "status track";
           return;
         }
         if (!poseQuality.ok) {
-          diagState.lastRejectionReason = poseQuality.reason;
+          recordRejection(poseQuality.reason);
           scannerDiagnostics.push('[SCAN MATCH REJECT]', { requestId, pairId: newPairId, reason: poseQuality.reason, keptTracking: false });
           clearTrackingGeometry('pose_rejected_' + poseQuality.reason);
           return;
@@ -1775,7 +2387,7 @@
           lastOrdered = null;
           smoothCorners = null;
         }
-        diagState.lastRejectionReason = null;
+        recordAcceptance();
         scannerDiagnostics.push('[SCAN MATCH ACCEPT]', { requestId, pairId: newPairId, wasTracking, sameTarget: isSameTarget });
         if (!wasTracking) scannerDiagnostics.push('[TRACK START]', { pairId: newPairId, generation: scannerGeneration });
         tracking = true;
@@ -1784,6 +2396,7 @@
         graceEnteredAt = 0;
         lastDetectTs = performance.now();
         lastLockTs = lastDetectTs;
+        diagState.lastAcceptedDetectionAt = Date.now();
 
         stopScannerStatusCycle();
         if (applyWarp(currCorners)) playOverlay();
@@ -1795,6 +2408,16 @@
         console.error("Detection error:", e);
         detectionPolicy.finish(requestId);
         if (activeDetectionController) activeDetectionController = null;
+        if (sessionEnding) {
+          // Root cause of the forbidden "recognition fallback shown after navigation begins"
+          // case: endScannerSession() aborts activeDetectionController as part of exit
+          // cleanup, which lands right here as an AbortError — but this abort was caused by
+          // exiting, not a genuine recognition timeout, so it must never call
+          // handleDetectionTimeout() (which can show the recognition-help panel) or touch
+          // status text after the scanner is already tearing down.
+          scannerDiagnostics.push('scan_tick_skipped', { reason: 'aborted_for_session_end' });
+          return;
+        }
         if (e && e.name === 'AbortError') {
           handleDetectionTimeout();
         } else {
@@ -1807,27 +2430,183 @@
       }
     }
 
-    function startDetectLoop() {
-      if (detectLoopTimer) return;
-      const loopGeneration = scannerGeneration;
-      detectLoopTimer = setInterval(() => {
-        if (sessionEnding) {
-          stopDetectLoop();
+    // Self-rescheduling scan loop (replaces a bare setInterval poll). A real-device backend
+    // log showed detect requests going silent for 5-18s at a time. Root causes found:
+    // (1) FORCE_REDETECT_MS was 12000ms — up to 12s of intentional silence whenever local
+    //     tracking looked healthy (now 3000ms, see above);
+    // (2) recoverScanner() used to unconditionally stop this loop and wait 250ms+ for EVERY
+    //     orientation/resize/visibility event, even when the camera never needed touching;
+    // (3) the loop was a setInterval — a single uncaught exception inside one tick would
+    //     have silently killed all future ticks with no diagnostic trail.
+    // This version: a completed tick ALWAYS schedules the next one (in a finally block,
+    // regardless of outcome), loop cancellation is keyed on scanLoopToken (NOT
+    // scannerGeneration, which bumps for unrelated reasons and must not cancel a live
+    // loop), and every skip is diagnosed with an explicit reason.
+    function scheduleNextScan(reason, delayMs) {
+      if (detectLoopTimer) { clearTimeout(detectLoopTimer); detectLoopTimer = null; }
+      if (sessionEnding) {
+        scannerDiagnostics.push('scan_tick_skipped', { reason: 'session_ending' });
+        return;
+      }
+      const token = scanLoopToken;
+      const delay = delayMs != null ? delayMs : DETECT_INTERVAL_MS;
+      const now = Date.now();
+      diagState.nextScanScheduledAt = now + delay;
+      diagState.lastScheduledAt = now;
+      diagState.lastExpectedRunAt = now + delay;
+      diagState.selectedDelayMs = delay;
+      diagState.selectedDelayReason = reason;
+      scannerDiagnostics.push('next_scan_scheduled', { reason, delay, token, generation: scannerGeneration });
+      detectLoopTimer = setTimeout(() => scanTick(token), delay);
+    }
+
+    // Watchdog (real-device fix): a completely independent backstop, deliberately its OWN
+    // chain rather than folded into scheduleNextScan — a stuck or misfiring main tick must
+    // not also take the safety net down with it. Real mobile-browser timer drift can push
+    // actual gaps past the theoretical worst case computed from FORCE_REDETECT_MS/
+    // detectIntervalMs alone, so this forces a request through the normal guarded path if
+    // none has STARTED within WATCHDOG_TIMEOUT_MS, without ever touching the camera or loop.
+    const WATCHDOG_TIMEOUT_MS = 4000;
+    const WATCHDOG_CHECK_INTERVAL_MS = 500;
+    let watchdogTimerId = null;
+
+    function stopWatchdog() {
+      if (watchdogTimerId) { clearTimeout(watchdogTimerId); watchdogTimerId = null; }
+    }
+
+    function scheduleWatchdog(token) {
+      stopWatchdog();
+      if (sessionEnding) return;
+      watchdogTimerId = setTimeout(() => watchdogTick(token), WATCHDOG_CHECK_INTERVAL_MS);
+    }
+
+    function watchdogTick(token) {
+      watchdogTimerId = null;
+      if (sessionEnding || token !== scanLoopToken) return; // loop ownership moved on — this watchdog instance retires, never restarted by a stale token
+      diagState.currentScanLoopToken = scanLoopToken;
+      diagState.requestInFlight = detectInFlight;
+      diagState.recoveryInProgress = Boolean(recoverScannerPromise);
+      if (document.hidden || recoverScannerPromise || diagState.cameraStartInProgress) {
+        scheduleWatchdog(token); // never forces anything in these states — just keeps checking
+        return;
+      }
+      const baseline = diagState.lastRequestStartAt || diagState.lastCameraStartTimestamp || Date.now();
+      const elapsed = Date.now() - baseline;
+      diagState.watchdogDeadline = baseline + WATCHDOG_TIMEOUT_MS;
+      if (!detectInFlight && !isStreamDead()) {
+        if (elapsed > WATCHDOG_TIMEOUT_MS) {
+          diagState.watchdogTriggered = true;
+          scannerDiagnostics.push('watchdog_forced_detection', { elapsedMs: elapsed, generation: scannerGeneration, token });
+          detectOnceFromServer(true); // forces a request through the SAME guarded path scanTick uses — never restarts the camera or the loop itself
+        }
+      } else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {
+        // Root cause of the real-device 7-9s silent gaps (see diagState.watchdogDeadline
+        // comment above): detectOnceFromServer()'s own fetch abort ceiling
+        // (runtimeConfig.requestTimeoutMs, 7000-9000ms depending on mode) is far past this
+        // watchdog's 4000ms deadline, and this watchdog used to treat "a request is already
+        // in flight" as reason enough to never act — so one stalled request (packet loss,
+        // slow mobile network) could hold the loop silent for its FULL internal timeout with
+        // no forced recovery. Abort it through the SAME AbortController
+        // detectOnceFromServer() already sets up (activeDetectionController) — this lands in
+        // its existing 'AbortError' catch branch / handleDetectionTimeout(), the same
+        // recognition-timeout path a slow response already takes, not a new failure mode.
+        diagState.watchdogTriggered = true;
+        diagState.watchdogAbortCount++;
+        scannerDiagnostics.push('watchdog_aborted_stuck_request', { elapsedMs: elapsed, generation: scannerGeneration, token });
+        if (activeDetectionController) activeDetectionController.abort();
+      }
+      scheduleWatchdog(token); // always reschedules — including right after a request completes, since the next 500ms check will see detectInFlight clear and the elapsed baseline reset
+    }
+
+    function skipTick(reason, extra) {
+      diagState.lastSkipReason = reason;
+      diagState.consecutiveSkipCount++;
+      scannerDiagnostics.push('scan_tick_skipped', Object.assign({ reason }, extra || {}));
+    }
+
+    async function scanTick(token) {
+      detectLoopTimer = null;
+      const track = cameraStream ? cameraStream.getVideoTracks()[0] : null;
+      const actualRunAt = Date.now();
+      const expectedRunAt = diagState.lastExpectedRunAt;
+      // detectionPolicyNextAllowedAt/suppressionDeadline mirror detectionPolicy.canStart()'s
+      // and FORCE_REDETECT_MS's own formulas (createRequestPolicy doesn't expose its
+      // internal lastStarted) — approximations for diagnostics, not used as gates here.
+      const detectionPolicyNextAllowedAt = lastDetectTs
+        ? Math.round(lastDetectTs + DETECT_INTERVAL_MS * (tracking ? 2 : 1)) : null;
+      const suppressionDeadline = lastDetectTs ? Math.round(lastDetectTs + FORCE_REDETECT_MS) : null;
+      diagState.currentScanLoopToken = token;
+      diagState.requestInFlight = detectInFlight;
+      diagState.recoveryInProgress = Boolean(recoverScannerPromise);
+      diagState.trackingAgeMs = tracking ? Math.round(performance.now() - lastLockTs) : null;
+      scannerDiagnostics.push('scan_tick_enter', {
+        token, currentToken: scanLoopToken, state: scannerState.state, generation: scannerGeneration,
+        scanInFlight: detectInFlight, cameraStartInProgress: diagState.cameraStartInProgress,
+        recoveryPending: Boolean(recoverScannerPromise),
+        streamDead: isStreamDead(), trackReadyState: track ? track.readyState : null,
+        videoReadyState: cam.readyState, videoWidth: cam.videoWidth, videoHeight: cam.videoHeight,
+        visibilityState: document.visibilityState,
+        orientationAngle: (screen.orientation && typeof screen.orientation.angle === 'number') ? screen.orientation.angle : null,
+        lastRequestStart: diagState.lastRequestStartAt, lastRequestFinish: diagState.lastRequestFinishAt,
+        scheduledAt: diagState.lastScheduledAt, expectedRunAt, actualRunAt,
+        timerDriftMs: expectedRunAt != null ? actualRunAt - expectedRunAt : null,
+        lastRequestStartedAt: diagState.lastRequestStartAt,
+        elapsedSinceLastRequestStart: diagState.lastRequestStartAt ? actualRunAt - diagState.lastRequestStartAt : null,
+        suppressionDeadline, detectionPolicyNextAllowedAt,
+        selectedDelayMs: diagState.selectedDelayMs, selectedDelayReason: diagState.selectedDelayReason,
+        tracking
+      });
+      try {
+        if (sessionEnding) { skipTick('session_ending'); return; }
+        if (token !== scanLoopToken) { skipTick('stale_loop_token', { token, currentToken: scanLoopToken }); return; }
+        if (document.hidden) { skipTick('tab_hidden'); return; }
+        if (!cvReady) { skipTick('opencv_not_ready'); return; }
+        if (recoverScannerPromise) { skipTick('recovery_pending'); return; }
+        if (diagState.cameraStartInProgress) { skipTick('camera_start_in_progress'); return; }
+        if (cam.readyState < 2) {
+          // A resize/orientation reflow can transiently drop readyState even though the
+          // track is still live — never treat this as a reason to stop the loop; nudge
+          // play() and just retry on the next tick.
+          skipTick('video_not_ready', { trackReadyState: track ? track.readyState : null });
+          if (cameraStream && !isStreamDead()) { try { cam.play().catch(() => {}); } catch (_) {} }
           return;
         }
-        if (loopGeneration !== scannerGeneration) {
-          stopDetectLoop();
-          return;
-        }
+        if (detectInFlight) { skipTick('request_in_flight'); return; }
         const now = performance.now();
         const driftMs = now - lastLockTs;
         const sinceLastDetect = now - lastDetectTs;
         const trackingHealthy = tracking && driftMs <= HEALTHY_TRACK_SUPPRESS_MS;
         // Re-detect on confidence loss; otherwise do only a bounded re-anchor.
-        if (!tracking || driftMs > 1500 || (trackingHealthy && sinceLastDetect > FORCE_REDETECT_MS)) {
-          detectOnceFromServer();
+        if (!(!tracking || driftMs > 1500 || (trackingHealthy && sinceLastDetect > FORCE_REDETECT_MS))) {
+          skipTick('tracking_healthy_suppressed', { sinceLastDetect: Math.round(sinceLastDetect) });
+          return;
         }
-      }, DETECT_INTERVAL_MS);
+        diagState.consecutiveSkipCount = 0;
+        const requestStartedAtMs = Date.now();
+        // Snapshot the gap since the PREVIOUS request's start before overwriting it — this is
+        // what elapsed_since_previous_request_start_ms reports to detect_init, so a real
+        // multi-second client-side scheduling delay shows up in the server log directly
+        // instead of only being inferable from response timestamps.
+        diagState.lastRequestGapMs = diagState.lastRequestStartAt ? requestStartedAtMs - diagState.lastRequestStartAt : null;
+        diagState.lastRequestStartAt = requestStartedAtMs;
+        scannerDiagnostics.push('request_started', { token, generation: scannerGeneration });
+        await detectOnceFromServer();
+        diagState.lastRequestFinishAt = Date.now();
+        scannerDiagnostics.push('request_finished', { token, generation: scannerGeneration });
+      } finally {
+        // Always reschedule — a completed tick (whatever the outcome) must lead to the
+        // next one unless the scanner was intentionally stopped (sessionEnding/stale token,
+        // both checked again inside scheduleNextScan/the next scanTick invocation).
+        scheduleNextScan('after_tick');
+      }
+    }
+
+    function startDetectLoop() {
+      if (detectLoopTimer) return; // repeated calls are a no-op — one loop, ever
+      diagState.scanLoopStartCount++;
+      scannerDiagnostics.push('loop_restarted', { token: scanLoopToken });
+      scheduleNextScan('loop_start', 0);
+      scheduleWatchdog(scanLoopToken); // shares the main loop's token — stops/restarts in lockstep with it
     }
 
     window.addEventListener('orientationchange', () => scheduleOrientationRecovery('orientationchange'));
@@ -1867,9 +2646,17 @@
 
     // Clean up on page unload
     window.addEventListener('unload', function () {
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-      }
+      stopCameraStream('unload');
+    });
+
+    // bfcache restore: Safari/Firefox can restore the whole page (including a frozen
+    // <video>) without re-running scripts. If the camera track is dead by then, force a
+    // real restart; otherwise just resettle geometry — never silently stay paused.
+    window.addEventListener('pageshow', function (event) {
+      scannerDiagnostics.push('pageshow', { persisted: event.persisted, generation: scannerGeneration });
+      if (!event.persisted) return;
+      scannerDiagnostics.push('[CAMERA RECOVERY]', { reason: 'pageshow_bfcache', restartCamera: isStreamDead() });
+      recoverScanner('pageshow_bfcache', isStreamDead());
     });
 
     // ================================================
@@ -1881,34 +2668,82 @@
     if (diagPanelActive) {
       diagPanelEl.style.display = 'block';
       const diagFieldsEl = document.getElementById('diagFields');
-      let diagCollapsed = false;
+      const diagSummaryEl = document.getElementById('diagSummaryLine');
+      const diagIconEl = document.getElementById('diagCollapseIcon');
+      const diagExpandedEl = document.getElementById('diagExpanded');
+      let diagExpandedOpen = false;
 
+      // Collapsed by default — does not cover the scanning area. Tapping the summary bar
+      // (a full-width 44px tap target) expands/collapses; expanded content scrolls on its
+      // own so it never has to grow the fixed bottom sheet past 65vh.
       document.getElementById('diagCollapseBtn').addEventListener('click', function () {
-        diagCollapsed = !diagCollapsed;
-        diagFieldsEl.style.display = diagCollapsed ? 'none' : 'block';
+        diagExpandedOpen = !diagExpandedOpen;
+        diagExpandedEl.style.display = diagExpandedOpen ? 'block' : 'none';
+        diagIconEl.textContent = diagExpandedOpen ? '▼' : '▲';
       });
 
       document.getElementById('diagResetBtn').addEventListener('click', function () {
+        // Diagnostics only — never touches cameraStream, tracking, or scannerState.
         scannerDiagnostics.reset();
-        diagState.consecutiveAccepted = 0;
-        diagState.consecutiveRejected = 0;
-        diagState.lastRejectionReason = null;
-        diagState.staleCount = 0;
-        diagState.durationSampleCount = 0;
-        diagState.durationSampleSum = 0;
-        diagState.avgDurationMs = null;
-        diagState.lastDurationMs = null;
-        diagState.requestSeq = 0;
+        scannerTransitionHistory.length = 0;
+        Object.assign(diagState, {
+          consecutiveAccepted: 0, consecutiveRejected: 0, lastRejectionReason: null,
+          staleCount: 0, durationSampleCount: 0, durationSampleSum: 0, avgDurationMs: null,
+          lastDurationMs: null, requestSeq: 0, latestAppliedSeq: 0,
+          cameraStartCount: 0, cameraRestartCount: 0, restartReason: null,
+          lastCameraStartTimestamp: null, lastCameraStopTimestamp: null,
+          totalAccepted: 0, totalRejected: 0, rejectionReasonCounts: {},
+          scanLoopStartCount: 0, scanLoopStopCount: 0,
+          nextScanScheduledAt: null, lastRequestStartAt: null, lastRequestFinishAt: null
+        });
         renderDiagPanel();
       });
 
       document.getElementById('diagExportBtn').addEventListener('click', function () {
+        // Privacy: no frame pixels, no marker image data, no deviceId/groupId, no auth/
+        // session cookies, no email/name — just states, counts, ids (random session uuid),
+        // dimensions, and timing.
+        const track = cameraStream ? cameraStream.getVideoTracks()[0] : null;
+        const settings = track && track.getSettings ? track.getSettings() : {};
         const payload = {
           exportedAt: new Date().toISOString(),
           sessionId: scannerSessionId,
           generation: scannerGeneration,
           state: scannerState.state,
-          counters: Object.assign({}, diagState),
+          browser: {
+            userAgent: navigator.userAgent,
+            platform: navigator.platform || null,
+            viewport: { width: window.innerWidth, height: window.innerHeight },
+            devicePixelRatio: window.devicePixelRatio || 1,
+            orientation: (screen.orientation && screen.orientation.type) || null,
+            visibilityState: document.visibilityState,
+            connectionType: (navigator.connection && navigator.connection.effectiveType) || null
+          },
+          camera: {
+            videoWidth: cam.videoWidth, videoHeight: cam.videoHeight,
+            trackWidth: settings.width || null, trackHeight: settings.height || null,
+            frameRate: settings.frameRate || null, facingMode: settings.facingMode || null,
+            activeStreamCount: cameraStream ? 1 : 0, activeTrackCount: activeTrackCount(),
+            cameraStartCount: diagState.cameraStartCount, cameraRestartCount: diagState.cameraRestartCount,
+            restartReason: diagState.restartReason,
+            lastCameraStartTimestamp: diagState.lastCameraStartTimestamp,
+            lastCameraStopTimestamp: diagState.lastCameraStopTimestamp
+          },
+          scanner: {
+            scanLoopStartCount: diagState.scanLoopStartCount, scanLoopStopCount: diagState.scanLoopStopCount,
+            requestSeq: diagState.requestSeq, latestAppliedSeq: diagState.latestAppliedSeq,
+            staleResponseCount: diagState.staleCount, lastLatencyMs: diagState.lastDurationMs,
+            avgLatencyMs: diagState.avgDurationMs, recentTransitions: scannerTransitionHistory.slice(),
+            scannerEntryContext: diagState.scannerEntryContext,
+            resolvedBackDestination: diagState.resolvedBackDestination,
+            backDestinationReason: diagState.backDestinationReason
+          },
+          detection: {
+            totalAccepted: diagState.totalAccepted, totalRejected: diagState.totalRejected,
+            rejectionReasonCounts: Object.assign({}, diagState.rejectionReasonCounts),
+            lastGoodMatches: diagState.lastGoodMatches, lastKeypoints: diagState.lastKeypoints,
+            lastHomography: diagState.lastHomography
+          },
           history: scannerDiagnostics.snapshot()
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -1926,35 +2761,59 @@
         const activeLoops = (detectLoopTimer ? 1 : 0) + (trackLoopActive ? 1 : 0);
         const confidence = trackingBadFrames > 0 ? Math.max(0, 1 - trackingBadFrames / TRACKING_GRACE_FRAMES) : (tracking ? 1 : 0);
         const hq = diagState.lastHomography || {};
+        const track = cameraStream ? cameraStream.getVideoTracks()[0] : null;
+        const settings = track && track.getSettings ? track.getSettings() : {};
+        const lastResult = diagState.lastRejectionReason ? `reject:${diagState.lastRejectionReason}` : (diagState.totalAccepted ? 'accept' : '-');
+
+        diagSummaryEl.textContent = `${scannerState.state} | streams:${cameraStream ? 1 : 0} | loops:${activeLoops} | ${lastResult}`;
+
+        const reasonDist = Object.entries(diagState.rejectionReasonCounts)
+          .sort((a, b) => b[1] - a[1]).slice(0, 6)
+          .map(([reason, count]) => `    ${reason}: ${count}`).join('\n') || '    (none yet)';
+        const recentTransitions = scannerTransitionHistory.slice(-8)
+          .map(t => `    ${t.from} -> ${t.to} (${t.reason || 'no reason'})`).join('\n') || '    (none yet)';
+
         const lines = [
-          `state: ${scannerState.state}`,
-          `camera ready: ${isCameraHealthy()}`,
-          `session: ${scannerSessionId || '-'}`,
-          `generation: ${scannerGeneration}`,
-          `orientation revision: ${orientationRevision}`,
-          `viewport: ${window.innerWidth}x${window.innerHeight}`,
-          `frame: ${frameW}x${frameH}`,
-          `active loops: ${activeLoops}`,
-          `request seq: ${diagState.requestSeq}`,
-          `candidate pair id: ${currentPairId}`,
-          `marker type: ${diagState.lastMarkerType || '-'}`,
-          `keypoints: ${diagState.lastKeypoints ?? '-'}`,
-          `good matches: ${diagState.lastGoodMatches ?? '-'}`,
-          `inliers: ${hq.inliers ?? '-'}`,
-          `inlier ratio: ${typeof hq.inlier_ratio === 'number' ? hq.inlier_ratio.toFixed(2) : '-'}`,
-          `reprojection error: ${typeof hq.mean_error === 'number' ? hq.mean_error.toFixed(2) : '-'}`,
-          `quad valid: ${currCorners ? runtime.isValidQuad(currCorners, frameW, frameH) : '-'}`,
-          `visible area ratio: ${diagState.visibleAreaRatio != null ? diagState.visibleAreaRatio.toFixed(3) : '-'}`,
-          `rejection reason: ${diagState.lastRejectionReason || '-'}`,
-          `tracking: ${tracking}`,
-          `tracking confidence: ${confidence.toFixed(2)}`,
-          `consecutive accepted frames: ${diagState.consecutiveAccepted}`,
-          `consecutive rejected frames: ${diagState.consecutiveRejected}`,
+          '-- Browser/Runtime --',
+          `platform: ${navigator.platform || '-'}`,
+          `viewport: ${window.innerWidth}x${window.innerHeight}  dpr: ${window.devicePixelRatio || 1}`,
+          `orientation: ${(screen.orientation && screen.orientation.type) || '-'}  revision: ${orientationRevision}`,
+          `visibility: ${document.visibilityState}`,
+          `connection: ${(navigator.connection && navigator.connection.effectiveType) || '-'}`,
+          '',
+          '-- Camera --',
+          `camera ready (cosmetic check): ${isCameraHealthy()}   stream dead (restart check): ${isStreamDead()}`,
+          `video: ${cam.videoWidth}x${cam.videoHeight}   track: ${settings.width || '-'}x${settings.height || '-'}`,
+          `frame rate: ${settings.frameRate || '-'}   facing: ${settings.facingMode || '-'}`,
+          `active streams: ${cameraStream ? 1 : 0}   active tracks: ${activeTrackCount()}`,
+          `start count: ${diagState.cameraStartCount}   restart count: ${diagState.cameraRestartCount}`,
+          `start in progress: ${diagState.cameraStartInProgress}   last restart reason: ${diagState.restartReason || '-'}`,
+          '',
+          '-- Scanner Runtime --',
+          `state: ${scannerState.state}   session: ${scannerSessionId || '-'}   generation: ${scannerGeneration}`,
+          `active loops: ${activeLoops}   loop token: ${scanLoopToken}   loop starts: ${diagState.scanLoopStartCount}   loop stops: ${diagState.scanLoopStopCount}`,
+          `request seq: ${diagState.requestSeq}   latest applied: ${diagState.latestAppliedSeq}   stale/dropped: ${diagState.staleCount}`,
+          `next scan scheduled: ${diagState.nextScanScheduledAt ? Math.round(diagState.nextScanScheduledAt - Date.now()) + 'ms' : '-'}`,
+          `last request start/finish: ${diagState.lastRequestStartAt || '-'} / ${diagState.lastRequestFinishAt || '-'}`,
+          `latency: ${diagState.lastDurationMs ?? '-'}ms   avg: ${diagState.avgDurationMs ?? '-'}ms`,
           `recovery state: ${scannerState.state === 'recovering' || scannerState.state === 'target_lost'}`,
           `last accepted: ${lastLockTs ? Math.round(performance.now() - lastLockTs) + 'ms ago' : '-'}`,
-          `processing duration: ${diagState.lastDurationMs ?? '-'}ms`,
-          `avg processing duration: ${diagState.avgDurationMs ?? '-'}ms`,
-          `dropped/stale result count: ${diagState.staleCount}`
+          `entry context: ${diagState.scannerEntryContext}   back destination: ${diagState.resolvedBackDestination}`,
+          'recent transitions:',
+          recentTransitions,
+          '',
+          '-- Detection --',
+          `candidate pair id: ${currentPairId}   marker type: ${diagState.lastMarkerType || '-'}`,
+          `keypoints: ${diagState.lastKeypoints ?? '-'}   good matches: ${diagState.lastGoodMatches ?? '-'}`,
+          `inliers: ${hq.inliers ?? '-'}   inlier ratio: ${typeof hq.inlier_ratio === 'number' ? hq.inlier_ratio.toFixed(2) : '-'}`,
+          `reprojection error: ${typeof hq.mean_error === 'number' ? hq.mean_error.toFixed(2) : '-'}`,
+          `quad valid: ${currCorners ? runtime.isValidQuad(currCorners, frameW, frameH) : '-'}   visible area ratio: ${diagState.visibleAreaRatio != null ? diagState.visibleAreaRatio.toFixed(3) : '-'}`,
+          `tracking: ${tracking}   confidence: ${confidence.toFixed(2)}`,
+          `consecutive accepted: ${diagState.consecutiveAccepted}   consecutive rejected: ${diagState.consecutiveRejected}`,
+          `total accepted: ${diagState.totalAccepted}   total rejected: ${diagState.totalRejected}`,
+          `last rejection reason: ${diagState.lastRejectionReason || '-'}`,
+          'recent rejection-reason distribution:',
+          reasonDist
         ];
         diagFieldsEl.textContent = lines.join('\n');
       }

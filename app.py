@@ -24,6 +24,7 @@ import ffmpeg
 import secrets
 import hashlib
 import traceback
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 from concurrent.futures import ThreadPoolExecutor
 import logging
 import requests
@@ -3847,7 +3848,8 @@ def success_page(project_id):
         user=user,
         is_admin=False,
         qr_download_url=url_for("download_project_qr", project_id=project.id),
-        projects_url=url_for("projects_page")
+        projects_url=url_for("projects_page"),
+        test_scanner_url=url_for("scanner_test_entry", project_id=project.id)
     )
 
 # --------------------------------------------------------------------------------------------
@@ -3882,55 +3884,172 @@ def serve_image(project_id, image_id):
 def serve_qr(filename):
     return send_from_directory(QR_DIR, filename)
 
+SCANNER_TEST_TOKEN_MAX_AGE_SECONDS = 120
+
+
+def _scanner_test_serializer():
+    return URLSafeTimedSerializer(app.secret_key, salt="scanner-test-entry")
+
+
+def _issue_scanner_test_token(project_id, ctx, **identity):
+    """Minted only by the ownership-checked routes below (scanner_test_entry /
+    admin_scanner_test_entry) — this is what proves a /scanner/ visit is a genuine,
+    server-verified creator/admin test rather than a forged ?entry_context=/?mode= query
+    param, which any public viewer could also send."""
+    return _scanner_test_serializer().dumps({"project_id": project_id, "ctx": ctx, **identity})
+
+
+def _read_scanner_test_token(token):
+    """Returns (payload, None) on success, or (None, reason) on any failure — expired,
+    tampered, or simply absent (the normal public-viewer case)."""
+    if not token:
+        return None, "no_test_token"
+    try:
+        payload = _scanner_test_serializer().loads(token, max_age=SCANNER_TEST_TOKEN_MAX_AGE_SECONDS)
+    except SignatureExpired:
+        return None, "expired_token"
+    except BadSignature:
+        return None, "invalid_token"
+    return payload, None
+
+
+def resolve_scanner_entry_context(project, test_token):
+    """Server-verified only. Never infers creator_test/admin_test from session.user_id or
+    session.admin_id alone — a public QR link's owner id would look identical to the
+    owner's own session the instant they're logged in, and a viewer can freely fake
+    ?entry_context=creator_test or ?mode=creator in the query string. The ONLY way to reach
+    creator_test/admin_test is a short-lived signed token minted by the dedicated,
+    ownership-checked entry routes (scanner_test_entry / admin_scanner_test_entry) below.
+
+    Returns a dict: context, back_url, back_destination_reason, entry_route_type,
+    entry_authorization_result. context is one of
+    'public_viewer' | 'creator_test' | 'admin_test'.
+    """
+    default = {
+        "context": "public_viewer",
+        "back_url": url_for("landing"),
+        "back_destination_reason": "public_viewer",
+        "entry_route_type": "public_scanner_route",
+        "entry_authorization_result": "n/a_public",
+    }
+    payload, err = _read_scanner_test_token(test_token)
+    if err:
+        result = dict(default)
+        if err != "no_test_token":
+            result["entry_authorization_result"] = err
+        return result
+    if payload.get("project_id") != project.id:
+        result = dict(default)
+        result["entry_authorization_result"] = "project_mismatch"
+        return result
+    ctx = payload.get("ctx")
+    if ctx == "creator_test":
+        session_user_id = session.get("user_id")
+        if session_user_id and payload.get("user_id") == session_user_id and project.owner_user_id == session_user_id:
+            return {
+                "context": "creator_test",
+                "back_url": url_for("project_preview", project_id=project.id),
+                "back_destination_reason": "creator_test",
+                "entry_route_type": "creator_test_route",
+                "entry_authorization_result": "authorized",
+            }
+        result = dict(default)
+        result["entry_route_type"] = "creator_test_route"
+        result["entry_authorization_result"] = "not_owner"
+        return result
+    if ctx == "admin_test":
+        session_admin_id = session.get("admin_id")
+        if session_admin_id and payload.get("admin_id") == session_admin_id and project.owner_admin_id == session_admin_id:
+            return {
+                "context": "admin_test",
+                "back_url": url_for("admin_project_preview", project_id=project.id),
+                "back_destination_reason": "admin_test",
+                "entry_route_type": "admin_test_route",
+                "entry_authorization_result": "authorized",
+            }
+        result = dict(default)
+        result["entry_route_type"] = "admin_test_route"
+        result["entry_authorization_result"] = "not_owner"
+        return result
+    result = dict(default)
+    result["entry_authorization_result"] = "invalid_token"
+    return result
+
+
+@app.route("/project/<int:project_id>/scanner-test")
+@login_required
+def scanner_test_entry(project_id):
+    """The ONLY safe way to reach creator_test scanner context. Verifies real ownership via
+    the actual authenticated session (never a query param), then mints a short-lived signed
+    token so /scanner/ can prove this visit came from here."""
+    user = current_user()
+    project = Project.query.get_or_404(project_id)
+    if project.owner_user_id != user.id:
+        abort(404)
+    token = _issue_scanner_test_token(project.id, "creator_test", user_id=user.id)
+    return redirect(url_for("scanner", project_id=project.id, test_token=token))
+
+
+@app.route("/admin/project/<int:project_id>/scanner-test")
+@admin_required
+def admin_scanner_test_entry(project_id):
+    """Admin equivalent of scanner_test_entry — same signed-token pattern, admin ownership
+    verified server-side before the token is ever minted."""
+    admin = current_admin()
+    project = Project.query.get_or_404(project_id)
+    if project.owner_admin_id != admin.id:
+        abort(404)
+    token = _issue_scanner_test_token(project.id, "admin_test", admin_id=admin.id)
+    return redirect(url_for("scanner", project_id=project.id, test_token=token))
+
+
 @app.route("/scanner/<int:project_id>")
 def scanner(project_id):
-    """Public scanner - handles both user and admin projects"""
-    user_id = request.args.get("user_id", type=int)
-    admin_id = request.args.get("admin_id", type=int)
-    user_name = request.args.get("user_name")
-    admin_name = request.args.get("admin_name")
-    
-    # ✅ FIX: If user_id is in URL, set it in session
-    # if user_id and not session.get("user_id"):
-    #     session["user_id"] = user_id
-    #     print(f"✅ Auto-logged in user {user_id} from QR code")
+    """Public scanner - handles both user and admin projects.
 
-    # ✅ FIX: ALWAYS set user_id from URL into session
-    if user_id:
-        session["user_id"] = user_id
-        session.permanent = True
-        print(f"✅ FORCE set user_id {user_id} in session from QR code")
-    else:
-        print(f"❌ No user_id in URL - scans will not count")
-    
-    
+    user_id/user_name/admin_id/admin_name query params are legacy artifacts of the original
+    QR URL shape (see scanner_url generation above) — display-only historically, and now not
+    read at all: they must never authenticate a viewer, mutate the session, or influence
+    entry-context resolution. Project ownership/attribution is resolved from the Project
+    record itself, never from the query string. A tokenized /s/<share_token> public URL that
+    doesn't expose owner identity in the query string at all is a required next phase — see
+    gate-jr/cross-device-test-matrix.md.
+    """
+    test_token = request.args.get("test_token")
+
     project = Project.query.get(project_id)
-    
+
     if not project:
         return "Project not found"
-    
-    # Determine creator info
-    if project.owner_user_id:
+
+    # Entry context is resolved purely server-side (signed token + real session ownership
+    # check) — the session is never mutated by this route at all, for any project.
+    entry = resolve_scanner_entry_context(project, test_token)
+
+    # project_owner_id / project_owner_admin_id: resolved from the DB record, never from an
+    # editable URL parameter. This is what used to be a single ambiguous `user_id` reused for
+    # both "who owns this project" and "who is scanning it".
+    project_owner_id = project.owner_user_id
+    if project_owner_id:
         creator_type = "user"
-        creator_id = project.owner_user_id
         creator_name = project.owner_user.full_name if project.owner_user else "User"
     else:
         creator_type = "admin"
-        creator_id = project.owner_admin_id
         creator_name = project.owner_admin.name if project.owner_admin else "Admin"
-    
+
     return render_template(
         "user/scanner.html",
         project_id=project_id,
         project_name=project.name,
         qr_code_url=project.qr_code_path,
-        user_id=user_id,
-        admin_id=admin_id,
-        user_name=user_name,
-        admin_name=admin_name,
         creator_type=creator_type,
         creator_name=creator_name,
-        scanner_diagnostics_enabled=scanner_diagnostics_enabled()
+        scanner_diagnostics_enabled=scanner_diagnostics_enabled(),
+        scanner_entry_context=entry["context"],
+        resolved_back_destination=entry["back_url"],
+        back_destination_reason=entry["back_destination_reason"],
+        entry_route_type=entry["entry_route_type"],
+        entry_authorization_result=entry["entry_authorization_result"],
     )
 @app.route("/detect_init", methods=["POST"])
 def detect_init():
@@ -3954,6 +4073,27 @@ def detect_init():
             "source_frame_height": source_frame_height,
             "orientation_revision": orientation_revision,
         }
+
+        # Client timing metadata (real-device gap investigation) — logged so a silent
+        # multi-second gap between requests is explained by data (client scheduling state at
+        # send time), not guessed from server response timestamps alone. All optional/best-
+        # effort: an older client that doesn't send these simply logs None for each.
+        client_timing = {
+            "request_seq": request.form.get("request_seq"),
+            "client_request_started_at": request.form.get("client_request_started_at"),
+            "elapsed_since_previous_request_start_ms": request.form.get("elapsed_since_previous_request_start_ms"),
+            "selected_delay_ms": request.form.get("selected_delay_ms"),
+            "selected_delay_reason": request.form.get("selected_delay_reason"),
+            "tracking_active": request.form.get("tracking_active"),
+            "tracking_age_ms": request.form.get("tracking_age_ms"),
+            "detect_in_flight_before_start": request.form.get("detect_in_flight_before_start"),
+            "watchdog_triggered": request.form.get("watchdog_triggered"),
+            "watchdog_abort_requested": request.form.get("watchdog_abort_requested"),
+            "page_visible": request.form.get("page_visible"),
+            "stream_healthy": request.form.get("stream_healthy"),
+            "scan_loop_token": request.form.get("scan_loop_token"),
+        }
+        print(f"⏱ client_timing: {client_timing}")
         
         print(f"📌 project_id: {project_id}")
         print(f"📌 test_file: {test_file.filename if test_file else 'None'}")
@@ -4008,11 +4148,17 @@ def detect_init():
                 "orientation_revision": orientation_revision,
             }), 200
         
-        # Get scan session info
-        user_id = session.get("user_id")
+        # Get scan session info. scan_attribution_owner_id is the PROJECT OWNER, resolved
+        # from the DB record — never from session/query params. This is what quota/ScanLog
+        # attribution has always meant here (a public viewer's scan counts against the
+        # project owner's plan), it was just previously read off session['user_id'] after
+        # that session had been force-mutated to the owner's id by the scanner() route (see
+        # the removed "FORCE set user_id ... from QR code" line). It is NOT the authenticated
+        # viewer's own identity, which is never touched by this endpoint.
+        scan_attribution_owner_id = project.owner_user_id
         scan_session_id = request.form.get("scan_session_id")
-        
-        print(f"👤 user_id: {user_id}")
+
+        print(f"👤 scan_attribution_owner_id: {scan_attribution_owner_id}")
         print(f"🆔 scan_session_id from request: {scan_session_id}")
         
         # If no session_id provided, generate one
@@ -4026,23 +4172,23 @@ def detect_init():
         user = None
         
         # ✅ CHECK SCAN LIMITS - BUT ONLY FOR USER PROJECTS
-        if user_id:
-            user = User.query.get(user_id)
+        if scan_attribution_owner_id:
+            user = User.query.get(scan_attribution_owner_id)
             print(f"👤 User found: {user is not None}")
-            
+
             if user:
                 # Check if a log already exists for this session
                 existing_log = ScanLog.query.filter_by(
-                    user_id=user_id,
+                    user_id=scan_attribution_owner_id,
                     scan_session_id=scan_session_id
                 ).first()
-                
+
                 print(f"📝 Existing log for this session: {existing_log is not None}")
-                
+
                 if not existing_log:
                     scan_log = ScanLog(
                         project_id=project_id,
-                        user_id=user_id,
+                        user_id=scan_attribution_owner_id,
                         scan_session_id=scan_session_id,
                         is_successful=False,
                         scan_type="admin" if is_admin_project else "user"
@@ -4365,7 +4511,7 @@ def detect_init():
             "homography_quality": homography_quality,
             "marker_mode": marker_mode,
             "top_checked": top_ids,
-            "scan_session_id": scan_session_id if user_id else None,
+            "scan_session_id": scan_session_id if scan_attribution_owner_id else None,
             "ready_pairs": len(processed_pairs),
             "total_pairs": total_pairs,
             "is_admin_project": is_admin_project  # Let frontend know
@@ -4404,7 +4550,6 @@ def scanner_session_end():
         
         project_id = data.get("project_id")
         session_id = data.get("session_id")
-        user_id = session.get("user_id")
 
         project = Project.query.get(int(project_id)) if project_id else None
 
@@ -4415,45 +4560,51 @@ def scanner_session_end():
                 "counted": False,
                 "reason": "Admin project - unlimited scans"
             })
-        
+
+        # scan_attribution_owner_id is the PROJECT OWNER (DB record), never the viewer's own
+        # session — this endpoint must never read or depend on the calling browser's
+        # authentication state, since a public viewer with no session at all still needs
+        # their scan to count against the project owner's quota. See detect_init() above for
+        # the same fix.
+        scan_attribution_owner_id = project.owner_user_id if project else None
+
         print(f"📌 project_id: {project_id}")
         print(f"📌 session_id: {session_id}")
-        print(f"📌 user_id from session: {user_id}")
-        
+        print(f"📌 scan_attribution_owner_id: {scan_attribution_owner_id}")
+
         if not project_id or not session_id:
             return jsonify({"ok": False, "error": "Missing required fields"}), 400
-        
-        # Only count for logged-in users
-        if not user_id:
-            print("❌ Guest user - not counting")
-            return jsonify({"ok": True, "counted": False, "reason": "Guest user"})
-        
-        user = User.query.get(user_id)
+
+        if not scan_attribution_owner_id:
+            print("❌ No attributable project owner - not counting")
+            return jsonify({"ok": True, "counted": False, "reason": "No attributable project owner"})
+
+        user = User.query.get(scan_attribution_owner_id)
         if not user:
-            print(f"❌ User {user_id} not found")
+            print(f"❌ User {scan_attribution_owner_id} not found")
             return jsonify({"ok": False, "error": "User not found"}), 404
-        
+
         print(f"👤 User found: {user.email}")
         print(f"📊 Current scans_used: {user.scans_used}")
-        
+
         # Check if this session had ANY successful scan
         successful_scan = ScanLog.query.filter_by(
-            user_id=user_id,
+            user_id=scan_attribution_owner_id,
             scan_session_id=session_id,
             is_successful=True
         ).first()
-        
+
         print(f"✅ Successful scan found: {successful_scan is not None}")
-        
+
         if successful_scan:
             print(f"   Log ID: {successful_scan.id}")
             print(f"   Project ID: {successful_scan.project_id}")
             print(f"   Counted: {getattr(successful_scan, 'counted', False)}")
-        
+
         if not successful_scan:
             # Check if there are ANY logs for this session
             any_log = ScanLog.query.filter_by(
-                user_id=user_id,
+                user_id=scan_attribution_owner_id,
                 scan_session_id=session_id
             ).first()
             if any_log:
@@ -6417,7 +6568,8 @@ def admin_success_page(project_id):
         user=admin,
         is_admin=True,
         qr_download_url=url_for("admin_download_project_qr", project_id=project.id),
-        projects_url=url_for("admin_my_projects")
+        projects_url=url_for("admin_my_projects"),
+        test_scanner_url=url_for("admin_scanner_test_entry", project_id=project.id)
     )
 
 @app.route("/admin/projects/<int:project_id>/qr")

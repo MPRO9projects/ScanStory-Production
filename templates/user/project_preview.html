@@ -99,10 +99,22 @@
                 <div class="font-bold">{{ project.created_at.strftime('%d %b %Y') }}</div>
             </div>
         </div>
-        <a href="{{ url_for('scanner', project_id=project.id) }}" target="_blank" 
+        {# scanner_test_entry mints a signed, ownership-verified token so this resolves
+           scanner_entry_context=creator_test server-side — see app.py. Only valid for the
+           actual project owner's own session; the admin-support "viewing someone else's
+           project" branch below keeps the plain public link since that's a different
+           person's session and was never a creator_test-eligible view. #}
+        {% if not admin_view %}
+        <a href="{{ url_for('scanner_test_entry', project_id=project.id) }}" target="_blank"
+           class="bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 px-5 py-2 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-cyan-500/30 transition flex items-center gap-2">
+            <i class="fas fa-vial"></i> Test Scanner
+        </a>
+        {% else %}
+        <a href="{{ url_for('scanner', project_id=project.id) }}" target="_blank"
            class="bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 px-5 py-2 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-cyan-500/30 transition flex items-center gap-2">
             <i class="fas fa-qrcode"></i> Scan AR
         </a>
+        {% endif %}
     </div>
     
     <!-- Media Pairs Grid -->
