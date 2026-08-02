@@ -222,7 +222,12 @@ def test_healthy_tracking_suppresses_repeated_detect_init_and_limits_inflight():
     assert "const HEALTHY_TRACK_SUPPRESS_MS = 1200" in html
     assert "const trackingHealthy = tracking && driftMs <= HEALTHY_TRACK_SUPPRESS_MS" in html
     assert "(trackingHealthy && sinceLastDetect > FORCE_REDETECT_MS)" in html
-    assert "if (sessionEnding || detectInFlight || !cvReady || cam.readyState < 2) return" in html
+    detect_start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
+    detect_end = html.index("async function scanTick(token)", detect_start)
+    detect_body = html[detect_start:detect_end]
+    assert "if (sessionEnding || detectInFlight || !cvReady || cam.readyState < 2) {" in detect_body
+    assert "if (!sessionEnding) scheduleNextScan('after_attempt_not_started');" in detect_body
+    assert "return;" in detect_body
 
 
 def test_temporal_pose_rejection_prevents_overlay_state_mutation():

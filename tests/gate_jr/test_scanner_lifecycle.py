@@ -451,8 +451,12 @@ def test_in_flight_guard_clears_on_every_exit_path():
     """finally block guarantees detectInFlight clears on accept, reject, HTTP error,
     timeout, abort, or thrown exception — not just the happy path."""
     html = _scanner_html()
-    assert "} finally {" in html
-    assert "detectInFlight = false;" in html
+    detect_body = _detect_once_body()
+    assert "} finally {" in detect_body
+    assert "finalizeDetectionAttempt(attempt," in detect_body
+    finalize_start = html.index("function finalizeDetectionAttempt(")
+    finalize_end = html.index("function clearTrackingGeometry", finalize_start)
+    assert "detectInFlight = false;" in html[finalize_start:finalize_end]
 
 
 # --- Orientation / visibility / page lifecycle ---------------------------------------
@@ -576,18 +580,22 @@ def test_scan_request_is_always_rescheduled_after_any_outcome():
     finally_idx = body.index("} finally {")
     await_idx = body.index("await detectOnceFromServer();")
     assert try_idx < await_idx < finally_idx, "detectOnceFromServer() must be inside the try, before the finally"
-    assert "scheduleNextScan('after_tick');" in body[finally_idx:]
+    assert "if (!requestAttemptStarted) scheduleNextScan('after_tick');" in body[finally_idx:]
+    finalize_start = html.index("function finalizeDetectionAttempt(")
+    finalize_end = html.index("function clearTrackingGeometry", finalize_start)
+    assert "scheduleAttemptSuccessor(attempt, 'after_attempt');" in html[finalize_start:finalize_end]
 
 
 def test_scan_in_flight_cleared_after_every_outcome():
     """detectInFlight (this codebase's scanInFlight) clears in detectOnceFromServer's own
     finally block — independently of scanTick's reschedule guarantee above."""
     html = _scanner_html()
-    detect_start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
-    detect_end = html.index("async function scanTick(token)")
-    detect_body = html[detect_start:detect_end]
+    detect_body = _detect_once_body()
     assert "} finally {" in detect_body
-    assert "detectInFlight = false;" in detect_body
+    assert "finalizeDetectionAttempt(attempt," in detect_body
+    finalize_start = html.index("function finalizeDetectionAttempt(")
+    finalize_end = html.index("function clearTrackingGeometry", finalize_start)
+    assert "detectInFlight = false;" in html[finalize_start:finalize_end]
 
 
 def test_resize_and_orientationchange_do_not_stop_the_loop_when_stream_is_alive():
@@ -1065,7 +1073,8 @@ def _watchdog_tick_body():
 
 def test_watchdog_aborts_a_request_stuck_past_its_own_deadline():
     body = _watchdog_tick_body()
-    assert "detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS" in body
+    assert "detectInFlight && activeDetectionAttempt && activeDetectionAttempt.phase === 'network'" in body
+    assert "networkElapsed > WATCHDOG_TIMEOUT_MS" in body
     assert "activeDetectionController.abort()" in body
     assert "'watchdog_aborted_stuck_request'" in body
 
@@ -1772,7 +1781,7 @@ def test_watchdog_only_counts_a_real_abort_not_a_stuck_with_nothing_to_abort_tic
     controller-exists / no-controller-yet case), not an if/else nested inside one — see the
     lastFetchStartAt fix, which needed the real-abort branch to compute its own elapsed time."""
     body = _watchdog_tick_body()
-    real_abort_start = body.index("} else if (detectInFlight && diagState.lastRequestStartAt && activeDetectionController) {")
+    real_abort_start = body.index("} else if (detectInFlight && activeDetectionAttempt && activeDetectionAttempt.phase === 'network'")
     real_abort_end = body.index("} else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {")
     real_abort_branch = body[real_abort_start:real_abort_end]
     assert "diagState.watchdogAbortCount++;" in real_abort_branch
@@ -1795,7 +1804,7 @@ def test_frame_capture_runs_before_active_detection_controller_is_assigned():
     start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
     end = html.index("async function scanTick(token)")
     body = html[start:end]
-    capture_idx = body.index("ctx.drawImage(cam, 0, 0, cap.width, cap.height);")
+    capture_idx = body.index("captureCtx.drawImage(cam, 0, 0, captureCanvas.width, captureCanvas.height);")
     controller_idx = body.index("const controller = new AbortController();")
     assert capture_idx < controller_idx
 
@@ -1933,10 +1942,10 @@ def test_drawimage_and_toblob_are_now_logged_as_separate_stages():
     order = [
         body.index("logTimingCheckpoint('[FRAME CAPTURE START]'"),
         body.index("logTimingCheckpoint('[DRAW IMAGE START]'"),
-        body.index("ctx.drawImage(cam, 0, 0, cap.width, cap.height);"),
+        body.index("captureCtx.drawImage(cam, 0, 0, captureCanvas.width, captureCanvas.height);"),
         body.index("logTimingCheckpoint('[DRAW IMAGE END]'"),
         body.index("logTimingCheckpoint('[TOBLOB START]'"),
-        body.index("cap.toBlob(res, \"image/jpeg\", 0.85)"),
+        body.index("captureCanvas.toBlob(res, \"image/jpeg\", 0.85)"),
         body.index("logTimingCheckpoint('[TOBLOB END]'"),
         body.index("logTimingCheckpoint('[FRAME CAPTURE END]'"),
     ]
@@ -1979,7 +1988,7 @@ def test_network_timeout_baseline_starts_at_fetch_not_at_capture_start():
     assert fetch_start_marker < stamp_idx < fetch_call_idx
 
     watchdog_body = _watchdog_tick_body()
-    real_abort_start = watchdog_body.index("} else if (detectInFlight && diagState.lastRequestStartAt && activeDetectionController) {")
+    real_abort_start = watchdog_body.index("} else if (detectInFlight && activeDetectionAttempt && activeDetectionAttempt.phase === 'network'")
     real_abort_end = watchdog_body.index("} else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {")
     real_abort_branch = watchdog_body[real_abort_start:real_abort_end]
     assert "const networkElapsed = Date.now() - (diagState.lastFetchStartAt || baseline);" in real_abort_branch
@@ -1993,7 +2002,7 @@ def test_capture_duration_does_not_leak_into_network_elapsed_calculation():
     ~= now) must compute a small networkElapsed even if lastRequestStartAt (capture start)
     was minutes ago — proving the two clocks are now independent."""
     watchdog_body = _watchdog_tick_body()
-    real_abort_start = watchdog_body.index("} else if (detectInFlight && diagState.lastRequestStartAt && activeDetectionController) {")
+    real_abort_start = watchdog_body.index("} else if (detectInFlight && activeDetectionAttempt && activeDetectionAttempt.phase === 'network'")
     real_abort_end = watchdog_body.index("} else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {")
     real_abort_branch = watchdog_body[real_abort_start:real_abort_end]
     # networkElapsed must be derived from lastFetchStartAt, never from `baseline` alone
@@ -2016,7 +2025,7 @@ def test_session_end_during_capture_blocks_fetch_from_starting():
     assert capture_end_idx < session_check_idx < try_idx < fetch_idx
     guard_body = body[session_check_idx:try_idx]
     assert "'session_ended_during_capture'" in guard_body
-    assert "detectInFlight = false;" in guard_body
+    assert "finalizeDetectionAttempt(attempt, 'cancelled', 'session_ended_during_capture', false);" in guard_body
     assert "return;" in guard_body
 
 
@@ -2094,13 +2103,23 @@ def _track_frame_body():
     return html[start:end]
 
 
-def test_capture_and_tracking_share_one_canvas_and_context():
+def test_capture_uses_its_own_canvas_and_context():
     """Proof 1: exactly one <canvas>/2D-context pair exists and is used by both the
     server-capture path (detectOnceFromServer) and the local-tracking path
     (matFromVideoGray, called every trackFrame tick) — not two independent resources."""
     html = _scanner_html()
     assert html.count('getElementById("cap")') == 1
+    assert html.count('getElementById("captureCanvas")') == 1
     assert html.count('cap.getContext(') == 1
+    assert html.count('captureCanvas.getContext(') == 1
+    detect_body = _detect_once_body()
+    assert "captureCanvas.width = capW;" in detect_body
+    assert "captureCanvas.height = capH;" in detect_body
+    assert "captureCtx.drawImage(cam, 0, 0, captureCanvas.width, captureCanvas.height);" in detect_body
+    assert "captureCanvas.toBlob(res, \"image/jpeg\", 0.85)" in detect_body
+    assert "cap.width = capW;" not in detect_body
+    assert "cap.height = capH;" not in detect_body
+    assert "cap.toBlob(" not in detect_body
     gray_start = html.index("function matFromVideoGray()")
     gray_end = html.index("function cornersToMat(corners)")
     gray_body = html[gray_start:gray_end]
@@ -2108,36 +2127,126 @@ def test_capture_and_tracking_share_one_canvas_and_context():
     assert "ctx.getImageData(0, 0, cap.width, cap.height)" in gray_body
 
 
-def test_detect_resizes_shared_canvas_before_network_await():
+def test_capture_never_resizes_tracking_canvas_before_network_await():
     """Proof 2/4: detectOnceFromServer mutates cap.width/height to detection dimensions
     SYNCHRONOUSLY, before the toBlob await and before the fetch await — i.e. before any
     point where the event loop could run a queued trackFrame() rAF callback in between."""
-    html = _scanner_html()
-    detect_start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
-    detect_end = html.index("async function scanTick(token)")
-    body = html[detect_start:detect_end]
-    resize_at = body.index("cap.width = capW;")
-    assert body.index("cap.height = capH;") > resize_at
-    to_blob_at = body.index('cap.toBlob(res, "image/jpeg", 0.85)')
+    body = _detect_once_body()
+    resize_at = body.index("captureCanvas.width = capW;")
+    assert body.index("captureCanvas.height = capH;") > resize_at
+    to_blob_at = body.index('captureCanvas.toBlob(res, "image/jpeg", 0.85)')
     fetch_at = body.index('await fetch("/detect_init"')
     assert resize_at < to_blob_at < fetch_at
+    assert "cap.width = capW;" not in body[:fetch_at]
+    assert "cap.height = capH;" not in body[:fetch_at]
 
 
-def test_capture_dimensions_are_not_restored_before_response_arrives():
+def test_tracking_canvas_is_sized_only_from_backend_frame_dimensions():
     """Proof 2/4: nothing restores cap.width/height back to frameW/frameH between the
     capture-dimension resize and the fetch's await resolving — the only restoration is
     inside the accepted-detection branch, which runs strictly after `await r.json()`.
     A rejected/no-detection/stale response leaves cap at detection dimensions."""
-    html = _scanner_html()
-    detect_start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
-    detect_end = html.index("async function scanTick(token)")
-    body = html[detect_start:detect_end]
-    resize_at = body.index("cap.width = capW;")
+    body = _detect_once_body()
+    resize_at = body.index("captureCanvas.width = capW;")
     json_at = body.index("const data = await r.json();")
     between = body[resize_at:json_at]
-    assert "cap.width = frameW" not in between
+    assert "cap.width =" not in between
+    assert "cap.height =" not in between
     restore_at = body.index("cap.width = frameW; cap.height = frameH;")
     assert restore_at > json_at
+
+
+def test_one_active_attempt_maximum_is_structurally_enforced():
+    html = _scanner_html()
+    create_start = html.index("function createDetectionAttempt(")
+    create_end = html.index("function isCurrentDetectionAttempt", create_start)
+    body = html[create_start:create_end]
+    assert "if (activeDetectionAttempt && !activeDetectionAttempt.terminal) {" in body
+    assert "return null;" in body
+    assert "activeDetectionAttempt = attempt;" in body
+    assert "detectInFlight = true;" in body
+
+
+def test_one_encode_and_one_fetch_are_owned_by_the_active_attempt():
+    body = _detect_once_body()
+    assert "attempt.encodeInFlight = true;" in body
+    assert "const blob = await new Promise(res => captureCanvas.toBlob(res, \"image/jpeg\", 0.85));" in body
+    assert "attempt.encodeInFlight = false;" in body
+    assert "attempt.fetchInFlight = true;" in body
+    assert "activeDetectionController = controller;" in body
+    assert 'const r = await fetch("/detect_init", { method: "POST", body: fd, signal: controller.signal });' in body
+    assert "attempt.fetchInFlight = false;" in body
+
+
+def test_one_successor_schedule_per_attempt():
+    html = _scanner_html()
+    schedule_start = html.index("function scheduleAttemptSuccessor(")
+    schedule_end = html.index("function finalizeDetectionAttempt", schedule_start)
+    schedule_body = html[schedule_start:schedule_end]
+    assert "attempt.successorScheduled" in schedule_body
+    assert "scheduleNextScan(reason || 'after_attempt');" in schedule_body
+    finalize_start = html.index("function finalizeDetectionAttempt(")
+    finalize_end = html.index("function clearTrackingGeometry", finalize_start)
+    finalize_body = html[finalize_start:finalize_end]
+    assert "if (scheduleSuccessor) scheduleAttemptSuccessor(attempt, 'after_attempt');" in finalize_body
+
+
+def test_watchdog_never_aborts_drawing_encoding_or_handling_attempt_phases():
+    body = _watchdog_tick_body()
+    real_abort_start = body.index("} else if (detectInFlight && activeDetectionAttempt && activeDetectionAttempt.phase === 'network'")
+    real_abort_end = body.index("} else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {")
+    real_abort_branch = body[real_abort_start:real_abort_end]
+    assert "activeDetectionAttempt.phase === 'network'" in real_abort_branch
+    assert "activeDetectionController.abort();" in real_abort_branch
+    for phase in ("'drawing'", "'encoding'", "'handling'"):
+        assert phase not in real_abort_branch
+
+
+def test_network_abort_requires_exact_attempt_ownership():
+    body = _watchdog_tick_body()
+    real_abort_start = body.index("} else if (detectInFlight && activeDetectionAttempt && activeDetectionAttempt.phase === 'network'")
+    real_abort_end = body.index("} else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {")
+    real_abort_branch = body[real_abort_start:real_abort_end]
+    for guard in (
+        "activeDetectionAttempt.controller === activeDetectionController",
+        "activeDetectionAttempt.requestSequence === diagState.activeAttemptSeq",
+        "activeDetectionAttempt.scannerGeneration === scannerGeneration",
+        "activeDetectionAttempt.scanLoopToken === token",
+        "!activeDetectionAttempt.networkAborted",
+        "!activeDetectionAttempt.terminal",
+    ):
+        assert guard in real_abort_branch
+
+
+def test_late_blob_stale_generation_and_stale_loop_token_are_ignored():
+    html = _scanner_html()
+    current_start = html.index("function isCurrentDetectionAttempt(")
+    current_end = html.index("function setDetectionAttemptPhase", current_start)
+    current_body = html[current_start:current_end]
+    assert "attempt.scannerGeneration === scannerGeneration" in current_body
+    assert "attempt.scanLoopToken === scanLoopToken" in current_body
+    detect_body = _detect_once_body()
+    assert "finalizeDetectionAttempt(attempt, 'cancelled', 'late_blob_callback');" in detect_body
+    assert "finalizeDetectionAttempt(attempt, 'cancelled', 'stale_response');" in detect_body
+    assert "finalizeDetectionAttempt(attempt, 'cancelled', 'stale_attempt_after_fetch');" in detect_body
+
+
+def test_capture_metadata_uses_uploaded_capture_dimensions():
+    body = _detect_once_body()
+    capture_width_idx = body.index("captureCanvas.width = capW;")
+    metadata_width_idx = body.index('fd.append("source_frame_width", String(capW));')
+    metadata_height_idx = body.index('fd.append("source_frame_height", String(capH));')
+    fetch_idx = body.index('await fetch("/detect_init"')
+    assert capture_width_idx < metadata_width_idx < fetch_idx
+    assert capture_width_idx < metadata_height_idx < fetch_idx
+
+
+def test_scan_counting_still_records_once_per_accepted_detection():
+    body = _detect_once_body()
+    accept_idx = body.index("recordAcceptance();")
+    warp_idx = body.index("if (applyWarp(currCorners,", accept_idx)
+    assert accept_idx < warp_idx
+    assert body.count("recordAcceptance();") == 1
 
 
 def test_track_frame_has_no_capture_in_flight_guard():

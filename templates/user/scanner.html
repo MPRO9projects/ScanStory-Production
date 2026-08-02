@@ -615,6 +615,7 @@
   <div class="progress-info" id="progressInfo"></div>
 
   <canvas id="cap" hidden></canvas>
+  <canvas id="captureCanvas" hidden></canvas>
 
   <div id="status" class="status scan">Loading OpenCV…</div>
 
@@ -873,6 +874,12 @@
       watchdogDeadline: null,
       watchdogTriggered: false,
       requestInFlight: false,
+      activeAttemptPhase: null,
+      activeAttemptSeq: null,
+      activeAttemptTerminal: false,
+      encodeInFlight: false,
+      fetchInFlight: false,
+      successorScheduled: false,
       recoveryInProgress: false,
       trackingAgeMs: null,
       currentScanLoopToken: null,
@@ -1167,6 +1174,8 @@
     const overlay = document.getElementById("overlay");
     const cap = document.getElementById("cap");
     const ctx = cap.getContext("2d", { willReadFrequently: true });
+    const captureCanvas = document.getElementById("captureCanvas");
+    const captureCtx = captureCanvas.getContext("2d");
     const statusDiv = document.getElementById("status");
     const soundGate = document.getElementById("soundGate");
     const loadingSpinner = document.getElementById("loadingSpinner");
@@ -1446,6 +1455,7 @@
 
     let tracking = false;
     let detectInFlight = false;
+    let activeDetectionAttempt = null;
     let clientRequestSeq = 0; // real-device gap investigation: numbers every detect_init request client-side
     let frameW = 0, frameH = 0;
     let prevGray = null;
@@ -1530,7 +1540,106 @@
         try { activeDetectionController.abort(); } catch (_) {}
         activeDetectionController = null;
       }
+      if (activeDetectionAttempt && !activeDetectionAttempt.terminal) {
+        activeDetectionAttempt.cancelled = true;
+        finalizeDetectionAttempt(activeDetectionAttempt, 'cancelled', 'invalidate_detection', false);
+      }
       detectInFlight = false;
+    }
+
+    function createDetectionAttempt(requestSequence, generation, token) {
+      if (activeDetectionAttempt && !activeDetectionAttempt.terminal) {
+        scannerDiagnostics.push('detection_attempt_rejected', {
+          reason: 'attempt_in_flight',
+          requestSequence,
+          activeRequestSequence: activeDetectionAttempt.requestSequence,
+          phase: activeDetectionAttempt.phase,
+          generation,
+          token
+        });
+        return null;
+      }
+      const attempt = {
+        requestSequence,
+        scannerGeneration: generation,
+        scanLoopToken: token,
+        phase: 'drawing',
+        controller: null,
+        terminal: false,
+        successorScheduled: false,
+        cancelled: false,
+        encodeInFlight: false,
+        fetchInFlight: false,
+        networkAborted: false
+      };
+      activeDetectionAttempt = attempt;
+      detectInFlight = true;
+      diagState.activeAttemptSeq = requestSequence;
+      diagState.activeAttemptPhase = attempt.phase;
+      diagState.activeAttemptTerminal = false;
+      diagState.encodeInFlight = false;
+      diagState.fetchInFlight = false;
+      diagState.successorScheduled = false;
+      scannerDiagnostics.push('detection_attempt_started', { requestSequence, generation, token, phase: attempt.phase });
+      return attempt;
+    }
+
+    function isCurrentDetectionAttempt(attempt) {
+      return Boolean(
+        attempt &&
+        activeDetectionAttempt === attempt &&
+        !attempt.terminal &&
+        !attempt.cancelled &&
+        !sessionEnding &&
+        attempt.scannerGeneration === scannerGeneration &&
+        attempt.scanLoopToken === scanLoopToken
+      );
+    }
+
+    function setDetectionAttemptPhase(attempt, phase) {
+      if (!isCurrentDetectionAttempt(attempt)) return false;
+      attempt.phase = phase;
+      diagState.activeAttemptPhase = phase;
+      scannerDiagnostics.push('detection_attempt_phase', {
+        requestSequence: attempt.requestSequence,
+        generation: attempt.scannerGeneration,
+        token: attempt.scanLoopToken,
+        phase
+      });
+      return true;
+    }
+
+    function scheduleAttemptSuccessor(attempt, reason) {
+      if (!attempt || attempt.successorScheduled || sessionEnding || attempt.scanLoopToken !== scanLoopToken) return false;
+      attempt.successorScheduled = true;
+      diagState.successorScheduled = true;
+      scheduleNextScan(reason || 'after_attempt');
+      return true;
+    }
+
+    function finalizeDetectionAttempt(attempt, phase, reason, scheduleSuccessor = true) {
+      if (!attempt || activeDetectionAttempt !== attempt || attempt.terminal) return false;
+      attempt.phase = phase || 'complete';
+      attempt.terminal = true;
+      attempt.encodeInFlight = false;
+      attempt.fetchInFlight = false;
+      if (activeDetectionController === attempt.controller) activeDetectionController = null;
+      if (attempt.controller && activeDetectionController === attempt.controller) activeDetectionController = null;
+      detectInFlight = false;
+      diagState.activeAttemptPhase = attempt.phase;
+      diagState.activeAttemptTerminal = true;
+      diagState.encodeInFlight = false;
+      diagState.fetchInFlight = false;
+      scannerDiagnostics.push('detection_attempt_finalized', {
+        requestSequence: attempt.requestSequence,
+        phase: attempt.phase,
+        reason,
+        generation: attempt.scannerGeneration,
+        token: attempt.scanLoopToken
+      });
+      if (scheduleSuccessor) scheduleAttemptSuccessor(attempt, 'after_attempt');
+      if (activeDetectionAttempt === attempt) activeDetectionAttempt = null;
+      return true;
     }
 
     function clearTrackingGeometry(reason, options = {}) {
@@ -2573,15 +2682,26 @@
       // send (the guard on the next line returns otherwise), which is itself the useful
       // sanity check: if the server ever logs this true, the in-flight guard was bypassed.
       const detectInFlightBeforeStart = detectInFlight;
-      if (sessionEnding || detectInFlight || !cvReady || cam.readyState < 2) return;
-      if (!detectionPolicy.canStart(performance.now(), !document.hidden, Boolean(cameraStream), tracking)) return;
+      if (sessionEnding || detectInFlight || !cvReady || cam.readyState < 2) {
+        if (!sessionEnding) scheduleNextScan('after_attempt_not_started');
+        return;
+      }
+      if (!detectionPolicy.canStart(performance.now(), !document.hidden, Boolean(cameraStream), tracking)) {
+        scheduleNextScan('after_attempt_not_started');
+        return;
+      }
       const requestId = detectionPolicy.start(performance.now());
       const requestGeneration = scannerGeneration;
+      const requestLoopToken = scanLoopToken;
+      const attempt = createDetectionAttempt(requestId, requestGeneration, requestLoopToken);
+      if (!attempt) {
+        detectionPolicy.finish(requestId);
+        return;
+      }
       const requestOrientationRevision = orientationRevision;
       const requestPairEpoch = activePairEpoch;
       const requestStart = performance.now();
       clientRequestSeq++;
-      detectInFlight = true;
       if (scannerState.state === 'ready_to_scan' || scannerState.state === 'recovering') safeTransition('detecting', 'server_request');
       loadingSpinner.style.display = "block";
 
@@ -2596,8 +2716,8 @@
         capW = Math.round(capW * limitScale);
         capH = Math.round(capH * limitScale);
       }
-      cap.width = capW;
-      cap.height = capH;
+      captureCanvas.width = capW;
+      captureCanvas.height = capH;
 
       // Audit note: this capture step (drawImage + toBlob) runs BEFORE activeDetectionController
       // is assigned below — the watchdog cannot abort a stall here (nothing to call .abort()
@@ -2608,12 +2728,33 @@
       // real-device run can attribute the delay to one stage specifically instead of both.
       logTimingCheckpoint('[FRAME CAPTURE START]', 'frame_capture');
       logTimingCheckpoint('[DRAW IMAGE START]', 'draw_image', { capW, capH, videoWidth: cam.videoWidth, videoHeight: cam.videoHeight });
-      ctx.drawImage(cam, 0, 0, cap.width, cap.height);
+      captureCtx.drawImage(cam, 0, 0, captureCanvas.width, captureCanvas.height);
       logTimingCheckpoint('[DRAW IMAGE END]', 'draw_image', { capW, capH, videoWidth: cam.videoWidth, videoHeight: cam.videoHeight });
+      if (!isCurrentDetectionAttempt(attempt)) {
+        detectionPolicy.finish(requestId);
+        finalizeDetectionAttempt(attempt, 'cancelled', 'stale_after_drawing');
+        return;
+      }
+      setDetectionAttemptPhase(attempt, 'encoding');
+      attempt.encodeInFlight = true;
+      diagState.encodeInFlight = true;
       logTimingCheckpoint('[TOBLOB START]', 'to_blob', { capW, capH });
-      const blob = await new Promise(res => cap.toBlob(res, "image/jpeg", 0.85));
+      const blob = await new Promise(res => captureCanvas.toBlob(res, "image/jpeg", 0.85));
+      attempt.encodeInFlight = false;
+      diagState.encodeInFlight = false;
       logTimingCheckpoint('[TOBLOB END]', 'to_blob', { capW, capH });
       logTimingCheckpoint('[FRAME CAPTURE END]', 'frame_capture');
+      if (!isCurrentDetectionAttempt(attempt)) {
+        detectionPolicy.finish(requestId);
+        finalizeDetectionAttempt(attempt, 'cancelled', 'late_blob_callback');
+        return;
+      }
+      if (!blob || !blob.size) {
+        scannerDiagnostics.push('capture_blob_invalid', { requestId, generation: requestGeneration, token: requestLoopToken, size: blob ? blob.size : null });
+        detectionPolicy.finish(requestId);
+        finalizeDetectionAttempt(attempt, 'complete', 'invalid_blob');
+        return;
+      }
 
       // Root-cause fix (proven — session-end audit): sessionEnding was only checked BEFORE
       // capture started and again AFTER the fetch resolved — nothing guarded the boundary
@@ -2626,12 +2767,17 @@
       if (sessionEnding) {
         scannerDiagnostics.push('scan_tick_skipped', { reason: 'session_ended_during_capture' });
         detectionPolicy.finish(requestId);
-        detectInFlight = false;
         loadingSpinner.style.display = "none";
+        finalizeDetectionAttempt(attempt, 'cancelled', 'session_ended_during_capture', false);
         return;
       }
 
       try {
+        if (!setDetectionAttemptPhase(attempt, 'network')) {
+          detectionPolicy.finish(requestId);
+          finalizeDetectionAttempt(attempt, 'cancelled', 'stale_before_formdata');
+          return;
+        }
         const fd = new FormData();
         fd.append("project_id", PROJECT_ID);
         fd.append("test_image", blob, "frame.jpg");
@@ -2661,6 +2807,14 @@
         fd.append("scan_loop_token", String(scanLoopToken));
 
         const controller = new AbortController();
+        if (!isCurrentDetectionAttempt(attempt)) {
+          detectionPolicy.finish(requestId);
+          finalizeDetectionAttempt(attempt, 'cancelled', 'stale_before_controller');
+          return;
+        }
+        attempt.controller = controller;
+        attempt.fetchInFlight = true;
+        diagState.fetchInFlight = true;
         activeDetectionController = controller;
         // Root-cause fix (proven — see watchdogTick): the watchdog's "abort a stuck
         // request" deadline used to be computed from diagState.lastRequestStartAt, which is
@@ -2679,7 +2833,14 @@
         const r = await fetch("/detect_init", { method: "POST", body: fd, signal: controller.signal });
         logTimingCheckpoint('[FETCH END]', 'fetch', { requestId, httpStatus: r.status });
         clearTimeout(timeoutId);
-        if (activeDetectionController === controller) activeDetectionController = null;
+        if (activeDetectionController === controller && attempt.controller === controller) activeDetectionController = null;
+        attempt.fetchInFlight = false;
+        diagState.fetchInFlight = false;
+        if (!setDetectionAttemptPhase(attempt, 'handling')) {
+          detectionPolicy.finish(requestId);
+          finalizeDetectionAttempt(attempt, 'cancelled', 'stale_before_response_handling');
+          return;
+        }
         const data = await r.json();
         // Exit-safety (round-4 fix): a request already in flight when endScannerSession()
         // ran can still resolve AFTER navigation begins. isStaleGeneration below (generation
@@ -2691,6 +2852,14 @@
           diagState.staleCount++;
           scannerDiagnostics.push('[STALE RESULT IGNORED]', { requestId, code: 'session_ended' });
           detectionPolicy.finish(requestId);
+          finalizeDetectionAttempt(attempt, 'cancelled', 'session_ended_after_fetch', false);
+          return;
+        }
+        if (!isCurrentDetectionAttempt(attempt)) {
+          diagState.staleCount++;
+          scannerDiagnostics.push('[STALE RESULT IGNORED]', { requestId, code: 'stale_attempt_after_fetch' });
+          detectionPolicy.finish(requestId);
+          finalizeDetectionAttempt(attempt, 'cancelled', 'stale_attempt_after_fetch');
           return;
         }
         const durationMs = Math.round(performance.now() - requestStart);
@@ -2716,9 +2885,13 @@
             requestGeneration, activeGeneration: scannerGeneration
           });
           detectionPolicy.finish(requestId);
+          finalizeDetectionAttempt(attempt, 'cancelled', 'stale_response');
           return;
         }
-        if (detectionPolicy.finish(requestId) === 'stale') return;
+        if (detectionPolicy.finish(requestId) === 'stale') {
+          finalizeDetectionAttempt(attempt, 'cancelled', 'stale_policy_finish');
+          return;
+        }
         latestAcceptedRequestId = requestId;
         diagState.latestAppliedSeq = requestId;
         const validation = runtime.validateDetectionResponse(data);
@@ -2909,7 +3082,9 @@
       } catch (e) {
         console.error("Detection error:", e);
         detectionPolicy.finish(requestId);
-        if (activeDetectionController) activeDetectionController = null;
+        attempt.fetchInFlight = false;
+        diagState.fetchInFlight = false;
+        if (activeDetectionController === attempt.controller) activeDetectionController = null;
         if (sessionEnding) {
           // Root cause of the forbidden "recognition fallback shown after navigation begins"
           // case: endScannerSession() aborts activeDetectionController as part of exit
@@ -2918,6 +3093,7 @@
           // handleDetectionTimeout() (which can show the recognition-help panel) or touch
           // status text after the scanner is already tearing down.
           scannerDiagnostics.push('scan_tick_skipped', { reason: 'aborted_for_session_end' });
+          finalizeDetectionAttempt(attempt, 'cancelled', 'aborted_for_session_end', false);
           return;
         }
         if (e && e.name === 'AbortError') {
@@ -2928,7 +3104,7 @@
         }
       } finally {
         logTimingCheckpoint('[RESPONSE HANDLED]', 'response_handled', { requestId });
-        detectInFlight = false;
+        finalizeDetectionAttempt(attempt, (attempt.cancelled || sessionEnding) ? 'cancelled' : 'complete', 'finally');
         loadingSpinner.style.display = "none";
       }
     }
@@ -3047,7 +3223,7 @@
           logTimingCheckpoint('[WATCHDOG ABORT]', 'forced_detection', { elapsedMs: elapsed });
           detectOnceFromServer(true); // forces a request through the SAME guarded path scanTick uses — never restarts the camera or the loop itself
         }
-      } else if (detectInFlight && diagState.lastRequestStartAt && activeDetectionController) {
+      } else if (detectInFlight && activeDetectionAttempt && activeDetectionAttempt.phase === 'network' && diagState.lastRequestStartAt && activeDetectionController) {
         // Root-cause fix (proven — real-device log showed FETCH START immediately followed
         // by WATCHDOG ABORT / AbortError): this branch used to reuse `elapsed`, computed
         // from diagState.lastRequestStartAt — stamped BEFORE frame capture (drawImage/
@@ -3058,7 +3234,17 @@
         // elapsed time is now measured from diagState.lastFetchStartAt (stamped right before
         // the fetch call), completely separate from however long capture took.
         const networkElapsed = Date.now() - (diagState.lastFetchStartAt || baseline);
-        if (networkElapsed > WATCHDOG_TIMEOUT_MS) {
+        if (
+          networkElapsed > WATCHDOG_TIMEOUT_MS &&
+          activeDetectionAttempt &&
+          activeDetectionAttempt.phase === 'network' &&
+          activeDetectionAttempt.controller === activeDetectionController &&
+          activeDetectionAttempt.requestSequence === diagState.activeAttemptSeq &&
+          activeDetectionAttempt.scannerGeneration === scannerGeneration &&
+          activeDetectionAttempt.scanLoopToken === token &&
+          !activeDetectionAttempt.networkAborted &&
+          !activeDetectionAttempt.terminal
+        ) {
           diagState.watchdogTriggered = true;
           diagState.lastWatchdogElapsedMs = networkElapsed;
           diagState.watchdogAbortCount++;
@@ -3066,6 +3252,8 @@
           diagState.lastWatchdogReason = 'aborted_stuck_request';
           scannerDiagnostics.push('watchdog_aborted_stuck_request', { elapsedMs: networkElapsed, generation: scannerGeneration, token });
           logTimingCheckpoint('[WATCHDOG ABORT]', 'aborted_stuck_request', { elapsedMs: networkElapsed });
+          activeDetectionAttempt.networkAborted = true;
+          activeDetectionAttempt.cancelled = true;
           activeDetectionController.abort();
         }
       } else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {
@@ -3093,6 +3281,7 @@
 
     async function scanTick(token) {
       detectLoopTimer = null;
+      let requestAttemptStarted = false;
       logTimingCheckpoint('[SCAN TIMER FIRED]', 'timer_fired', { token });
       const track = cameraStream ? cameraStream.getVideoTracks()[0] : null;
       const actualRunAt = Date.now();
@@ -3158,6 +3347,7 @@
         diagState.lastRequestGapMs = diagState.lastRequestStartAt ? requestStartedAtMs - diagState.lastRequestStartAt : null;
         diagState.lastRequestStartAt = requestStartedAtMs;
         scannerDiagnostics.push('request_started', { token, generation: scannerGeneration });
+        requestAttemptStarted = true;
         await detectOnceFromServer();
         diagState.lastRequestFinishAt = Date.now();
         scannerDiagnostics.push('request_finished', { token, generation: scannerGeneration });
@@ -3165,7 +3355,7 @@
         // Always reschedule — a completed tick (whatever the outcome) must lead to the
         // next one unless the scanner was intentionally stopped (sessionEnding/stale token,
         // both checked again inside scheduleNextScan/the next scanTick invocation).
-        scheduleNextScan('after_tick');
+        if (!requestAttemptStarted) scheduleNextScan('after_tick');
       }
     }
 
