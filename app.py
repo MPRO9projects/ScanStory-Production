@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import shutil
 import mimetypes
 import threading
 import json
@@ -19,7 +20,7 @@ import cv2
 import numpy as np
 import qrcode
 from qrcode.image.styledpil import StyledPilImage
-from PIL import Image, ImageDraw, ImageFile, ImageFont
+from PIL import Image, ImageDraw, ImageFile, ImageFont, ImageOps
 import ffmpeg
 import secrets
 import hashlib
@@ -1101,6 +1102,12 @@ MIN_GOOD_MATCHES = 8          # raised from 7 — need more matches before trust
 RANSAC_REPROJ = 5.0           # tightened from 8.0 — fewer false inliers
 MIN_INLIERS_ABS = 8           # raised from 6 — 5 inliers produced degenerate H
 MIN_INLIERS_RATIO = 0.30
+# Cap on how high MIN_INLIERS_RATIO * total_good can push the required-inlier bar — a
+# marker with a genuinely large unique-correspondence count (highly textured, well-lit)
+# should not need more than this many inliers just because "total" is large. Without a
+# cap, a false-positive-prone but well-textured marker could demand an inlier count that
+# even its own best possible detection can't consistently clear.
+MAX_INLIERS_REQUIRED = 40
 
 _tls = threading.local()
 _fast_bf = cv2.BFMatcher(cv2.NORM_HAMMING)
@@ -1603,7 +1610,46 @@ def load_features(project_id: int, pair_index: int = 0):
         print(f"❌ load_features error for project={project_id}, pair={pair_index}: {e}")
         return _empty_features()
 
-def match_best_variant(test_desc, feats, ratio=0.75):
+def _filter_mutual_unique_matches(matches):
+    """Enforce unique query/train correspondence (mutual-nearest-match filtering).
+
+    Root cause investigated for the "50-75 good matches but only 6-13 inliers" pattern
+    (real-device logs; see also the comment above the evaluate_homography_quality() call
+    in detect_init referencing a prior "45 good matches, 6 inliers, required 13" case):
+    match_best_variant()'s ratio test has no dedup — a single stored keypoint (trainIdx)
+    can be the "good" match for several query keypoints (repetitive local texture), and a
+    single query keypoint could likewise appear more than once if matched against more
+    than one variant tag before this filter runs. These duplicate/many-to-one
+    correspondences inflate the "good_matches" count without adding independent
+    geometric evidence, which then inflates evaluate_homography_quality's
+    required-inlier bar (MIN_INLIERS_RATIO * total) beyond what the genuinely unique
+    correspondence set can ever satisfy — a geometrically sound detection gets rejected
+    as "weak_inliers" purely because its own match count was self-inflated.
+
+    Keeps, for each trainIdx, only its lowest-distance match; then, among survivors, for
+    each queryIdx keeps only its lowest-distance match. Order-independent w.r.t. which
+    pass runs first only when both are enforced fully, hence two passes.
+    """
+    if not matches:
+        return matches
+    best_by_train = {}
+    for m in matches:
+        prev = best_by_train.get(m.trainIdx)
+        if prev is None or m.distance < prev.distance:
+            best_by_train[m.trainIdx] = m
+    best_by_query = {}
+    for m in best_by_train.values():
+        prev = best_by_query.get(m.queryIdx)
+        if prev is None or m.distance < prev.distance:
+            best_by_query[m.queryIdx] = m
+    return list(best_by_query.values())
+
+
+def match_best_variant(test_desc, feats, ratio=0.75, diag=None):
+    """diag, if given a dict, is updated (only when a new best candidate is found) with
+    raw_knn_matches, ratio_accepted_pre_dedup, unique_query_idx, unique_train_idx, and
+    deduped_good — the match-count funnel for whichever tag/ratio ends up winning. Purely
+    diagnostic (see _log_frame_diag in detect_init); never changes matching behavior."""
     best = ("", [], None)
     if test_desc is None or test_desc.size == 0:
         return best
@@ -1628,16 +1674,30 @@ def match_best_variant(test_desc, feats, ratio=0.75):
             continue
 
         for ratio_try in (ratio, min(ratio + 0.05, 0.95), min(ratio + 0.15, 0.95)):
-            good = []
+            good_raw = []
             for m_n in knn:
                 if len(m_n) != 2:
                     continue
                 m, n = m_n
                 if m.distance < ratio_try * n.distance:
-                    good.append(m)
+                    good_raw.append(m)
+
+            # Dedup BEFORE counting/comparing — see _filter_mutual_unique_matches(). Without
+            # this, a repetitive-texture marker's duplicate/many-to-one correspondences
+            # inflate "good" here, which is exactly the count evaluate_homography_quality's
+            # required-inlier formula scales off of.
+            good = _filter_mutual_unique_matches(good_raw)
 
             if len(good) > len(best[1]):
                 best = (tag, good, skp if skp is not None else stored_kp)
+                if diag is not None:
+                    diag["raw_knn_matches"] = len(knn)
+                    diag["ratio_accepted_pre_dedup"] = len(good_raw)
+                    diag["unique_query_idx"] = len({m.queryIdx for m in good_raw})
+                    diag["unique_train_idx"] = len({m.trainIdx for m in good_raw})
+                    diag["deduped_good"] = len(good)
+                    diag["winning_tag"] = tag
+                    diag["winning_ratio"] = ratio_try
 
             if len(good) >= MIN_GOOD_MATCHES:
                 break
@@ -1710,7 +1770,7 @@ def evaluate_homography_quality(src_arr, dst_arr, homography, mask, marker_w, ma
     total = int(len(src_arr))
     inliers = int(np.sum(inlier_mask))
     inlier_ratio = inliers / float(max(total, 1))
-    min_inliers_needed = max(MIN_INLIERS_ABS, int(MIN_INLIERS_RATIO * total))
+    min_inliers_needed = min(max(MIN_INLIERS_ABS, int(MIN_INLIERS_RATIO * total)), MAX_INLIERS_REQUIRED)
     if inliers < min_inliers_needed:
         return False, {
             "reason": "weak_inliers", "code": "insufficient_inliers",
@@ -1865,9 +1925,127 @@ def quick_score(test_desc, feats, ratio=0.84, max_checks=QUICK_DESC_LIMIT):
 
     return best_score
 
-def make_feature_working_jpeg(src_path: str, out_path: str, max_dim: int = ORB_MAX_DIM, jpeg_quality: int = 92) -> str:
+# A crop narrower or shorter than this (in pixels, post-clamp) is treated as degenerate —
+# almost certainly a bad/empty selection, not a real marker photograph.
+MIN_CROP_ROI_PIXELS = 32
+# A stored file's dimensions within this fractional tolerance of marker_processed_width/
+# height are treated as "the client already baked this crop into the pixels" — see
+# extract_marker_roi().
+CROP_ALREADY_APPLIED_TOLERANCE = 0.02
+
+
+def extract_marker_roi(image_path, marker_meta):
+    """Apply EXIF/orientation normalization, then — when marker_meta describes a crop —
+    return ONLY the selected ROI as a BGR numpy array. This becomes the reference
+    coordinate system feature extraction, homography, and returned marker corners must use
+    from here on (see evaluate_homography_quality / detect_init, which already receive
+    stored reference w/h from the .npz this function's caller writes).
+
+    Never silently guesses: every decision this function makes (already-cropped detected,
+    clamped, rejected as too small, invalid fraction, full_image mode) is recorded in the
+    returned diagnostics dict — nothing here falls back to the full image without a logged
+    reason.
+
+    marker_meta is a plain dict with the same keys _parse_marker_meta()/ProjectPair use:
+    mode, crop_x, crop_y, crop_width, crop_height, processed_width, processed_height
+    (processed_width/height are optional — used only for the already-cropped check).
+
+    Returns (bgr_array, diagnostics_dict). bgr_array is never None — callers always get a
+    valid image back, cropped or not, per diagnostics['crop_applied'].
+    """
+    diag = {
+        "crop_applied": False,
+        "clamped": False,
+        "fallback_reason": None,
+        "marker_mode": (marker_meta or {}).get("mode", "full_image"),
+    }
+    with Image.open(image_path) as raw:
+        diag["original_decoded_w"], diag["original_decoded_h"] = raw.size
+        corrected = ImageOps.exif_transpose(raw)
+        if corrected.mode != "RGB":
+            corrected = corrected.convert("RGB")
+        actual_w, actual_h = corrected.size
+        diag["orientation_corrected_w"], diag["orientation_corrected_h"] = actual_w, actual_h
+        bgr = np.array(corrected)[:, :, ::-1].copy()
+
+    if diag["marker_mode"] != "crop":
+        diag["fallback_reason"] = "mode_full_image"
+        diag["final_w"], diag["final_h"] = actual_w, actual_h
+        return bgr, diag
+
+    processed_w = int((marker_meta or {}).get("processed_width") or 0)
+    processed_h = int((marker_meta or {}).get("processed_height") or 0)
+    if processed_w > 0 and processed_h > 0:
+        w_tol = max(2, processed_w * CROP_ALREADY_APPLIED_TOLERANCE)
+        h_tol = max(2, processed_h * CROP_ALREADY_APPLIED_TOLERANCE)
+        if abs(actual_w - processed_w) <= w_tol and abs(actual_h - processed_h) <= h_tol:
+            # The stored file's dimensions already match the client's post-crop canvas
+            # output (see drawCroppedMarkerToCanvas/renderMarkerBlob in
+            # user_create_project.html) — the crop is already baked into these pixels.
+            # Cropping again with the same normalized fractions would double-crop.
+            diag["fallback_reason"] = "already_cropped_client_side"
+            diag["final_w"], diag["final_h"] = actual_w, actual_h
+            return bgr, diag
+
+    try:
+        # `... or default` would silently turn an explicit, invalid 0.0 crop_width/height
+        # into the 1.0 default — use "is None" so an explicit 0.0 is preserved and caught
+        # by the crop_w <= 0 check below instead of being masked.
+        meta = marker_meta or {}
+        crop_x = float(meta["crop_x"] if meta.get("crop_x") is not None else 0.0)
+        crop_y = float(meta["crop_y"] if meta.get("crop_y") is not None else 0.0)
+        crop_w = float(meta["crop_width"] if meta.get("crop_width") is not None else 1.0)
+        crop_h = float(meta["crop_height"] if meta.get("crop_height") is not None else 1.0)
+    except (TypeError, ValueError):
+        diag["fallback_reason"] = "invalid_crop_fraction"
+        diag["final_w"], diag["final_h"] = actual_w, actual_h
+        return bgr, diag
+
+    if crop_w <= 0 or crop_h <= 0 or crop_x < 0 or crop_y < 0 or not all(
+        np.isfinite(v) for v in (crop_x, crop_y, crop_w, crop_h)
+    ):
+        diag["fallback_reason"] = "invalid_crop_fraction"
+        diag["final_w"], diag["final_h"] = actual_w, actual_h
+        return bgr, diag
+
+    px = int(round(crop_x * actual_w))
+    py = int(round(crop_y * actual_h))
+    pw = int(round(crop_w * actual_w))
+    ph = int(round(crop_h * actual_h))
+    diag["normalized_roi"] = [crop_x, crop_y, crop_w, crop_h]
+    diag["calculated_pixel_roi"] = [px, py, pw, ph]
+
+    clamped_px = max(0, min(px, actual_w - 1))
+    clamped_py = max(0, min(py, actual_h - 1))
+    clamped_pw = max(1, min(pw, actual_w - clamped_px))
+    clamped_ph = max(1, min(ph, actual_h - clamped_py))
+    if (clamped_px, clamped_py, clamped_pw, clamped_ph) != (px, py, pw, ph):
+        diag["clamped"] = True
+    diag["clamped_pixel_roi"] = [clamped_px, clamped_py, clamped_pw, clamped_ph]
+
+    if clamped_pw < MIN_CROP_ROI_PIXELS or clamped_ph < MIN_CROP_ROI_PIXELS:
+        diag["fallback_reason"] = f"crop_too_small ({clamped_pw}x{clamped_ph} < {MIN_CROP_ROI_PIXELS}px)"
+        diag["final_w"], diag["final_h"] = actual_w, actual_h
+        return bgr, diag
+
+    roi = bgr[clamped_py:clamped_py + clamped_ph, clamped_px:clamped_px + clamped_pw]
+    diag["crop_applied"] = True
+    diag["final_w"], diag["final_h"] = clamped_pw, clamped_ph
+    return roi, diag
+
+
+def make_feature_working_jpeg(src_path: str, out_path: str, max_dim: int = ORB_MAX_DIM, jpeg_quality: int = 92, marker_meta=None) -> str:
+    """marker_meta is optional — omit it (the default) to preserve exact prior behavior
+    (whole-image ORB input). Passing marker_meta={"mode": "crop", ...} crops to the
+    selected ROI (see extract_marker_roi()) before the resize below, so the crop is
+    established before any resize/enhancement/ORB extraction happens, per the
+    recognition-stability investigation into background/table clutter in stored features."""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    img = cv2.imread(src_path, cv2.IMREAD_COLOR)
+    if marker_meta is not None:
+        img, roi_diag = extract_marker_roi(src_path, marker_meta)
+        print(f"🔲 ROI diagnostics ({src_path}): {roi_diag}")
+    else:
+        img = cv2.imread(src_path, cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError("Bad image for feature working jpeg")
     h, w = img.shape[:2]
@@ -1877,6 +2055,147 @@ def make_feature_working_jpeg(src_path: str, out_path: str, max_dim: int = ORB_M
         img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
     cv2.imwrite(out_path, img, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
     return out_path
+
+
+def _npz_reference_summary(npz_path):
+    """previous/new reference dims + keypoint count for the rebuild report below — the
+    'n' (non-mirrored, non-rotated) variant is the representative keypoint count."""
+    if not os.path.exists(npz_path):
+        return {"reference_w": None, "reference_h": None, "keypoint_count": None}
+    try:
+        data = np.load(npz_path, allow_pickle=True)
+        return {
+            "reference_w": int(data["w"]) if "w" in data else None,
+            "reference_h": int(data["h"]) if "h" in data else None,
+            "keypoint_count": int(data["desc_n"].shape[0]) if "desc_n" in data else None,
+        }
+    except Exception as e:
+        return {"reference_w": None, "reference_h": None, "keypoint_count": None, "read_error": str(e)}
+
+
+def rebuild_pair_features(project_id: int, pair_index: int, admin: bool = False, apply_legacy_roi: bool = False):
+    """Safe, idempotent feature rebuild for ONE existing pair.
+
+    Default (apply_legacy_roi=False): extracts from the EXACT stored image pixels,
+    unchanged — this matches normal upload/reprocessing behavior. The normal upload path
+    already renders the user-selected ROI into a canvas and uploads those pixels (see
+    drawCroppedMarkerToCanvas/renderMarkerBlob in user_create_project.html); marker_crop_x/
+    y/width/height describe a crop ALREADY baked into the stored image and must never be
+    applied again — doing so double-crops (the real regression this rebuilt: project 40
+    went from a genuine 641x1200 marker to a sliver of it, ~245x644, entirely from
+    reapplying its own already-applied crop metadata).
+
+    apply_legacy_roi=True is an explicit, narrow escape hatch for pairs confirmed (by
+    inspection, not assumption) to predate the canvas-crop pipeline — where the stored
+    image genuinely IS the full uncropped upload and marker_crop_* genuinely does still
+    need applying once. Prints a loud warning every time it's used, since applying it to
+    an already-cropped pair reproduces the exact regression this function exists to fix.
+
+    Backs up the existing .npz before replacing it either way, and reports previous/new
+    reference dimensions + keypoint count. Never touches the pair's uploaded source image
+    (image_filename) or its video file. Rerunning with the SAME apply_legacy_roi value
+    against the same stored image is deterministic (same inputs -> same outputs).
+    """
+    images_dir = ADMIN_IMAGES_DIR if admin else IMAGES_DIR
+    features_dir = ADMIN_FEATURES_DIR if admin else FEATURES_DIR
+
+    pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=pair_index).first()
+    if pair is None:
+        raise ValueError(f"No ProjectPair found for project_id={project_id} pair_index={pair_index}")
+    if not pair.image_filename:
+        raise ValueError(f"ProjectPair project_id={project_id} pair_index={pair_index} has no stored image_filename")
+
+    img_path = os.path.join(images_dir, pair.image_filename)
+    if not os.path.exists(img_path):
+        raise FileNotFoundError(f"Source image not found on disk: {img_path}")
+
+    npz_path = os.path.join(features_dir, f"{project_id}_{pair_index}.npz")
+    report = {
+        "project_id": project_id,
+        "pair_index": pair_index,
+        "pair_id": pair.id,
+        "image_filename": pair.image_filename,
+        "npz_path": npz_path,
+        "apply_legacy_roi": apply_legacy_roi,
+    }
+    report["previous"] = _npz_reference_summary(npz_path)
+
+    backup_path = None
+    if os.path.exists(npz_path):
+        backup_path = f"{npz_path}.bak.{int(time.time())}"
+        shutil.copy2(npz_path, backup_path)
+    report["backup_path"] = backup_path
+
+    marker_meta = None
+    if apply_legacy_roi:
+        print(
+            f"⚠️⚠️⚠️ LEGACY ROI REPAIR REQUESTED for project_id={project_id} pair_index={pair_index} "
+            f"— applying marker_crop_x/y/width/height to the STORED image. This is only correct if "
+            f"this pair's stored image predates the client-side crop-baking pipeline (i.e. it is the "
+            f"full, uncropped upload). Applying this to an ALREADY-cropped pair double-crops it — "
+            f"verify before running this."
+        )
+        marker_meta = {
+            "mode": pair.marker_mode,
+            "crop_x": pair.marker_crop_x,
+            "crop_y": pair.marker_crop_y,
+            "crop_width": pair.marker_crop_width,
+            "crop_height": pair.marker_crop_height,
+            "processed_width": pair.marker_processed_width,
+            "processed_height": pair.marker_processed_height,
+        }
+    report["marker_meta"] = marker_meta
+
+    work_img_path = os.path.join(images_dir, f"{project_id}_{pair_index}_rebuild_work.jpg")
+    try:
+        make_feature_working_jpeg(img_path, work_img_path, max_dim=ORB_MAX_DIM, jpeg_quality=92, marker_meta=marker_meta)
+        extract_features_multi(work_img_path, npz_path, max_dim=ORB_MAX_DIM)
+    finally:
+        try:
+            if os.path.exists(work_img_path):
+                os.remove(work_img_path)
+        except Exception:
+            pass
+
+    report["new"] = _npz_reference_summary(npz_path)
+    load_features.cache_clear()  # drop the stale cached entry so the running server picks up the rebuild immediately
+    return report
+
+
+@app.cli.command("rebuild-pair-features")
+@click.option("--project-id", type=int, required=True, help="Project ID owning the pair.")
+@click.option("--pair-index", type=int, required=True, help="Pair index within the project (NOT the ProjectPair.id primary key).")
+@click.option("--admin", is_flag=True, help="Use admin image/feature directories instead of user directories.")
+@click.option(
+    "--apply-legacy-roi", is_flag=True,
+    help="DANGEROUS — only for pairs confirmed to predate the client-side crop-baking "
+         "pipeline (stored image is genuinely the full uncropped upload). Applies "
+         "marker_crop_x/y/width/height to the stored image. Omit this flag for normal "
+         "rebuilds — the default extracts from the exact stored pixels, no crop applied, "
+         "which is correct for every pair uploaded through the current upload flow.",
+)
+def rebuild_pair_features_command(project_id, pair_index, admin, apply_legacy_roi):
+    """Rebuild ONE pair's ORB features from its stored image.
+
+    Default: extracts from the exact stored image pixels — no crop coordinates applied.
+    Use --apply-legacy-roi only for a pair you've confirmed still needs its stored crop
+    metadata applied (an old upload that predates canvas-side crop baking); applying it to
+    an already-cropped pair double-crops it (see: project 40 regression, 641x1200 ->
+    245x644).
+
+    Example (project 39, ProjectPair.id=49): first resolve pair_index via
+    `ProjectPair.query.get(49).pair_index` — this command takes project_id + pair_index
+    (the pair's position within the project), not the ProjectPair primary key.
+    """
+    report = rebuild_pair_features(project_id, pair_index, admin=admin, apply_legacy_roi=apply_legacy_roi)
+    click.echo(f"Pair: project_id={report['project_id']} pair_index={report['pair_index']} pair_id={report['pair_id']}")
+    click.echo(f"Image: {report['image_filename']}")
+    click.echo(f"Legacy ROI applied: {report['apply_legacy_roi']}")
+    click.echo(f"Marker meta: {report['marker_meta']}")
+    click.echo(f"Backup: {report['backup_path'] or '(no existing npz to back up)'}")
+    click.echo(f"Previous reference: {report['previous']}")
+    click.echo(f"New reference:      {report['new']}")
+
 
 def _process_pair_upload(project_id: int, i: int, image_file, video_file):
     img_filename = f"{project_id}_{i}.jpg"
@@ -3408,7 +3727,7 @@ def handle_upload():
             try:
                 # Get image path
                 img_path = os.path.join(IMAGES_DIR, img_filename)
-                
+
                 # Mark as processing
                 with app.app_context():
                     pair = ProjectPair.query.filter_by(
@@ -3419,12 +3738,22 @@ def handle_upload():
                         pair.processing_status = "processing"
                         pair.feature_extraction_status = "extracting"
                         db.session.commit()
-                
+
                 # ✅ YOUR EXACT FEATURE EXTRACTION LOGIC
                 work_img_path = os.path.join(IMAGES_DIR, f"{project_id}_{pair_index}_work.jpg")
                 npz_path = os.path.join(FEATURES_DIR, f"{project_id}_{pair_index}.npz")
-                
-                # Process this single pair
+
+                # Process this single pair. Root-cause fix (real-device regression, projects
+                # 39/40): the normal upload path already renders the user-selected ROI into a
+                # canvas and uploads THOSE pixels (see drawCroppedMarkerToCanvas /
+                # renderMarkerBlob in user_create_project.html) — the stored marker_crop_x/y/
+                # width/height are provenance/UI metadata describing a crop ALREADY baked into
+                # img_path, never an instruction to crop again. Passing marker_meta here
+                # (removed) double-cropped every new project's marker down to a sliver of the
+                # card (project 40: 641x1200 -> 245x644). The exact uploaded pixels are always
+                # the authoritative marker image for normal processing; marker_meta is only
+                # ever applied via the explicit legacy-repair path — see
+                # rebuild_pair_features(..., apply_legacy_roi=True).
                 standardize_uploaded_image(img_path, target_size=1200)
                 make_feature_working_jpeg(img_path, work_img_path, max_dim=ORB_MAX_DIM, jpeg_quality=92)
                 extract_features_multi(work_img_path, npz_path, max_dim=ORB_MAX_DIM)
@@ -4260,7 +4589,24 @@ def detect_init():
         gray_small, scale, orig_w, orig_h = _resize_gray_for_detect(img)
         frame_w, frame_h = orig_w, orig_h
         print(f"📸 Gray scale: {gray_small.shape}, scale: {scale}")
-        
+
+        # Recognition-stability diagnostics (read-only — informational, never gates
+        # accept/reject). blur_score is Laplacian variance (lower = blurrier); brightness_score
+        # is mean pixel intensity 0-255. Collected here so every exit path below can attach
+        # them to one compact frame-level diagnostic block (see _log_frame_diag()).
+        blur_score = float(cv2.Laplacian(gray_small, cv2.CV_64F).var())
+        brightness_score = float(np.mean(gray_small))
+        frame_diag = {
+            "blur_score": round(blur_score, 1),
+            "brightness_score": round(brightness_score, 1),
+            "likely_blurry": blur_score < 40.0,
+            "likely_glare_or_dark": brightness_score > 235.0 or brightness_score < 25.0,
+        }
+
+        def _log_frame_diag(stage, **extra):
+            frame_diag.update(extra)
+            print(f"📋 frame_diag[{stage}]: {frame_diag}")
+
         orb = _orb_detect()
         test_kp, test_desc = orb.detectAndCompute(gray_small, None)
         t_after_detect = time.time()
@@ -4323,19 +4669,23 @@ def detect_init():
             if feats is None:
                 continue
 
-            best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.75)
+            pid_diag = {}
+            best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.75, diag=pid_diag)
 
             if not good_matches or len(good_matches) < MIN_GOOD_MATCHES:
-                best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.80)
+                best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.80, diag=pid_diag)
 
             if not good_matches or len(good_matches) < MIN_GOOD_MATCHES:
-                best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.90)
+                best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.90, diag=pid_diag)
 
             if good_matches and len(good_matches) > best_good:
                 second_good = best_good
                 best_good = len(good_matches)
                 best_match = (best_tag, good_matches, stored_kp, feats)
                 best_match_id = pid
+                # Match-count funnel for the CURRENT winning candidate only — overwritten if
+                # a later pid in top_ids wins instead, so this always reflects best_match_id.
+                frame_diag["match_funnel"] = dict(pid_diag, pair_id=pid)
                 print(f"  - Pair {pid}: {len(good_matches)} good matches")
             elif good_matches and len(good_matches) > second_good:
                 second_good = len(good_matches)
@@ -4344,6 +4694,7 @@ def detect_init():
 
         if not best_match or best_good < MIN_GOOD_MATCHES:
             print(f"❌ Detection failed: best_good={best_good}")
+            _log_frame_diag("mobile_detection_failed", raw_keypoints=len(test_kp), quick_score_candidates=len(scored), best_good=best_good)
             if scan_log and not is_admin_project:
                 db.session.commit()
             return jsonify({
@@ -4394,9 +4745,31 @@ def detect_init():
         src_arr = np.array(src_pts, dtype=np.float32)
         dst_arr = np.array(dst_pts, dtype=np.float32)
         
+        # Spatial distribution of the (deduped) good matches BEFORE RANSAC — informational
+        # only, does not gate anything. Lets a bad-frame log distinguish "matches scattered
+        # across the marker" (likely genuine texture, RANSAC just found the geometry
+        # inconsistent) from "matches clumped in one corner" (likely background clutter or a
+        # repetitive local patch, hypothesis A/B/E).
+        pre_ransac_cells, pre_ransac_score = _grid_coverage(dst_arr, frame_w * scale, frame_h * scale, grid=3)
+        matched_pair = next((p for p in processed_pairs if p.pair_index == best_match_id), None)
+        frame_diag["reference_crop"] = {
+            "stored_w": int(feats["w"]), "stored_h": int(feats["h"]),
+            "marker_mode": getattr(matched_pair, "marker_mode", None),
+            "marker_crop_wh_fraction": [getattr(matched_pair, "marker_crop_width", None), getattr(matched_pair, "marker_crop_height", None)],
+            # No server-side cropping ever happens — these crop_* fields are only what the
+            # client reported at upload time (see _parse_marker_meta), never verified or
+            # applied to pixels. If a client under-reports its own crop, background outside
+            # the marker is baked into the stored ORB features with no way to detect that
+            # from here alone (hypothesis A) — this field makes that visible for correlation,
+            # not something this pass can independently confirm or refute.
+        }
+        frame_diag["pre_ransac_grid_cells"] = pre_ransac_cells
+        frame_diag["pre_ransac_grid_score"] = pre_ransac_score
+
         H, mask = cv2.findHomography(src_arr, dst_arr, cv2.RANSAC, RANSAC_REPROJ)
         if H is None or mask is None:
             print(f"❌ Homography failed")
+            _log_frame_diag("homography_failed", raw_keypoints=len(test_kp), quick_score_candidates=len(scored), good_matches=best_good)
             if scan_log and not is_admin_project:
                 db.session.commit()
             return jsonify({"detected": False, "reason": "Homography failed", "code": "missing_homography"}), 200
@@ -4409,15 +4782,29 @@ def detect_init():
         # weakened by not duplicating the check here. Duplicating it here used to short-circuit
         # BEFORE evaluate_homography_quality ran, which meant every weak-inlier rejection came
         # back as a bare "Weak homography" string instead of a structured reason/code (see e.g.
-        # a real-device log of "45 good matches, 6 inliers, required 13" with no further detail).
+        # a real-device log of "45 good matches, 6 inliers, required 13" with no further detail
+        # — now fixed at the source by deduping good_matches, see _filter_mutual_unique_matches).
         tw, th = feats["w"], feats["h"]
         quality_ok, homography_quality = evaluate_homography_quality(
             src_arr, dst_arr, H, mask, tw, th, frame_w, frame_h, scale=scale
         )
         print(f"Homography quality: {homography_quality}")
+        # Homography condition/degeneracy: a near-singular H (huge condition number) means
+        # the RANSAC fit is barely constrained — informational, does not gate.
+        try:
+            frame_diag["homography_condition"] = float(np.linalg.cond(H))
+        except Exception:
+            frame_diag["homography_condition"] = None
+        frame_diag["visible_area_ratio"] = homography_quality.get("quad_area", 0) / max(frame_w * frame_h, 1) if homography_quality.get("quad_area") else None
 
         if not quality_ok:
             print(f"Rejected pose: {homography_quality.get('reason')} ({homography_quality.get('code')})")
+            _log_frame_diag(
+                "quality_rejected",
+                raw_keypoints=len(test_kp), quick_score_candidates=len(scored), good_matches=best_good,
+                inliers=inliers, inlier_ratio=(inliers / max(best_good, 1)),
+                reject_reason=homography_quality.get("reason"), reject_code=homography_quality.get("code"),
+            )
             if scan_log and not is_admin_project:
                 db.session.commit()
             return jsonify({
@@ -4490,8 +4877,13 @@ def detect_init():
             matched_video_url = url_for("serve_video", project_id=project_id, image_id=best_match_id, _external=True,_scheme="https")
         
         print(f"✅ Detection successful! Returning response")
+        _log_frame_diag(
+            "accepted",
+            raw_keypoints=len(test_kp), quick_score_candidates=len(scored), good_matches=best_good,
+            inliers=inliers, inlier_ratio=(inliers / max(best_good, 1)),
+        )
         print("="*50 + "\n")
-        
+
         return jsonify({
             "detected": True,
             "matched_pair_id": best_match_id,
@@ -6405,12 +6797,15 @@ def admin_handle_upload():
                         pair.processing_status = "processing"
                         pair.feature_extraction_status = "extracting"
                         db.session.commit()
-                
+
                 # ✅ CHANGE 5: Use ADMIN paths in background
                 img_path = os.path.join(ADMIN_IMAGES_DIR, img_filename)  # ← CHANGED
                 work_img_path = os.path.join(ADMIN_IMAGES_DIR, f"{project_id}_{pair_index}_work.jpg")  # ← CHANGED
                 npz_path = os.path.join(ADMIN_FEATURES_DIR, f"{project_id}_{pair_index}.npz")  # ← CHANGED
-                
+
+                # See the user-path comment above process_single_pair_bg's equivalent call —
+                # marker_meta is never passed here either: the uploaded pixels are already
+                # the selected ROI, applying crop_* again double-crops.
                 make_feature_working_jpeg(img_path, work_img_path, max_dim=ORB_MAX_DIM, jpeg_quality=92)
                 extract_features_multi(work_img_path, npz_path, max_dim=ORB_MAX_DIM)
                 

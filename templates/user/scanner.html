@@ -848,7 +848,20 @@
       lastRequestFinishAt: null,
       lastAcceptedDetectionAt: null,
       lastRequestGapMs: null,
+      // Network-leg-only timing (capture/watchdog audit fix) — stamped right before the
+      // fetch call, separate from lastRequestStartAt (stamped before frame capture). The
+      // watchdog's abort-a-stuck-fetch check uses this field, not lastRequestStartAt, so a slow
+      // capture phase no longer eats into the fetch's own timeout budget.
+      lastFetchStartAt: null,
       watchdogAbortCount: 0,
+      // Session-local watchdog counters (recognition-stability pass) — watchdogAbortCount
+      // above is a lifetime-this-page-load total and is never cleared by Reset Diagnostics,
+      // which made a real cumulative count of 35 hard to interpret (no way to tell "35
+      // spread across the whole test" from "35 since I last hit Reset"). These three do
+      // get cleared by Reset Diagnostics, so they answer "how many since I started watching."
+      watchdogAbortCountSession: 0,
+      lastWatchdogReason: null,
+      lastWatchdogElapsedMs: null,
       // Request watchdog (this pass) — the actual root cause of the observed 7-9s real-
       // device silent gaps: detectOnceFromServer()'s own fetch abort ceiling
       // (runtimeConfig.requestTimeoutMs, 7000-9000ms) was far past this watchdog's 4000ms
@@ -1338,6 +1351,25 @@
     overlay.addEventListener("ended", () => {
       videoFinished = true;
       console.log('📹 Video ended');
+      // Audit note (issue 3): the overlay <video> element has the native `loop` attribute
+      // (see its markup further down), which means 'ended' never fires during normal
+      // looping playback — the browser seeks back to 0 and keeps playing without emitting
+      // this event at all. This handler firing at all would itself be notable (it would
+      // mean playback reached the end WITHOUT looping — e.g. `loop` got cleared somewhere,
+      // or the browser doesn't support/ignored it for this source).
+      logVideoCheckpoint('[OVERLAY VIDEO ENDED]', 'video_ended');
+    });
+    let lastKnownOverlayTime = 0;
+    overlay.addEventListener("timeupdate", () => {
+      // Heuristic loop detector: native looping seeks currentTime back to ~0 without a
+      // dedicated DOM event. A backward jump of >0.5s while `loop` is on and we didn't just
+      // explicitly reset currentTime ourselves (accept-path resets are followed almost
+      // immediately by forward playback, so a jump this large during normal ticking is the
+      // signature of a native loop-restart).
+      if (overlay.loop && lastKnownOverlayTime - overlay.currentTime > 0.5) {
+        logVideoCheckpoint('[OVERLAY VIDEO LOOP]', 'native_loop_restart');
+      }
+      lastKnownOverlayTime = overlay.currentTime;
     });
 
     // ================================================
@@ -1836,12 +1868,35 @@
       diagState.overlayRenderCount = overlayRenderCount;
     }
 
+    // Temporary video-loop audit instrumentation (issue 3: does the overlay video truly
+    // reach 'ended', or is tracking lost — hiding/pausing it — before it ever completes?).
+    // One shared logger, same fixed field set every call, so a real-device log reads as
+    // one timeline: currentTime/duration/ended/paused/loop/readyState/networkState plus
+    // tracking + overlay state + which pair/video this is about.
+    function logVideoCheckpoint(tag, reason, extra) {
+      console.log(tag, Object.assign({
+        currentTime: overlay.currentTime,
+        duration: overlay.duration,
+        ended: overlay.ended,
+        paused: overlay.paused,
+        loop: overlay.loop,
+        readyState: overlay.readyState,
+        networkState: overlay.networkState,
+        tracking,
+        overlayState,
+        pairId: currentPairId,
+        videoUrl: currentVideoUrl,
+        reason
+      }, extra || {}));
+    }
+
     function stopOverlayImmediate() {
       if (poseHoldTimer) { clearTimeout(poseHoldTimer); poseHoldTimer = null; }
       poseHoldUntil = 0;
       overlayState = 'hidden';
       overlayWrap.style.display = "none";
       overlayWrap.style.opacity = "0";
+      logVideoCheckpoint('[OVERLAY VIDEO PAUSE]', 'stop_overlay_immediate');
       try { overlay.pause(); } catch (e) { }
       infoBadge.style.display = "none";
       progressInfo.textContent = "";
@@ -1874,6 +1929,7 @@
       overlayWrap.style.opacity = "1";
       overlayState = 'tracking';
       if (overlay.paused && overlay.src) {
+        logVideoCheckpoint('[OVERLAY VIDEO PLAY]', 'play_overlay');
         overlay.play().catch(e => console.log('Play failed:', e));
       }
     }
@@ -2325,6 +2381,15 @@
       diagState.consecutiveRejected++;
       diagState.consecutiveAccepted = 0;
       scannerDiagnostics.push('[TRACK LOST]', { reason, generation: scannerGeneration, badFrames: trackingBadFrames });
+      // Audit note (issue 3): logged only when the overlay video was ACTIVELY mid-playback
+      // (not already paused/ended) at the moment tracking dropped — this is what
+      // distinguishes "the video genuinely reached the end on its own" from "tracking loss
+      // cut off playback before it finished". clearTrackingGeometry below is what actually
+      // pauses/hides the overlay via requestPoseHold/stopOverlayImmediate — this checkpoint
+      // captures state the instant BEFORE that happens.
+      if (!overlay.paused && !overlay.ended) {
+        logVideoCheckpoint('[TRACKING LOST DURING PLAYBACK]', reason);
+      }
       clearTrackingGeometry(reason, { holdPose: true });
       safeTransition('target_lost', reason);
       safeTransition('recovering', reason);
@@ -2534,8 +2599,37 @@
       cap.width = capW;
       cap.height = capH;
 
+      // Audit note: this capture step (drawImage + toBlob) runs BEFORE activeDetectionController
+      // is assigned below — the watchdog cannot abort a stall here (nothing to call .abort()
+      // on yet), and toBlob's callback-wrapped Promise has no timeout/reject path of its own.
+      // A real-device log showed a ~5.8s gap between [FRAME CAPTURE START] and
+      // [FRAME CAPTURE END], which grouped drawImage (synchronous) and toBlob (async,
+      // callback-based JPEG encoding) together — split into 4 checkpoints so a follow-up
+      // real-device run can attribute the delay to one stage specifically instead of both.
+      logTimingCheckpoint('[FRAME CAPTURE START]', 'frame_capture');
+      logTimingCheckpoint('[DRAW IMAGE START]', 'draw_image', { capW, capH, videoWidth: cam.videoWidth, videoHeight: cam.videoHeight });
       ctx.drawImage(cam, 0, 0, cap.width, cap.height);
+      logTimingCheckpoint('[DRAW IMAGE END]', 'draw_image', { capW, capH, videoWidth: cam.videoWidth, videoHeight: cam.videoHeight });
+      logTimingCheckpoint('[TOBLOB START]', 'to_blob', { capW, capH });
       const blob = await new Promise(res => cap.toBlob(res, "image/jpeg", 0.85));
+      logTimingCheckpoint('[TOBLOB END]', 'to_blob', { capW, capH });
+      logTimingCheckpoint('[FRAME CAPTURE END]', 'frame_capture');
+
+      // Root-cause fix (proven — session-end audit): sessionEnding was only checked BEFORE
+      // capture started and again AFTER the fetch resolved — nothing guarded the boundary
+      // between them. endScannerSession() can run WHILE capture (drawImage/toBlob) is still
+      // in progress (it can't abort a request that has no activeDetectionController yet —
+      // see the audit note above), so without this check, a session-end during capture would
+      // still build FormData and start a real fetch afterward — exactly matching a prior
+      // server-side log of a detect_init request arriving after session end. Mirrors the
+      // existing post-fetch sessionEnding check below; never touches overlay/state/scheduling.
+      if (sessionEnding) {
+        scannerDiagnostics.push('scan_tick_skipped', { reason: 'session_ended_during_capture' });
+        detectionPolicy.finish(requestId);
+        detectInFlight = false;
+        loadingSpinner.style.display = "none";
+        return;
+      }
 
       try {
         const fd = new FormData();
@@ -2568,8 +2662,22 @@
 
         const controller = new AbortController();
         activeDetectionController = controller;
+        // Root-cause fix (proven — see watchdogTick): the watchdog's "abort a stuck
+        // request" deadline used to be computed from diagState.lastRequestStartAt, which is
+        // stamped BEFORE frame capture (drawImage/toBlob) even begins. When capture itself
+        // was slow (a real-device log showed ~5.8s between FRAME CAPTURE START/END), that
+        // baseline was ALREADY past the 4000ms watchdog deadline by the time capture
+        // finished and the fetch below actually started — so a brand-new fetch, 0ms old,
+        // got treated as "already overdue" and the very next watchdog tick aborted it
+        // immediately (matching the observed FETCH START -> WATCHDOG ABORT -> AbortError
+        // sequence). lastFetchStartAt gives the network leg its OWN fresh deadline that
+        // starts counting from when the fetch actually begins, not from whenever the
+        // overall request cycle (including capture) started.
+        diagState.lastFetchStartAt = Date.now();
         const timeoutId = setTimeout(() => controller.abort(), runtimeConfig.requestTimeoutMs || 8000);
+        logTimingCheckpoint('[FETCH START]', 'fetch', { requestId });
         const r = await fetch("/detect_init", { method: "POST", body: fd, signal: controller.signal });
+        logTimingCheckpoint('[FETCH END]', 'fetch', { requestId, httpStatus: r.status });
         clearTimeout(timeoutId);
         if (activeDetectionController === controller) activeDetectionController = null;
         const data = await r.json();
@@ -2715,6 +2823,7 @@
           }
           activePairEpoch++;
           scannerDiagnostics.push('[MARKER SWITCH]', { fromPairId: currentPairId, toPairId: newPairId, epoch: activePairEpoch });
+          logVideoCheckpoint('[OVERLAY VIDEO SOURCE CHANGE]', 'marker_switch', { fromVideoUrl: currentVideoUrl, toVideoUrl: newVideoUrl });
           overlay.src = newVideoUrl;
           overlay.currentTime = 0;
           videoFinished = false;
@@ -2818,6 +2927,7 @@
           statusDiv.className = "status scan";
         }
       } finally {
+        logTimingCheckpoint('[RESPONSE HANDLED]', 'response_handled', { requestId });
         detectInFlight = false;
         loadingSpinner.style.display = "none";
       }
@@ -2835,7 +2945,41 @@
     // regardless of outcome), loop cancellation is keyed on scanLoopToken (NOT
     // scannerGeneration, which bumps for unrelated reasons and must not cancel a live
     // loop), and every skip is diagnosed with an explicit reason.
+
+    // Temporary request-gap audit instrumentation (real-device 5-12s gaps, watchdog count
+    // rising to 28+). One shared checkpoint logger so every stage of a single request's
+    // lifecycle — schedule -> timer fire -> frame capture -> fetch -> response -> next
+    // schedule, plus watchdog ticks/aborts — carries the same fixed set of fields, letting
+    // a real-device log be read as one continuous timeline instead of scattered prints.
+    // [SCAN SCHEDULED]/[NEXT SCAN SCHEDULED] are intentionally the SAME call site (see
+    // scheduleNextScan below) — in this codebase's architecture the initial scan schedule
+    // and every subsequent "schedule the next one" are literally the same moment, not two
+    // different stages; `reason` (e.g. 'loop_start' vs 'after_tick') distinguishes them.
+    function logTimingCheckpoint(tag, reason, extra) {
+      const track = cameraStream ? cameraStream.getVideoTracks()[0] : null;
+      console.log(tag, Object.assign({
+        now: Math.round(performance.now()),
+        requestSeq: clientRequestSeq,
+        generation: scannerGeneration,
+        loopToken: scanLoopToken,
+        tracking,
+        detectInFlight,
+        pageVisible: !document.hidden,
+        streamHealthy: !isStreamDead(),
+        trackReadyState: track ? track.readyState : null,
+        videoReadyState: cam.readyState,
+        videoNetworkState: cam.networkState,
+        reason
+      }, extra || {}));
+    }
+
+    // Duplicate-scheduling audit (temporary): scheduleNextScan already clears any existing
+    // detectLoopTimer before setting a new one, so at most one pending scan timer can exist
+    // — these fields make that provable from a real-device log (rather than assumed) by
+    // showing exactly which timer, if any, got replaced by which.
+    let scanTimerGeneration = 0;
     function scheduleNextScan(reason, delayMs) {
+      const replacedTimerId = detectLoopTimer;
       if (detectLoopTimer) { clearTimeout(detectLoopTimer); detectLoopTimer = null; }
       if (sessionEnding) {
         scannerDiagnostics.push('scan_tick_skipped', { reason: 'session_ending' });
@@ -2849,8 +2993,15 @@
       diagState.lastExpectedRunAt = now + delay;
       diagState.selectedDelayMs = delay;
       diagState.selectedDelayReason = reason;
+      scanTimerGeneration++;
       scannerDiagnostics.push('next_scan_scheduled', { reason, delay, token, generation: scannerGeneration });
       detectLoopTimer = setTimeout(() => scanTick(token), delay);
+      logTimingCheckpoint('[SCAN SCHEDULED]', reason, {
+        delay, token,
+        scanTimerGeneration, scheduledBy: reason,
+        scheduledAt: now, expectedFireAt: now + delay,
+        timerId: detectLoopTimer, replacedTimerId
+      });
     }
 
     // Watchdog (real-device fix): a completely independent backstop, deliberately its OWN
@@ -2879,6 +3030,7 @@
       diagState.currentScanLoopToken = scanLoopToken;
       diagState.requestInFlight = detectInFlight;
       diagState.recoveryInProgress = Boolean(recoverScannerPromise);
+      logTimingCheckpoint('[WATCHDOG TICK]', 'watchdog_tick', { token });
       if (document.hidden || recoverScannerPromise || diagState.cameraStartInProgress) {
         scheduleWatchdog(token); // never forces anything in these states — just keeps checking
         return;
@@ -2889,24 +3041,46 @@
       if (!detectInFlight && !isStreamDead()) {
         if (elapsed > WATCHDOG_TIMEOUT_MS) {
           diagState.watchdogTriggered = true;
+          diagState.lastWatchdogReason = 'forced_detection';
+          diagState.lastWatchdogElapsedMs = elapsed;
           scannerDiagnostics.push('watchdog_forced_detection', { elapsedMs: elapsed, generation: scannerGeneration, token });
+          logTimingCheckpoint('[WATCHDOG ABORT]', 'forced_detection', { elapsedMs: elapsed });
           detectOnceFromServer(true); // forces a request through the SAME guarded path scanTick uses — never restarts the camera or the loop itself
         }
+      } else if (detectInFlight && diagState.lastRequestStartAt && activeDetectionController) {
+        // Root-cause fix (proven — real-device log showed FETCH START immediately followed
+        // by WATCHDOG ABORT / AbortError): this branch used to reuse `elapsed`, computed
+        // from diagState.lastRequestStartAt — stamped BEFORE frame capture (drawImage/
+        // toBlob) even begins. When capture itself ran long (~5.8s observed), that baseline
+        // was already past WATCHDOG_TIMEOUT_MS the moment the fetch below finally started,
+        // so a brand-new, 0ms-old fetch looked "already overdue" and got aborted on the very
+        // next tick — the network leg never actually got its own 4000ms budget. Network
+        // elapsed time is now measured from diagState.lastFetchStartAt (stamped right before
+        // the fetch call), completely separate from however long capture took.
+        const networkElapsed = Date.now() - (diagState.lastFetchStartAt || baseline);
+        if (networkElapsed > WATCHDOG_TIMEOUT_MS) {
+          diagState.watchdogTriggered = true;
+          diagState.lastWatchdogElapsedMs = networkElapsed;
+          diagState.watchdogAbortCount++;
+          diagState.watchdogAbortCountSession++;
+          diagState.lastWatchdogReason = 'aborted_stuck_request';
+          scannerDiagnostics.push('watchdog_aborted_stuck_request', { elapsedMs: networkElapsed, generation: scannerGeneration, token });
+          logTimingCheckpoint('[WATCHDOG ABORT]', 'aborted_stuck_request', { elapsedMs: networkElapsed });
+          activeDetectionController.abort();
+        }
       } else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {
-        // Root cause of the real-device 7-9s silent gaps (see diagState.watchdogDeadline
-        // comment above): detectOnceFromServer()'s own fetch abort ceiling
-        // (runtimeConfig.requestTimeoutMs, 7000-9000ms depending on mode) is far past this
-        // watchdog's 4000ms deadline, and this watchdog used to treat "a request is already
-        // in flight" as reason enough to never act — so one stalled request (packet loss,
-        // slow mobile network) could hold the loop silent for its FULL internal timeout with
-        // no forced recovery. Abort it through the SAME AbortController
-        // detectOnceFromServer() already sets up (activeDetectionController) — this lands in
-        // its existing 'AbortError' catch branch / handleDetectionTimeout(), the same
-        // recognition-timeout path a slow response already takes, not a new failure mode.
-        diagState.watchdogTriggered = true;
-        diagState.watchdogAbortCount++;
-        scannerDiagnostics.push('watchdog_aborted_stuck_request', { elapsedMs: elapsed, generation: scannerGeneration, token });
-        if (activeDetectionController) activeDetectionController.abort();
+        // Still capturing (no controller yet, see the audit note above the FRAME CAPTURE
+        // checkpoints) and the overall request cycle has run past the deadline — nothing
+        // exists yet to abort, so this only records the stall; it must never increment the
+        // abort counters (see watchdogAbortCount's own comment — counting "noticed a stuck
+        // state" as an abort is exactly the bug that made it climb into the dozens).
+        {
+          diagState.watchdogTriggered = true;
+          diagState.lastWatchdogElapsedMs = elapsed;
+          diagState.lastWatchdogReason = 'stuck_before_network_request';
+          scannerDiagnostics.push('watchdog_stuck_before_network_request', { elapsedMs: elapsed, generation: scannerGeneration, token });
+          logTimingCheckpoint('[WATCHDOG ABORT]', 'stuck_before_network_request', { elapsedMs: elapsed });
+        }
       }
       scheduleWatchdog(token); // always reschedules — including right after a request completes, since the next 500ms check will see detectInFlight clear and the elapsed baseline reset
     }
@@ -2919,6 +3093,7 @@
 
     async function scanTick(token) {
       detectLoopTimer = null;
+      logTimingCheckpoint('[SCAN TIMER FIRED]', 'timer_fired', { token });
       const track = cameraStream ? cameraStream.getVideoTracks()[0] : null;
       const actualRunAt = Date.now();
       const expectedRunAt = diagState.lastExpectedRunAt;
@@ -3087,7 +3262,9 @@
           lastCameraStartTimestamp: null, lastCameraStopTimestamp: null,
           totalAccepted: 0, totalRejected: 0, rejectionReasonCounts: {},
           scanLoopStartCount: 0, scanLoopStopCount: 0,
-          nextScanScheduledAt: null, lastRequestStartAt: null, lastRequestFinishAt: null
+          nextScanScheduledAt: null, lastRequestStartAt: null, lastRequestFinishAt: null,
+          watchdogAbortCountSession: 0, lastWatchdogReason: null, lastWatchdogElapsedMs: null,
+          lastFetchStartAt: null
         });
         renderDiagPanel();
       });
@@ -3195,6 +3372,8 @@
           `next scan scheduled: ${diagState.nextScanScheduledAt ? Math.round(diagState.nextScanScheduledAt - Date.now()) + 'ms' : '-'}`,
           `last request start/finish: ${diagState.lastRequestStartAt || '-'} / ${diagState.lastRequestFinishAt || '-'}`,
           `latency: ${diagState.lastDurationMs ?? '-'}ms   avg: ${diagState.avgDurationMs ?? '-'}ms`,
+          `watchdog aborts — lifetime: ${diagState.watchdogAbortCount}   since reset: ${diagState.watchdogAbortCountSession}`,
+          `last watchdog: ${diagState.lastWatchdogReason || '-'}   ${diagState.lastWatchdogElapsedMs != null ? diagState.lastWatchdogElapsedMs + 'ms' : '-'}`,
           '',
           // -- Geometry (Agent 1 / b63b511) -- everything below is new instrumentation for
           // the fixed-corner-order overlay pipeline: coordinate mapping, the raw ->

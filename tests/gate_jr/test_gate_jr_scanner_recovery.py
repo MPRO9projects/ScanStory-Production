@@ -3,6 +3,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from PIL import Image
 
 
 class NoopThread:
@@ -295,6 +296,97 @@ def test_weak_homography_now_gets_a_structured_reason_instead_of_generic_string(
     assert quality["code"] == "insufficient_inliers"
     assert quality["inliers"] == 6
     assert quality["required"] == 13
+
+
+# --- Recognition-stability pass: why many good matches collapse into few inliers -------
+# Root cause investigated (see _filter_mutual_unique_matches in app.py): match_best_variant
+# had no duplicate-match filtering — a single stored keypoint could be the "good" match for
+# several query keypoints (repetitive texture), inflating good_matches without adding
+# independent geometric evidence, which then inflated evaluate_homography_quality's
+# required-inlier bar (MIN_INLIERS_RATIO * total) past what the true unique-correspondence
+# set could ever satisfy.
+
+def test_duplicate_match_filtering_keeps_only_best_per_train_and_query_index(app_module):
+    matches = [
+        cv2.DMatch(0, 5, 0.30),
+        cv2.DMatch(1, 5, 0.20),   # duplicate trainIdx=5 — this one wins (lower distance)
+        cv2.DMatch(2, 5, 0.25),   # duplicate trainIdx=5 — loses to idx 1
+        cv2.DMatch(3, 7, 0.10),
+        cv2.DMatch(3, 8, 0.40),   # duplicate queryIdx=3 — loses to (3,7)
+        cv2.DMatch(4, 9, 0.15),
+    ]
+    filtered = app_module._filter_mutual_unique_matches(matches)
+    train_ids = sorted(m.trainIdx for m in filtered)
+    query_ids = sorted(m.queryIdx for m in filtered)
+    assert train_ids == sorted(set(train_ids))   # every trainIdx appears at most once
+    assert query_ids == sorted(set(query_ids))   # every queryIdx appears at most once
+    assert len(filtered) == 3  # (1,5), (3,7), (4,9) survive from the 6 raw matches
+    kept_pairs = sorted((m.queryIdx, m.trainIdx) for m in filtered)
+    assert (1, 5) in kept_pairs   # lowest-distance survivor of the trainIdx=5 cluster
+    assert (0, 5) not in kept_pairs
+    assert (2, 5) not in kept_pairs
+    assert (3, 7) in kept_pairs   # lowest-distance survivor of the queryIdx=3 cluster
+    assert (3, 8) not in kept_pairs
+    assert (4, 9) in kept_pairs
+
+
+def test_duplicate_match_filtering_is_a_noop_on_already_unique_matches(app_module):
+    matches = [cv2.DMatch(i, i + 100, 0.2 + i * 0.01) for i in range(20)]
+    filtered = app_module._filter_mutual_unique_matches(matches)
+    assert len(filtered) == 20
+
+
+def test_required_inliers_formula_is_capped(app_module):
+    """A marker with a very large unique-correspondence count (150) must not demand more
+    than MAX_INLIERS_REQUIRED inliers — without the cap, 0.30*150=45 would make even a
+    45-of-150 (30%) detection borderline-impossible to review/tune confidently."""
+    assert app_module.MAX_INLIERS_REQUIRED == 40
+    marker_w, marker_h = 500, 300
+    total = 150
+    src = np.array([[100 + (i % 20) * 5, 100 + (i // 20) * 5] for i in range(total)], dtype=np.float32)
+    dst = src + np.array([3, 3], dtype=np.float32)
+    mask = np.zeros((total, 1), dtype=np.uint8)
+    mask[:40] = 1  # exactly at the cap — uncapped required would be int(0.30*150)=45
+
+    ok_or_rejected, quality = app_module.evaluate_homography_quality(
+        src, dst, np.eye(3, dtype=np.float64), mask, marker_w, marker_h, 675, 1200, scale=0.8
+    )
+    # Whatever else it does or doesn't reject on (reprojection/clustering), it must not be
+    # rejected for insufficient_inliers, since inliers(40) >= min(45, 40)=40.
+    if not ok_or_rejected:
+        assert quality.get("code") != "insufficient_inliers"
+
+
+def test_required_inliers_below_cap_uses_ratio_formula_unchanged(app_module):
+    """Existing small-total behavior (e.g. the 45-good/6-inlier/13-required regression
+    test above) must be completely unaffected by the cap — 13 < 40, cap never engages."""
+    marker_w, marker_h = 500, 300
+    src = np.array([[100 + i, 100 + i] for i in range(45)], dtype=np.float32)
+    dst = src + np.array([5, 5], dtype=np.float32)
+    mask = np.zeros((45, 1), dtype=np.uint8)
+    mask[:6] = 1
+    ok, quality = app_module.evaluate_homography_quality(
+        src, dst, np.eye(3, dtype=np.float64), mask, marker_w, marker_h, 675, 1200, scale=0.8
+    )
+    assert not ok
+    assert quality["required"] == 13  # max(8, 0.30*45)=13, unaffected by the 40 cap
+
+
+def test_many_matches_poor_ratio_still_rejected_after_dedup_and_cap(app_module):
+    """The dedup+cap changes must not turn into a backdoor for accepting a genuinely weak
+    detection — 100 total, 15 inliers (15% ratio, well under the 30% floor) stays rejected
+    even though 15 would clear a naive absolute-count-only check."""
+    marker_w, marker_h = 500, 300
+    total = 100
+    src = np.array([[100 + (i % 20) * 5, 100 + (i // 20) * 5] for i in range(total)], dtype=np.float32)
+    dst = src + np.array([2, 2], dtype=np.float32)
+    mask = np.zeros((total, 1), dtype=np.uint8)
+    mask[:15] = 1
+    ok, quality = app_module.evaluate_homography_quality(
+        src, dst, np.eye(3, dtype=np.float64), mask, marker_w, marker_h, 675, 1200, scale=0.8
+    )
+    assert not ok
+    assert quality["code"] in ("insufficient_inliers", "low_inlier_ratio")
 
 
 def test_homography_quality_distinguishes_low_ratio_from_insufficient_count(app_module):
@@ -998,3 +1090,350 @@ def test_scan_candidate_and_match_accept_reject_diagnostics_present():
     assert "'[SCAN MATCH REJECT]'" in html
     assert "'[TRACK START]'" in html
     assert "'[CAMERA RECOVERY]'" in html
+
+
+# --- ROI feature extraction: fix server-side crop enforcement (project 39 investigation) -
+# Root cause confirmed: for pairs where the client-side crop-baking never actually reduced
+# the uploaded pixels (an older upload, or any path that saves the raw file), marker_mode
+# stores "crop" with real crop_x/y/width/height fractions, but extract_features_multi()
+# always ran ORB against the FULL stored image — background/table/chair descriptors ended
+# up in the reference feature set. extract_marker_roi() now applies that crop before any
+# resize/enhancement/ORB step, using the image's OWN actual (EXIF-corrected) pixel
+# dimensions as the reference frame — never guessed, always measured.
+
+def _write_test_image(path, width, height, bg_color, card_box=None, card_color=None, exif_orientation=None):
+    """Builds a real, decodable JPEG: a solid bg_color canvas with an optional distinctly-
+    colored card_color rectangle at card_box=(x, y, w, h) — mimics 'a business card on a
+    table' for background-exclusion tests. exif_orientation, if given, is written as EXIF
+    tag 0x0112 on an image saved at PRE-rotation (raw) dimensions."""
+    img = Image.new("RGB", (width, height), bg_color)
+    if card_box is not None:
+        x, y, w, h = card_box
+        card = Image.new("RGB", (w, h), card_color)
+        img.paste(card, (x, y))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if exif_orientation is not None:
+        exif = Image.Exif()
+        exif[0x0112] = exif_orientation
+        img.save(path, "JPEG", exif=exif)
+    else:
+        img.save(path, "JPEG")
+    return path
+
+
+def test_extract_marker_roi_converts_normalized_crop_to_correct_pixel_roi(app_module, tmp_path):
+    path = _write_test_image(tmp_path / "card.jpg", 1000, 800, (0, 0, 0))
+    marker_meta = {"mode": "crop", "crop_x": 0.2, "crop_y": 0.25, "crop_width": 0.3, "crop_height": 0.4}
+    roi, diag = app_module.extract_marker_roi(str(path), marker_meta)
+    assert diag["crop_applied"] is True
+    assert diag["calculated_pixel_roi"] == [200, 200, 300, 320]
+    assert diag["clamped_pixel_roi"] == [200, 200, 300, 320]
+    assert diag["clamped"] is False
+    assert roi.shape[1] == 300 and roi.shape[0] == 320
+
+
+def test_extract_marker_roi_uses_orientation_corrected_dimensions(app_module, tmp_path):
+    """A 200x100 image saved with EXIF orientation=6 (rotate 90) must be treated as a
+    100x200 image for crop math — the raw (undecoded-orientation) dimensions must never
+    leak into the pixel ROI calculation."""
+    path = _write_test_image(tmp_path / "rotated.jpg", 200, 100, (5, 5, 5), exif_orientation=6)
+    marker_meta = {"mode": "crop", "crop_x": 0.0, "crop_y": 0.0, "crop_width": 0.5, "crop_height": 0.5}
+    roi, diag = app_module.extract_marker_roi(str(path), marker_meta)
+    assert diag["original_decoded_w"] == 200 and diag["original_decoded_h"] == 100
+    assert diag["orientation_corrected_w"] == 100 and diag["orientation_corrected_h"] == 200
+    assert diag["calculated_pixel_roi"] == [0, 0, 50, 100]
+    assert roi.shape[1] == 50 and roi.shape[0] == 100
+
+
+def test_extract_marker_roi_clamps_out_of_bounds_crop(app_module, tmp_path):
+    path = _write_test_image(tmp_path / "card.jpg", 400, 300, (0, 0, 0))
+    # px=340,pw=120 clamps to 60; py=240,ph=120 clamps to 60 — both stay above
+    # MIN_CROP_ROI_PIXELS(32) so this exercises clamping without also tripping the
+    # too-small rejection.
+    marker_meta = {"mode": "crop", "crop_x": 0.85, "crop_y": 0.8, "crop_width": 0.3, "crop_height": 0.4}
+    roi, diag = app_module.extract_marker_roi(str(path), marker_meta)
+    assert diag["clamped"] is True
+    px, py, pw, ph = diag["clamped_pixel_roi"]
+    assert px + pw <= 400 and py + ph <= 300
+    assert roi.shape[1] == pw and roi.shape[0] == ph
+
+
+def test_extract_marker_roi_rejects_invalid_crop_with_logged_reason(app_module, tmp_path):
+    path = _write_test_image(tmp_path / "card.jpg", 400, 300, (0, 0, 0))
+    for bad_meta in (
+        {"mode": "crop", "crop_x": 0.1, "crop_y": 0.1, "crop_width": 0.0, "crop_height": 0.2},
+        {"mode": "crop", "crop_x": -0.1, "crop_y": 0.1, "crop_width": 0.2, "crop_height": 0.2},
+        {"mode": "crop", "crop_x": 0.1, "crop_y": 0.1, "crop_width": 0.01, "crop_height": 0.01},  # too small in pixels
+    ):
+        roi, diag = app_module.extract_marker_roi(str(path), bad_meta)
+        assert diag["crop_applied"] is False
+        assert diag["fallback_reason"] is not None  # never silent
+        assert roi.shape[1] == 400 and roi.shape[0] == 300  # falls back to the whole image
+
+
+def test_extract_marker_roi_excludes_background_outside_the_card(app_module, tmp_path):
+    """A distinctly-colored 'card' region inside a differently-colored 'table' background —
+    the returned ROI's pixels must be entirely (or overwhelmingly) the card color, proving
+    background is excluded, not just that dimensions happen to match."""
+    bg = (200, 30, 30)      # reddish "table"
+    card = (30, 200, 30)    # greenish "card"
+    card_box = (100, 80, 200, 150)  # x, y, w, h
+    path = _write_test_image(tmp_path / "card_on_table.jpg", 500, 400, bg, card_box=card_box, card_color=card)
+    marker_meta = {
+        "mode": "crop",
+        "crop_x": card_box[0] / 500, "crop_y": card_box[1] / 400,
+        "crop_width": card_box[2] / 500, "crop_height": card_box[3] / 400,
+    }
+    roi, diag = app_module.extract_marker_roi(str(path), marker_meta)
+    assert diag["crop_applied"] is True
+    mean_bgr = roi.reshape(-1, 3).mean(axis=0)
+    # roi is BGR — card_color=(30,200,30) RGB means high G, low R/B
+    assert mean_bgr[1] > 150   # green channel dominant
+    assert mean_bgr[2] < 80    # red channel (BGR index 2) low — background red is excluded
+
+
+def test_extract_marker_roi_full_image_mode_is_unchanged(app_module, tmp_path):
+    path = _write_test_image(tmp_path / "card.jpg", 300, 200, (0, 0, 0))
+    roi, diag = app_module.extract_marker_roi(str(path), {"mode": "full_image"})
+    assert diag["crop_applied"] is False
+    assert diag["fallback_reason"] == "mode_full_image"
+    assert roi.shape[1] == 300 and roi.shape[0] == 200
+
+
+def test_extract_marker_roi_skips_double_crop_when_already_client_side_cropped(app_module, tmp_path):
+    """If the stored file's dimensions already match marker_processed_width/height (the
+    client's own post-crop canvas render), applying crop_x/y/width/height again would
+    double-crop — must be detected and skipped."""
+    path = _write_test_image(tmp_path / "already_cropped.jpg", 240, 180, (0, 0, 0))
+    marker_meta = {
+        "mode": "crop", "crop_x": 0.15, "crop_y": 0.15, "crop_width": 0.5, "crop_height": 0.5,
+        "processed_width": 240, "processed_height": 180,
+    }
+    roi, diag = app_module.extract_marker_roi(str(path), marker_meta)
+    assert diag["crop_applied"] is False
+    assert diag["fallback_reason"] == "already_cropped_client_side"
+    assert roi.shape[1] == 240 and roi.shape[0] == 180
+
+
+def _make_pair_with_real_image(app_module, project_with_pair, width, height, bg_color, card_box, card_color, mode="crop"):
+    project, pair = project_with_pair
+    img_path = Path(app_module.IMAGES_DIR) / pair.image_filename
+    _write_test_image(img_path, width, height, bg_color, card_box=card_box, card_color=card_color)
+    cx, cy, cw, ch = card_box
+    pair.marker_mode = mode
+    pair.marker_crop_x = cx / width
+    pair.marker_crop_y = cy / height
+    pair.marker_crop_width = cw / width
+    pair.marker_crop_height = ch / height
+    # Deliberately unset (simulates project 39's real bug — an older pair with crop
+    # metadata but no recorded processed_width/height): the "already cropped client-side"
+    # detection requires BOTH to be known and > 0, so leaving them unset forces
+    # extract_marker_roi to actually apply the crop, matching the real confirmed bug.
+    pair.marker_processed_width = None
+    pair.marker_processed_height = None
+    return project, pair
+
+
+def test_rebuild_pair_features_default_uses_exact_pixels_not_crop(app_module, db_session, project_with_pair):
+    """URGENT ROLLBACK: rebuild_pair_features's default (apply_legacy_roi=False, i.e. not
+    passed at all) must NOT apply marker_crop_x/y/width/height — the stored image is
+    already the selected ROI (client-side canvas crop), so cropping it again would
+    double-crop exactly like the real project 40 regression (641x1200 -> 245x644).
+    Reference dimensions must equal the FULL stored image, not the crop box."""
+    project, pair = _make_pair_with_real_image(
+        app_module, project_with_pair, 600, 500, (10, 10, 10), (100, 100, 200, 150), (200, 200, 200)
+    )
+    db_session.commit()
+
+    report = app_module.rebuild_pair_features(project.id, pair.pair_index)
+
+    assert report["apply_legacy_roi"] is False
+    assert report["marker_meta"] is None
+    assert report["new"]["reference_w"] == 600  # full stored image width, NOT the 200px crop
+    assert report["new"]["reference_h"] == 500  # full stored image height, NOT the 150px crop
+    assert report["new"]["keypoint_count"] is not None
+
+
+def test_rebuild_pair_features_apply_legacy_roi_true_applies_the_crop(app_module, db_session, project_with_pair):
+    """The ONLY way to get crop behavior back: explicit apply_legacy_roi=True. Verifies the
+    escape hatch still works for a pair genuinely confirmed to predate crop-baking."""
+    project, pair = _make_pair_with_real_image(
+        app_module, project_with_pair, 600, 500, (10, 10, 10), (100, 100, 200, 150), (200, 200, 200)
+    )
+    db_session.commit()
+
+    report = app_module.rebuild_pair_features(project.id, pair.pair_index, apply_legacy_roi=True)
+
+    assert report["apply_legacy_roi"] is True
+    assert report["marker_meta"] is not None
+    assert report["new"]["reference_w"] == 200
+    assert report["new"]["reference_h"] == 150
+
+
+def test_rebuild_pair_features_default_is_idempotent_and_never_shrinks(app_module, db_session, project_with_pair):
+    """Running the default (no-crop) rebuild twice must give IDENTICAL dimensions both
+    times — it must never progressively shrink the marker on repeated runs."""
+    project, pair = _make_pair_with_real_image(
+        app_module, project_with_pair, 600, 500, (10, 10, 10), (100, 100, 200, 150), (200, 200, 200)
+    )
+    db_session.commit()
+
+    first = app_module.rebuild_pair_features(project.id, pair.pair_index)
+    second = app_module.rebuild_pair_features(project.id, pair.pair_index)
+
+    assert first["new"]["reference_w"] == second["new"]["reference_w"] == 600
+    assert first["new"]["reference_h"] == second["new"]["reference_h"] == 500
+    assert first["new"]["keypoint_count"] == second["new"]["keypoint_count"]
+
+
+def test_rebuild_pair_features_backs_up_existing_npz_before_replacing(app_module, db_session, project_with_pair, feature_artifact):
+    project, pair = _make_pair_with_real_image(
+        app_module, project_with_pair, 600, 500, (10, 10, 10), (100, 100, 200, 150), (200, 200, 200)
+    )
+    db_session.commit()
+    assert feature_artifact.exists()  # pre-existing (whole-image) feature file, from the fixture
+
+    report = app_module.rebuild_pair_features(project.id, pair.pair_index)
+
+    assert report["backup_path"] is not None
+    assert Path(report["backup_path"]).exists()
+    assert report["previous"]["reference_w"] == 100  # the fixture's stored old w/h
+    assert report["previous"]["reference_h"] == 100
+
+
+def test_rebuild_pair_features_does_not_alter_source_image_or_video(app_module, db_session, project_with_pair):
+    project, pair = _make_pair_with_real_image(
+        app_module, project_with_pair, 600, 500, (10, 10, 10), (100, 100, 200, 150), (200, 200, 200)
+    )
+    db_session.commit()
+    img_path = Path(app_module.IMAGES_DIR) / pair.image_filename
+    video_path = Path(app_module.VIDEOS_DIR) / pair.video_filename
+    image_bytes_before = img_path.read_bytes()
+    video_bytes_before = video_path.read_bytes()
+
+    app_module.rebuild_pair_features(project.id, pair.pair_index)
+
+    assert img_path.read_bytes() == image_bytes_before
+    assert video_path.read_bytes() == video_bytes_before
+
+
+def test_rebuild_pair_features_unknown_pair_raises_clear_error(app_module, db_session, project_with_pair):
+    project, _pair = project_with_pair
+    try:
+        app_module.rebuild_pair_features(project.id, 999)
+        assert False, "expected ValueError for a nonexistent pair_index"
+    except ValueError as e:
+        assert "No ProjectPair found" in str(e)
+
+
+def test_homography_uses_crop_relative_reference_dimensions_and_fixed_corner_order(app_module):
+    """Confirms evaluate_homography_quality's own corner-order contract is untouched by
+    the ROI work — it already builds the source rect purely from whatever marker_w/marker_h
+    it's given (now the CROP dimensions, once rebuild_pair_features runs), and always in
+    [TL, TR, BR, BL] order: (0,0), (w,0), (w,h), (0,h)."""
+    marker_w, marker_h = 200, 150  # crop-relative dims, not the original full-image dims
+    src = np.array(
+        [[10, 10], [190, 8], [192, 140], [8, 142], [50, 50], [150, 50], [150, 100], [50, 100], [100, 75]],
+        dtype=np.float32,
+    )
+    h_matrix = cv2.getPerspectiveTransform(
+        np.array([[0, 0], [marker_w, 0], [marker_w, marker_h], [0, marker_h]], dtype=np.float32),
+        np.array([[40, 40], [560, 60], [540, 980], [60, 960]], dtype=np.float32),
+    )
+    dst = cv2.perspectiveTransform(src.reshape(-1, 1, 2), h_matrix).reshape(-1, 2)
+    mask = np.ones((len(src), 1), dtype=np.uint8)
+
+    ok, quality = app_module.evaluate_homography_quality(src, dst, h_matrix, mask, marker_w, marker_h, 675, 1200, scale=1.0)
+    assert ok
+    corners = quality["corners"]
+    # [TL, TR, BR, BL]: TL.x < TR.x, TR.y < BR.y, BR.x > BL.x — a basic ordering sanity
+    # check, not a re-derivation of the corner math itself (owned elsewhere, untouched).
+    tl, tr, br, bl = corners
+    assert tl[0] < tr[0]
+    assert tr[1] < br[1]
+    assert br[0] > bl[0]
+
+
+# --- URGENT ROLLBACK: double-crop protection (projects 39/40 real-device regression) ----
+# The normal upload path already renders the user-selected ROI into a canvas and uploads
+# those pixels (drawCroppedMarkerToCanvas/renderMarkerBlob in user_create_project.html).
+# Automatically re-applying marker_crop_x/y/width/height during background feature
+# extraction double-cropped every new project — project 40 went from a genuine 641x1200
+# marker down to ~245x644, and zero detections resulted on both projects 39 and 40 in real-
+# device testing. marker_meta must never be passed into make_feature_working_jpeg for any
+# normal upload/reprocessing path; the crop helper is now reachable ONLY through
+# rebuild_pair_features(..., apply_legacy_roi=True), an explicit, narrow escape hatch.
+
+def _app_py_src():
+    return Path("app.py").read_text(encoding="utf-8", errors="ignore")
+
+
+def test_normal_upload_paths_never_pass_marker_meta_to_feature_extraction(app_module):
+    """Static check on the two real background-processing closures (user + admin project
+    creation) — neither may pass marker_meta to make_feature_working_jpeg. This is the
+    literal fix for the confirmed regression, not just the helper's own safe default."""
+    src = _app_py_src()
+
+    user_start = src.index("def process_single_pair_bg(project_id, pair_index, img_filename, upload_id, video_info=None):")
+    user_body = src[user_start:user_start + 3000]
+    assert "make_feature_working_jpeg(img_path, work_img_path, max_dim=ORB_MAX_DIM, jpeg_quality=92)" in user_body
+    assert "marker_meta=" not in user_body
+
+    admin_start = src.index("def process_single_pair_bg_admin(project_id, pair_index, img_filename):")
+    admin_end = admin_start + 3000
+    admin_body = src[admin_start:admin_end]
+    assert "make_feature_working_jpeg(img_path, work_img_path, max_dim=ORB_MAX_DIM, jpeg_quality=92)" in admin_body
+    assert "marker_meta=" not in admin_body
+
+
+def test_make_feature_working_jpeg_default_ignores_stored_crop_metadata(app_module, tmp_path):
+    """Section 5A: even if a caller HAD crop metadata on hand, the current normal-path
+    call (no marker_meta kwarg) extracts from the exact uploaded pixels — proven directly
+    against make_feature_working_jpeg, not just by reading the call site."""
+    src_path = tmp_path / "card.jpg"
+    out_path = tmp_path / "work.jpg"
+    _write_test_image(src_path, 641, 1200, (0, 0, 0), card_box=(50, 50, 300, 300), card_color=(200, 200, 200))
+
+    app_module.make_feature_working_jpeg(str(src_path), str(out_path), max_dim=app_module.ORB_MAX_DIM, jpeg_quality=92)
+
+    with Image.open(out_path) as out_img:
+        assert out_img.size == (641, 1200)  # exact uploaded pixels, no crop applied
+
+
+def test_legacy_roi_repair_requires_explicit_flag_not_marker_mode_alone(app_module, db_session, project_with_pair):
+    """Section 5B: rebuild_pair_features must never crop based on marker_mode=='crop'
+    alone — apply_legacy_roi defaults to False even when the pair's marker_mode is 'crop'
+    and valid crop_x/y/width/height are present."""
+    project, pair = _make_pair_with_real_image(
+        app_module, project_with_pair, 500, 400, (5, 5, 5), (50, 50, 150, 120), (220, 220, 220)
+    )
+    assert pair.marker_mode == "crop"  # crop metadata IS present and valid
+    db_session.commit()
+
+    default_report = app_module.rebuild_pair_features(project.id, pair.pair_index)
+    assert default_report["new"]["reference_w"] == 500
+    assert default_report["new"]["reference_h"] == 400
+
+    legacy_report = app_module.rebuild_pair_features(project.id, pair.pair_index, apply_legacy_roi=True)
+    assert legacy_report["new"]["reference_w"] == 150
+    assert legacy_report["new"]["reference_h"] == 120
+
+
+def test_project_40_style_regression_already_cropped_marker_stays_full_size(app_module, db_session, project_with_pair):
+    """Section 5D — reproduces the exact project 40 shape: a 641x1200-equivalent
+    already-cropped marker (using round numbers: 640x1200) carrying OLD normalized crop
+    metadata (as if from before the crop-baking pipeline existed, still pointing at roughly
+    a third of the frame). Normal processing (default rebuild, no flag) must leave it at
+    640x1200 — it must NOT become ~245x644 like the real regression did."""
+    project, pair = _make_pair_with_real_image(
+        app_module, project_with_pair, 640, 1200, (15, 15, 15), (160, 260, 245, 644), (210, 210, 210)
+    )
+    db_session.commit()
+
+    report = app_module.rebuild_pair_features(project.id, pair.pair_index)
+
+    assert report["new"]["reference_w"] == 640
+    assert report["new"]["reference_h"] == 1200
+    assert not (
+        200 <= report["new"]["reference_w"] <= 290 and 600 <= report["new"]["reference_h"] <= 690
+    )  # nowhere near the ~245x644 double-crop shape

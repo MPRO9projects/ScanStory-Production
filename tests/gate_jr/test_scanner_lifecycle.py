@@ -1075,7 +1075,7 @@ def test_watchdog_abort_reuses_the_existing_abort_controller_not_a_new_failure_p
     branch (handleDetectionTimeout) — not invent a second, parallel failure/cleanup path."""
     html = _scanner_html()
     body = _watchdog_tick_body()
-    assert "if (activeDetectionController) activeDetectionController.abort();" in body
+    assert "activeDetectionController.abort();" in body
     assert "if (e && e.name === 'AbortError') {" in html
     assert "handleDetectionTimeout();" in html
 
@@ -1571,7 +1571,7 @@ def test_aborted_exit_request_does_not_trigger_recognition_fallback():
     recognition-help panel after navigation has already begun."""
     html = _scanner_html()
     catch_start = html.index("} catch (e) {\n        console.error(\"Detection error:\", e);")
-    catch_end = html.index("} finally {\n        detectInFlight = false;")
+    catch_end = html.index("} finally {\n        logTimingCheckpoint('[RESPONSE HANDLED]'")
     body = html[catch_start:catch_end]
     sessionEnding_check_idx = body.index("if (sessionEnding) {")
     handle_timeout_idx = body.index("handleDetectionTimeout();")
@@ -1622,3 +1622,592 @@ def test_exit_order_matches_required_sequence():
         body.index("navigator.sendBeacon"),
     ]
     assert order == sorted(order)
+
+
+# --- Recognition-stability pass: last-trusted-pose hold (already adequate, verified) ----
+# POSE_HOLD_MS/requestPoseHold predate this pass (Agent 1 geometry work) — this pass only
+# verifies the existing implementation actually satisfies every sub-requirement in the
+# task spec, and adds regression coverage so a future change can't silently break it.
+
+def test_trusted_pose_hold_duration_is_within_the_required_range():
+    html = _scanner_html()
+    assert "const POSE_HOLD_MS = 500;" in html  # within the required ~300-700ms range
+    assert 300 <= 500 <= 700
+
+
+def test_pose_hold_fades_opacity_rather_than_snapping_instantly():
+    html = _scanner_html()
+    start = html.index("function requestPoseHold(reason)")
+    end = html.index("function playOverlay()")
+    body = html[start:end]
+    assert 'overlayWrap.style.opacity = "0.72"' in body  # partial, not full, opacity during hold
+    assert "poseHoldTimer = setTimeout(" in body
+    # CSS transition makes opacity changes animate rather than jump — not an instant snap
+    css_start = html.index("#overlayWrap {")
+    css_end = html.index("}", css_start)
+    assert "transition: opacity" in html[css_start:css_end]
+
+
+def test_pose_hold_resumes_smoothly_if_tracking_recovers_before_timeout():
+    html = _scanner_html()
+    start = html.index("function requestPoseHold(reason)")
+    end = html.index("function playOverlay()")
+    body = html[start:end]
+    # The post-timeout hide is gated on `!tracking` — if a new valid pose already resumed
+    # tracking before POSE_HOLD_MS elapses, the hide is skipped entirely (no re-hide,
+    # no flash) rather than unconditionally hiding on a timer.
+    assert "if (!tracking && performance.now() >= poseHoldUntil) {" in body
+    play_start = html.index("function playOverlay()")
+    play_end = html.index("function showMatchIndicator")
+    play_body = html[play_start:play_end]
+    assert 'overlayWrap.style.opacity = "1"' in play_body
+
+
+def test_pose_hold_snaps_off_after_bounded_timeout_not_indefinitely():
+    html = _scanner_html()
+    start = html.index("function requestPoseHold(reason)")
+    end = html.index("function playOverlay()")
+    body = html[start:end]
+    assert 'overlayWrap.style.opacity = "0"' in body
+    assert "if (!tracking) stopOverlayImmediate();" in body
+    assert "}, 140);" in body  # bounded follow-up, not an open-ended wait
+
+
+def test_held_frames_are_never_counted_as_accepted_detections():
+    """requestPoseHold() must never touch totalAccepted/consecutiveAccepted — a held
+    (recognition-loss) frame is explicitly not a detection."""
+    html = _scanner_html()
+    start = html.index("function requestPoseHold(reason)")
+    end = html.index("function playOverlay()")
+    body = html[start:end]
+    assert "totalAccepted" not in body
+    assert "consecutiveAccepted" not in body
+    assert "recordAcceptance(" not in body
+
+
+def test_invalid_or_non_finite_geometry_hides_immediately_not_via_hold():
+    """Large camera/marker movement and invalid geometry must bypass the hold entirely —
+    clearTrackingGeometry() without { holdPose: true } goes straight to
+    stopOverlayImmediate(), never requestPoseHold()."""
+    html = _scanner_html()
+    # camera-restart/recovery path: immediate hide (no holdPose option)
+    recovery_idx = html.index("scannerDiagnostics.push('[CAMERA RECOVERY]'")
+    recovery_slice = html[recovery_idx:recovery_idx + 300]
+    assert "clearTrackingGeometry(reason);" in recovery_slice
+    assert "{ holdPose: true }" not in recovery_slice
+    # pose-quality rejection when not already tracking: immediate hide
+    assert "clearTrackingGeometry('pose_rejected_' + poseQuality.reason);" in html
+    pose_reject_idx = html.index("clearTrackingGeometry('pose_rejected_' + poseQuality.reason);")
+    pose_reject_slice = html[max(0, pose_reject_idx - 200):pose_reject_idx]
+    assert "{ holdPose: true }" not in pose_reject_slice
+    # local tracking loss (dropTracking): DOES use the hold — a short glitch, not
+    # necessarily a large movement or invalid geometry
+    drop_tracking_start = html.index("function dropTracking(reason, extraMats)")
+    drop_tracking_end = html.index("function handleDetectionTimeout()")
+    assert "clearTrackingGeometry(reason, { holdPose: true });" in html[drop_tracking_start:drop_tracking_end]
+
+
+# --- Recognition-stability pass: watchdog session-local counters ------------------------
+
+def test_watchdog_session_local_counters_exist_and_track_reason_and_elapsed():
+    html = _scanner_html()
+    assert "watchdogAbortCountSession: 0," in html
+    assert "lastWatchdogReason: null," in html
+    assert "lastWatchdogElapsedMs: null," in html
+    body = _watchdog_tick_body()
+    assert "diagState.lastWatchdogReason = 'forced_detection';" in body
+    assert "diagState.lastWatchdogReason = 'aborted_stuck_request';" in body
+    assert "diagState.watchdogAbortCountSession++;" in body
+    assert "diagState.lastWatchdogElapsedMs = elapsed;" in body
+
+
+def test_watchdog_session_local_counters_reset_by_reset_diagnostics_but_lifetime_count_does_not():
+    """watchdogAbortCount (lifetime-this-page-load) must NOT be in the Reset Diagnostics
+    payload — only the session-local counters reset, so a tester can distinguish "35
+    across the whole test" from "35 since I last reset"."""
+    html = _scanner_html()
+    reset_start = html.index("document.getElementById('diagResetBtn')")
+    reset_end = html.index("renderDiagPanel();", reset_start)
+    reset_body = html[reset_start:reset_end]
+    assert "watchdogAbortCountSession: 0" in reset_body
+    assert "lastWatchdogReason: null" in reset_body
+    assert "lastWatchdogElapsedMs: null" in reset_body
+    assert "watchdogAbortCount: 0" not in reset_body  # lifetime counter deliberately untouched
+
+
+# --- Full behaviour audit: reference surface, request gaps, video loop ------------------
+# Issue 1 (wrong reference surface): audited data + code, no bug found — data/images/
+# 39_0.jpg and 40_0.jpg are genuinely card-only (visually inspected), reference keypoints
+# (data/features/*_0.npz) span the whole card content, and feats["w"]/["h"] feed the
+# homography rect directly (app.py). No edit made — nothing to fix, per "no edit unless the
+# cause is unambiguous."
+#
+# Issue 2 (5-12s request gaps, watchdog count rising to 28): proven by code inspection —
+# watchdogTick's "abort a stuck request" branch incremented watchdogAbortCount/
+# watchdogAbortCountSession BEFORE checking whether activeDetectionController even existed
+# to abort. Frame capture (ctx.drawImage/cap.toBlob) runs before activeDetectionController
+# is assigned and has no timeout of its own — if capture ever stalls, detectInFlight stays
+# true with nothing for the watchdog to abort, and every 500ms tick re-entered that branch,
+# re-incrementing the counter without resolving anything (28 aborts * 500ms = ~14s, the
+# same order of magnitude as the reported 12,601ms gap). Fixed: the counter now only
+# increments when there is an actual controller to abort; a stuck-with-nothing-to-abort
+# tick logs a distinct 'stuck_before_network_request' reason instead. Full timing
+# instrumentation added (see logTimingCheckpoint) so a real-device run can confirm the
+# capture-phase hypothesis precisely; wrapping frame capture in its own timeout is NOT
+# implemented this pass (no proof yet from a real timeline — only strong circumstantial
+# code-level evidence), documented as the recommended follow-up.
+#
+# Issue 3 (video completion/rescan): audited — the overlay <video> already has the native
+# `loop` attribute (so 'ended' never fires during normal playback), and the 'ended' handler
+# only sets videoFinished, never touching tracking/overlay state. No coupling between video
+# completion and tracking found. Diagnostics added (logVideoCheckpoint) so a real-device run
+# can confirm whether apparent "stops" are actually request-gap stalls (issue 2) rather than
+# a video/tracking bug.
+
+def test_watchdog_only_counts_a_real_abort_not_a_stuck_with_nothing_to_abort_tick():
+    """The proven bug: watchdogAbortCount/watchdogAbortCountSession must only increment in
+    the branch that actually has an activeDetectionController to call .abort() on — a stuck
+    detectInFlight with no controller yet (e.g. mid frame-capture) must log a distinct
+    reason and NOT inflate the abort counters. Two separate `else if` branches now (one per
+    controller-exists / no-controller-yet case), not an if/else nested inside one — see the
+    lastFetchStartAt fix, which needed the real-abort branch to compute its own elapsed time."""
+    body = _watchdog_tick_body()
+    real_abort_start = body.index("} else if (detectInFlight && diagState.lastRequestStartAt && activeDetectionController) {")
+    real_abort_end = body.index("} else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {")
+    real_abort_branch = body[real_abort_start:real_abort_end]
+    assert "diagState.watchdogAbortCount++;" in real_abort_branch
+    assert "diagState.watchdogAbortCountSession++;" in real_abort_branch
+    assert "activeDetectionController.abort();" in real_abort_branch
+
+    stuck_branch_start = real_abort_end
+    stuck_branch_end = body.index("scheduleWatchdog(token); // always reschedules", stuck_branch_start)
+    stuck_branch = body[stuck_branch_start:stuck_branch_end]
+    assert "watchdogAbortCount++" not in stuck_branch
+    assert "watchdogAbortCountSession++" not in stuck_branch
+    assert "'stuck_before_network_request'" in stuck_branch
+
+
+def test_frame_capture_runs_before_active_detection_controller_is_assigned():
+    """Documents the actual root cause: frame capture (drawImage/toBlob) has no
+    AbortController of its own and runs BEFORE activeDetectionController is assigned —
+    confirmed directly from source ordering, not assumed."""
+    html = _scanner_html()
+    start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
+    end = html.index("async function scanTick(token)")
+    body = html[start:end]
+    capture_idx = body.index("ctx.drawImage(cam, 0, 0, cap.width, cap.height);")
+    controller_idx = body.index("const controller = new AbortController();")
+    assert capture_idx < controller_idx
+
+
+def test_timing_checkpoints_cover_the_full_request_lifecycle():
+    html = _scanner_html()
+    for tag in (
+        "[SCAN SCHEDULED]",
+        "[SCAN TIMER FIRED]",
+        "[FRAME CAPTURE START]",
+        "[FRAME CAPTURE END]",
+        "[FETCH START]",
+        "[FETCH END]",
+        "[RESPONSE HANDLED]",
+        "[WATCHDOG TICK]",
+        "[WATCHDOG ABORT]",
+    ):
+        assert f"logTimingCheckpoint('{tag}'" in html
+
+
+def test_timing_checkpoint_logs_the_required_fields():
+    html = _scanner_html()
+    start = html.index("function logTimingCheckpoint(tag, reason, extra)")
+    end = html.index("function scheduleNextScan(reason, delayMs)")
+    body = html[start:end]
+    for field in (
+        "now:", "requestSeq:", "generation:", "loopToken:", "tracking,", "detectInFlight,",
+        "pageVisible:", "streamHealthy:", "trackReadyState:", "videoReadyState:", "videoNetworkState:", "reason",
+    ):
+        assert field in body
+
+
+def test_video_diagnostics_cover_play_pause_ended_loop_source_change_and_tracking_loss():
+    html = _scanner_html()
+    for tag in (
+        "[OVERLAY VIDEO PLAY]",
+        "[OVERLAY VIDEO PAUSE]",
+        "[OVERLAY VIDEO ENDED]",
+        "[OVERLAY VIDEO LOOP]",
+        "[OVERLAY VIDEO SOURCE CHANGE]",
+        "[TRACKING LOST DURING PLAYBACK]",
+    ):
+        assert f"logVideoCheckpoint('{tag}'" in html
+
+
+def test_overlay_video_has_native_loop_enabled():
+    """Section 3 decision rule: if loop is already enabled, do not add a fake fix. Confirmed
+    present — no change made to the video element."""
+    html = _scanner_html()
+    assert '<video id="overlay" autoplay playsinline loop preload="auto"></video>' in html
+
+
+def test_video_ended_does_not_drop_tracking():
+    """The 'ended' handler must only ever touch videoFinished/logging — never `tracking`,
+    never clearTrackingGeometry/dropTracking. Proves issue 3's premise directly: video
+    completion and tracking loss are not coupled in either direction."""
+    html = _scanner_html()
+    start = html.index('overlay.addEventListener("ended"')
+    end = html.index('overlay.addEventListener("timeupdate"')
+    body = html[start:end]
+    assert "videoFinished = true;" in body
+    assert "tracking = " not in body
+    assert "clearTrackingGeometry(" not in body
+    assert "dropTracking(" not in body
+
+
+def test_video_loop_detection_does_not_reassign_source():
+    """The native-loop heuristic detector (timeupdate listener) must be read-only — it
+    must never itself set overlay.src, which would defeat native looping by forcing a
+    reload instead of letting the browser loop in place."""
+    html = _scanner_html()
+    start = html.index('overlay.addEventListener("timeupdate"')
+    end = start + html[start:].index("});") + len("});")
+    body = html[start:end]
+    assert "overlay.src" not in body
+    assert "overlay.load(" not in body
+
+
+def test_overlay_src_is_only_reassigned_on_marker_switch():
+    """The only legitimate source reassignment is the marker-switch branch in the accept
+    path — confirms no other code path (loop detection, ended handler, pause/stop) recreates
+    or reloads the video element's source, matching 'preserve a single long-lived video
+    element' from earlier passes."""
+    html = _scanner_html()
+    assert html.count("overlay.src = ") == 1
+    assign_idx = html.index("overlay.src = ")
+    nearby = html[max(0, assign_idx - 300):assign_idx]
+    assert "[MARKER SWITCH]" in nearby
+
+
+def test_marker_loss_still_performs_cleanup_and_logs_playback_state():
+    html = _scanner_html()
+    start = html.index("function dropTracking(reason, extraMats)")
+    end = html.index("function handleDetectionTimeout()")
+    body = html[start:end]
+    assert "clearTrackingGeometry(reason, { holdPose: true });" in body
+    assert "logVideoCheckpoint('[TRACKING LOST DURING PLAYBACK]', reason);" in body
+    # only logged when the video was actually still playing — not an unconditional log
+    assert "if (!overlay.paused && !overlay.ended) {" in body
+
+
+def test_session_end_still_performs_cleanup():
+    """No regression from the audit's instrumentation additions — endScannerSession's
+    teardown order (already verified elsewhere) still ends with camera stop, and the
+    checkpoint additions are logging-only insertions, not replacements of any cleanup call."""
+    html = _scanner_html()
+    start = html.index("async function endScannerSession()")
+    end = html.index("function finalizeScannerAndNavigate(href, reason)")
+    body = html[start:end]
+    assert "stopDetectLoop('session_end');" in body
+    assert "invalidateDetection();" in body
+    assert "stopTrackingLoop();" in body
+    assert "stopCameraStream('session_end');" in body
+
+
+# --- Capture/watchdog/timer/tracking audit (real-device evidence: 5.8s FRAME CAPTURE gap,
+# FETCH START immediately followed by WATCHDOG ABORT / AbortError) -----------------------
+
+def _detect_once_body():
+    html = _scanner_html()
+    start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
+    end = html.index("async function scanTick(token)")
+    return html[start:end]
+
+
+def test_drawimage_and_toblob_are_now_logged_as_separate_stages():
+    """Audit 1: [FRAME CAPTURE START]/[FRAME CAPTURE END] previously grouped drawImage
+    (synchronous) and toBlob (async JPEG encoding) together, so a real-device gap between
+    them couldn't be attributed to one specific stage. Split into 4 checkpoints, in the
+    correct order, bracketing each call precisely."""
+    # Search for the actual logTimingCheckpoint(...) call sites, not the bare bracketed
+    # tags — this file's own explanatory comment above mentions "[FRAME CAPTURE START]"
+    # and "[FRAME CAPTURE END]" in prose, which would false-match a bare substring search.
+    body = _detect_once_body()
+    order = [
+        body.index("logTimingCheckpoint('[FRAME CAPTURE START]'"),
+        body.index("logTimingCheckpoint('[DRAW IMAGE START]'"),
+        body.index("ctx.drawImage(cam, 0, 0, cap.width, cap.height);"),
+        body.index("logTimingCheckpoint('[DRAW IMAGE END]'"),
+        body.index("logTimingCheckpoint('[TOBLOB START]'"),
+        body.index("cap.toBlob(res, \"image/jpeg\", 0.85)"),
+        body.index("logTimingCheckpoint('[TOBLOB END]'"),
+        body.index("logTimingCheckpoint('[FRAME CAPTURE END]'"),
+    ]
+    assert order == sorted(order)
+
+
+def test_capture_checkpoints_never_log_image_or_blob_data():
+    """Audit 1 explicit requirement: do not log image or user data — only numeric
+    dimensions/state. Checks the actual logTimingCheckpoint(...) call sites' own argument
+    lists, not the surrounding code (which legitimately declares/reads the `blob` variable
+    a few lines later for the FormData upload — that's not a log call)."""
+    body = _detect_once_body()
+    for call_start in (
+        body.index("logTimingCheckpoint('[FRAME CAPTURE START]'"),
+        body.index("logTimingCheckpoint('[DRAW IMAGE START]'"),
+        body.index("logTimingCheckpoint('[DRAW IMAGE END]'"),
+        body.index("logTimingCheckpoint('[TOBLOB START]'"),
+        body.index("logTimingCheckpoint('[TOBLOB END]'"),
+        body.index("logTimingCheckpoint('[FRAME CAPTURE END]'"),
+    ):
+        call_end = body.index(");", call_start) + 2
+        call_text = body[call_start:call_end]
+        # 'to_blob' is this test's own reason-string label (see 'reason' argument), not a
+        # reference to the actual image blob — excluded before checking for the real thing.
+        assert "blob" not in call_text.replace("to_blob", "")
+        assert ".toDataURL" not in call_text
+        assert "atob(" not in call_text
+
+
+def test_network_timeout_baseline_starts_at_fetch_not_at_capture_start():
+    """Audit 2 root-cause fix: lastFetchStartAt is stamped right before the fetch call —
+    separate from lastRequestStartAt (stamped before capture) — and the watchdog's real
+    abort branch (controller exists) must compute its elapsed time from lastFetchStartAt,
+    not the capture-inclusive baseline. This is what stops a slow capture phase from making
+    a brand-new fetch look 'already overdue'."""
+    body = _detect_once_body()
+    fetch_start_marker = body.index("const controller = new AbortController();")
+    stamp_idx = body.index("diagState.lastFetchStartAt = Date.now();", fetch_start_marker)
+    fetch_call_idx = body.index('await fetch("/detect_init"', fetch_start_marker)
+    assert fetch_start_marker < stamp_idx < fetch_call_idx
+
+    watchdog_body = _watchdog_tick_body()
+    real_abort_start = watchdog_body.index("} else if (detectInFlight && diagState.lastRequestStartAt && activeDetectionController) {")
+    real_abort_end = watchdog_body.index("} else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {")
+    real_abort_branch = watchdog_body[real_abort_start:real_abort_end]
+    assert "const networkElapsed = Date.now() - (diagState.lastFetchStartAt || baseline);" in real_abort_branch
+    assert "networkElapsed > WATCHDOG_TIMEOUT_MS" in real_abort_branch
+    # must NOT abort based on the capture-inclusive `elapsed` variable
+    assert "if (elapsed > WATCHDOG_TIMEOUT_MS)" not in real_abort_branch
+
+
+def test_capture_duration_does_not_leak_into_network_elapsed_calculation():
+    """Direct regression for the observed bug: a fetch that just started (lastFetchStartAt
+    ~= now) must compute a small networkElapsed even if lastRequestStartAt (capture start)
+    was minutes ago — proving the two clocks are now independent."""
+    watchdog_body = _watchdog_tick_body()
+    real_abort_start = watchdog_body.index("} else if (detectInFlight && diagState.lastRequestStartAt && activeDetectionController) {")
+    real_abort_end = watchdog_body.index("} else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {")
+    real_abort_branch = watchdog_body[real_abort_start:real_abort_end]
+    # networkElapsed must be derived from lastFetchStartAt, never from `baseline` alone
+    # (baseline is lastRequestStartAt-derived and includes however long capture took)
+    assert "Date.now() - (diagState.lastFetchStartAt || baseline)" in real_abort_branch
+    assert "Date.now() - baseline" not in real_abort_branch
+
+
+def test_session_end_during_capture_blocks_fetch_from_starting():
+    """Audit 6 proven fix: a sessionEnding check now runs right after capture completes and
+    BEFORE any FormData/fetch code — session-end can occur while capture (no
+    activeDetectionController exists yet to abort) is still in progress, and this is the
+    boundary that previously let a request start after session end (matching a prior
+    server-side log of a detect_init arriving post session-end)."""
+    body = _detect_once_body()
+    capture_end_idx = body.index("logTimingCheckpoint('[FRAME CAPTURE END]', 'frame_capture');")
+    session_check_idx = body.index("if (sessionEnding) {", capture_end_idx)
+    try_idx = body.index("try {", session_check_idx)
+    fetch_idx = body.index('await fetch("/detect_init"')
+    assert capture_end_idx < session_check_idx < try_idx < fetch_idx
+    guard_body = body[session_check_idx:try_idx]
+    assert "'session_ended_during_capture'" in guard_body
+    assert "detectInFlight = false;" in guard_body
+    assert "return;" in guard_body
+
+
+def test_marker_loss_reasons_are_all_genuine_local_tracking_failures():
+    """Audit 5 / Case E: every dropTracking() caller must be a local optical-flow/geometry
+    failure inside trackFrame() — never a network/watchdog/session-related reason. Proves
+    [TRACKING LOST DURING PLAYBACK] represents genuine marker loss, not a request-gap
+    side effect, and that no change to tracking behaviour is warranted."""
+    html = _scanner_html()
+    track_start = html.index("function trackFrame()")
+    track_end = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
+    track_body = html[track_start:track_end]
+    for reason in (
+        "'insufficient_flow_points'",
+        "'homography_empty'",
+        "'corner_order_invalid'",
+        "'out_of_bounds'",
+        "'tracking_geometry_invalid'",
+    ):
+        assert f"dropTracking({reason}" in track_body
+    assert "dropTracking('pose_rejected_' + localPoseQuality.reason" in track_body
+    # none of these are network/session/watchdog-caused
+    for forbidden in ("network_timeout", "capture_timeout", "session_ending", "watchdog"):
+        assert forbidden not in track_body
+    # dropTracking is only ever CALLED from within trackFrame — never from detect_init
+    # response handling, watchdog, or session-end code. (dropTracking's own function
+    # DEFINITION lives earlier in the file, before trackFrame — that's the "+1" below.)
+    assert html.count("dropTracking(") == track_body.count("dropTracking(") + 1
+
+
+def test_at_most_one_pending_scan_timer_is_still_structurally_guaranteed():
+    """Audit 4: no duplicate-timer bug was proven — scheduleNextScan already clears any
+    existing detectLoopTimer before setting a new one, and startDetectLoop no-ops if a
+    timer is already pending. Confirms these guarantees are still in place, plus the new
+    diagnostic identifiers added to make timer identity provable from a real-device log."""
+    html = _scanner_html()
+    schedule_start = html.index("function scheduleNextScan(reason, delayMs)")
+    schedule_end = html.index("function stopWatchdog()")
+    schedule_body = html[schedule_start:schedule_end]
+    assert "if (detectLoopTimer) { clearTimeout(detectLoopTimer); detectLoopTimer = null; }" in schedule_body
+    assert "scanTimerGeneration++;" in schedule_body
+    assert "replacedTimerId" in schedule_body
+    assert "expectedFireAt: now + delay" in schedule_body
+
+    start_loop_start = html.index("function startDetectLoop()")
+    start_loop_end = html.index("window.addEventListener('orientationchange'")
+    start_loop_body = html[start_loop_start:start_loop_end]
+    assert "if (detectLoopTimer) return;" in start_loop_body
+
+
+def test_watchdog_recheck_does_not_find_proven_stale_controller_ownership_bug():
+    """Audit 3: analyzed, not proven. Concurrency is single-threaded (setTimeout callbacks
+    never overlap), only one activeDetectionController variable ever exists, detectInFlight
+    prevents a second detectOnceFromServer from starting while one is outstanding, and
+    watchdogTick's own token check retires a stale watchdog instance immediately when the
+    loop token changes (session end / camera restart / fallback). No generation-tagging
+    added to the controller itself, since no reachable scenario was found where a watchdog
+    callback could target a controller from a different request than the one it measured."""
+    html = _scanner_html()
+    watchdog_start = html.index("function watchdogTick(token)")
+    body = html[watchdog_start:watchdog_start + 400]
+    assert "if (sessionEnding || token !== scanLoopToken) return;" in body
+
+
+# ---------------------------------------------------------------------------
+# Final conclusive verification: shared canvas / coordinate-space hypothesis.
+# These describe CURRENT behaviour only — no production code changed to add
+# or pass these tests.
+# ---------------------------------------------------------------------------
+
+def _track_frame_body():
+    html = _scanner_html()
+    start = html.index("function trackFrame()")
+    end = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
+    return html[start:end]
+
+
+def test_capture_and_tracking_share_one_canvas_and_context():
+    """Proof 1: exactly one <canvas>/2D-context pair exists and is used by both the
+    server-capture path (detectOnceFromServer) and the local-tracking path
+    (matFromVideoGray, called every trackFrame tick) — not two independent resources."""
+    html = _scanner_html()
+    assert html.count('getElementById("cap")') == 1
+    assert html.count('cap.getContext(') == 1
+    gray_start = html.index("function matFromVideoGray()")
+    gray_end = html.index("function cornersToMat(corners)")
+    gray_body = html[gray_start:gray_end]
+    assert "ctx.drawImage(cam, 0, 0, cap.width, cap.height)" in gray_body
+    assert "ctx.getImageData(0, 0, cap.width, cap.height)" in gray_body
+
+
+def test_detect_resizes_shared_canvas_before_network_await():
+    """Proof 2/4: detectOnceFromServer mutates cap.width/height to detection dimensions
+    SYNCHRONOUSLY, before the toBlob await and before the fetch await — i.e. before any
+    point where the event loop could run a queued trackFrame() rAF callback in between."""
+    html = _scanner_html()
+    detect_start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
+    detect_end = html.index("async function scanTick(token)")
+    body = html[detect_start:detect_end]
+    resize_at = body.index("cap.width = capW;")
+    assert body.index("cap.height = capH;") > resize_at
+    to_blob_at = body.index('cap.toBlob(res, "image/jpeg", 0.85)')
+    fetch_at = body.index('await fetch("/detect_init"')
+    assert resize_at < to_blob_at < fetch_at
+
+
+def test_capture_dimensions_are_not_restored_before_response_arrives():
+    """Proof 2/4: nothing restores cap.width/height back to frameW/frameH between the
+    capture-dimension resize and the fetch's await resolving — the only restoration is
+    inside the accepted-detection branch, which runs strictly after `await r.json()`.
+    A rejected/no-detection/stale response leaves cap at detection dimensions."""
+    html = _scanner_html()
+    detect_start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
+    detect_end = html.index("async function scanTick(token)")
+    body = html[detect_start:detect_end]
+    resize_at = body.index("cap.width = capW;")
+    json_at = body.index("const data = await r.json();")
+    between = body[resize_at:json_at]
+    assert "cap.width = frameW" not in between
+    restore_at = body.index("cap.width = frameW; cap.height = frameH;")
+    assert restore_at > json_at
+
+
+def test_track_frame_has_no_capture_in_flight_guard():
+    """Proof 6: trackFrame() never checks detectInFlight/activeDetectionController/capW/
+    capH before calling matFromVideoGray() — nothing pauses or defers local tracking while
+    a server-capture cycle currently owns (has resized) the shared canvas."""
+    body = _track_frame_body()
+    for forbidden in ("detectInFlight", "activeDetectionController", "capW", "capH"):
+        assert forbidden not in body
+    assert "matFromVideoGray()" in body
+
+
+def test_matframevideogray_has_no_fixed_dimension_or_size_guard():
+    """Proof 5: matFromVideoGray always draws/reads at whatever cap.width/cap.height
+    currently are — no parameter, no comparison against frameW/frameH, no assertion that
+    the canvas is still sized for tracking before producing a gray Mat. Combined with proof
+    2/4 above, prevGray (captured at a previous cap size) and this call's gray Mat (captured
+    at whatever size cap currently holds) can genuinely differ in dimensions."""
+    html = _scanner_html()
+    gray_start = html.index("function matFromVideoGray()")
+    gray_end = html.index("function cornersToMat(corners)")
+    gray_body = html[gray_start:gray_end]
+    assert "frameW" not in gray_body
+    assert "frameH" not in gray_body
+    assert gray_body.count("cap.width") == 2  # drawImage + getImageData, both current-size
+
+
+def test_trackframe_catch_block_bypasses_droptracking_and_geometry_clear():
+    """Proof 7 (shape-loss connection): a thrown exception inside trackFrame's try block
+    (e.g. cv.calcOpticalFlowPyrLK asserting prevGray/gray size equality, which a shared,
+    externally-resized canvas can violate) is caught by a bare catch that only flips
+    `tracking = false` — it does NOT call dropTracking()/clearTrackingGeometry(), so no
+    [TRACK LOST] diagnostic is recorded and the overlay's last-applied transform/visibility
+    is left exactly as-is (frozen), rather than explicitly held or hidden."""
+    body = _track_frame_body()
+    catch_start = body.rindex("} catch (e) {")
+    catch_body = body[catch_start:body.index("}", body.index("tracking = false;", catch_start)) + 1]
+    assert "tracking = false;" in catch_body
+    assert "dropTracking(" not in catch_body
+    assert "clearTrackingGeometry(" not in catch_body
+    assert "requestPoseHold(" not in catch_body
+
+
+def test_pose_hold_keeps_video_playing_only_stop_overlay_pauses_it():
+    """Proof 7 (visible overlay-loss path): requestPoseHold() only fades opacity — it never
+    calls overlay.pause(). Only stopOverlayImmediate() actually pauses the <video>. This is
+    what allows the overlay video to keep playing (per the supplied evidence:
+    ended=false, paused=false, loop=true) while the geometry/transform is stale or the
+    overlay is fading/hidden — pausing and hiding are not the same event."""
+    html = _scanner_html()
+    hold_start = html.index("function requestPoseHold(reason)")
+    hold_end = html.index("function playOverlay()")
+    hold_body = html[hold_start:hold_end]
+    assert "overlay.pause()" not in hold_body
+    stop_start = html.index("function stopOverlayImmediate()")
+    stop_end = html.index("function requestPoseHold(reason)")
+    stop_body = html[stop_start:stop_end]
+    assert "overlay.pause()" in stop_body
+
+
+def test_applywarp_and_render_path_use_frameW_frameH_not_cap_dimensions():
+    """Scope-limiting proof: applyWarp (the server-response geometry-render path) reads the
+    module-level frameW/frameH variables directly, never cap.width/cap.height — so the
+    shared-canvas mutation proven above corrupts local OPTICAL-FLOW tracking specifically,
+    not the server-response rendering math itself. Keeps the verdict precise rather than
+    over-broad."""
+    html = _scanner_html()
+    warp_start = html.index("function applyWarp(cornersFrame, context = {})")
+    warp_end = html.index("function poseCompatibility(nextCorners)")
+    warp_body = html[warp_start:warp_end]
+    assert "isOverlayFrameQuadRenderable(cornersFrame, frameW, frameH)" in warp_body
+    assert "cap.width" not in warp_body
+    assert "cap.height" not in warp_body
