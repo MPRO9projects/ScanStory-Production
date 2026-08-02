@@ -2039,7 +2039,7 @@ def test_marker_loss_reasons_are_all_genuine_local_tracking_failures():
     [TRACKING LOST DURING PLAYBACK] represents genuine marker loss, not a request-gap
     side effect, and that no change to tracking behaviour is warranted."""
     html = _scanner_html()
-    track_start = html.index("function trackFrame()")
+    track_start = html.index("function trackFrame(")
     track_end = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
     track_body = html[track_start:track_end]
     for reason in (
@@ -2054,10 +2054,15 @@ def test_marker_loss_reasons_are_all_genuine_local_tracking_failures():
     # none of these are network/session/watchdog-caused
     for forbidden in ("network_timeout", "capture_timeout", "session_ending", "watchdog"):
         assert forbidden not in track_body
-    # dropTracking is only ever CALLED from within trackFrame — never from detect_init
-    # response handling, watchdog, or session-end code. (dropTracking's own function
-    # DEFINITION lives earlier in the file, before trackFrame — that's the "+1" below.)
-    assert html.count("dropTracking(") == track_body.count("dropTracking(") + 1
+    bootstrap_start = html.index("function initializeFreshLiveTracker(now, metadata)")
+    bootstrap_end = html.index("function dropTracking(reason, extraMats", bootstrap_start)
+    bootstrap_body = html[bootstrap_start:bootstrap_end]
+    assert "dropTracking('tracker_bootstrap_failed'" in bootstrap_body
+    assert "dropTracking('tracker_bootstrap_exception'" in bootstrap_body
+    # dropTracking is only ever CALLED from local tracking/bootstrap code — never from
+    # detect_init response handling, watchdog, or session-end code. (dropTracking's own
+    # function DEFINITION lives earlier in the file, before trackFrame — that's the "+1".)
+    assert html.count("dropTracking(") == track_body.count("dropTracking(") + bootstrap_body.count("dropTracking(") + 1
 
 
 def test_at_most_one_pending_scan_timer_is_still_structurally_guaranteed():
@@ -2102,7 +2107,7 @@ def test_watchdog_recheck_does_not_find_proven_stale_controller_ownership_bug():
 
 def _track_frame_body():
     html = _scanner_html()
-    start = html.index("function trackFrame()")
+    start = html.index("function trackFrame(")
     end = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
     return html[start:end]
 
@@ -2165,8 +2170,9 @@ def test_capture_never_resizes_tracking_canvas_before_network_await():
 
 
 def test_accepted_detection_no_longer_mutates_capture_canvas():
-    """Accepted detections initialize tracking through resetTrackingEpoch(frameW, frameH);
-    neither captureCanvas nor cap is resized for tracking after the response."""
+    """Accepted detections no longer mutate captureCanvas/cap, and they also no longer
+    start LK from the uploaded capture. The fresh live-frame bootstrap owns tracking
+    dimensions after the response."""
     body = _detect_once_body()
     resize_at = body.index("captureCanvas.width = capW;")
     json_at = body.index("const data = await r.json();")
@@ -2175,34 +2181,104 @@ def test_accepted_detection_no_longer_mutates_capture_canvas():
     assert "cap.height =" not in between
     assert "cap.width = frameW" not in body
     assert "cap.height = frameH" not in body
-    assert "resetTrackingEpoch(frameW, frameH)" in body
-    reset_at = body.index("resetTrackingEpoch(frameW, frameH)")
-    assert reset_at > json_at  # only reached after the response resolves and is accepted
+    assert "resetTrackingEpoch(frameW, frameH)" not in body
+    assert body.index("trackerBootstrapPending = true;") > json_at
 
 
-def test_tracking_initialization_uses_uploaded_capture_temporal_source():
+def test_tracking_initialization_uses_server_pose_as_visual_only_before_fresh_bootstrap():
     body = _detect_once_body()
     draw_idx = body.index("captureCtx.drawImage(cam, 0, 0, captureCanvas.width, captureCanvas.height);")
     stamp_idx = body.index("const uploadedCaptureAt = performance.now();")
-    reset_idx = body.index("resetTrackingEpoch(frameW, frameH);")
-    gray_idx = body.index("prevGray = matFromUploadedCaptureGray();")
-    points_idx = body.index("prevPts = cv.matFromArray", gray_idx)
-    assert draw_idx < stamp_idx < reset_idx < gray_idx < points_idx
-    assert "source: 'uploaded_capture_frame'" in body
+    arm_idx = body.index("trackerBootstrapPending = true;")
+    warp_idx = body.index("if (applyWarp(currCorners,")
+    assert draw_idx < stamp_idx < arm_idx < warp_idx
+    assert "source: 'server_pose_visual_only'" in body
+    assert "serverInitPointCount" in body
     assert "captureFrameAgeMs" in body
-    assert "prevGray = matFromVideoGray();" not in body[reset_idx:points_idx]
+    assert "resetTrackingEpoch(frameW, frameH)" not in body
+    assert "prevGray =" not in body
 
 
-def test_uploaded_capture_gray_is_copied_into_tracking_canvas_not_used_for_lk_directly():
+def test_ordinary_lk_never_starts_from_uploaded_capture_gray():
     html = _scanner_html()
-    start = html.index("function matFromUploadedCaptureGray()")
-    end = html.index("function resetTrackingEpoch(width, height)", start)
-    body = html[start:end]
-    assert "trackingCtx.drawImage(captureCanvas, 0, 0, trackingCanvas.width, trackingCanvas.height);" in body
-    assert "trackingCtx.getImageData(0, 0, trackingCanvas.width, trackingCanvas.height);" in body
+    assert "function matFromUploadedCaptureGray()" not in html
+    assert "matFromUploadedCaptureGray(" not in html
     track_body = _track_frame_body()
     lk_idx = track_body.index("cv.calcOpticalFlowPyrLK(")
     assert "captureCanvas" not in track_body[:lk_idx]
+
+
+def test_fresh_live_bootstrap_initializes_prevgray_and_points_from_same_frame():
+    html = _scanner_html()
+    start = html.index("function initializeFreshLiveTracker(now, metadata)")
+    end = html.index("function dropTracking(reason, extraMats", start)
+    body = html[start:end]
+    reset_at = body.index("resetTrackingEpoch(frameW, frameH);")
+    gray_at = body.index("gray = matFromVideoGray();")
+    features_at = body.index("cv.goodFeaturesToTrack(gray, features")
+    prev_gray_at = body.index("prevGray = gray;")
+    prev_pts_at = body.index("prevPts = features.clone();")
+    ready_at = body.index("scannerDiagnostics.push('tracking_bootstrap_ready'")
+    assert reset_at < gray_at < features_at < prev_gray_at < prev_pts_at < ready_at
+    assert "mask = maskFromQuad(currCorners);" in body
+    assert "source: 'fresh_live_presented_frame'" in body
+    assert "coverage < 0.25" in body
+
+
+def test_first_lk_runs_only_after_fresh_live_bootstrap_frame():
+    track_body = _track_frame_body()
+    bootstrap_at = track_body.index("if (trackerBootstrapPending) {")
+    init_at = track_body.index("initializeFreshLiveTracker(now, metadata);", bootstrap_at)
+    return_at = track_body.index("return;", init_at)
+    lk_at = track_body.index("cv.calcOpticalFlowPyrLK(")
+    assert bootstrap_at < init_at < return_at < lk_at
+    assert "firstLkPending" in track_body
+    assert "first_lk_step" in track_body
+    assert "firstLkFrameGapMs = firstLiveTrackingFrameAt ? now - firstLiveTrackingFrameAt : null;" in track_body
+
+
+def test_tracking_cadence_prefers_request_video_frame_callback_with_single_owner():
+    html = _scanner_html()
+    start = html.index("function scheduleTrackingFrame()")
+    end = html.index("function startTrackingLoop()", start)
+    body = html[start:end]
+    assert "if (!trackLoopActive || trackingCallbackId !== null) return;" in body
+    assert "cam.requestVideoFrameCallback" in body
+    assert "callbackType: 'video_frame'" in body
+    assert "callbackType: 'animation_frame'" in body
+    stop_start = html.index("function stopTrackingLoop()")
+    stop_body = html[stop_start:start]
+    assert "cam.cancelVideoFrameCallback(trackingCallbackId)" in stop_body
+    assert "cancelAnimationFrame(trackingCallbackId)" in stop_body
+
+
+def test_bootstrap_failure_uses_bounded_tracking_loss_cleanup():
+    html = _scanner_html()
+    init_start = html.index("function initializeFreshLiveTracker(now, metadata)")
+    init_body = html[init_start:html.index("function dropTracking(reason, extraMats", init_start)]
+    assert "dropTracking('tracker_bootstrap_failed'" in init_body
+    assert "reason: 'insufficient_bootstrap_coverage'" in init_body
+    assert "dropTracking('tracker_bootstrap_exception'" in init_body
+    clear_start = html.index("function clearTrackingGeometry(reason, options = {})")
+    clear_body = html[clear_start:html.index("function stopTrackingLoop()", clear_start)]
+    assert "trackerBootstrapPending = false;" in clear_body
+    assert "firstLkPending = false;" in clear_body
+
+
+def test_tracking_loss_summary_contains_real_device_fields():
+    html = _scanner_html()
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_body = html[drop_start:html.index("function handleDetectionTimeout()", drop_start)]
+    assert "`[TRACKING LOST] reason=${reason}`" in drop_body
+    for field in (
+        "firstLkFrameGapMs",
+        "initialPoints",
+        "goodPoints",
+        "coverage",
+        "prevGray",
+        "gray",
+    ):
+        assert field in drop_body
 
 
 def test_one_active_attempt_maximum_is_structurally_enforced():
@@ -2382,7 +2458,7 @@ def test_matframevideogray_uses_tracking_canvas_dimensions_only():
     dimensions are stable by construction, independent of the capture canvas."""
     html = _scanner_html()
     gray_start = html.index("function matFromVideoGray()")
-    gray_end = html.index("function matFromUploadedCaptureGray()")
+    gray_end = html.index("function resetTrackingEpoch(width, height)", gray_start)
     gray_body = html[gray_start:gray_end]
     assert "frameW" not in gray_body
     assert "frameH" not in gray_body
@@ -2582,10 +2658,16 @@ def test_server_reacquisition_starts_exactly_one_fresh_epoch():
     detect_start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
     detect_end = html.index("async function scanTick(token)")
     body = html[detect_start:detect_end]
-    assert body.count("resetTrackingEpoch(") == 1
-    reset_at = body.index("resetTrackingEpoch(frameW, frameH)")
-    prev_gray_at = body.index("prevGray = matFromUploadedCaptureGray();")
-    epoch_stamp_at = body.index("prevGrayEpoch = trackingEpoch;")
+    assert "resetTrackingEpoch(" not in body
+    assert "trackerBootstrapPending = true;" in body
+    assert "tracking_bootstrap_armed" in body
+    assert "startTrackingLoop();" in body
+    init_start = html.index("function initializeFreshLiveTracker(now, metadata)")
+    init_body = html[init_start:html.index("function dropTracking(reason, extraMats", init_start)]
+    assert init_body.count("resetTrackingEpoch(frameW, frameH)") == 1
+    reset_at = init_body.index("resetTrackingEpoch(frameW, frameH);")
+    prev_gray_at = init_body.index("prevGray = gray;")
+    epoch_stamp_at = init_body.index("prevGrayEpoch = trackingEpoch;")
     assert reset_at < prev_gray_at < epoch_stamp_at
 
 

@@ -667,11 +667,25 @@ def test_overlay_uses_four_corner_perspective_matrix_without_video_recreation():
     assert "const nextSmoothCorners = smoothing.corners" in apply_block
     assert "const [p1, p2, p3, p4] = nextSmoothCorners" in apply_block
     assert "quadToMatrix3d(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y, p4.x, p4.y, elW, elH)" in apply_block
+    assert apply_block.index("overlayWrap.style.width = `${elW}px`") < apply_block.index("overlayWrap.style.transform")
+    assert apply_block.index("overlayWrap.style.height = `${elH}px`") < apply_block.index("overlayWrap.style.transform")
     assert "overlayWrap.style.transform = `matrix3d(${m.join(\",\")})`" in apply_block
     assert html.count('id="overlay"') == 1
     assert "document.querySelectorAll('#overlay').length" in html
     assert "overlay.src = newVideoUrl" in html
     assert html.index("if (!wasSameTarget)") < html.index("overlay.src = newVideoUrl")
+
+
+def test_overlay_wrapper_contains_only_video_surface_for_matrix_mapping():
+    html = _scanner_html()
+    start = html.index('<div id="overlayWrap">')
+    end = html.index("</div>", start)
+    overlay_wrap_markup = html[start:end]
+    assert '<video id="overlay"' in overlay_wrap_markup
+    assert 'id="wm-logo"' not in overlay_wrap_markup
+    assert html.index('id="wm-logo"') > end
+    assert "overlay.style.transform = `scale(${FLIP_X ? -1 : 1}, ${FLIP_Y ? -1 : 1})`" in html
+    assert "overlay.style.transform = `matrix3d(" not in html
 
 
 def test_time_based_smoothing_and_outlier_suppression_are_present():

@@ -584,8 +584,8 @@
 
     <div id="overlayWrap">
       <video id="overlay" autoplay playsinline loop preload="auto"></video>
-      <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" id="wm-logo" alt="ScanStory">
     </div>
+    <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" id="wm-logo" alt="ScanStory">
     {% if scanner_diagnostics_enabled %}
     <canvas id="poseDebugCanvas"></canvas>
     {% endif %}
@@ -1511,6 +1511,15 @@
     let activeTrackerInitialPointCount = 0;
     let detectionControllerSeq = 0;
     let watchdogCallbackSeq = 0;
+    let trackingCallbackId = null;
+    let trackingCallbackType = null;
+    let lastPresentedFrameKey = null;
+    let trackerBootstrapPending = false;
+    let trackerBootstrapStartedAt = 0;
+    let firstLkPending = false;
+    let firstLiveTrackingFrameAt = 0;
+    let firstLkFrameGapMs = null;
+    let activeTrackerCoverage = null;
 
     const TRANSITION_HISTORY_LIMIT = 20;
     const scannerTransitionHistory = []; // bounded — recent transitions for diagnostics only
@@ -1677,6 +1686,8 @@
 
     function clearTrackingGeometry(reason, options = {}) {
       tracking = false;
+      trackerBootstrapPending = false;
+      firstLkPending = false;
       currCorners = null;
       lastOrdered = null;
       smoothCorners = null;
@@ -1698,12 +1709,42 @@
     }
 
     function stopTrackingLoop() {
-      if (animationFrameId) {
-        cancelAnimationFrame(animationFrameId);
+      if (trackingCallbackId !== null) {
+        if (trackingCallbackType === 'video_frame' && typeof cam.cancelVideoFrameCallback === 'function') {
+          cam.cancelVideoFrameCallback(trackingCallbackId);
+        } else {
+          cancelAnimationFrame(trackingCallbackId);
+        }
+        trackingCallbackId = null;
+        trackingCallbackType = null;
         animationFrameId = null;
         diagState.scanLoopStopCount++;
       }
       trackLoopActive = false;
+      trackerBootstrapPending = false;
+      firstLkPending = false;
+    }
+
+    function scheduleTrackingFrame() {
+      if (!trackLoopActive || trackingCallbackId !== null) return;
+      if (typeof cam.requestVideoFrameCallback === 'function') {
+        trackingCallbackType = 'video_frame';
+        trackingCallbackId = cam.requestVideoFrameCallback((now, metadata) => {
+          trackingCallbackId = null;
+          trackingCallbackType = null;
+          animationFrameId = null;
+          trackFrame(now, Object.assign({ callbackType: 'video_frame' }, metadata || {}));
+        });
+      } else {
+        trackingCallbackType = 'animation_frame';
+        trackingCallbackId = requestAnimationFrame((now) => {
+          trackingCallbackId = null;
+          trackingCallbackType = null;
+          animationFrameId = null;
+          trackFrame(now, { callbackType: 'animation_frame' });
+        });
+      }
+      animationFrameId = trackingCallbackId;
     }
 
     function startTrackingLoop() {
@@ -1711,7 +1752,7 @@
       trackLoopActive = true;
       trackingGeneration = scannerGeneration;
       diagState.scanLoopStartCount++;
-      animationFrameId = requestAnimationFrame(trackFrame);
+      scheduleTrackingFrame();
     }
 
     function stopDetectLoop(reason) {
@@ -2383,6 +2424,8 @@
       }
       lastOrdered = orderedOverlayCorners;
       smoothCorners = nextSmoothCorners;
+      overlayWrap.style.width = `${elW}px`;
+      overlayWrap.style.height = `${elH}px`;
       overlayWrap.style.transform = `matrix3d(${m.join(",")})`;
       overlayWrap.style.opacity = "1";
       overlayState = 'tracking';
@@ -2493,16 +2536,6 @@
       return gray;
     }
 
-    function matFromUploadedCaptureGray() {
-      trackingCtx.drawImage(captureCanvas, 0, 0, trackingCanvas.width, trackingCanvas.height);
-      const imgData = trackingCtx.getImageData(0, 0, trackingCanvas.width, trackingCanvas.height);
-      let src = cv.matFromImageData(imgData);
-      let gray = new cv.Mat();
-      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-      src.delete();
-      return gray;
-    }
-
     // Single entry point for starting a fresh tracking epoch: releases the previous
     // prevGray/prevPts, resizes the dedicated tracking canvas to the new fixed dimensions,
     // and bumps trackingEpoch. Every tracking-dimension change must go through this one
@@ -2559,12 +2592,85 @@
       return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
     }
 
+    function pointCoverage(points, quad) {
+      const bounds = pointBounds(points);
+      if (!bounds || !quad || quad.length !== 4) return 0;
+      const quadBounds = pointBounds(quad.flatMap(p => [p.x, p.y]));
+      if (!quadBounds || quadBounds.width <= 0 || quadBounds.height <= 0) return 0;
+      return Math.min(bounds.width / quadBounds.width, bounds.height / quadBounds.height);
+    }
+
+    function maskFromQuad(corners) {
+      const mask = cv.Mat.zeros(trackingCanvas.height, trackingCanvas.width, cv.CV_8UC1);
+      const points = [];
+      for (const p of corners) {
+        points.push(Math.round(p.x), Math.round(p.y));
+      }
+      const quad = cv.matFromArray(4, 1, cv.CV_32SC2, points);
+      cv.fillConvexPoly(mask, quad, new cv.Scalar(255));
+      quad.delete();
+      return mask;
+    }
+
+    function initializeFreshLiveTracker(now, metadata) {
+      let gray = null, mask = null, features = null;
+      try {
+        resetTrackingEpoch(frameW, frameH);
+        gray = matFromVideoGray();
+        mask = maskFromQuad(currCorners);
+        features = new cv.Mat();
+        cv.goodFeaturesToTrack(gray, features, MAX_TRACK_POINTS, 0.01, 8, mask, 3, false, 0.04);
+        const flat = Array.from(features.data32F || []);
+        const count = flat.length / 2;
+        const coverage = pointCoverage(flat, currCorners);
+        activeTrackerCoverage = coverage;
+        activeTrackerInitialPointCount = count;
+        activeTrackerInitializedAt = now || performance.now();
+        prevGray = gray;
+        gray = null;
+        prevGrayEpoch = trackingEpoch;
+        prevPts = features.clone();
+        if (count < MIN_GOOD_POINTS || coverage < 0.25) {
+          dropTracking('tracker_bootstrap_failed', [], {
+            gray: prevGray,
+            goodPointCount: count,
+            pointBounds: pointBounds(flat),
+            validation: { ok: false, reason: 'insufficient_bootstrap_coverage', coverage, count }
+          });
+          return false;
+        }
+        trackerBootstrapPending = false;
+        tracking = true;
+        firstLkPending = true;
+        firstLiveTrackingFrameAt = now || performance.now();
+        firstLkFrameGapMs = null;
+        lastTrackFrameTs = firstLiveTrackingFrameAt;
+        scannerDiagnostics.push('tracking_bootstrap_ready', {
+          requestSequence: activeTrackerRequestSeq,
+          trackingEpoch,
+          source: 'fresh_live_presented_frame',
+          presentedFrames: metadata && metadata.presentedFrames != null ? metadata.presentedFrames : null,
+          pointCount: count,
+          coverage
+        });
+        return true;
+      } catch (e) {
+        dropTracking('tracker_bootstrap_exception', [gray, mask, features], {
+          gray,
+          validation: { ok: false, reason: 'tracker_bootstrap_exception', message: e && e.message ? e.message : String(e) }
+        });
+        return false;
+      } finally {
+        deleteMats(mask, features);
+      }
+    }
+
     function dropTracking(reason, extraMats, details = {}) {
       recordRejection(reason);
       diagState.consecutiveRejected++;
       diagState.consecutiveAccepted = 0;
       const now = performance.now();
-      scannerDiagnostics.push('[TRACK LOST]', Object.assign({
+      const lossDiagnostic = Object.assign({
         reason,
         generation: scannerGeneration,
         badFrames: trackingBadFrames,
@@ -2582,7 +2688,22 @@
         previousCorners: currCorners,
         proposedCorners: details.proposedCorners || null,
         validation: details.validation || null
-      }, details.extra || {}));
+      }, details.extra || {});
+      scannerDiagnostics.push('[TRACK LOST]', lossDiagnostic);
+      const prevDims = lossDiagnostic.prevGrayDimensions;
+      const grayDims = lossDiagnostic.currentGrayDimensions;
+      console.log(
+        `[TRACKING LOST] reason=${reason}` +
+        ` requestSeq=${lossDiagnostic.requestSequence || '-'}` +
+        ` epoch=${trackingEpoch}` +
+        ` trackerAgeMs=${lossDiagnostic.ageSinceServerResponseMs != null ? lossDiagnostic.ageSinceServerResponseMs : '-'}` +
+        ` firstLkFrameGapMs=${firstLkFrameGapMs != null ? Math.round(firstLkFrameGapMs) : '-'}` +
+        ` initialPoints=${lossDiagnostic.initialPointCount != null ? lossDiagnostic.initialPointCount : '-'}` +
+        ` goodPoints=${lossDiagnostic.goodPointCount != null ? lossDiagnostic.goodPointCount : '-'}` +
+        ` coverage=${activeTrackerCoverage != null ? activeTrackerCoverage.toFixed(3) : '-'}` +
+        ` prevGray=${prevDims ? prevDims.rows + 'x' + prevDims.cols : '-'}` +
+        ` gray=${grayDims ? grayDims.rows + 'x' + grayDims.cols : '-'}`
+      );
       // Audit note (issue 3): logged only when the overlay video was ACTIVELY mid-playback
       // (not already paused/ended) at the moment tracking dropped — this is what
       // distinguishes "the video genuinely reached the end on its own" from "tracking loss
@@ -2644,15 +2765,20 @@
       return trackingBadFrames >= TRACKING_GRACE_FRAMES || (performance.now() - graceEnteredAt) >= TRACKING_GRACE_MS;
     }
 
-    function trackFrame() {
+    function trackFrame(nowArg, metadata) {
       if (!trackLoopActive) return;
       if (trackingGeneration !== scannerGeneration) {
         stopTrackingLoop();
         return;
       }
-      animationFrameId = requestAnimationFrame(trackFrame);
-      if (!cvReady || !tracking || cam.readyState < 2) return;
-      const now = performance.now();
+      scheduleTrackingFrame();
+      if (!cvReady || (!tracking && !trackerBootstrapPending) || cam.readyState < 2) return;
+      const frameKey = metadata && metadata.presentedFrames != null
+        ? `vf:${metadata.presentedFrames}`
+        : (metadata && metadata.mediaTime != null ? `mt:${metadata.mediaTime}` : null);
+      if (frameKey && frameKey === lastPresentedFrameKey) return;
+      if (frameKey) lastPresentedFrameKey = frameKey;
+      const now = typeof nowArg === 'number' ? nowArg : performance.now();
       if (now - lastTrackFrameTs < TRACK_FRAME_INTERVAL_MS) return;
       // Captured BEFORE lastTrackFrameTs is overwritten below — the gap between this tick
       // and the last one that actually ran. TRACKING_GRACE_MS (900ms) is reused rather than
@@ -2664,6 +2790,11 @@
       // enough that stale points no longer correspond to the new frame.
       const gapSinceLastTick = lastTrackFrameTs ? (now - lastTrackFrameTs) : 0;
       lastTrackFrameTs = now;
+
+      if (trackerBootstrapPending) {
+        initializeFreshLiveTracker(now, metadata);
+        return;
+      }
 
       let gray = null, nextPts = null, status = null, err = null;
       let prevMat = null, nextMat = null, mask = null, H = null;
@@ -2690,6 +2821,9 @@
         nextPts = new cv.Mat();
         status = new cv.Mat();
         err = new cv.Mat();
+        if (firstLkPending) {
+          firstLkFrameGapMs = firstLiveTrackingFrameAt ? now - firstLiveTrackingFrameAt : null;
+        }
         cv.calcOpticalFlowPyrLK(prevGray, gray, prevPts, nextPts, status, err, new cv.Size(21, 21), 3);
 
         const goodPrev = [];
@@ -2719,6 +2853,22 @@
             pointBounds: pointBounds(goodNext)
           });
           return;
+        }
+        if (firstLkPending) {
+          scannerDiagnostics.push('first_lk_step', {
+            requestSequence: activeTrackerRequestSeq,
+            trackingEpoch,
+            uploadedCaptureAt: activeTrackerCaptureAt,
+            trackerInitializedAt: activeTrackerInitializedAt,
+            firstLiveTrackingFrameAt,
+            firstLkFrameGapMs,
+            captureToFirstLkAgeMs: activeTrackerCaptureAt ? Math.round(now - activeTrackerCaptureAt) : null,
+            initialPointCount: activeTrackerInitialPointCount,
+            goodPointCount: goodPrev.length / 2,
+            coverage: activeTrackerCoverage,
+            trackingCallbackType: metadata && metadata.callbackType ? metadata.callbackType : null
+          });
+          firstLkPending = false;
         }
         if (trackingBadFrames > 0) {
           scannerDiagnostics.push('[TRACK RECOVERED]', { generation: scannerGeneration, badFrames: trackingBadFrames });
@@ -2928,10 +3078,22 @@
       attempt.encodeInFlight = true;
       diagState.encodeInFlight = true;
       logTimingCheckpoint('[TOBLOB START]', 'to_blob', { capW, capH });
+      const encodeStartedAt = performance.now();
       const blob = await new Promise(res => captureCanvas.toBlob(res, "image/jpeg", 0.85));
+      const encodeDurationMs = Math.round(performance.now() - encodeStartedAt);
       attempt.encodeInFlight = false;
       diagState.encodeInFlight = false;
       logTimingCheckpoint('[TOBLOB END]', 'to_blob', { capW, capH });
+      logTimingCheckpoint('[ENCODE COMPLETE]', 'encode_complete', {
+        requestSeq: requestId,
+        durationMs: encodeDurationMs,
+        blobBytes: blob ? blob.size : 0,
+        captureWidth: capW,
+        captureHeight: capH,
+        above500ms: encodeDurationMs > 500,
+        above1500ms: encodeDurationMs > 1500,
+        above3000ms: encodeDurationMs > 3000
+      });
       logTimingCheckpoint('[FRAME CAPTURE END]', 'frame_capture');
       if (!isCurrentDetectionAttempt(attempt)) {
         detectionPolicy.finish(requestId);
@@ -3206,53 +3368,24 @@
           }
         }
         const pts = (data.init_points || []).slice(0, MAX_TRACK_POINTS).map(p => [Number(p.x), Number(p.y)]);
-        let initialTrackingPointCount = pts.length;
-
-        // Fresh tracking epoch: dedicated tracking canvas fixed at server frame
-        // dimensions, old prevGray/prevPts released, epoch bumped — no dependency on
-        // (or mutation of) the capture canvas. init_points/corners below are the server's
-        // frameW×frameH space, converted into prevPts exactly once, right here.
-        resetTrackingEpoch(frameW, frameH);
-        prevGray = matFromUploadedCaptureGray();
-        prevGrayEpoch = trackingEpoch;
+        const serverInitPointCount = pts.length;
         activeTrackerRequestSeq = requestId;
-        activeTrackerInitializedAt = performance.now();
         activeTrackerCaptureAt = uploadedCaptureAt;
-        activeTrackerInitialPointCount = initialTrackingPointCount;
-
-        if (pts.length >= 25) {
-          const flat = [];
-          for (const [x, y] of pts) flat.push(x, y);
-          prevPts = cv.matFromArray(pts.length, 1, cv.CV_32FC2, flat);
-        } else {
-          // Sample a 10×10 bilinear grid across the detected quad — avoids collinear fallback
-          const c = newCorners; // [TL, TR, BR, BL] order from server
-          const flat = [];
-          const GRID = 10;
-          for (let ri = 0; ri < GRID; ri++) {
-            for (let ci2 = 0; ci2 < GRID; ci2++) {
-              const u = (ci2 + 0.5) / GRID;
-              const v = (ri + 0.5) / GRID;
-              // Bilinear interpolation: top edge TL→TR, bottom edge BL→BR
-              const tx = c[0].x + (c[1].x - c[0].x) * u;
-              const ty = c[0].y + (c[1].y - c[0].y) * u;
-              const bx = c[3].x + (c[2].x - c[3].x) * u;
-              const by = c[3].y + (c[2].y - c[3].y) * u;
-              flat.push(tx + (bx - tx) * v, ty + (by - ty) * v);
-            }
-          }
-          prevPts = cv.matFromArray(flat.length / 2, 1, cv.CV_32FC2, flat);
-          initialTrackingPointCount = flat.length / 2;
-          activeTrackerInitialPointCount = initialTrackingPointCount;
-        }
-        scannerDiagnostics.push('tracking_epoch_initialized', {
+        activeTrackerInitializedAt = 0;
+        activeTrackerInitialPointCount = 0;
+        activeTrackerCoverage = null;
+        firstLiveTrackingFrameAt = 0;
+        firstLkFrameGapMs = null;
+        firstLkPending = false;
+        trackerBootstrapPending = true;
+        trackerBootstrapStartedAt = performance.now();
+        scannerDiagnostics.push('tracking_bootstrap_armed', {
           requestId,
-          trackingEpoch,
-          source: 'uploaded_capture_frame',
-          captureFrameAgeMs: Math.round(activeTrackerInitializedAt - activeTrackerCaptureAt),
+          source: 'server_pose_visual_only',
+          serverInitPointCount,
+          captureFrameAgeMs: Math.round(trackerBootstrapStartedAt - activeTrackerCaptureAt),
           frameWidth: frameW,
-          frameHeight: frameH,
-          initialPointCount: initialTrackingPointCount
+          frameHeight: frameH
         });
 
         // When re-anchoring while already tracking same pair, preserve smoothCorners
@@ -3267,6 +3400,7 @@
         scannerDiagnostics.push('[SCAN MATCH ACCEPT]', { requestId, pairId: newPairId, wasTracking, sameTarget: isSameTarget });
         if (!wasTracking) scannerDiagnostics.push('[TRACK START]', { pairId: newPairId, generation: scannerGeneration });
         tracking = true;
+        startTrackingLoop();
         safeTransition('tracking', 'match_accept');
         trackingBadFrames = 0;
         graceEnteredAt = 0;
