@@ -284,7 +284,7 @@ def test_ordinary_marker_loss_never_calls_camera_functions():
     ordinary marker loss — none of them may call setupCamera, restartCameraStream, or
     recoverScanner. Camera health and detection health must stay separate concepts."""
     html = _scanner_html()
-    drop_start = html.index("function dropTracking(reason, extraMats)")
+    drop_start = html.index("function dropTracking(reason, extraMats")
     drop_end = html.index("function handleDetectionTimeout()")
     drop_body = html[drop_start:drop_end]
     for forbidden in ("setupCamera(", "restartCameraStream(", "recoverScanner("):
@@ -580,7 +580,8 @@ def test_scan_request_is_always_rescheduled_after_any_outcome():
     finally_idx = body.index("} finally {")
     await_idx = body.index("await detectOnceFromServer();")
     assert try_idx < await_idx < finally_idx, "detectOnceFromServer() must be inside the try, before the finally"
-    assert "if (!requestAttemptStarted) scheduleNextScan('after_tick');" in body[finally_idx:]
+    assert "if (!requestAttemptStarted && !detectInFlight && !(activeDetectionAttempt && !activeDetectionAttempt.terminal)) {" in body[finally_idx:]
+    assert "scheduleNextScan('after_tick');" in body[finally_idx:]
     finalize_start = html.index("function finalizeDetectionAttempt(")
     finalize_end = html.index("function clearTrackingGeometry", finalize_start)
     assert "scheduleAttemptSuccessor(attempt, 'after_attempt');" in html[finalize_start:finalize_end]
@@ -1008,7 +1009,7 @@ def test_watchdog_forces_a_request_after_four_seconds_of_silence():
 
 def test_watchdog_does_not_create_concurrent_requests():
     html = _scanner_html()
-    watchdog_start = html.index("function watchdogTick(token)")
+    watchdog_start = html.index("function watchdogTick(token")
     watchdog_end = html.index("function startDetectLoop()")
     body = html[watchdog_start:watchdog_end]
     assert "if (!detectInFlight && !isStreamDead()) {" in body
@@ -1016,7 +1017,7 @@ def test_watchdog_does_not_create_concurrent_requests():
 
 def test_watchdog_respects_hidden_state():
     html = _scanner_html()
-    watchdog_start = html.index("function watchdogTick(token)")
+    watchdog_start = html.index("function watchdogTick(token")
     watchdog_end = html.index("function startDetectLoop()")
     body = html[watchdog_start:watchdog_end]
     assert "if (document.hidden || recoverScannerPromise || diagState.cameraStartInProgress) {" in body
@@ -1024,7 +1025,7 @@ def test_watchdog_respects_hidden_state():
 
 def test_watchdog_respects_recovery_state():
     html = _scanner_html()
-    watchdog_start = html.index("function watchdogTick(token)")
+    watchdog_start = html.index("function watchdogTick(token")
     watchdog_end = html.index("function startDetectLoop()")
     body = html[watchdog_start:watchdog_end]
     assert "recoverScannerPromise" in body
@@ -1033,7 +1034,7 @@ def test_watchdog_respects_recovery_state():
 def test_watchdog_uses_current_scan_loop_token():
     html = _scanner_html()
     assert "function scheduleWatchdog(token)" in html
-    watchdog_start = html.index("function watchdogTick(token)")
+    watchdog_start = html.index("function watchdogTick(token")
     watchdog_end = html.index("function startDetectLoop()")
     body = html[watchdog_start:watchdog_end]
     assert "if (sessionEnding || token !== scanLoopToken) return;" in body
@@ -1042,7 +1043,7 @@ def test_watchdog_uses_current_scan_loop_token():
 
 def test_watchdog_never_restarts_the_camera():
     html = _scanner_html()
-    watchdog_start = html.index("function watchdogTick(token)")
+    watchdog_start = html.index("function watchdogTick(token")
     watchdog_end = html.index("function startDetectLoop()")
     body = html[watchdog_start:watchdog_end]
     for forbidden in ("setupCamera(", "restartCameraStream(", "recoverScanner("):
@@ -1066,7 +1067,7 @@ def test_watchdog_stops_and_starts_with_the_main_scan_loop():
 
 def _watchdog_tick_body():
     html = _scanner_html()
-    start = html.index("function watchdogTick(token)")
+    start = html.index("function watchdogTick(token")
     end = html.index("function skipTick(reason, extra)")
     return html[start:end]
 
@@ -1711,7 +1712,7 @@ def test_invalid_or_non_finite_geometry_hides_immediately_not_via_hold():
     assert "{ holdPose: true }" not in pose_reject_slice
     # local tracking loss (dropTracking): DOES use the hold — a short glitch, not
     # necessarily a large movement or invalid geometry
-    drop_tracking_start = html.index("function dropTracking(reason, extraMats)")
+    drop_tracking_start = html.index("function dropTracking(reason, extraMats")
     drop_tracking_end = html.index("function handleDetectionTimeout()")
     assert "clearTrackingGeometry(reason, { holdPose: true });" in html[drop_tracking_start:drop_tracking_end]
 
@@ -1794,6 +1795,7 @@ def test_watchdog_only_counts_a_real_abort_not_a_stuck_with_nothing_to_abort_tic
     assert "watchdogAbortCount++" not in stuck_branch
     assert "watchdogAbortCountSession++" not in stuck_branch
     assert "'stuck_before_network_request'" in stuck_branch
+    assert "logTimingCheckpoint('[WATCHDOG SKIP]'" in stuck_branch
 
 
 def test_frame_capture_runs_before_active_detection_controller_is_assigned():
@@ -1821,6 +1823,8 @@ def test_timing_checkpoints_cover_the_full_request_lifecycle():
         "[RESPONSE HANDLED]",
         "[WATCHDOG TICK]",
         "[WATCHDOG ABORT]",
+        "[WATCHDOG FORCED DETECTION]",
+        "[WATCHDOG SKIP]",
     ):
         assert f"logTimingCheckpoint('{tag}'" in html
 
@@ -1897,7 +1901,7 @@ def test_overlay_src_is_only_reassigned_on_marker_switch():
 
 def test_marker_loss_still_performs_cleanup_and_logs_playback_state():
     html = _scanner_html()
-    start = html.index("function dropTracking(reason, extraMats)")
+    start = html.index("function dropTracking(reason, extraMats")
     end = html.index("function handleDetectionTimeout()")
     body = html[start:end]
     assert "clearTrackingGeometry(reason, { holdPose: true });" in body
@@ -2085,7 +2089,7 @@ def test_watchdog_recheck_does_not_find_proven_stale_controller_ownership_bug():
     added to the controller itself, since no reachable scenario was found where a watchdog
     callback could target a controller from a different request than the one it measured."""
     html = _scanner_html()
-    watchdog_start = html.index("function watchdogTick(token)")
+    watchdog_start = html.index("function watchdogTick(token")
     body = html[watchdog_start:watchdog_start + 400]
     assert "if (sessionEnding || token !== scanLoopToken) return;" in body
 
@@ -2176,6 +2180,31 @@ def test_accepted_detection_no_longer_mutates_capture_canvas():
     assert reset_at > json_at  # only reached after the response resolves and is accepted
 
 
+def test_tracking_initialization_uses_uploaded_capture_temporal_source():
+    body = _detect_once_body()
+    draw_idx = body.index("captureCtx.drawImage(cam, 0, 0, captureCanvas.width, captureCanvas.height);")
+    stamp_idx = body.index("const uploadedCaptureAt = performance.now();")
+    reset_idx = body.index("resetTrackingEpoch(frameW, frameH);")
+    gray_idx = body.index("prevGray = matFromUploadedCaptureGray();")
+    points_idx = body.index("prevPts = cv.matFromArray", gray_idx)
+    assert draw_idx < stamp_idx < reset_idx < gray_idx < points_idx
+    assert "source: 'uploaded_capture_frame'" in body
+    assert "captureFrameAgeMs" in body
+    assert "prevGray = matFromVideoGray();" not in body[reset_idx:points_idx]
+
+
+def test_uploaded_capture_gray_is_copied_into_tracking_canvas_not_used_for_lk_directly():
+    html = _scanner_html()
+    start = html.index("function matFromUploadedCaptureGray()")
+    end = html.index("function resetTrackingEpoch(width, height)", start)
+    body = html[start:end]
+    assert "trackingCtx.drawImage(captureCanvas, 0, 0, trackingCanvas.width, trackingCanvas.height);" in body
+    assert "trackingCtx.getImageData(0, 0, trackingCanvas.width, trackingCanvas.height);" in body
+    track_body = _track_frame_body()
+    lk_idx = track_body.index("cv.calcOpticalFlowPyrLK(")
+    assert "captureCanvas" not in track_body[:lk_idx]
+
+
 def test_one_active_attempt_maximum_is_structurally_enforced():
     html = _scanner_html()
     create_start = html.index("function createDetectionAttempt(")
@@ -2238,6 +2267,48 @@ def test_network_abort_requires_exact_attempt_ownership():
         assert guard in real_abort_branch
 
 
+def test_completed_controller_is_not_globally_abortable_after_fetch_settles():
+    body = _detect_once_body()
+    fetch_end = body.index("logTimingCheckpoint('[FETCH END]'")
+    settled = body.index("attempt.fetchSettled = true;", fetch_end)
+    phase = body.index("attempt.phase = 'handling';", fetch_end)
+    clear_controller = body.index("activeDetectionController === controller", fetch_end)
+    response_json = body.index("const data = await r.json();", fetch_end)
+    assert fetch_end < settled < response_json
+    assert fetch_end < phase < response_json
+    assert fetch_end < clear_controller < response_json
+    assert "diagState.lastFetchStartAt = null;" in body[fetch_end:response_json]
+
+
+def test_watchdog_callback_after_fetch_settlement_cannot_abort_completed_request():
+    body = _watchdog_tick_body()
+    real_abort_start = body.index("} else if (detectInFlight && activeDetectionAttempt && activeDetectionAttempt.phase === 'network'")
+    real_abort_end = body.index("} else if (detectInFlight && diagState.lastRequestStartAt && elapsed > WATCHDOG_TIMEOUT_MS) {")
+    real_abort_branch = body[real_abort_start:real_abort_end]
+    assert "activeDetectionAttempt.phase === 'network'" in real_abort_branch
+    assert "fetchSettled: activeDetectionAttempt.fetchSettled" in real_abort_branch
+    detect_body = _detect_once_body()
+    assert "attempt.phase = 'handling';" in detect_body
+    assert "attempt.fetchSettled = true;" in detect_body
+
+
+def test_watchdog_callback_after_response_handled_uses_finish_baseline_not_start_baseline():
+    body = _watchdog_tick_body()
+    assert "diagState.lastRequestFinishAt || diagState.lastRequestStartAt" in body
+    assert "logTimingCheckpoint('[WATCHDOG FORCED DETECTION]'" in body
+    forced_start = body.index("if (!detectInFlight && !isStreamDead()) {")
+    forced_end = body.index("} else if (detectInFlight && activeDetectionAttempt", forced_start)
+    forced_branch = body[forced_start:forced_end]
+    assert "logTimingCheckpoint('[WATCHDOG ABORT]'" not in forced_branch
+
+
+def test_stale_watchdog_cannot_trigger_new_capture():
+    body = _watchdog_tick_body()
+    stale_return = body.index("if (sessionEnding || token !== scanLoopToken) return;")
+    forced_detection = body.index("detectOnceFromServer(true);")
+    assert stale_return < forced_detection
+
+
 def test_late_blob_stale_generation_and_stale_loop_token_are_ignored():
     html = _scanner_html()
     current_start = html.index("function isCurrentDetectionAttempt(")
@@ -2259,6 +2330,31 @@ def test_capture_metadata_uses_uploaded_capture_dimensions():
     fetch_idx = body.index('await fetch("/detect_init"')
     assert capture_width_idx < metadata_width_idx < fetch_idx
     assert capture_width_idx < metadata_height_idx < fetch_idx
+
+
+def test_stale_scan_timer_cannot_reschedule_while_attempt_active():
+    html = _scanner_html()
+    schedule_start = html.index("function scheduleNextScan(reason, delayMs)")
+    schedule_end = html.index("function stopWatchdog()", schedule_start)
+    schedule_body = html[schedule_start:schedule_end]
+    assert "if (activeDetectionAttempt && !activeDetectionAttempt.terminal) {" in schedule_body
+    assert "scan_schedule_skipped" in schedule_body
+
+    scan_body = _scan_tick_body(html)
+    finally_idx = scan_body.index("} finally {")
+    finally_body = scan_body[finally_idx:]
+    assert "!detectInFlight" in finally_body
+    assert "!(activeDetectionAttempt && !activeDetectionAttempt.terminal)" in finally_body
+
+
+def test_attempt_creation_cancels_any_pending_normal_scan_timer():
+    html = _scanner_html()
+    create_start = html.index("function createDetectionAttempt(")
+    create_end = html.index("const attempt = {", create_start)
+    create_body = html[create_start:create_end]
+    assert "if (detectLoopTimer) {" in create_body
+    assert "clearTimeout(detectLoopTimer);" in create_body
+    assert "scan_timer_cancelled_for_attempt" in create_body
 
 
 def test_scan_counting_still_records_once_per_accepted_detection():
@@ -2286,7 +2382,7 @@ def test_matframevideogray_uses_tracking_canvas_dimensions_only():
     dimensions are stable by construction, independent of the capture canvas."""
     html = _scanner_html()
     gray_start = html.index("function matFromVideoGray()")
-    gray_end = html.index("function resetTrackingEpoch(width, height)")
+    gray_end = html.index("function matFromUploadedCaptureGray()")
     gray_body = html[gray_start:gray_end]
     assert "frameW" not in gray_body
     assert "frameH" not in gray_body
@@ -2335,9 +2431,47 @@ def test_dimension_and_epoch_mismatch_checked_before_optical_flow_call():
     body = _track_frame_body()
     guard_at = body.index("if (!prevGray || !prevPts || prevGrayEpoch !== trackingEpoch ||")
     assert "prevGray.rows !== gray.rows || prevGray.cols !== gray.cols) {" in body[guard_at:guard_at + 200]
-    assert "dropTracking('tracking_frame_dimension_mismatch', [gray]);" in body[guard_at:guard_at + 300]
+    assert "dropTracking('tracking_frame_dimension_mismatch', [gray], { gray, frameGapMs: gapSinceLastTick });" in body[guard_at:guard_at + 300]
     lk_at = body.index("cv.calcOpticalFlowPyrLK(")
     assert guard_at < lk_at
+
+
+def test_tracking_loss_diagnostic_carries_exact_reason_and_context_fields():
+    html = _scanner_html()
+    start = html.index("function dropTracking(reason, extraMats")
+    end = html.index("function handleDetectionTimeout()", start)
+    body = html[start:end]
+    for field in (
+        "reason,",
+        "requestSequence:",
+        "trackingEpoch,",
+        "ageSinceServerResponseMs:",
+        "ageSinceUploadedCaptureMs:",
+        "prevGrayDimensions:",
+        "currentGrayDimensions:",
+        "initialPointCount:",
+        "goodPointCount:",
+        "pointBounds:",
+        "lastTrackFrameTs,",
+        "frameGapMs:",
+        "previousCorners:",
+        "proposedCorners:",
+        "validation:",
+    ):
+        assert field in body
+    track_body = _track_frame_body()
+    for reason in (
+        "tracking_frame_dimension_mismatch",
+        "tracking_frame_gap_exceeded",
+        "insufficient_flow_points",
+        "homography_empty",
+        "tracking_epoch_superseded",
+        "tracking_exception",
+        "corner_order_invalid",
+        "out_of_bounds",
+        "tracking_geometry_invalid",
+    ):
+        assert reason in track_body
 
 
 def test_trackframe_catch_block_routes_through_controlled_failure():
@@ -2349,8 +2483,8 @@ def test_trackframe_catch_block_routes_through_controlled_failure():
     body = _track_frame_body()
     catch_start = body.rindex("} catch (e) {")
     catch_body = body[catch_start:body.index("}", body.index("dropTracking('tracking_exception'", catch_start)) + 1]
-    assert "deleteMats(gray, nextPts, status, err, prevMat, nextMat, mask, H);" in catch_body
-    assert "dropTracking('tracking_exception', []);" in catch_body
+    assert "dropTracking('tracking_exception', [gray, nextPts, status, err, prevMat, nextMat, mask, H]" in catch_body
+    assert "validation: { ok: false, reason: 'tracking_exception'" in catch_body
 
 
 def test_pose_hold_keeps_video_playing_only_stop_overlay_pauses_it():
@@ -2384,7 +2518,7 @@ def test_frame_gap_guard_runs_before_matfromvideogray_and_optical_flow():
     frame correspondence invalid."""
     body = _track_frame_body()
     gap_check_at = body.index("if (gapSinceLastTick > TRACKING_GRACE_MS) {")
-    drop_at = body.index("dropTracking('tracking_frame_gap_exceeded', []);")
+    drop_at = body.index("dropTracking('tracking_frame_gap_exceeded', [], { frameGapMs: gapSinceLastTick });")
     gray_at = body.index("gray = matFromVideoGray();")
     lk_at = body.index("cv.calcOpticalFlowPyrLK(")
     assert gap_check_at < drop_at < gray_at < lk_at
@@ -2410,7 +2544,7 @@ def test_bounded_hold_still_governs_every_new_tracking_failure_reason():
     loss reason. No new, unbounded hold was introduced; stale geometry cannot persist
     past the existing hold window."""
     html = _scanner_html()
-    drop_start = html.index("function dropTracking(reason, extraMats)")
+    drop_start = html.index("function dropTracking(reason, extraMats")
     drop_end = html.index("function handleDetectionTimeout()")
     drop_body = html[drop_start:drop_end]
     assert "clearTrackingGeometry(reason, { holdPose: true });" in drop_body
@@ -2425,7 +2559,7 @@ def test_new_failure_paths_never_touch_video_source_or_currenttime_or_loop():
     scrub playback position, or replace native looping."""
     html = _scanner_html()
     for fn_start, fn_end in (
-        ("function dropTracking(reason, extraMats)", "function handleDetectionTimeout()"),
+        ("function dropTracking(reason, extraMats", "function handleDetectionTimeout()"),
         ("function clearTrackingGeometry(reason, options = {})", "function stopTrackingLoop()"),
         ("function requestPoseHold(reason)", "function playOverlay()"),
     ):
@@ -2450,7 +2584,7 @@ def test_server_reacquisition_starts_exactly_one_fresh_epoch():
     body = html[detect_start:detect_end]
     assert body.count("resetTrackingEpoch(") == 1
     reset_at = body.index("resetTrackingEpoch(frameW, frameH)")
-    prev_gray_at = body.index("prevGray = matFromVideoGray();")
+    prev_gray_at = body.index("prevGray = matFromUploadedCaptureGray();")
     epoch_stamp_at = body.index("prevGrayEpoch = trackingEpoch;")
     assert reset_at < prev_gray_at < epoch_stamp_at
 

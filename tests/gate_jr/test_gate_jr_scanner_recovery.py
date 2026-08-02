@@ -612,9 +612,9 @@ def test_grace_recovery_and_timeout_both_go_through_single_exit_paths():
     previous prevGray/prevPts)."""
     html = _scanner_html()
     assert "'[TRACK RECOVERED]'" in html
-    assert "function dropTracking(reason, extraMats)" in html
-    assert "dropTracking('insufficient_flow_points', [gray, nextPts, status, err]);" in html
-    assert "dropTracking('homography_empty', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);" in html
+    assert "function dropTracking(reason, extraMats" in html
+    assert "dropTracking('insufficient_flow_points', [gray, nextPts, status, err], {" in html
+    assert "dropTracking('homography_empty', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {" in html
     assert "'[TRACK LOST]'" in html
     assert "clearTrackingGeometry(reason, { holdPose: true });" in html  # dropTracking holds the last pose briefly
 

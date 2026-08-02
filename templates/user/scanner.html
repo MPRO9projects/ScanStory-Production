@@ -1505,6 +1505,12 @@
     let overlayPoseSeq = 0;
     let lastTrustedPoseTs = 0;
     let lastSmoothGeneration = 0;
+    let activeTrackerRequestSeq = 0;
+    let activeTrackerInitializedAt = 0;
+    let activeTrackerCaptureAt = 0;
+    let activeTrackerInitialPointCount = 0;
+    let detectionControllerSeq = 0;
+    let watchdogCallbackSeq = 0;
 
     const TRANSITION_HISTORY_LIMIT = 20;
     const scannerTransitionHistory = []; // bounded — recent transitions for diagnostics only
@@ -1572,17 +1578,31 @@
         });
         return null;
       }
+      if (detectLoopTimer) {
+        const cancelledTimerId = detectLoopTimer;
+        clearTimeout(detectLoopTimer);
+        detectLoopTimer = null;
+        scannerDiagnostics.push('scan_timer_cancelled_for_attempt', {
+          requestSequence,
+          cancelledTimerId,
+          generation,
+          token
+        });
+      }
       const attempt = {
         requestSequence,
         scannerGeneration: generation,
         scanLoopToken: token,
         phase: 'drawing',
         controller: null,
+        controllerId: null,
         terminal: false,
         successorScheduled: false,
         cancelled: false,
         encodeInFlight: false,
         fetchInFlight: false,
+        fetchSettled: false,
+        responseHandled: false,
         networkAborted: false
       };
       activeDetectionAttempt = attempt;
@@ -2473,6 +2493,16 @@
       return gray;
     }
 
+    function matFromUploadedCaptureGray() {
+      trackingCtx.drawImage(captureCanvas, 0, 0, trackingCanvas.width, trackingCanvas.height);
+      const imgData = trackingCtx.getImageData(0, 0, trackingCanvas.width, trackingCanvas.height);
+      let src = cv.matFromImageData(imgData);
+      let gray = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      src.delete();
+      return gray;
+    }
+
     // Single entry point for starting a fresh tracking epoch: releases the previous
     // prevGray/prevPts, resizes the dedicated tracking canvas to the new fixed dimensions,
     // and bumps trackingEpoch. Every tracking-dimension change must go through this one
@@ -2512,11 +2542,47 @@
     // Single exit path for "local tracking failed this frame" — fixes a leak where the
     // H.empty() branch used to fall through to shared cleanup without freeing `gray`,
     // and without releasing the previous prevGray/prevPts (audit finding).
-    function dropTracking(reason, extraMats) {
+    function matDims(mat) {
+      return mat ? { rows: mat.rows, cols: mat.cols } : null;
+    }
+
+    function pointBounds(points) {
+      if (!points || points.length < 2) return null;
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (let i = 0; i < points.length; i += 2) {
+        const x = Number(points[i]), y = Number(points[i + 1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+        minX = Math.min(minX, x); minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x); maxY = Math.max(maxY, y);
+      }
+      if (!Number.isFinite(minX)) return null;
+      return { minX, minY, maxX, maxY, width: maxX - minX, height: maxY - minY };
+    }
+
+    function dropTracking(reason, extraMats, details = {}) {
       recordRejection(reason);
       diagState.consecutiveRejected++;
       diagState.consecutiveAccepted = 0;
-      scannerDiagnostics.push('[TRACK LOST]', { reason, generation: scannerGeneration, badFrames: trackingBadFrames });
+      const now = performance.now();
+      scannerDiagnostics.push('[TRACK LOST]', Object.assign({
+        reason,
+        generation: scannerGeneration,
+        badFrames: trackingBadFrames,
+        requestSequence: activeTrackerRequestSeq || latestAcceptedRequestId || null,
+        trackingEpoch,
+        ageSinceServerResponseMs: activeTrackerInitializedAt ? Math.round(now - activeTrackerInitializedAt) : null,
+        ageSinceUploadedCaptureMs: activeTrackerCaptureAt ? Math.round(now - activeTrackerCaptureAt) : null,
+        prevGrayDimensions: matDims(prevGray),
+        currentGrayDimensions: matDims(details.gray || null),
+        initialPointCount: activeTrackerInitialPointCount,
+        goodPointCount: typeof details.goodPointCount === 'number' ? details.goodPointCount : null,
+        pointBounds: details.pointBounds || null,
+        lastTrackFrameTs,
+        frameGapMs: typeof details.frameGapMs === 'number' ? Math.round(details.frameGapMs) : null,
+        previousCorners: currCorners,
+        proposedCorners: details.proposedCorners || null,
+        validation: details.validation || null
+      }, details.extra || {}));
       // Audit note (issue 3): logged only when the overlay video was ACTIVELY mid-playback
       // (not already paused/ended) at the moment tracking dropped — this is what
       // distinguishes "the video genuinely reached the end on its own" from "tracking loss
@@ -2605,7 +2671,7 @@
         const epochAtTickStart = trackingEpoch;
 
         if (gapSinceLastTick > TRACKING_GRACE_MS) {
-          dropTracking('tracking_frame_gap_exceeded', []);
+          dropTracking('tracking_frame_gap_exceeded', [], { frameGapMs: gapSinceLastTick });
           return;
         }
 
@@ -2617,7 +2683,7 @@
         // into LK; fail through the same controlled path as any other tracking loss.
         if (!prevGray || !prevPts || prevGrayEpoch !== trackingEpoch ||
             prevGray.rows !== gray.rows || prevGray.cols !== gray.cols) {
-          dropTracking('tracking_frame_dimension_mismatch', [gray]);
+          dropTracking('tracking_frame_dimension_mismatch', [gray], { gray, frameGapMs: gapSinceLastTick });
           return;
         }
 
@@ -2646,7 +2712,12 @@
             deleteMats(gray, nextPts, status, err);
             return; // skip this frame, keep tracking state
           }
-          dropTracking('insufficient_flow_points', [gray, nextPts, status, err]);
+          dropTracking('insufficient_flow_points', [gray, nextPts, status, err], {
+            gray,
+            frameGapMs: gapSinceLastTick,
+            goodPointCount: goodPrev.length / 2,
+            pointBounds: pointBounds(goodNext)
+          });
           return;
         }
         if (trackingBadFrames > 0) {
@@ -2661,7 +2732,12 @@
         H = cv.findHomography(prevMat, nextMat, cv.RANSAC, RANSAC_REPROJ, mask);
 
         if (H.empty()) {
-          dropTracking('homography_empty', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          dropTracking('homography_empty', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
+            gray,
+            frameGapMs: gapSinceLastTick,
+            goodPointCount: goodPrev.length / 2,
+            pointBounds: pointBounds(goodNext)
+          });
           return;
         }
 
@@ -2672,7 +2748,14 @@
         cornerMat.delete(); newCornerMat.delete();
         const newCorners = normalizeCornerOrder(newCornersRaw, currCorners);
         if (!newCorners) {
-          dropTracking('corner_order_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          dropTracking('corner_order_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
+            gray,
+            frameGapMs: gapSinceLastTick,
+            goodPointCount: goodPrev.length / 2,
+            pointBounds: pointBounds(goodNext),
+            proposedCorners: newCornersRaw,
+            validation: validateOverlayQuad(newCornersRaw)
+          });
           return;
         }
 
@@ -2683,7 +2766,14 @@
           p.y > -pad * frameH && p.y < frameH * (1 + pad)
         );
         if (!inBounds) {
-          dropTracking('out_of_bounds', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          dropTracking('out_of_bounds', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
+            gray,
+            frameGapMs: gapSinceLastTick,
+            goodPointCount: goodPrev.length / 2,
+            pointBounds: pointBounds(goodNext),
+            proposedCorners: newCorners,
+            validation: { ok: false, reason: 'out_of_bounds' }
+          });
           return;
         }
 
@@ -2695,7 +2785,14 @@
             deleteMats(gray, nextPts, status, err, prevMat, nextMat, mask, H);
             return;
           }
-          dropTracking('pose_rejected_' + localPoseQuality.reason, [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          dropTracking('pose_rejected_' + localPoseQuality.reason, [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
+            gray,
+            frameGapMs: gapSinceLastTick,
+            goodPointCount: goodPrev.length / 2,
+            pointBounds: pointBounds(goodNext),
+            proposedCorners: newCorners,
+            validation: localPoseQuality
+          });
           return;
         }
 
@@ -2705,13 +2802,27 @@
           // fresh accepted detection or a controlled failure bumps trackingEpoch, and
           // neither can interleave with a synchronous function body — kept as an explicit
           // guard so a result computed against a superseded epoch can never be applied.
-          dropTracking('tracking_epoch_superseded', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          dropTracking('tracking_epoch_superseded', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
+            gray,
+            frameGapMs: gapSinceLastTick,
+            goodPointCount: goodPrev.length / 2,
+            pointBounds: pointBounds(goodNext),
+            proposedCorners: newCorners,
+            validation: { ok: false, reason: 'tracking_epoch_superseded' }
+          });
           return;
         }
 
         currCorners = newCorners;
         if (!applyWarp(currCorners)) {
-          dropTracking('tracking_geometry_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          dropTracking('tracking_geometry_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
+            gray,
+            frameGapMs: gapSinceLastTick,
+            goodPointCount: goodPrev.length / 2,
+            pointBounds: pointBounds(goodNext),
+            proposedCorners: currCorners,
+            validation: { ok: false, reason: 'tracking_geometry_invalid' }
+          });
           return;
         }
         playOverlay();
@@ -2745,8 +2856,11 @@
         // broken epoch, records an explicit reason, and enters the existing bounded
         // pose-hold/recovery policy instead of leaving stale geometry visible indefinitely.
         console.error('Track frame error:', e);
-        deleteMats(gray, nextPts, status, err, prevMat, nextMat, mask, H);
-        dropTracking('tracking_exception', []);
+        dropTracking('tracking_exception', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
+          gray,
+          frameGapMs: gapSinceLastTick,
+          validation: { ok: false, reason: 'tracking_exception', message: e && e.message ? e.message : String(e) }
+        });
       }
     }
 
@@ -2803,6 +2917,7 @@
       logTimingCheckpoint('[FRAME CAPTURE START]', 'frame_capture');
       logTimingCheckpoint('[DRAW IMAGE START]', 'draw_image', { capW, capH, videoWidth: cam.videoWidth, videoHeight: cam.videoHeight });
       captureCtx.drawImage(cam, 0, 0, captureCanvas.width, captureCanvas.height);
+      const uploadedCaptureAt = performance.now();
       logTimingCheckpoint('[DRAW IMAGE END]', 'draw_image', { capW, capH, videoWidth: cam.videoWidth, videoHeight: cam.videoHeight });
       if (!isCurrentDetectionAttempt(attempt)) {
         detectionPolicy.finish(requestId);
@@ -2887,6 +3002,7 @@
           return;
         }
         attempt.controller = controller;
+        attempt.controllerId = ++detectionControllerSeq;
         attempt.fetchInFlight = true;
         diagState.fetchInFlight = true;
         activeDetectionController = controller;
@@ -2907,8 +3023,12 @@
         const r = await fetch("/detect_init", { method: "POST", body: fd, signal: controller.signal });
         logTimingCheckpoint('[FETCH END]', 'fetch', { requestId, httpStatus: r.status });
         clearTimeout(timeoutId);
-        if (activeDetectionController === controller && attempt.controller === controller) activeDetectionController = null;
+        attempt.fetchSettled = true;
         attempt.fetchInFlight = false;
+        attempt.phase = 'handling';
+        diagState.activeAttemptPhase = 'handling';
+        diagState.lastFetchStartAt = null;
+        if (activeDetectionController === controller && attempt.controller === controller) activeDetectionController = null;
         diagState.fetchInFlight = false;
         if (!setDetectionAttemptPhase(attempt, 'handling')) {
           detectionPolicy.finish(requestId);
@@ -3086,14 +3206,19 @@
           }
         }
         const pts = (data.init_points || []).slice(0, MAX_TRACK_POINTS).map(p => [Number(p.x), Number(p.y)]);
+        let initialTrackingPointCount = pts.length;
 
         // Fresh tracking epoch: dedicated tracking canvas fixed at server frame
         // dimensions, old prevGray/prevPts released, epoch bumped — no dependency on
         // (or mutation of) the capture canvas. init_points/corners below are the server's
         // frameW×frameH space, converted into prevPts exactly once, right here.
         resetTrackingEpoch(frameW, frameH);
-        prevGray = matFromVideoGray();
+        prevGray = matFromUploadedCaptureGray();
         prevGrayEpoch = trackingEpoch;
+        activeTrackerRequestSeq = requestId;
+        activeTrackerInitializedAt = performance.now();
+        activeTrackerCaptureAt = uploadedCaptureAt;
+        activeTrackerInitialPointCount = initialTrackingPointCount;
 
         if (pts.length >= 25) {
           const flat = [];
@@ -3117,7 +3242,18 @@
             }
           }
           prevPts = cv.matFromArray(flat.length / 2, 1, cv.CV_32FC2, flat);
+          initialTrackingPointCount = flat.length / 2;
+          activeTrackerInitialPointCount = initialTrackingPointCount;
         }
+        scannerDiagnostics.push('tracking_epoch_initialized', {
+          requestId,
+          trackingEpoch,
+          source: 'uploaded_capture_frame',
+          captureFrameAgeMs: Math.round(activeTrackerInitializedAt - activeTrackerCaptureAt),
+          frameWidth: frameW,
+          frameHeight: frameH,
+          initialPointCount: initialTrackingPointCount
+        });
 
         // When re-anchoring while already tracking same pair, preserve smoothCorners
         // to avoid a visible jump — only reset when switching pairs or first detection
@@ -3177,6 +3313,8 @@
         }
       } finally {
         logTimingCheckpoint('[RESPONSE HANDLED]', 'response_handled', { requestId });
+        attempt.responseHandled = true;
+        diagState.lastRequestFinishAt = Date.now();
         finalizeDetectionAttempt(attempt, (attempt.cancelled || sessionEnding) ? 'cancelled' : 'complete', 'finally');
         loadingSpinner.style.display = "none";
       }
@@ -3234,6 +3372,17 @@
         scannerDiagnostics.push('scan_tick_skipped', { reason: 'session_ending' });
         return;
       }
+      if (activeDetectionAttempt && !activeDetectionAttempt.terminal) {
+        scannerDiagnostics.push('scan_schedule_skipped', {
+          reason: 'active_attempt_in_progress',
+          scheduledBy: reason,
+          activeRequestSequence: activeDetectionAttempt.requestSequence,
+          activePhase: activeDetectionAttempt.phase,
+          token: activeDetectionAttempt.scanLoopToken,
+          replacedTimerId
+        });
+        return;
+      }
       const token = scanLoopToken;
       const delay = delayMs != null ? delayMs : DETECT_INTERVAL_MS;
       const now = Date.now();
@@ -3243,7 +3392,11 @@
       diagState.selectedDelayMs = delay;
       diagState.selectedDelayReason = reason;
       scanTimerGeneration++;
-      scannerDiagnostics.push('next_scan_scheduled', { reason, delay, token, generation: scannerGeneration });
+      scannerDiagnostics.push('next_scan_scheduled', {
+        reason, delay, token, generation: scannerGeneration,
+        scanTimerGeneration, scheduledBy: reason, timerOwner: 'scan_loop',
+        replacedTimerId
+      });
       detectLoopTimer = setTimeout(() => scanTick(token), delay);
       logTimingCheckpoint('[SCAN SCHEDULED]', reason, {
         delay, token,
@@ -3270,21 +3423,54 @@
     function scheduleWatchdog(token) {
       stopWatchdog();
       if (sessionEnding) return;
-      watchdogTimerId = setTimeout(() => watchdogTick(token), WATCHDOG_CHECK_INTERVAL_MS);
+      const watchdogId = ++watchdogCallbackSeq;
+      const capturedAttempt = activeDetectionAttempt;
+      const capturedController = activeDetectionController;
+      watchdogTimerId = setTimeout(() => watchdogTick(token, watchdogId, {
+        requestSequence: capturedAttempt ? capturedAttempt.requestSequence : null,
+        generation: scannerGeneration,
+        loopToken: token,
+        controllerId: capturedAttempt ? capturedAttempt.controllerId : null,
+        hasController: Boolean(capturedController)
+      }), WATCHDOG_CHECK_INTERVAL_MS);
     }
 
-    function watchdogTick(token) {
+    function watchdogTick(token, watchdogId, captured) {
       watchdogTimerId = null;
       if (sessionEnding || token !== scanLoopToken) return; // loop ownership moved on — this watchdog instance retires, never restarted by a stale token
       diagState.currentScanLoopToken = scanLoopToken;
       diagState.requestInFlight = detectInFlight;
       diagState.recoveryInProgress = Boolean(recoverScannerPromise);
-      logTimingCheckpoint('[WATCHDOG TICK]', 'watchdog_tick', { token });
+      const activeAttempt = activeDetectionAttempt;
+      logTimingCheckpoint('[WATCHDOG TICK]', 'watchdog_tick', {
+        token,
+        watchdogId,
+        capturedRequestSequence: captured ? captured.requestSequence : null,
+        activeRequestSequence: activeAttempt ? activeAttempt.requestSequence : null,
+        capturedGeneration: captured ? captured.generation : null,
+        activeGeneration: scannerGeneration,
+        capturedLoopToken: captured ? captured.loopToken : null,
+        activeLoopToken: scanLoopToken,
+        capturedControllerId: captured ? captured.controllerId : null,
+        activeControllerId: activeAttempt ? activeAttempt.controllerId : null,
+        capturedHadController: captured ? captured.hasController : null,
+        activeHasController: Boolean(activeDetectionController),
+        attemptPhase: activeAttempt ? activeAttempt.phase : null,
+        attemptTerminal: activeAttempt ? activeAttempt.terminal : null,
+        controllerAborted: activeDetectionController ? activeDetectionController.signal.aborted : null,
+        fetchSettled: activeAttempt ? activeAttempt.fetchSettled : null,
+        responseHandled: activeAttempt ? activeAttempt.responseHandled : null,
+        abortAttempted: false,
+        abortExecuted: false,
+        skipReason: null
+      });
       if (document.hidden || recoverScannerPromise || diagState.cameraStartInProgress) {
         scheduleWatchdog(token); // never forces anything in these states — just keeps checking
         return;
       }
-      const baseline = diagState.lastRequestStartAt || diagState.lastCameraStartTimestamp || Date.now();
+      const baseline = detectInFlight
+        ? (diagState.lastRequestStartAt || diagState.lastCameraStartTimestamp || Date.now())
+        : (diagState.lastRequestFinishAt || diagState.lastRequestStartAt || diagState.lastCameraStartTimestamp || Date.now());
       const elapsed = Date.now() - baseline;
       diagState.watchdogDeadline = baseline + WATCHDOG_TIMEOUT_MS;
       if (!detectInFlight && !isStreamDead()) {
@@ -3293,7 +3479,13 @@
           diagState.lastWatchdogReason = 'forced_detection';
           diagState.lastWatchdogElapsedMs = elapsed;
           scannerDiagnostics.push('watchdog_forced_detection', { elapsedMs: elapsed, generation: scannerGeneration, token });
-          logTimingCheckpoint('[WATCHDOG ABORT]', 'forced_detection', { elapsedMs: elapsed });
+          logTimingCheckpoint('[WATCHDOG FORCED DETECTION]', 'forced_detection', {
+            elapsedMs: elapsed,
+            watchdogId,
+            abortAttempted: false,
+            abortExecuted: false,
+            skipReason: 'no_active_attempt'
+          });
           detectOnceFromServer(true); // forces a request through the SAME guarded path scanTick uses — never restarts the camera or the loop itself
         }
       } else if (detectInFlight && activeDetectionAttempt && activeDetectionAttempt.phase === 'network' && diagState.lastRequestStartAt && activeDetectionController) {
@@ -3324,7 +3516,19 @@
           diagState.watchdogAbortCountSession++;
           diagState.lastWatchdogReason = 'aborted_stuck_request';
           scannerDiagnostics.push('watchdog_aborted_stuck_request', { elapsedMs: networkElapsed, generation: scannerGeneration, token });
-          logTimingCheckpoint('[WATCHDOG ABORT]', 'aborted_stuck_request', { elapsedMs: networkElapsed });
+          logTimingCheckpoint('[WATCHDOG ABORT]', 'aborted_stuck_request', {
+            elapsedMs: networkElapsed,
+            watchdogId,
+            capturedRequestSequence: captured ? captured.requestSequence : null,
+            activeRequestSequence: activeDetectionAttempt.requestSequence,
+            capturedControllerId: captured ? captured.controllerId : null,
+            activeControllerId: activeDetectionAttempt.controllerId,
+            fetchSettled: activeDetectionAttempt.fetchSettled,
+            responseHandled: activeDetectionAttempt.responseHandled,
+            abortAttempted: true,
+            abortExecuted: true,
+            skipReason: null
+          });
           activeDetectionAttempt.networkAborted = true;
           activeDetectionAttempt.cancelled = true;
           activeDetectionController.abort();
@@ -3340,7 +3544,13 @@
           diagState.lastWatchdogElapsedMs = elapsed;
           diagState.lastWatchdogReason = 'stuck_before_network_request';
           scannerDiagnostics.push('watchdog_stuck_before_network_request', { elapsedMs: elapsed, generation: scannerGeneration, token });
-          logTimingCheckpoint('[WATCHDOG ABORT]', 'stuck_before_network_request', { elapsedMs: elapsed });
+          logTimingCheckpoint('[WATCHDOG SKIP]', 'stuck_before_network_request', {
+            elapsedMs: elapsed,
+            watchdogId,
+            abortAttempted: false,
+            abortExecuted: false,
+            skipReason: 'no_network_controller'
+          });
         }
       }
       scheduleWatchdog(token); // always reschedules — including right after a request completes, since the next 500ms check will see detectInFlight clear and the elapsed baseline reset
@@ -3428,7 +3638,9 @@
         // Always reschedule — a completed tick (whatever the outcome) must lead to the
         // next one unless the scanner was intentionally stopped (sessionEnding/stale token,
         // both checked again inside scheduleNextScan/the next scanTick invocation).
-        if (!requestAttemptStarted) scheduleNextScan('after_tick');
+        if (!requestAttemptStarted && !detectInFlight && !(activeDetectionAttempt && !activeDetectionAttempt.terminal)) {
+          scheduleNextScan('after_tick');
+        }
       }
     }
 
