@@ -1176,6 +1176,12 @@
     const ctx = cap.getContext("2d", { willReadFrequently: true });
     const captureCanvas = document.getElementById("captureCanvas");
     const captureCtx = captureCanvas.getContext("2d");
+    // Dedicated canvas for local optical-flow tracking only; captureCanvas/captureCtx own
+    // server snapshot drawing, JPEG encoding, upload metadata, and FormData. This removes
+    // the shared-canvas coordinate-space hazard: capture can resize independently while
+    // trackFrame reads a fixed tracking epoch.
+    const trackingCanvas = document.createElement("canvas");
+    const trackingCtx = trackingCanvas.getContext("2d", { willReadFrequently: true });
     const statusDiv = document.getElementById("status");
     const soundGate = document.getElementById("soundGate");
     const loadingSpinner = document.getElementById("loadingSpinner");
@@ -1480,6 +1486,13 @@
     let recoveryAttempt = 0;
     let lastTrackFrameTs = 0;
     let trackingGeneration = 0;
+    // Tracking (dimension/coordinate-space) epoch — distinct from trackingGeneration
+    // (camera-restart lifecycle). Bumped only by resetTrackingEpoch(), whenever the
+    // tracking canvas is (re)sized and prevGray/prevPts are rebuilt from a fresh accepted
+    // detection. prevGrayEpoch records which epoch prevGray/prevPts belong to, so a stale
+    // pairing can never reach calcOpticalFlowPyrLK.
+    let trackingEpoch = 0;
+    let prevGrayEpoch = -1;
     let activePairEpoch = 0; // bumped only when the displayed pair actually changes (marker A/B guard)
     let rawOverlayCorners = null;
     let orderedOverlayCorners = null;
@@ -2451,13 +2464,27 @@
     }
 
     function matFromVideoGray() {
-      ctx.drawImage(cam, 0, 0, cap.width, cap.height);
-      const imgData = ctx.getImageData(0, 0, cap.width, cap.height);
+      trackingCtx.drawImage(cam, 0, 0, trackingCanvas.width, trackingCanvas.height);
+      const imgData = trackingCtx.getImageData(0, 0, trackingCanvas.width, trackingCanvas.height);
       let src = cv.matFromImageData(imgData);
       let gray = new cv.Mat();
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
       src.delete();
       return gray;
+    }
+
+    // Single entry point for starting a fresh tracking epoch: releases the previous
+    // prevGray/prevPts, resizes the dedicated tracking canvas to the new fixed dimensions,
+    // and bumps trackingEpoch. Every tracking-dimension change must go through this one
+    // function — never resize the tracking canvas directly elsewhere — so prevGray/prevPts
+    // and the canvas buffer are never left inconsistent across a resize.
+    function resetTrackingEpoch(width, height) {
+      if (prevGray) { prevGray.delete(); prevGray = null; }
+      if (prevPts) { prevPts.delete(); prevPts = null; }
+      trackingCanvas.width = width;
+      trackingCanvas.height = height;
+      trackingEpoch++;
+      return trackingEpoch;
     }
 
     function cornersToMat(corners) {
@@ -2561,14 +2588,42 @@
       if (!cvReady || !tracking || cam.readyState < 2) return;
       const now = performance.now();
       if (now - lastTrackFrameTs < TRACK_FRAME_INTERVAL_MS) return;
+      // Captured BEFORE lastTrackFrameTs is overwritten below — the gap between this tick
+      // and the last one that actually ran. TRACKING_GRACE_MS (900ms) is reused rather than
+      // inventing a new threshold: it is already the codebase's accepted wall-clock ceiling
+      // for "grace period alone can hang on throttled/low-FPS devices" (see graceExpired()
+      // above). The same reasoning applies to optical-flow correspondence: calcOpticalFlowPyrLK's
+      // 21x21/3-level pyramidal search assumes small inter-frame motion, and a main-thread
+      // stall this long (backgrounded tab, long capture/encode stall) can move the card far
+      // enough that stale points no longer correspond to the new frame.
+      const gapSinceLastTick = lastTrackFrameTs ? (now - lastTrackFrameTs) : 0;
       lastTrackFrameTs = now;
 
+      let gray = null, nextPts = null, status = null, err = null;
+      let prevMat = null, nextMat = null, mask = null, H = null;
       try {
-        const gray = matFromVideoGray();
-        const nextPts = new cv.Mat();
-        const status = new cv.Mat();
-        const err = new cv.Mat();
+        const epochAtTickStart = trackingEpoch;
 
+        if (gapSinceLastTick > TRACKING_GRACE_MS) {
+          dropTracking('tracking_frame_gap_exceeded', []);
+          return;
+        }
+
+        gray = matFromVideoGray();
+
+        // OpenCV safety: calcOpticalFlowPyrLK requires prevImg/nextImg of equal size.
+        // A dimension or epoch mismatch here means prevGray/prevPts belong to a different
+        // tracking canvas size than the frame just captured — never feed mismatched Mats
+        // into LK; fail through the same controlled path as any other tracking loss.
+        if (!prevGray || !prevPts || prevGrayEpoch !== trackingEpoch ||
+            prevGray.rows !== gray.rows || prevGray.cols !== gray.cols) {
+          dropTracking('tracking_frame_dimension_mismatch', [gray]);
+          return;
+        }
+
+        nextPts = new cv.Mat();
+        status = new cv.Mat();
+        err = new cv.Mat();
         cv.calcOpticalFlowPyrLK(prevGray, gray, prevPts, nextPts, status, err, new cv.Size(21, 21), 3);
 
         const goodPrev = [];
@@ -2600,10 +2655,10 @@
         trackingBadFrames = 0; // reset on good frame
         graceEnteredAt = 0;
 
-        const prevMat = cv.matFromArray(goodPrev.length / 2, 1, cv.CV_32FC2, goodPrev);
-        const nextMat = cv.matFromArray(goodNext.length / 2, 1, cv.CV_32FC2, goodNext);
-        const mask = new cv.Mat();
-        const H = cv.findHomography(prevMat, nextMat, cv.RANSAC, RANSAC_REPROJ, mask);
+        prevMat = cv.matFromArray(goodPrev.length / 2, 1, cv.CV_32FC2, goodPrev);
+        nextMat = cv.matFromArray(goodNext.length / 2, 1, cv.CV_32FC2, goodNext);
+        mask = new cv.Mat();
+        H = cv.findHomography(prevMat, nextMat, cv.RANSAC, RANSAC_REPROJ, mask);
 
         if (H.empty()) {
           dropTracking('homography_empty', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
@@ -2644,6 +2699,16 @@
           return;
         }
 
+        if (trackingEpoch !== epochAtTickStart) {
+          // Defensive: the tracking epoch changed underneath this tick. Structurally this
+          // should never happen (trackFrame runs synchronously, no awaits), since only a
+          // fresh accepted detection or a controlled failure bumps trackingEpoch, and
+          // neither can interleave with a synchronous function body — kept as an explicit
+          // guard so a result computed against a superseded epoch can never be applied.
+          dropTracking('tracking_epoch_superseded', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
+          return;
+        }
+
         currCorners = newCorners;
         if (!applyWarp(currCorners)) {
           dropTracking('tracking_geometry_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H]);
@@ -2657,6 +2722,7 @@
 
         prevGray.delete();
         prevGray = gray;
+        prevGrayEpoch = trackingEpoch;
         prevPts.delete();
         prevPts = nextMat.clone();
         lastLockTs = performance.now();
@@ -2671,8 +2737,16 @@
         mask.delete(); H.delete();
 
       } catch (e) {
+        // Controlled tracking failure: any exception during this tick (e.g. an OpenCV
+        // assertion from a Mat-size mismatch that slipped past the guard above) is routed
+        // through the same dropTracking() path as every other tracking-loss reason —
+        // never a bare `tracking = false`. This releases every Mat allocated so far this
+        // tick (deleteMats tolerates nulls for whichever weren't reached), stops the
+        // broken epoch, records an explicit reason, and enters the existing bounded
+        // pose-hold/recovery policy instead of leaving stale geometry visible indefinitely.
         console.error('Track frame error:', e);
-        tracking = false;
+        deleteMats(gray, nextPts, status, err, prevMat, nextMat, mask, H);
+        dropTracking('tracking_exception', []);
       }
     }
 
@@ -2942,8 +3016,6 @@
 
         frameW = Number(data.frame_width);
         frameH = Number(data.frame_height);
-        cap.width = frameW;
-        cap.height = frameH;
 
         const newCornersRaw = data.corners.map(p => ({ x: Number(p.x), y: Number(p.y) }));
         const newCorners = normalizeCornerOrder(newCornersRaw, currCorners);
@@ -3015,12 +3087,13 @@
         }
         const pts = (data.init_points || []).slice(0, MAX_TRACK_POINTS).map(p => [Number(p.x), Number(p.y)]);
 
-        if (prevPts) prevPts.delete();
-        if (prevGray) prevGray.delete();
-
-        // Redraw at server frame dimensions for consistent optical flow space
-        cap.width = frameW; cap.height = frameH;
+        // Fresh tracking epoch: dedicated tracking canvas fixed at server frame
+        // dimensions, old prevGray/prevPts released, epoch bumped — no dependency on
+        // (or mutation of) the capture canvas. init_points/corners below are the server's
+        // frameW×frameH space, converted into prevPts exactly once, right here.
+        resetTrackingEpoch(frameW, frameH);
         prevGray = matFromVideoGray();
+        prevGrayEpoch = trackingEpoch;
 
         if (pts.length >= 25) {
           const flat = [];

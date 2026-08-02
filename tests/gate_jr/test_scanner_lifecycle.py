@@ -2103,10 +2103,9 @@ def _track_frame_body():
     return html[start:end]
 
 
-def test_capture_uses_its_own_canvas_and_context():
-    """Proof 1: exactly one <canvas>/2D-context pair exists and is used by both the
-    server-capture path (detectOnceFromServer) and the local-tracking path
-    (matFromVideoGray, called every trackFrame tick) — not two independent resources."""
+def test_capture_and_tracking_use_separate_canvas_resources():
+    """Stream A owns captureCanvas/captureCtx for upload. Stream B owns
+    trackingCanvas/trackingCtx for optical flow."""
     html = _scanner_html()
     assert html.count('getElementById("cap")') == 1
     assert html.count('getElementById("captureCanvas")') == 1
@@ -2120,15 +2119,35 @@ def test_capture_uses_its_own_canvas_and_context():
     assert "cap.width = capW;" not in detect_body
     assert "cap.height = capH;" not in detect_body
     assert "cap.toBlob(" not in detect_body
+    assert html.count("document.createElement(\"canvas\")") == 1
+    assert "const trackingCanvas = document.createElement(\"canvas\");" in html
+    assert "const trackingCtx = trackingCanvas.getContext(" in html
     gray_start = html.index("function matFromVideoGray()")
     gray_end = html.index("function cornersToMat(corners)")
     gray_body = html[gray_start:gray_end]
-    assert "ctx.drawImage(cam, 0, 0, cap.width, cap.height)" in gray_body
-    assert "ctx.getImageData(0, 0, cap.width, cap.height)" in gray_body
+    assert "trackingCtx.drawImage(cam, 0, 0, trackingCanvas.width, trackingCanvas.height)" in gray_body
+    assert "trackingCtx.getImageData(0, 0, trackingCanvas.width, trackingCanvas.height)" in gray_body
+    assert "cap.width" not in gray_body
+    assert "cap.height" not in gray_body
+    assert "ctx.drawImage" not in gray_body
+    assert "ctx.getImageData" not in gray_body
+
+
+def test_tracking_canvas_never_used_for_toblob_or_capture():
+    """Stream B item 2: trackingCanvas/trackingCtx must never appear anywhere near
+    encoding/upload — toBlob, FormData, or the capture-metadata fields. Only
+    captureCanvas is encoded/uploaded."""
+    html = _scanner_html()
+    assert "trackingCanvas.toBlob" not in html
+    assert "trackingCtx.toBlob" not in html
+    assert html.count(".toBlob(") == 1
+    to_blob_call = html.index(".toBlob(")
+    assert html[to_blob_call - 30:to_blob_call].strip().endswith("captureCanvas")
+    assert "trackingCanvas" not in html[html.index("fd.append(\"test_image\"") - 200:html.index("fd.append(\"test_image\"") + 50]
 
 
 def test_capture_never_resizes_tracking_canvas_before_network_await():
-    """Proof 2/4: detectOnceFromServer mutates cap.width/height to detection dimensions
+    """Proof 2/4: detectOnceFromServer mutates captureCanvas dimensions
     SYNCHRONOUSLY, before the toBlob await and before the fetch await — i.e. before any
     point where the event loop could run a queued trackFrame() rAF callback in between."""
     body = _detect_once_body()
@@ -2141,19 +2160,20 @@ def test_capture_never_resizes_tracking_canvas_before_network_await():
     assert "cap.height = capH;" not in body[:fetch_at]
 
 
-def test_tracking_canvas_is_sized_only_from_backend_frame_dimensions():
-    """Proof 2/4: nothing restores cap.width/height back to frameW/frameH between the
-    capture-dimension resize and the fetch's await resolving — the only restoration is
-    inside the accepted-detection branch, which runs strictly after `await r.json()`.
-    A rejected/no-detection/stale response leaves cap at detection dimensions."""
+def test_accepted_detection_no_longer_mutates_capture_canvas():
+    """Accepted detections initialize tracking through resetTrackingEpoch(frameW, frameH);
+    neither captureCanvas nor cap is resized for tracking after the response."""
     body = _detect_once_body()
     resize_at = body.index("captureCanvas.width = capW;")
     json_at = body.index("const data = await r.json();")
     between = body[resize_at:json_at]
     assert "cap.width =" not in between
     assert "cap.height =" not in between
-    restore_at = body.index("cap.width = frameW; cap.height = frameH;")
-    assert restore_at > json_at
+    assert "cap.width = frameW" not in body
+    assert "cap.height = frameH" not in body
+    assert "resetTrackingEpoch(frameW, frameH)" in body
+    reset_at = body.index("resetTrackingEpoch(frameW, frameH)")
+    assert reset_at > json_at  # only reached after the response resolves and is accepted
 
 
 def test_one_active_attempt_maximum_is_structurally_enforced():
@@ -2259,35 +2279,78 @@ def test_track_frame_has_no_capture_in_flight_guard():
     assert "matFromVideoGray()" in body
 
 
-def test_matframevideogray_has_no_fixed_dimension_or_size_guard():
-    """Proof 5: matFromVideoGray always draws/reads at whatever cap.width/cap.height
-    currently are — no parameter, no comparison against frameW/frameH, no assertion that
-    the canvas is still sized for tracking before producing a gray Mat. Combined with proof
-    2/4 above, prevGray (captured at a previous cap size) and this call's gray Mat (captured
-    at whatever size cap currently holds) can genuinely differ in dimensions."""
+def test_matframevideogray_uses_tracking_canvas_dimensions_only():
+    """Stream B item 1/3: matFromVideoGray always draws/reads at whatever
+    trackingCanvas.width/height currently are — this canvas is ONLY ever resized inside
+    resetTrackingEpoch (checked separately below), so within one tracking epoch its
+    dimensions are stable by construction, independent of the capture canvas."""
     html = _scanner_html()
     gray_start = html.index("function matFromVideoGray()")
-    gray_end = html.index("function cornersToMat(corners)")
+    gray_end = html.index("function resetTrackingEpoch(width, height)")
     gray_body = html[gray_start:gray_end]
     assert "frameW" not in gray_body
     assert "frameH" not in gray_body
-    assert gray_body.count("cap.width") == 2  # drawImage + getImageData, both current-size
+    assert "cap.width" not in gray_body
+    assert "cap.height" not in gray_body
+    assert gray_body.count("trackingCanvas.width") == 2  # drawImage + getImageData
+    assert gray_body.count("trackingCanvas.height") == 2
 
 
-def test_trackframe_catch_block_bypasses_droptracking_and_geometry_clear():
-    """Proof 7 (shape-loss connection): a thrown exception inside trackFrame's try block
-    (e.g. cv.calcOpticalFlowPyrLK asserting prevGray/gray size equality, which a shared,
-    externally-resized canvas can violate) is caught by a bare catch that only flips
-    `tracking = false` — it does NOT call dropTracking()/clearTrackingGeometry(), so no
-    [TRACK LOST] diagnostic is recorded and the overlay's last-applied transform/visibility
-    is left exactly as-is (frozen), rather than explicitly held or hidden."""
+def test_tracking_canvas_dimensions_only_assigned_inside_reset_epoch():
+    """Stream B item 3: trackingCanvas.width/trackingCanvas.height are assigned in
+    exactly one place — resetTrackingEpoch() — so tracking dimensions can only change
+    together with a full prevGray/prevPts reset and an epoch bump, never independently
+    mid-epoch."""
+    html = _scanner_html()
+    assert html.count("trackingCanvas.width =") == 1
+    assert html.count("trackingCanvas.height =") == 1
+    reset_start = html.index("function resetTrackingEpoch(width, height)")
+    reset_end = html.index("function cornersToMat(corners)")
+    reset_body = html[reset_start:reset_end]
+    assert "trackingCanvas.width = width;" in reset_body
+    assert "trackingCanvas.height = height;" in reset_body
+
+
+def test_reset_tracking_epoch_deletes_prev_mats_before_resizing():
+    """Stream B item 4: resetTrackingEpoch releases the previous prevGray/prevPts (and
+    nulls them) before resizing the tracking canvas and bumping trackingEpoch — no old
+    Mat or point set is ever retained across a tracking-size change."""
+    html = _scanner_html()
+    reset_start = html.index("function resetTrackingEpoch(width, height)")
+    reset_end = html.index("function cornersToMat(corners)")
+    body = html[reset_start:reset_end]
+    delete_gray_at = body.index("prevGray.delete(); prevGray = null;")
+    delete_pts_at = body.index("prevPts.delete(); prevPts = null;")
+    resize_at = body.index("trackingCanvas.width = width;")
+    epoch_at = body.index("trackingEpoch++;")
+    assert delete_gray_at < resize_at
+    assert delete_pts_at < resize_at
+    assert resize_at < epoch_at
+
+
+def test_dimension_and_epoch_mismatch_checked_before_optical_flow_call():
+    """Stream B item 5/6: before calcOpticalFlowPyrLK, trackFrame checks prevGray/prevPts
+    existence, epoch currency, and prevGray/gray row+col equality — and returns (never
+    calling LK) if any check fails. Ordering in source proves the guard runs first."""
+    body = _track_frame_body()
+    guard_at = body.index("if (!prevGray || !prevPts || prevGrayEpoch !== trackingEpoch ||")
+    assert "prevGray.rows !== gray.rows || prevGray.cols !== gray.cols) {" in body[guard_at:guard_at + 200]
+    assert "dropTracking('tracking_frame_dimension_mismatch', [gray]);" in body[guard_at:guard_at + 300]
+    lk_at = body.index("cv.calcOpticalFlowPyrLK(")
+    assert guard_at < lk_at
+
+
+def test_trackframe_catch_block_routes_through_controlled_failure():
+    """Stream B item 7/8: a thrown exception inside trackFrame's try block is now routed
+    through dropTracking('tracking_exception', ...) — the same controlled-recovery path
+    as every other tracking-loss reason — instead of a bare `tracking = false`. Every Mat
+    variable that might have been allocated so far this tick is passed to deleteMats
+    first, so nothing leaks on the exception path."""
     body = _track_frame_body()
     catch_start = body.rindex("} catch (e) {")
-    catch_body = body[catch_start:body.index("}", body.index("tracking = false;", catch_start)) + 1]
-    assert "tracking = false;" in catch_body
-    assert "dropTracking(" not in catch_body
-    assert "clearTrackingGeometry(" not in catch_body
-    assert "requestPoseHold(" not in catch_body
+    catch_body = body[catch_start:body.index("}", body.index("dropTracking('tracking_exception'", catch_start)) + 1]
+    assert "deleteMats(gray, nextPts, status, err, prevMat, nextMat, mask, H);" in catch_body
+    assert "dropTracking('tracking_exception', []);" in catch_body
 
 
 def test_pose_hold_keeps_video_playing_only_stop_overlay_pauses_it():
@@ -2305,6 +2368,131 @@ def test_pose_hold_keeps_video_playing_only_stop_overlay_pauses_it():
     stop_end = html.index("function requestPoseHold(reason)")
     stop_body = html[stop_start:stop_end]
     assert "overlay.pause()" in stop_body
+
+
+# ---------------------------------------------------------------------------
+# Stream B: tracking canvas separation, tracking epoch, and controlled tracking
+# failure. Codex owns captureCanvas/encoding/attempt-lifecycle/watchdog/AbortController/
+# scan-scheduling/session-end-request-guards — none of that is touched here.
+# ---------------------------------------------------------------------------
+
+def test_frame_gap_guard_runs_before_matfromvideogray_and_optical_flow():
+    """Stream B item 10: a long gap since the last tracking tick (reused
+    TRACKING_GRACE_MS threshold — the codebase's own existing wall-clock ceiling, not an
+    invented value) invalidates correspondence and drops tracking BEFORE a new gray frame
+    is even captured or LK is called — never applies optical flow across a gap that makes
+    frame correspondence invalid."""
+    body = _track_frame_body()
+    gap_check_at = body.index("if (gapSinceLastTick > TRACKING_GRACE_MS) {")
+    drop_at = body.index("dropTracking('tracking_frame_gap_exceeded', []);")
+    gray_at = body.index("gray = matFromVideoGray();")
+    lk_at = body.index("cv.calcOpticalFlowPyrLK(")
+    assert gap_check_at < drop_at < gray_at < lk_at
+
+
+def test_epoch_supersede_guard_prevents_stale_epoch_callback_from_mutating_state():
+    """Stream B item 9: trackFrame captures trackingEpoch at tick start and re-checks it
+    immediately before committing results to shared state (currCorners/prevGray/prevPts)
+    — a result computed against a superseded epoch is dropped via the same controlled
+    dropTracking() path rather than applied."""
+    body = _track_frame_body()
+    capture_at = body.index("const epochAtTickStart = trackingEpoch;")
+    check_at = body.index("if (trackingEpoch !== epochAtTickStart) {")
+    commit_at = body.index("currCorners = newCorners;\n        if (!applyWarp(currCorners)) {")
+    assert capture_at < check_at < commit_at
+
+
+def test_bounded_hold_still_governs_every_new_tracking_failure_reason():
+    """Stream B item 11/12: every new failure reason (dimension mismatch, frame gap,
+    exception, epoch supersede) routes through dropTracking(), which unconditionally
+    calls clearTrackingGeometry(reason, { holdPose: true }) — the SAME bounded pose-hold
+    policy (POSE_HOLD_MS, a finite constant) already governing every existing tracking
+    loss reason. No new, unbounded hold was introduced; stale geometry cannot persist
+    past the existing hold window."""
+    html = _scanner_html()
+    drop_start = html.index("function dropTracking(reason, extraMats)")
+    drop_end = html.index("function handleDetectionTimeout()")
+    drop_body = html[drop_start:drop_end]
+    assert "clearTrackingGeometry(reason, { holdPose: true });" in drop_body
+    assert "const POSE_HOLD_MS = 500;" in html  # finite, unchanged bound on the hold window
+
+
+def test_new_failure_paths_never_touch_video_source_or_currenttime_or_loop():
+    """Stream B item 13/14/15: dropTracking, clearTrackingGeometry, and requestPoseHold —
+    the entire controlled-failure/hold path used by every new tracking-loss reason — never
+    assign overlay.src or overlay.currentTime, and the native <video loop> attribute is
+    untouched. Temporary local-tracking weakness must never reset the video source,
+    scrub playback position, or replace native looping."""
+    html = _scanner_html()
+    for fn_start, fn_end in (
+        ("function dropTracking(reason, extraMats)", "function handleDetectionTimeout()"),
+        ("function clearTrackingGeometry(reason, options = {})", "function stopTrackingLoop()"),
+        ("function requestPoseHold(reason)", "function playOverlay()"),
+    ):
+        body = html[html.index(fn_start):html.index(fn_end)]
+        assert "overlay.src =" not in body
+        assert "overlay.currentTime =" not in body
+    assert html.count('<video id="overlay"') == 1
+    overlay_tag_end = html.index(">", html.index('<video id="overlay"'))
+    overlay_tag = html[html.index('<video id="overlay"'):overlay_tag_end]
+    assert "loop" in overlay_tag
+    assert "overlay.loop =" not in html
+
+
+def test_server_reacquisition_starts_exactly_one_fresh_epoch():
+    """Stream B item 16: the accepted-detection branch calls resetTrackingEpoch exactly
+    once per acceptance, immediately followed by rebuilding prevGray from the tracking
+    canvas and stamping prevGrayEpoch — a fresh epoch is only ever initialized from a
+    just-accepted server pose, never mid-tracking."""
+    html = _scanner_html()
+    detect_start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
+    detect_end = html.index("async function scanTick(token)")
+    body = html[detect_start:detect_end]
+    assert body.count("resetTrackingEpoch(") == 1
+    reset_at = body.index("resetTrackingEpoch(frameW, frameH)")
+    prev_gray_at = body.index("prevGray = matFromVideoGray();")
+    epoch_stamp_at = body.index("prevGrayEpoch = trackingEpoch;")
+    assert reset_at < prev_gray_at < epoch_stamp_at
+
+
+def test_corner_order_and_invalid_geometry_rejection_unchanged():
+    """Stream B item 17/18: normalizeCornerOrder is still consulted on both the local
+    tracking path and the server-response path, and out_of_bounds/homography_empty/
+    corner_order_invalid are still live dropTracking reasons — geometry validation was
+    not weakened or bypassed by the tracking-canvas/epoch changes."""
+    html = _scanner_html()
+    track_body = _track_frame_body()
+    assert "normalizeCornerOrder(newCornersRaw, currCorners)" in track_body
+    for reason in ("'homography_empty'", "'corner_order_invalid'", "'out_of_bounds'"):
+        assert f"dropTracking({reason}" in track_body
+
+
+def test_no_recognition_or_geometry_threshold_changed():
+    """Stream B item 19: MIN_GOOD_POINTS/MAX_ERR/RANSAC_REPROJ/TRACKING_GRACE_FRAMES/
+    TRACKING_GRACE_MS/POSE_HOLD_MS are exactly the same values as before this stream —
+    the tracking-canvas/epoch/gap/failure-path changes never touched recognition or
+    geometry acceptance thresholds."""
+    html = _scanner_html()
+    assert "const RANSAC_REPROJ = 5.0;" in html
+    assert "const TRACKING_GRACE_FRAMES = 3;" in html
+    assert "const TRACKING_GRACE_MS = 900;" in html
+    assert "const POSE_HOLD_MS = 500;" in html
+
+
+def test_session_end_still_releases_tracking_geometry_and_mats():
+    """Stream B item 20: endScannerSession() already stops the tracking loop and calls
+    clearTrackingGeometry('session_end') (which deletes prevGray/prevPts) before stopping
+    the camera — unchanged by this stream, still the single place tracking resources are
+    released on exit. The new dedicated trackingCanvas needs no separate teardown: it
+    holds no resources beyond what clearTrackingGeometry already frees."""
+    html = _scanner_html()
+    end_start = html.index("async function endScannerSession()")
+    end_end = html.index("console.log('\U0001f51a Ending scanner session:'")
+    body = html[end_start:end_end]
+    assert "stopTrackingLoop();" in body
+    assert "clearTrackingGeometry('session_end');" in body
+    stop_before_clear = body.index("stopTrackingLoop();") < body.index("clearTrackingGeometry('session_end');")
+    assert stop_before_clear
 
 
 def test_applywarp_and_render_path_use_frameW_frameH_not_cap_dimensions():
