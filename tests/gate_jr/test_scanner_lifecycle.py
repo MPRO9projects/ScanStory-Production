@@ -1584,7 +1584,7 @@ def test_stale_post_exit_response_is_ignored():
     scheduling."""
     html = _scanner_html()
     start = html.index("const data = await r.json();")
-    end = html.index("const durationMs = Math.round")
+    end = html.index("const durationMs = Math.round(performance.now() - requestStart);")
     body = html[start:end]
     assert "if (sessionEnding) {" in body
     assert "code: 'session_ended'" in body
@@ -3785,7 +3785,7 @@ def test_new_bootstrap_starts_without_a_frame_gap_baseline():
     schedule_at = body.index("scheduleTrackingFrame();")
     assert reset_at < schedule_at
     reset_fn_start = html.index("function resetFrameGapBaseline(reason)")
-    reset_fn_end = html.index("function establishFrameGapBaseline(mediaTime, wallTime)")
+    reset_fn_end = html.index("function establishFrameGapBaseline(mediaTime, wallTime, reason)")
     reset_fn_body = html[reset_fn_start:reset_fn_end]
     assert "hasSuccessfulLkBaseline = false;" in reset_fn_body
 
@@ -3796,12 +3796,12 @@ def test_first_successful_lk_establishes_baseline():
     ALL succeeded (right after lastSuccessfulLkAt is stamped) — never at callback entry,
     bootstrap, or rearm."""
     html = _scanner_html()
-    assert html.count("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt);") == 1  # the one real call site
-    call_at = html.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt);")
+    assert html.count("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending ? 'first_post_reseed_lk' : 'successful_lk');") == 1  # the one real call site
+    call_at = html.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending ? 'first_post_reseed_lk' : 'successful_lk');")
     stamp_at = html.index("lastSuccessfulLkAt = performance.now();")
     playoverlay_at = html.rindex("playOverlay();", 0, call_at)
     assert playoverlay_at < stamp_at < call_at
-    establish_fn_start = html.index("function establishFrameGapBaseline(mediaTime, wallTime)")
+    establish_fn_start = html.index("function establishFrameGapBaseline(mediaTime, wallTime, reason)")
     establish_fn_end = html.index("function cancelCurrentTrackingCallback(reason)")
     establish_fn_body = html[establish_fn_start:establish_fn_end]
     assert "hasSuccessfulLkBaseline = true;" in establish_fn_body
@@ -4003,40 +4003,51 @@ def test_low_spatial_coverage_may_trigger_reseed_independent_of_raw_count():
 
 
 def test_reseed_mask_uses_the_current_valid_marker_quad():
-    """Task H item 4: attemptFeatureReseed builds its search mask via maskFromQuad(quad)
-    — `quad` is the parameter trackFrame passes as currCorners, the just-applied,
-    already-validated marker quad for this tick, never a stale or unvalidated one."""
+    """Task H item 4 (Pass 10: ROI-cropped, not full-frame): attemptFeatureReseed builds
+    its search mask from the quad's OWN bounding box (roiX/roiY/roiW/roiH derived from
+    `quad`, the parameter trackFrame passes as currCorners) and fills it via
+    cv.fillConvexPoly with the quad's corners re-expressed in ROI-local coordinates —
+    the just-applied, already-validated marker quad for this tick, never a stale one."""
     body = _attempt_feature_reseed_body()
-    assert "mask = maskFromQuad(quad);" in body
+    assert "const bounds = pointBounds(quad.flatMap(function (p) { return [p.x, p.y]; }));" in body
+    assert "cv.fillConvexPoly(roiMask, quadRoiMat, new cv.Scalar(255));" in body
     track_body = _track_frame_body()
     assert "attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells)" in track_body
 
 
 def test_fresh_points_are_restricted_to_marker_roi():
-    """Task H item 5: cv.goodFeaturesToTrack is called with the quad-derived mask (not
-    the full frame) — candidate points can only be found inside the marker ROI."""
+    """Task H item 5 (Pass 10): cv.goodFeaturesToTrack runs on roiGray (a cropped VIEW of
+    the frame, via gray.roi(), restricted to the quad's bounding box) masked by roiMask —
+    candidate points can only be found inside the marker ROI, and the ROI crop is what
+    Pass 10 optimizes (previously a full-frame mask over the whole 1200x675 frame)."""
     body = _attempt_feature_reseed_body()
-    mask_built_at = body.index("mask = maskFromQuad(quad);")
-    gft_at = body.index("cv.goodFeaturesToTrack(gray, candidates, targetNew, 0.01, 8, mask, 3, false, 0.04);")
-    assert mask_built_at < gft_at
+    roi_crop_at = body.index("roiGray = gray.roi(new cv.Rect(roiX, roiY, roiW, roiH));")
+    gft_at = body.index("cv.goodFeaturesToTrack(roiGray, candidates, targetNew, 0.01, 8, roiMask, 3, false, 0.04);")
+    assert roi_crop_at < gft_at
 
 
 def test_surviving_and_fresh_points_are_spatially_deduplicated():
-    """Task H item 6: every fresh candidate is checked against RESEED_DEDUP_RADIUS
-    before being merged — a candidate too close to an already-accepted point (surviving
-    or already-merged) is dropped, never double-counted."""
+    """Task H item 6 (Pass 10: O(1)-amortized spatial hash, not O(N^2) nested loop): every
+    fresh candidate is checked against the RESEED_DEDUP_RADIUS-bucketed grid via
+    grid.isNear() before being merged — a candidate too close to an already-accepted
+    point (surviving or already-merged, both inserted via grid.insert()) is dropped."""
     body = _attempt_feature_reseed_body()
-    assert "if (dx * dx + dy * dy < RESEED_DEDUP_RADIUS * RESEED_DEDUP_RADIUS) { tooClose = true; break; }" in body
-    assert "if (!tooClose && (merged.length / 2) < MAX_TRACK_POINTS) {" in body
+    assert "const grid = createSpatialDedupGrid(RESEED_DEDUP_RADIUS);" in body
+    assert "if (!grid.isNear(cx, cy)) {" in body
+    assert "grid.insert(cx, cy);" in body
+    grid_fn_start = _scanner_html().index("function createSpatialDedupGrid(cellSize)")
+    grid_fn_end = _scanner_html().index("function attemptFeatureReseed(")
+    grid_fn_body = _scanner_html()[grid_fn_start:grid_fn_end]
+    assert "if (ddx * ddx + ddy * ddy < r2) return true;" in grid_fn_body
 
 
 def test_merged_points_are_capped_at_target_capacity():
-    """Task H item 7: the merge loop's own guard, (merged.length / 2) < MAX_TRACK_POINTS,
-    is checked before every push — the merged set can never exceed the existing target
-    point capacity, the same cap bootstrap itself uses."""
+    """Task H item 7: the merge loop's own guard, (merged.length / 2) >= MAX_TRACK_POINTS,
+    breaks out of the loop before any further push — the merged set can never exceed the
+    existing target point capacity, the same cap bootstrap itself uses."""
     body = _attempt_feature_reseed_body()
-    assert "(merged.length / 2) < MAX_TRACK_POINTS" in body
-    assert "merged.push(cxp, cyp);" in body
+    assert "if ((merged.length / 2) >= MAX_TRACK_POINTS) break;" in body
+    assert "merged.push(cx, cy);" in body
 
 
 def test_successful_reseed_preserves_current_homography_and_overlay():
@@ -4063,7 +4074,7 @@ def test_successful_reseed_establishes_a_fresh_lk_baseline():
     evaluated — so a tick that reseeds always already has a freshly-established baseline
     for itself, never a stale one."""
     track_body = _track_frame_body()
-    establish_at = track_body.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt);")
+    establish_at = track_body.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending ? 'first_post_reseed_lk' : 'successful_lk');")
     reseed_call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells);")
     assert establish_at < reseed_call_at
 
@@ -4086,12 +4097,17 @@ def test_failed_reseed_cannot_loop_indefinitely():
 
 
 def test_failed_reseed_can_still_drop_through_insufficient_flow_points():
-    """Task H item 13: on any validation failure, attemptFeatureReseed returns
-    survivingPts UNCHANGED (never partially applies a bad reseed) — later ticks continue
-    with that same (possibly still-shrinking) point set and can still reach the existing,
-    unmodified insufficient_flow_points drop path normally."""
+    """Task H item 13: every validation-failure branch returns fail(reason, ...), and
+    fail() itself always returns survivingPts UNCHANGED (never partially applies a bad
+    reseed) — later ticks continue with that same (possibly still-shrinking) point set
+    and can still reach the existing, unmodified insufficient_flow_points drop path
+    normally."""
     body = _attempt_feature_reseed_body()
-    assert body.count("return survivingPts;") == 3  # one per validation-failure branch
+    assert body.count("return fail(") == 4  # no_capacity_remaining, degenerate_roi, insufficient_new_points, insufficient_merged_coverage
+    fail_fn_start = body.index("function fail(reason, candidatePoints) {")
+    fail_fn_end = body.index("let roiGray = null, roiMask = null, candidates = null;")
+    fail_fn_body = body[fail_fn_start:fail_fn_end]
+    assert "return survivingPts;" in fail_fn_body
     track_body = _track_frame_body()
     assert "dropTracking('insufficient_flow_points', [gray, nextPts, status, err], {" in track_body
 
@@ -4207,3 +4223,158 @@ def test_pass9_did_not_change_any_recognition_or_geometry_threshold():
     assert "const RANSAC_REPROJ = 5.0;" in html
     assert "const RESEED_MIN_COVERAGE_AFTER_MERGE = 0.25;" in html
     assert "coverage < 0.25" in html  # initializeFreshLiveTracker's own existing bootstrap floor, unchanged
+
+
+# ---------------------------------------------------------------------------
+# Pass 10: prevent reseed's own wall-clock cost from being misclassified as a camera/
+# tracking continuity gap. Real-device evidence: successful reseeds took ~850ms
+# (main-thread-blocking goodFeaturesToTrack), TRACKING_GRACE_MS is 900ms, and the very
+# next callback's own genuinely-advanced media time (real time passed while JS was
+# blocked) got compared against the PRE-reseed baseline and hard-dropped as
+# tracking_frame_gap_exceeded — exactly the class of bug Pass 8 already solved for other
+# continuity boundaries (stall, rearm, bootstrap, ...); reseed just wasn't one of them yet.
+# ---------------------------------------------------------------------------
+
+def test_successful_reseed_invalidates_old_lk_baseline_and_bumps_continuity_token():
+    """Task G item 1/2: attemptFeatureReseed's success path calls
+    resetFrameGapBaseline('feature_reseed_success') — which itself (Pass 8, unchanged)
+    bumps frameGapContinuityToken and clears hasSuccessfulLkBaseline — so the pre-reseed
+    baseline can never again satisfy hasValidLkBaseline's continuityToken match."""
+    body = _attempt_feature_reseed_body()
+    assert "resetFrameGapBaseline('feature_reseed_success');" in body
+    assert "firstPostReseedLkPending = true;" in body
+    reset_at = body.index("resetFrameGapBaseline('feature_reseed_success');")
+    return_merged_at = body.index("return merged;")
+    assert reset_at < return_merged_at
+    reset_fn_start = _scanner_html().index("function resetFrameGapBaseline(reason)")
+    reset_fn_end = _scanner_html().index("function establishFrameGapBaseline(mediaTime, wallTime, reason)")
+    reset_fn_body = _scanner_html()[reset_fn_start:reset_fn_end]
+    assert "frameGapContinuityToken++;" in reset_fn_body
+    assert "hasSuccessfulLkBaseline = false;" in reset_fn_body
+
+
+def test_first_callback_after_reseed_cannot_emit_frame_gap_exceeded():
+    """Task G item 3/6/7: after resetFrameGapBaseline runs (inside a successful reseed),
+    hasSuccessfulLkBaseline is false and frameGapContinuityToken has moved on — the next
+    tick's hasValidLkBaseline check (same mechanism trackFrame already uses for every
+    other continuity boundary) is therefore false regardless of how large the wall-clock
+    OR media-time gap actually is, so the entire gap-drop block is skipped — reseed's own
+    ~850ms of processing time can never by itself trigger tracking_frame_gap_exceeded."""
+    track_body = _track_frame_body()
+    assert "const hasValidLkBaseline = hasSuccessfulLkBaseline &&" in track_body
+    assert "successfulLkContinuityToken === frameGapContinuityToken;" in track_body
+    gap_block_at = track_body.index("if (hasValidLkBaseline && (now - lastSuccessfulLkWallTime) > TRACKING_GRACE_MS) {")
+    gray_at = track_body.index("gray = matFromVideoGray();")
+    assert gap_block_at < gray_at  # skipped tick falls straight through to normal LK, never a bare drop
+
+
+def test_first_successful_post_reseed_lk_establishes_baseline_with_distinct_reason():
+    """Task G item 4: the tick after a reseed, if its own LK succeeds, calls
+    establishFrameGapBaseline with reason='first_post_reseed_lk' (via
+    firstPostReseedLkPending) instead of the generic 'successful_lk' — and clears the
+    flag immediately after, so only that ONE tick is labeled this way."""
+    track_body = _track_frame_body()
+    call_at = track_body.index(
+        "establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending ? 'first_post_reseed_lk' : 'successful_lk');"
+    )
+    clear_at = track_body.index("if (firstPostReseedLkPending) firstPostReseedLkPending = false;")
+    assert call_at < clear_at
+    establish_fn_start = _scanner_html().index("function establishFrameGapBaseline(mediaTime, wallTime, reason)")
+    establish_fn_end = _scanner_html().index("function cancelCurrentTrackingCallback(reason)")
+    establish_fn_body = _scanner_html()[establish_fn_start:establish_fn_end]
+    assert "reason: reason || 'successful_lk'" in establish_fn_body
+
+
+def test_reseed_performance_diagnostic_is_bounded_and_scalar_only():
+    """Task G item 13: [TRACK RESEED PERFORMANCE] carries only scalar counts/durations
+    (roiWidth/roiHeight/candidateCount/featureDetectMs/mergeMs/totalMs) — never a point
+    array or other unbounded structure."""
+    body = _attempt_feature_reseed_body()
+    perf_at = body.index("logCallbackEvent('[TRACK RESEED PERFORMANCE]', {")
+    call_text = body[perf_at:body.index(");", perf_at) + 2]
+    assert "roiWidth: roiW, roiHeight: roiH, candidateCount, featureDetectMs, mergeMs," in call_text
+    assert "totalMs:" in call_text
+    assert "candData" not in call_text
+    assert "merged" not in call_text
+
+
+def test_reseed_temporary_mats_are_deleted_deterministically():
+    """Task G item 14: roiGray/roiMask/candidates are all released via deleteMats(...) in
+    a finally block — guaranteed regardless of which return path (success or any of the
+    fail() branches) was taken."""
+    body = _attempt_feature_reseed_body()
+    finally_at = body.index("} finally {")
+    finally_block = body[finally_at:body.index("}", body.index("reseedInProgress = false;", finally_at)) + 1]
+    assert "deleteMats(roiGray, roiMask, candidates);" in finally_block
+    assert "reseedInProgress = false;" in finally_block
+
+
+def test_roi_cropped_feature_detection_stays_inside_marker_bounding_box():
+    """Task G item 15 (Pass 10 performance fix): roiGray is a cropped VIEW of gray
+    (gray.roi(...)), bounded to the quad's own bounding box plus a small margin — never
+    the full frame — so goodFeaturesToTrack's own cost scales with the marker's area,
+    not the whole 1200x675 capture frame."""
+    body = _attempt_feature_reseed_body()
+    assert "const roiW = Math.min(gray.cols - roiX, Math.ceil(bounds.width) + margin * 2);" in body
+    assert "const roiH = Math.min(gray.rows - roiY, Math.ceil(bounds.height) + margin * 2);" in body
+    assert "roiGray = gray.roi(new cv.Rect(roiX, roiY, roiW, roiH));" in body
+
+
+def test_recovery_scan_has_exactly_one_owner():
+    """Task G item 20/21: watchdogTrackingSkipReason() returns 'scan_timer_pending'
+    whenever detectLoopTimer is truthy — including the zero-delay tracking_lost_reacquire
+    timer dropTracking's own scheduleNextScan call arms — so the watchdog can never force
+    a second capture while that timer already owns recovery for the same loss. The
+    forced-detection branch is only reached once this (and every other) skip reason has
+    already returned null."""
+    html = _scanner_html()
+    reason_start = html.index("function watchdogTrackingSkipReason()")
+    reason_end = html.index("function cancelPendingNormalScan(reason)")
+    reason_body = html[reason_start:reason_end]
+    assert "if (detectLoopTimer) return 'scan_timer_pending';" in reason_body
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_end = html.index("function handleDetectionTimeout()", drop_start)
+    drop_body = html[drop_start:drop_end]
+    owner_log_at = drop_body.index("owner: 'tracking_lost_reacquire', timerPending: true,")
+    schedule_at = drop_body.index("scheduleNextScan('tracking_lost_reacquire', 0);")
+    assert owner_log_at < schedule_at
+    watchdog_start = html.index("function watchdogTick(token")
+    watchdog_end = html.index("function skipTick(reason, extra)")
+    watchdog_body = html[watchdog_start:watchdog_end]
+    skip_check_at = watchdog_body.index("const trackingSkipReason = watchdogTrackingSkipReason();")
+    force_owner_log_at = watchdog_body.index("owner: 'watchdog', timerPending: Boolean(detectLoopTimer),")
+    forced_call_at = watchdog_body.index("detectOnceFromServer(true);")
+    assert skip_check_at < force_owner_log_at < forced_call_at
+
+
+def test_pass10_new_code_never_touches_video_source_or_currenttime_or_loop():
+    """Task G item 26: createSpatialDedupGrid, the ROI-cropping additions to
+    attemptFeatureReseed, and the new watchdog scan-timer-pending/recovery-owner code
+    never assign overlay.src or overlay.currentTime, and never reference the native
+    <video loop> attribute."""
+    html = _scanner_html()
+    for fn_start_marker, fn_end_marker in (
+        ("function createSpatialDedupGrid(cellSize)", "function attemptFeatureReseed("),
+        ("function attemptFeatureReseed(gray, quad, survivingPts, survivingCoverage, survivingGridCells)", "function initializeFreshLiveTracker(now, metadata)"),
+        ("function watchdogTrackingSkipReason()", "function cancelPendingNormalScan(reason)"),
+    ):
+        body = html[html.index(fn_start_marker):html.index(fn_end_marker)]
+        assert "overlay.src" not in body
+        assert "overlay.currentTime" not in body
+        assert "overlay.loop" not in body
+    assert html.count('<video id="overlay"') == 1
+
+
+def test_pass10_did_not_change_any_recognition_or_geometry_threshold():
+    """Task G item 25: MIN_GOOD_POINTS/MAX_ERR/RANSAC_REPROJ/TRACKING_GRACE_FRAMES/
+    TRACKING_GRACE_MS (never extended, per the explicit instruction not to)/POSE_HOLD_MS/
+    RVFC_STALL_TIMEOUT_MS all remain unchanged — this pass only touched reseed timing/
+    performance and recovery-scan ownership, never a recognition or geometry threshold."""
+    html = _scanner_html()
+    assert "const TRACKING_GRACE_FRAMES = 3;" in html
+    assert "const TRACKING_GRACE_MS = 900;" in html
+    assert "const POSE_HOLD_MS = 500;" in html
+    assert "const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;" in html
+    assert "const RANSAC_REPROJ = 5.0;" in html
+    assert "const RESEED_POINT_FRACTION = 0.35;" in html
+    assert "const RESEED_MIN_COVERAGE_AFTER_MERGE = 0.25;" in html

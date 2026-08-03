@@ -1644,6 +1644,10 @@
     let lastReseedAt = 0;
     let pointsAddedByLastReseed = 0;
     let reseedInProgress = false;
+    // Task B (Pass 10): set true the instant a reseed succeeds — the very next
+    // successful LK tick (the first one after this continuity boundary) is labeled
+    // 'first_post_reseed_lk' when it establishes the fresh baseline, then this clears.
+    let firstPostReseedLkPending = false;
     let lastCancelledCallbackId = null; // Task F (Pass 9) — see cancelCurrentTrackingCallback
     let rvfcStallWatchdogTimer = null;
     // rVFC health state machine (Pass 5): RVFC_ACTIVE (preferred) -> RVFC_STALLED (no
@@ -1753,6 +1757,13 @@
       if (trackerBootstrapPending) return 'tracker_bootstrap';
       if (trackingCallbackId !== null || rvfcHealthState !== 'RVFC_ACTIVE') return 'callback_recovery';
       if (activeDetectionAttempt && !activeDetectionAttempt.terminal) return 'attempt_active';
+      // Task F (Pass 10): a scan timer — including a zero-delay tracking_lost_reacquire
+      // timer scheduleNextScan just armed — already owns recovery for this loss. Between
+      // that timer being scheduled and it actually firing (even at 0ms delay, still an
+      // async macrotask) there is a real window where neither detectInFlight nor
+      // activeDetectionAttempt are set yet; without this check the watchdog's own elapsed-
+      // time condition could independently force a SECOND capture for the same loss.
+      if (detectLoopTimer) return 'scan_timer_pending';
       return null;
     }
 
@@ -2179,14 +2190,17 @@
     // validation + applyWarp have ALL already succeeded for this tick — never from a mere
     // callback entry, bootstrap, or rearm. This is what makes hasSuccessfulLkBaseline mean
     // exactly what its name says.
-    function establishFrameGapBaseline(mediaTime, wallTime) {
+    function establishFrameGapBaseline(mediaTime, wallTime, reason) {
       hasSuccessfulLkBaseline = true;
       lastSuccessfulLkWallTime = wallTime;
       lastSuccessfulLkMediaTime = mediaTime;
       successfulLkEpoch = trackingEpoch;
       successfulLkContinuityToken = frameGapContinuityToken;
+      // Task B (Pass 10): reason distinguishes an ordinary successful-LK baseline from
+      // the first successful LK after a reseed boundary reset — same mechanism, but the
+      // reason makes it provable from a real-device log which case actually happened.
       logCallbackEvent('[TRACK GAP BASELINE ESTABLISHED]', {
-        epoch: trackingEpoch, mediaTime, wallTime
+        epoch: trackingEpoch, mediaTime, wallTime, reason: reason || 'successful_lk'
       }, { continuityToken: frameGapContinuityToken });
     }
 
@@ -3264,6 +3278,7 @@
       // longer relevant.
       reseedAttemptsForEpoch = 0;
       consecutiveReseedFailures = 0;
+      firstPostReseedLkPending = false;
       // Task D: a fresh tracking epoch (bootstrap or accepted re-detection) is the natural
       // "clean start" point to try the preferred rVFC path again — no permanent fallback
       // lock. No separate cooldown timer is introduced; every fresh epoch is itself a
@@ -3394,74 +3409,133 @@
     // satisfied by call-site placement, not a redundant re-check). Returns the point
     // array to use going forward — the merged set on success, or the untouched surviving
     // set on any validation failure (never partially applies a bad reseed).
+    // Task D (Pass 10): O(1)-amortized spatial-hash dedup replacing the previous O(N^2)
+    // nested-loop scan — buckets points into RESEED_DEDUP_RADIUS-sized cells and only
+    // checks the 3x3 neighborhood of cells around a candidate, never the full existing set.
+    function createSpatialDedupGrid(cellSize) {
+      const buckets = new Map();
+      function keyOf(gx, gy) { return gx + ',' + gy; }
+      return {
+        insert: function (x, y) {
+          const key = keyOf(Math.floor(x / cellSize), Math.floor(y / cellSize));
+          let bucket = buckets.get(key);
+          if (!bucket) { bucket = []; buckets.set(key, bucket); }
+          bucket.push(x, y);
+        },
+        isNear: function (x, y) {
+          const gx = Math.floor(x / cellSize), gy = Math.floor(y / cellSize);
+          const r2 = cellSize * cellSize;
+          for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+              const bucket = buckets.get(keyOf(gx + dx, gy + dy));
+              if (!bucket) continue;
+              for (let k = 0; k < bucket.length; k += 2) {
+                const ddx = bucket[k] - x, ddy = bucket[k + 1] - y;
+                if (ddx * ddx + ddy * ddy < r2) return true;
+              }
+            }
+          }
+          return false;
+        }
+      };
+    }
+
     function attemptFeatureReseed(gray, quad, survivingPts, survivingCoverage, survivingGridCells) {
       reseedAttemptsForEpoch++;
       diagState.reseedAttempts++;
       reseedInProgress = true;
       const survivingCount = survivingPts.length / 2;
+      const reseedStartedAt = performance.now();
       logCallbackEvent('[TRACK RESEED START]', {
         epoch: trackingEpoch, survivingPoints: survivingCount,
         coverage: Number(survivingCoverage.toFixed(3)), gridCells: survivingGridCells
-      }, {});
-      let mask = null, candidates = null;
+      }, { startWallTime: reseedStartedAt });
+
+      function fail(reason, candidatePoints) {
+        consecutiveReseedFailures++;
+        diagState.reseedFailures++;
+        const durationMs = Math.round(performance.now() - reseedStartedAt);
+        logCallbackEvent('[TRACK RESEED FAILED]', {
+          epoch: trackingEpoch, reason, survivingPoints: survivingCount, candidatePoints
+        }, { durationMs });
+        return survivingPts;
+      }
+
+      let roiGray = null, roiMask = null, candidates = null;
       try {
         const targetNew = MAX_TRACK_POINTS - survivingCount;
         if (targetNew < RESEED_MIN_NEW_POINTS) {
-          consecutiveReseedFailures++;
-          diagState.reseedFailures++;
-          logCallbackEvent('[TRACK RESEED FAILED]', {
-            epoch: trackingEpoch, reason: 'no_capacity_remaining',
-            survivingPoints: survivingCount, candidatePoints: 0
-          }, {});
-          return survivingPts;
+          return fail('no_capacity_remaining', 0);
         }
-        mask = maskFromQuad(quad);
-        // Exclude small neighborhoods around survivors so goodFeaturesToTrack looks for
-        // NEW texture rather than re-finding points it already has.
-        for (let i = 0; i < survivingPts.length; i += 2) {
-          cv.circle(mask, new cv.Point(Math.round(survivingPts[i]), Math.round(survivingPts[i + 1])), 8, new cv.Scalar(0), -1);
-        }
-        candidates = new cv.Mat();
-        cv.goodFeaturesToTrack(gray, candidates, targetNew, 0.01, 8, mask, 3, false, 0.04);
-        const candidateFlat = Array.from(candidates.data32F || []);
-        const candidateCount = candidateFlat.length / 2;
 
-        // Spatial dedup: drop any candidate within RESEED_DEDUP_RADIUS of an
-        // already-accepted point (surviving OR already-merged-from-candidates).
+        // Task D: restrict goodFeaturesToTrack to the marker's own bounding ROI (plus a
+        // small margin) instead of scanning the FULL frame with a mask — this is the
+        // dominant cost driver on real devices (goodFeaturesToTrack's own runtime scales
+        // with the pixel area it processes, and masking alone does not reduce that area,
+        // only which pixels within it can be selected). gray.roi() is a view, not a copy.
+        const bounds = pointBounds(quad.flatMap(function (p) { return [p.x, p.y]; }));
+        const margin = 4;
+        const roiX = Math.max(0, Math.floor(bounds.minX) - margin);
+        const roiY = Math.max(0, Math.floor(bounds.minY) - margin);
+        const roiW = Math.min(gray.cols - roiX, Math.ceil(bounds.width) + margin * 2);
+        const roiH = Math.min(gray.rows - roiY, Math.ceil(bounds.height) + margin * 2);
+        if (roiW <= 0 || roiH <= 0) {
+          return fail('degenerate_roi', 0);
+        }
+        roiGray = gray.roi(new cv.Rect(roiX, roiY, roiW, roiH));
+        roiMask = cv.Mat.zeros(roiH, roiW, cv.CV_8UC1);
+        const quadRoiPts = [];
+        for (let i = 0; i < 4; i++) {
+          quadRoiPts.push(Math.round(quad[i].x - roiX), Math.round(quad[i].y - roiY));
+        }
+        const quadRoiMat = cv.matFromArray(4, 1, cv.CV_32SC2, quadRoiPts);
+        cv.fillConvexPoly(roiMask, quadRoiMat, new cv.Scalar(255));
+        quadRoiMat.delete();
+        // Exclude small neighborhoods around survivors (in ROI-local coordinates) so
+        // goodFeaturesToTrack looks for NEW texture rather than re-finding existing points.
+        for (let i = 0; i < survivingPts.length; i += 2) {
+          const sx = survivingPts[i] - roiX, sy = survivingPts[i + 1] - roiY;
+          if (sx >= 0 && sx < roiW && sy >= 0 && sy < roiH) {
+            cv.circle(roiMask, new cv.Point(Math.round(sx), Math.round(sy)), 8, new cv.Scalar(0), -1);
+          }
+        }
+
+        const featureDetectStart = performance.now();
+        candidates = new cv.Mat();
+        cv.goodFeaturesToTrack(roiGray, candidates, targetNew, 0.01, 8, roiMask, 3, false, 0.04);
+        const featureDetectMs = Math.round(performance.now() - featureDetectStart);
+        // Task D: read the typed array directly — no Array.from() copy of the candidate set.
+        const candData = candidates.data32F;
+        const candidateCount = candData.length / 2;
+
+        const mergeStart = performance.now();
+        const grid = createSpatialDedupGrid(RESEED_DEDUP_RADIUS);
+        for (let i = 0; i < survivingPts.length; i += 2) grid.insert(survivingPts[i], survivingPts[i + 1]);
         const merged = survivingPts.slice();
         let added = 0;
-        for (let i = 0; i < candidateFlat.length; i += 2) {
-          const cxp = candidateFlat[i], cyp = candidateFlat[i + 1];
-          let tooClose = false;
-          for (let j = 0; j < merged.length; j += 2) {
-            const dx = merged[j] - cxp, dy = merged[j + 1] - cyp;
-            if (dx * dx + dy * dy < RESEED_DEDUP_RADIUS * RESEED_DEDUP_RADIUS) { tooClose = true; break; }
-          }
-          if (!tooClose && (merged.length / 2) < MAX_TRACK_POINTS) {
-            merged.push(cxp, cyp);
+        for (let i = 0; i < candData.length; i += 2) {
+          if ((merged.length / 2) >= MAX_TRACK_POINTS) break;
+          const cx = candData[i] + roiX, cy = candData[i + 1] + roiY;
+          if (!grid.isNear(cx, cy)) {
+            merged.push(cx, cy);
+            grid.insert(cx, cy);
             added++;
           }
         }
+        const mergeMs = Math.round(performance.now() - mergeStart);
+
+        logCallbackEvent('[TRACK RESEED PERFORMANCE]', {
+          roiWidth: roiW, roiHeight: roiH, candidateCount, featureDetectMs, mergeMs,
+          totalMs: Math.round(performance.now() - reseedStartedAt)
+        }, {});
 
         if (added < RESEED_MIN_NEW_POINTS) {
-          consecutiveReseedFailures++;
-          diagState.reseedFailures++;
-          logCallbackEvent('[TRACK RESEED FAILED]', {
-            epoch: trackingEpoch, reason: 'insufficient_new_points',
-            survivingPoints: survivingCount, candidatePoints: candidateCount
-          }, {});
-          return survivingPts;
+          return fail('insufficient_new_points', candidateCount);
         }
 
         const mergedCoverage = pointCoverage(merged, quad);
         if (mergedCoverage < RESEED_MIN_COVERAGE_AFTER_MERGE) {
-          consecutiveReseedFailures++;
-          diagState.reseedFailures++;
-          logCallbackEvent('[TRACK RESEED FAILED]', {
-            epoch: trackingEpoch, reason: 'insufficient_merged_coverage',
-            survivingPoints: survivingCount, candidatePoints: candidateCount
-          }, {});
-          return survivingPts;
+          return fail('insufficient_merged_coverage', candidateCount);
         }
 
         const mergedGridCells = countOccupiedGridCells(merged, quad, POINT_GRID_SIZE);
@@ -3470,13 +3544,24 @@
         pointsAddedByLastReseed = added;
         diagState.reseedSuccesses++;
         diagState.pointsAddedByReseed += added;
+        const durationMs = Math.round(lastReseedAt - reseedStartedAt);
         logCallbackEvent('[TRACK RESEED SUCCESS]', {
           epoch: trackingEpoch, survivingPoints: survivingCount, newPoints: added,
           mergedPoints: merged.length / 2, coverage: Number(mergedCoverage.toFixed(3)), gridCells: mergedGridCells
-        }, {});
+        }, { durationMs });
+        // Task B (Pass 10): successful reseed IS a continuity boundary. Reseeding itself
+        // just consumed real wall-clock/main-thread time (the whole reason this pass
+        // exists — real-device evidence showed ~850ms), so the baseline this SAME tick
+        // established moments ago (before reseed ran) must not be used to judge the NEXT
+        // callback's arrival — that next callback's own gap, wall-clock AND media-time
+        // alike, is an EXPECTED consequence of known local work, never evidence of a
+        // camera/tracking continuity problem. Only the tick AFTER this one may be
+        // gap-compared, once ITS OWN successful LK establishes a fresh baseline.
+        resetFrameGapBaseline('feature_reseed_success');
+        firstPostReseedLkPending = true;
         return merged;
       } finally {
-        deleteMats(mask, candidates);
+        deleteMats(roiGray, roiMask, candidates);
         reseedInProgress = false;
       }
     }
@@ -3619,6 +3704,13 @@
       startScannerStatusCycle();
       statusDiv.textContent = "🎯 Scan AR marker";
       statusDiv.className = "status scan";
+      // Task F (Pass 10): this timer is now the sole recovery owner for this loss —
+      // watchdogTrackingSkipReason()'s scan_timer_pending check stands the watchdog down
+      // for as long as detectLoopTimer (set by scheduleNextScan below) stays pending.
+      logCallbackEvent('[RECOVERY SCAN OWNER]', {
+        owner: 'tracking_lost_reacquire', timerPending: true,
+        captureActive: diagState.capturePhase !== 'idle', fetchActive: Boolean(diagState.fetchInFlight)
+      }, {});
       scheduleNextScan('tracking_lost_reacquire', 0);
       deleteMats(...(extraMats || []));
       graceEnteredAt = 0;
@@ -3998,8 +4090,12 @@
         lastPoseUpdateAt = lastSuccessfulLkAt;
         // Task A/C (Pass 8): LK + geometry validation + applyWarp have ALL just succeeded
         // for this exact tick — the only point in this file allowed to establish the
-        // frame-gap baseline.
-        establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt);
+        // frame-gap baseline. Task B (Pass 10): if this is the first successful LK after
+        // a reseed boundary, label it distinctly and clear the pending flag — this
+        // baseline (not the one from before reseed) is what the tick AFTER this one gets
+        // gap-compared against.
+        establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending ? 'first_post_reseed_lk' : 'successful_lk');
+        if (firstPostReseedLkPending) firstPostReseedLkPending = false;
 
         // Task E: retain only survivors still inside the quad JUST applied this tick —
         // a point that drifted into the background must never keep being carried
@@ -4767,6 +4863,14 @@
             abortExecuted: false,
             skipReason: 'no_active_attempt'
           });
+          // Task F (Pass 10): only reached when watchdogTrackingSkipReason() returned
+          // null — including its scan_timer_pending check, so detectLoopTimer is
+          // confirmed falsy here. The watchdog is the sole, legitimate owner for this
+          // capture, never a second one racing an already-scheduled timer.
+          logCallbackEvent('[RECOVERY SCAN OWNER]', {
+            owner: 'watchdog', timerPending: Boolean(detectLoopTimer),
+            captureActive: diagState.capturePhase !== 'idle', fetchActive: Boolean(diagState.fetchInFlight)
+          }, { watchdogId });
           detectOnceFromServer(true); // forces a request through the SAME guarded path scanTick uses — never restarts the camera or the loop itself
         }
       } else if (detectInFlight && activeDetectionAttempt && activeDetectionAttempt.phase === 'network' && diagState.lastRequestStartAt && activeDetectionController) {
