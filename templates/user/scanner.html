@@ -1358,6 +1358,10 @@
           // Loop was never stopped — just leave 'paused' so status text and the next
           // (already-scheduled) tick resume normally.
           safeTransition('ready_to_scan', 'visibilitychange');
+          // Task B (Pass 8): boundary #8 (visibility recovery, no restart needed). rVFC
+          // is commonly throttled/paused while hidden — whatever wall/media time elapsed
+          // while hidden must never be gap-compared once ticks resume.
+          resetFrameGapBaseline('visibility_restored');
         }
       }
     });
@@ -1562,6 +1566,25 @@
     let lastTrackingCallbackEnteredAt = 0;
     let lastSuccessfulLkAt = 0;
     let lastPoseUpdateAt = 0;
+    // Task A (Pass 8): the frame-gap detector's ONLY valid evidence source. Previously the
+    // gap decision compared against lastTrackingMediaTime/lastTrackFrameTs, which are
+    // updated by ANY trackFrame call — including a bootstrap tick, a bare rearm tick, or
+    // the first tick after a stall/RAF-fallback/ownership-repair recovery — none of which
+    // is itself a successfully processed LK frame. That let a recovered callback's very
+    // first tick be judged against a baseline from BEFORE the recovery event, which by
+    // definition always looks like a "genuine" gap — proven by the real-device evidence:
+    // every recovery (stall-rearm, fresh bootstrap) was immediately followed by another
+    // tracking_frame_gap_exceeded drop with goodPoints=-/gray=- (LK never even ran).
+    // frameGapContinuityToken is bumped at every one of the 10 continuity boundaries in
+    // Task B — independent of trackingEpoch, since most of those boundaries (stall, rearm,
+    // RAF fallback, ownership repair, visibility, camera restart) do NOT themselves change
+    // the tracking epoch.
+    let frameGapContinuityToken = 0;
+    let hasSuccessfulLkBaseline = false;
+    let lastSuccessfulLkWallTime = 0;
+    let lastSuccessfulLkMediaTime = null;
+    let successfulLkEpoch = -1;
+    let successfulLkContinuityToken = -1;
     let rvfcStallWatchdogTimer = null;
     // rVFC health state machine (Pass 5): RVFC_ACTIVE (preferred) -> RVFC_STALLED (no
     // callback arrived, one rearm attempted) -> RAF_FALLBACK (rVFC rearm also stalled,
@@ -1989,6 +2012,11 @@
     // to be invoked — a big mediaTime delta cannot by itself distinguish "camera stalled"
     // from "we were slow to be called back" — so this path must never call dropTracking).
     function enterCallbackStallRecovery(callbackId, reason) {
+      // Task B (Pass 8): boundaries #3/#4/#5 (stall detection, rVFC rearm, RAF-fallback
+      // entry) all funnel through this one function — reset here, once, before either
+      // branch below arms a replacement callback, so that replacement's first tick is
+      // never gap-compared against pre-stall evidence.
+      resetFrameGapBaseline('callback_stall_recovery:' + reason);
       logCallbackEvent('[TRACK CALLBACK CANCELLED]', { id: callbackId, reason: 'tracking_callback_stalled' }, {
         epoch: trackingEpoch, cancelledBy: reason
       });
@@ -2065,6 +2093,36 @@
       }, extra || {});
     }
 
+    // Task B (Pass 8): call at every continuity boundary — invalidates the frame-gap
+    // baseline so the NEXT tick can never be gap-compared against evidence from before
+    // this boundary. Idempotent (bumping the token again before anything re-establishes
+    // the baseline is harmless — hasSuccessfulLkBaseline stays false either way).
+    function resetFrameGapBaseline(reason) {
+      frameGapContinuityToken++;
+      hasSuccessfulLkBaseline = false;
+      lastSuccessfulLkWallTime = 0;
+      lastSuccessfulLkMediaTime = null;
+      successfulLkEpoch = -1;
+      logCallbackEvent('[TRACK GAP BASELINE RESET]', {
+        reason, epoch: trackingEpoch, continuityToken: frameGapContinuityToken
+      }, {});
+    }
+
+    // Task A/C (Pass 8): called ONLY from the point in trackFrame where LK + geometry
+    // validation + applyWarp have ALL already succeeded for this tick — never from a mere
+    // callback entry, bootstrap, or rearm. This is what makes hasSuccessfulLkBaseline mean
+    // exactly what its name says.
+    function establishFrameGapBaseline(mediaTime, wallTime) {
+      hasSuccessfulLkBaseline = true;
+      lastSuccessfulLkWallTime = wallTime;
+      lastSuccessfulLkMediaTime = mediaTime;
+      successfulLkEpoch = trackingEpoch;
+      successfulLkContinuityToken = frameGapContinuityToken;
+      logCallbackEvent('[TRACK GAP BASELINE ESTABLISHED]', {
+        epoch: trackingEpoch, mediaTime, wallTime
+      }, { continuityToken: frameGapContinuityToken });
+    }
+
     // Task C (Pass 7): cancels whatever tracking callback currently holds ownership —
     // WITHOUT touching trackLoopActive/trackerBootstrapPending — so it can be reused both
     // by stopTrackingLoop() (full loop teardown) and by an in-tick reissue (Task B: cancel
@@ -2097,6 +2155,10 @@
       if (!trackLoopActive) return false;
       if (!tracking && !trackerBootstrapPending) return false;
       if (trackingCallbackId !== null) return false; // already owned — idempotent no-op
+      // Task B (Pass 8): boundary #7 (callback ownership repair) — the callback about to
+      // be armed here is itself the first one after a gap in ownership; its first tick
+      // must not be judged against whatever baseline existed before that gap.
+      resetFrameGapBaseline('ownership_repair:' + reason);
       const repaired = scheduleTrackingFrame(reason);
       if (repaired) {
         // Task F: owner-state snapshot right after a repair actually arms something —
@@ -2221,13 +2283,26 @@
         logCallbackEvent('rvfc_health_restored', { id: callbackId }, { epoch: trackingEpoch, from: rvfcHealthState });
         rvfcHealthState = 'RVFC_ACTIVE';
         rvfcRearmAttempted = false;
+        // Task B/C (Pass 8): boundary #6 (rVFC health restoration). This callback is
+        // itself the first-post-recovery one — its own trackFrame call below must not be
+        // gap-compared against pre-stall evidence, so the baseline is invalidated here,
+        // before trackFrame runs. If trackFrame's LK succeeds this same tick, it
+        // establishes the fresh baseline (see Task C: never emit tracking_frame_gap_exceeded
+        // for the first post-recovery frame).
+        resetFrameGapBaseline('rvfc_health_restored');
       }
 
       const processingStart = performance.now();
       trackFrame(now, Object.assign({ callbackType, callbackId }, effectiveMetadata || {}));
       const processingDuration = Math.round(performance.now() - processingStart);
+      // Task E (Pass 8): callbackEpoch (captured, immutable — what THIS callback was armed
+      // under) and currentEpoch (live — may have advanced during trackFrame's own call
+      // above, e.g. a bootstrap tick) are always printed as two distinct fields. Never
+      // label the live epoch as though it belonged to the callback — that ambiguity is
+      // exactly what made "[TRACK CALLBACK ENTERED] id=4 epoch=1" (id=4 was actually
+      // requested under epoch=0) misleading in the Pass 7 evidence.
       logCallbackEvent('[TRACK CALLBACK ENTERED]', {
-        id: callbackId, epoch: trackingEpoch,
+        id: callbackId, callbackEpoch, currentEpoch: trackingEpoch,
         mediaTime: effectiveMetadata && effectiveMetadata.mediaTime != null ? effectiveMetadata.mediaTime : null
       }, {
         ownerToken: callbackId, now,
@@ -2305,6 +2380,10 @@
       trackingGeneration = scannerGeneration;
       trackingCallbackOwnerToken++; // new loop session — see declaration comment
       diagState.scanLoopStartCount++;
+      // Task B (Pass 8): boundary #10 (loop restart) — also covers bootstrap start,
+      // camera-restart recovery, fallback retry, and detection-timeout restart, since all
+      // of those call startTrackingLoop() to begin a fresh tracking session.
+      resetFrameGapBaseline('tracking_loop_started');
       scheduleTrackingFrame();
     }
 
@@ -3100,6 +3179,10 @@
       trackingCanvas.width = width;
       trackingCanvas.height = height;
       trackingEpoch++;
+      // Task B (Pass 8): boundary #2 (epoch change) — redundant-safe alongside
+      // startTrackingLoop()'s own reset (this can fire on its own tick, one after
+      // startTrackingLoop already ran for the same bootstrap).
+      resetFrameGapBaseline('tracking_epoch_changed');
       // Task D: a fresh tracking epoch (bootstrap or accepted re-detection) is the natural
       // "clean start" point to try the preferred rVFC path again — no permanent fallback
       // lock. No separate cooldown timer is introduced; every fresh epoch is itself a
@@ -3391,9 +3474,6 @@
       if (frameKey) lastPresentedFrameKey = frameKey;
       const now = typeof nowArg === 'number' ? nowArg : performance.now();
       const mediaTime = metadata && typeof metadata.mediaTime === 'number' ? metadata.mediaTime : null;
-      const presentedFrameGapMs = mediaTime != null && lastTrackingMediaTime != null
-        ? (mediaTime - lastTrackingMediaTime) * 1000
-        : null;
       const callbackIntervalMs = diagState.lastPresentedVideoFrameAt ? now - diagState.lastPresentedVideoFrameAt : null;
       if (callbackIntervalMs != null) {
         diagState.trackingCallbackIntervalMs = Math.round(callbackIntervalMs);
@@ -3438,32 +3518,42 @@
       try {
         const epochAtTickStart = trackingEpoch;
 
-        if (gapSinceLastTick > TRACKING_GRACE_MS) {
-          // Task C: a genuine presented-frame gap requires EVIDENCE from two presented
-          // frames — both the previous and current mediaTime, with a measured delta above
-          // the grace ceiling. Wall-clock time passing with no such evidence (mediaTime
-          // missing on either side, e.g. a RAF-fallback tick with no prior sample, or a
-          // callback that simply never arrived) must NOT be treated as a confirmed gap —
-          // that case is either the independent stall-detection timer's job (callback truly
-          // never fired) or ambiguous and safest to resolve via reacquisition, not a hard
-          // drop with no evidence behind it.
+        // Task A/D (Pass 8): tracking_frame_gap_exceeded may ONLY fire when there are two
+        // consecutive, successfully processed LK frames from the same uninterrupted epoch
+        // and continuity generation. hasValidLkBaseline requires an actual prior
+        // establishFrameGapBaseline() call (only ever made after LK+geometry+applyWarp all
+        // succeeded) whose epoch/continuityToken still match — never merely "trackFrame
+        // was called before" (that included bootstrap ticks, bare rearm ticks, and the
+        // first tick after any stall/RAF-fallback/ownership-repair recovery, none of which
+        // is itself a successful LK frame). Without a valid baseline, this tick is not
+        // gap-evaluated at all — it falls through to normal gray/LK processing below, so a
+        // first-post-recovery frame can only fail (if it does) through the ordinary,
+        // evidence-producing LK-quality gates (goodPoints/gray populated), never this one.
+        const hasValidLkBaseline = hasSuccessfulLkBaseline &&
+          successfulLkEpoch === trackingEpoch &&
+          successfulLkContinuityToken === frameGapContinuityToken;
+        if (hasValidLkBaseline && (now - lastSuccessfulLkWallTime) > TRACKING_GRACE_MS) {
+          const presentedFrameGapMs = mediaTime != null && lastSuccessfulLkMediaTime != null
+            ? (mediaTime - lastSuccessfulLkMediaTime) * 1000
+            : null;
           const hasPresentedFrameEvidence = presentedFrameGapMs != null;
           const genuinePresentedGap = hasPresentedFrameEvidence && presentedFrameGapMs > TRACKING_GRACE_MS;
           const workloadActive = diagState.encodeInFlight || diagState.fetchInFlight || diagState.capturePhase !== 'idle';
+          const gapSinceLastSuccessfulLk = now - lastSuccessfulLkWallTime;
           if (!genuinePresentedGap || document.hidden || workloadActive) {
             setScannerWorkMode('RECOVERING', 'tracking_gap_suspended');
             clearTrackingGeometry('tracking_gap_suspended', { holdPose: true });
             startDetectLoop();
             scannerDiagnostics.push('tracking_gap_suspended', trackingWorkloadSnapshot({
-              gapMs: Math.round(gapSinceLastTick),
+              gapMs: Math.round(gapSinceLastSuccessfulLk),
               presentedFrameGapMs: presentedFrameGapMs != null ? Math.round(presentedFrameGapMs) : null,
               reason: document.hidden ? 'page_hidden' : (workloadActive ? 'capture_workload_active' : (hasPresentedFrameEvidence ? 'scheduler_delay_without_new_presented_frame' : 'no_presented_frame_evidence'))
             }));
             return;
           }
           dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({
-            frameGapMs: gapSinceLastTick,
-            gapMs: Math.round(gapSinceLastTick),
+            frameGapMs: gapSinceLastSuccessfulLk,
+            gapMs: Math.round(gapSinceLastSuccessfulLk),
             presentedFrameGapMs: Math.round(presentedFrameGapMs)
           }));
           return;
@@ -3645,6 +3735,10 @@
         if (frameW > 0 && frameH > 0) diagState.visibleAreaRatio = quadArea2(currCorners) / (frameW * frameH);
         lastSuccessfulLkAt = performance.now();
         lastPoseUpdateAt = lastSuccessfulLkAt;
+        // Task A/C (Pass 8): LK + geometry validation + applyWarp have ALL just succeeded
+        // for this exact tick — the only point in this file allowed to establish the
+        // frame-gap baseline.
+        establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt);
 
         prevGray.delete();
         prevGray = gray;

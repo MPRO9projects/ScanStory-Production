@@ -2741,16 +2741,16 @@ def test_pose_hold_keeps_video_playing_only_stop_overlay_pauses_it():
 # ---------------------------------------------------------------------------
 
 def test_frame_gap_policy_uses_presented_video_frame_time_before_optical_flow():
-    """Stream B item 10 / Pass 5 Task C: a long gap since the last tracking tick (reused
-    TRACKING_GRACE_MS threshold — the codebase's own existing wall-clock ceiling, not an
-    invented value) invalidates correspondence and drops tracking BEFORE a new gray frame
-    is even captured or LK is called — never applies optical flow across a gap that makes
-    frame correspondence invalid. A genuine hard drop additionally requires two-sided
-    presented-frame evidence (hasPresentedFrameEvidence + genuinePresentedGap) — missing
-    evidence routes to the soft-suspend/reacquire path instead, never a bare wall-clock
-    drop (Task C: do not call tracking_frame_gap_exceeded merely because time passed)."""
+    """Stream B item 10 / Pass 5 Task C / Pass 8 Task A/D: the gap-check requires a valid
+    successful-LK baseline (hasValidLkBaseline — same epoch AND continuity token as the
+    last successful LK) before it can even consider a drop, and additionally requires
+    two-sided presented-frame evidence (hasPresentedFrameEvidence + genuinePresentedGap)
+    from that baseline — missing evidence routes to the soft-suspend/reacquire path
+    instead, never a bare wall-clock drop, and everything happens BEFORE a new gray frame
+    is even captured or LK is called."""
     body = _track_frame_body()
-    gap_check_at = body.index("if (gapSinceLastTick > TRACKING_GRACE_MS) {")
+    baseline_check_at = body.index("const hasValidLkBaseline = hasSuccessfulLkBaseline &&")
+    gap_check_at = body.index("if (hasValidLkBaseline && (now - lastSuccessfulLkWallTime) > TRACKING_GRACE_MS) {")
     evidence_at = body.index("const hasPresentedFrameEvidence = presentedFrameGapMs != null;", gap_check_at)
     genuine_at = body.index("const genuinePresentedGap = hasPresentedFrameEvidence && presentedFrameGapMs > TRACKING_GRACE_MS;", gap_check_at)
     workload_at = body.index("const workloadActive = diagState.encodeInFlight || diagState.fetchInFlight || diagState.capturePhase !== 'idle';", gap_check_at)
@@ -2758,7 +2758,7 @@ def test_frame_gap_policy_uses_presented_video_frame_time_before_optical_flow():
     drop_at = body.index("dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({", gap_check_at)
     gray_at = body.index("gray = matFromVideoGray();")
     lk_at = body.index("cv.calcOpticalFlowPyrLK(")
-    assert gap_check_at < evidence_at < genuine_at < workload_at < suspend_at < drop_at < gray_at < lk_at
+    assert baseline_check_at < gap_check_at < evidence_at < genuine_at < workload_at < suspend_at < drop_at < gray_at < lk_at
     assert "if (!genuinePresentedGap || document.hidden || workloadActive) {" in body[gap_check_at:suspend_at]
     assert "presentedFrameGapMs: Math.round(presentedFrameGapMs)" in body[drop_at:gray_at]
     assert "no_presented_frame_evidence" in body[gap_check_at:drop_at]
@@ -3752,6 +3752,191 @@ def test_pass7_did_not_change_any_recognition_or_geometry_threshold():
     """Task G item 23: MIN_GOOD_POINTS/MAX_ERR/RANSAC_REPROJ/TRACKING_GRACE_FRAMES/
     TRACKING_GRACE_MS/POSE_HOLD_MS/RVFC_STALL_TIMEOUT_MS are unchanged — this pass only
     touched callback-ownership/scheduling/watchdog logic, never a recognition or geometry
+    acceptance threshold."""
+    html = _scanner_html()
+    assert "const TRACKING_GRACE_FRAMES = 3;" in html
+    assert "const TRACKING_GRACE_MS = 900;" in html
+    assert "const POSE_HOLD_MS = 500;" in html
+    assert "const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;" in html
+    assert "const RANSAC_REPROJ = 5.0;" in html
+
+
+# ---------------------------------------------------------------------------
+# Pass 8: reset the frame-gap baseline at every continuity boundary. Root cause:
+# tracking_frame_gap_exceeded compared against lastTrackingMediaTime/lastTrackFrameTs,
+# which are updated by ANY trackFrame call (bootstrap tick, bare rearm tick, first tick
+# after stall/RAF-fallback/ownership-repair recovery) — none of which is itself a
+# successfully processed LK frame. A recovered callback's first tick was therefore always
+# judged against pre-recovery evidence, which by definition always looks like a genuine
+# gap — proven by every recovery (stall-rearm, fresh bootstrap) being immediately
+# followed by another drop with goodPoints=-/gray=- (LK never even ran).
+# ---------------------------------------------------------------------------
+
+def test_new_bootstrap_starts_without_a_frame_gap_baseline():
+    """Task G item 1: startTrackingLoop() calls resetFrameGapBaseline() before arming the
+    first callback via scheduleTrackingFrame() — every fresh tracking session (bootstrap,
+    camera recovery, fallback retry, detection timeout) begins with hasSuccessfulLkBaseline
+    already false."""
+    html = _scanner_html()
+    start = html.index("function startTrackingLoop()")
+    end = html.index("function stopDetectLoop(reason)")
+    body = html[start:end]
+    reset_at = body.index("resetFrameGapBaseline('tracking_loop_started');")
+    schedule_at = body.index("scheduleTrackingFrame();")
+    assert reset_at < schedule_at
+    reset_fn_start = html.index("function resetFrameGapBaseline(reason)")
+    reset_fn_end = html.index("function establishFrameGapBaseline(mediaTime, wallTime)")
+    reset_fn_body = html[reset_fn_start:reset_fn_end]
+    assert "hasSuccessfulLkBaseline = false;" in reset_fn_body
+
+
+def test_first_successful_lk_establishes_baseline():
+    """Task G item 2: establishFrameGapBaseline() is called exactly once in the whole file,
+    at the point in trackFrame immediately after LK + geometry validation + applyWarp have
+    ALL succeeded (right after lastSuccessfulLkAt is stamped) — never at callback entry,
+    bootstrap, or rearm."""
+    html = _scanner_html()
+    assert html.count("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt);") == 1  # the one real call site
+    call_at = html.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt);")
+    stamp_at = html.index("lastSuccessfulLkAt = performance.now();")
+    playoverlay_at = html.rindex("playOverlay();", 0, call_at)
+    assert playoverlay_at < stamp_at < call_at
+    establish_fn_start = html.index("function establishFrameGapBaseline(mediaTime, wallTime)")
+    establish_fn_end = html.index("function cancelCurrentTrackingCallback(reason)")
+    establish_fn_body = html[establish_fn_start:establish_fn_end]
+    assert "hasSuccessfulLkBaseline = true;" in establish_fn_body
+    assert "successfulLkEpoch = trackingEpoch;" in establish_fn_body
+    assert "successfulLkContinuityToken = frameGapContinuityToken;" in establish_fn_body
+
+
+def test_first_successful_lk_cannot_emit_frame_gap_exceeded():
+    """Task G item 3/14: hasValidLkBaseline (which gates the entire gap-drop block) is
+    false until establishFrameGapBaseline() has run at least once for the current epoch/
+    continuity token — so the very first successful LK tick after any reset can never
+    itself have been the tick that dropped via tracking_frame_gap_exceeded (the drop
+    block is unreachable without a prior successful LK, and gray/LK for THIS tick hasn't
+    even run yet at the point the block would apply)."""
+    track_body = _track_frame_body()
+    baseline_at = track_body.index("const hasValidLkBaseline = hasSuccessfulLkBaseline &&")
+    gap_block_at = track_body.index("if (hasValidLkBaseline && (now - lastSuccessfulLkWallTime) > TRACKING_GRACE_MS) {")
+    gray_at = track_body.index("gray = matFromVideoGray();")
+    assert baseline_at < gap_block_at < gray_at
+    assert "successfulLkEpoch === trackingEpoch &&" in track_body
+    assert "successfulLkContinuityToken === frameGapContinuityToken;" in track_body
+
+
+def test_epoch_change_invalidates_baseline():
+    """Task G item 5/12: resetTrackingEpoch() calls resetFrameGapBaseline() right after
+    bumping trackingEpoch — so a baseline established under the OLD epoch can never match
+    hasValidLkBaseline's successfulLkEpoch === trackingEpoch check once the epoch moves on."""
+    html = _scanner_html()
+    start = html.index("function resetTrackingEpoch(width, height)")
+    end = html.index("function cornersToMat(corners)")
+    body = html[start:end]
+    epoch_bump_at = body.index("trackingEpoch++;")
+    reset_at = body.index("resetFrameGapBaseline('tracking_epoch_changed');")
+    assert epoch_bump_at < reset_at
+
+
+def test_rvfc_stall_and_rearm_and_raf_fallback_all_invalidate_baseline():
+    """Task G item 6/7/11: enterCallbackStallRecovery() — reached for stall detection, the
+    rVFC rearm attempt, AND RAF-fallback entry alike — calls resetFrameGapBaseline() once,
+    at its very top, before either the rearm or the fallback branch arms a replacement
+    callback. The baseline stays invalid through both branches (neither branch calls
+    establishFrameGapBaseline)."""
+    html = _scanner_html()
+    start = html.index("function enterCallbackStallRecovery(callbackId, reason)")
+    end = html.index("function onRvfcStallWatchdogFired(callbackId)")
+    body = html[start:end]
+    reset_at = body.index("resetFrameGapBaseline('callback_stall_recovery:' + reason);")
+    rearm_at = body.index("scheduleTrackingFrame('rvfc_stall_rearm_attempt', callbackId);")
+    fallback_at = body.index("scheduleTrackingFrame('rvfc_stalled_raf_fallback', callbackId);")
+    assert reset_at < rearm_at < fallback_at
+    assert "establishFrameGapBaseline(" not in body
+
+
+def test_rvfc_health_restoration_resets_baseline_before_trackframe_runs():
+    """Task G item 8/9: the rvfc_health_restored branch in onTrackingCallbackFired calls
+    resetFrameGapBaseline() BEFORE trackFrame() is invoked for that same (first-post-
+    recovery) callback — so that tick's own LK, if it succeeds, is the one that
+    establishes a fresh baseline via establishFrameGapBaseline(), never compared against
+    pre-stall evidence."""
+    body = _tracking_callback_functions_body()
+    restored_at = body.index("logCallbackEvent('rvfc_health_restored'")
+    reset_at = body.index("resetFrameGapBaseline('rvfc_health_restored');", restored_at)
+    trackframe_call_at = body.index("trackFrame(now, Object.assign(", restored_at)
+    assert restored_at < reset_at < trackframe_call_at
+
+
+def test_ownership_repair_invalidates_old_baseline():
+    """Task G item 10: ensureTrackingCallbackOwnership() calls resetFrameGapBaseline()
+    before arming the repaired callback via scheduleTrackingFrame() — the repaired
+    callback's first tick is never judged against whatever baseline existed before the
+    ownership gap."""
+    html = _scanner_html()
+    start = html.index("function ensureTrackingCallbackOwnership(reason)")
+    end = html.index("function onTrackingCallbackFired(")
+    body = html[start:end]
+    reset_at = body.index("resetFrameGapBaseline('ownership_repair:' + reason);")
+    schedule_at = body.index("const repaired = scheduleTrackingFrame(reason);")
+    assert reset_at < schedule_at
+
+
+def test_stale_callback_logs_skipped_before_any_entered_event():
+    """Task G item 15: onTrackingCallbackFired's validity check runs, and its failure
+    branch returns, strictly before the ENTERED log is ever reached — a stale/cancelled
+    callback can only ever emit [TRACK CALLBACK SKIPPED], never [TRACK CALLBACK ENTERED]."""
+    html = _scanner_html()
+    start = html.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata, callbackEpoch, callbackOwnerToken)")
+    end = html.index("function stopTrackingLoop()")
+    body = html[start:end]
+    failure_check_at = body.index("const failureReason = trackingCallbackValidityFailureReason(")
+    skipped_log_at = body.index("logCallbackEvent('[TRACK CALLBACK SKIPPED]',", failure_check_at)
+    entered_log_at = body.index("logCallbackEvent('[TRACK CALLBACK ENTERED]',")
+    assert failure_check_at < skipped_log_at < entered_log_at
+
+
+def test_callback_entered_prints_captured_and_current_epoch_separately():
+    """Task G item 16 / Task E: the [TRACK CALLBACK ENTERED] log carries callbackEpoch
+    (the captured, immutable value this callback was armed under) and currentEpoch (the
+    live global, which may have advanced during this same trackFrame call) as two
+    distinct fields — never conflating a captured value with the live one."""
+    body = _tracking_callback_functions_body()
+    entered_at = body.index("logCallbackEvent('[TRACK CALLBACK ENTERED]', {")
+    call_text = body[entered_at:body.index(");", entered_at) + 2]
+    assert "id: callbackId, callbackEpoch, currentEpoch: trackingEpoch," in call_text
+
+
+def test_genuine_two_frame_media_gap_can_still_drop_tracking():
+    """Task G item 17: with a valid baseline (same epoch, same continuity token) and a
+    real measured media-time delta above the grace ceiling, the hard
+    dropTracking('tracking_frame_gap_exceeded', ...) path is still reachable — Pass 8 only
+    narrowed WHEN the check applies, it did not remove genuine-gap detection entirely."""
+    track_body = _track_frame_body()
+    guard_at = track_body.index("if (!genuinePresentedGap || document.hidden || workloadActive) {")
+    drop_at = track_body.index("dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({")
+    assert guard_at < drop_at
+
+
+def test_pass8_new_functions_never_touch_video_source_or_currenttime_or_loop():
+    """Task G item 24: resetFrameGapBaseline/establishFrameGapBaseline never assign
+    overlay.src or overlay.currentTime, and never reference the native <video loop>
+    attribute — a baseline reset/establish must never reset the overlay's source, scrub
+    its playback position, or touch native looping."""
+    html = _scanner_html()
+    start = html.index("function resetFrameGapBaseline(reason)")
+    end = html.index("function cancelCurrentTrackingCallback(reason)")
+    body = html[start:end]
+    assert "overlay.src" not in body
+    assert "overlay.currentTime" not in body
+    assert "overlay.loop" not in body
+    assert html.count('<video id="overlay"') == 1
+
+
+def test_pass8_did_not_change_any_recognition_or_geometry_threshold():
+    """Task G item 25: MIN_GOOD_POINTS/MAX_ERR/RANSAC_REPROJ/TRACKING_GRACE_FRAMES/
+    TRACKING_GRACE_MS/POSE_HOLD_MS/RVFC_STALL_TIMEOUT_MS are unchanged — this pass only
+    touched the frame-gap baseline's evidence source, never a recognition or geometry
     acceptance threshold."""
     html = _scanner_html()
     assert "const TRACKING_GRACE_FRAMES = 3;" in html
