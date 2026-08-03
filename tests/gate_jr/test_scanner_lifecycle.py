@@ -2252,18 +2252,25 @@ def test_first_lk_runs_only_after_fresh_live_bootstrap_frame():
 
 
 def test_tracking_cadence_prefers_request_video_frame_callback_with_single_owner():
+    """Pass 5: scheduleTrackingFrame is the single arm point (one-owner semantics — never
+    arms a second callback while trackingCallbackId is still set), prefers rVFC unless the
+    health state machine has fallen back to RAF, and every fired callback is routed through
+    onTrackingCallbackFired's stale-id check before it can touch shared state."""
     html = _scanner_html()
-    start = html.index("function scheduleTrackingFrame()")
+    start = html.index("function scheduleTrackingFrame(reason, previousCallbackId)")
     end = html.index("function startTrackingLoop()", start)
     body = html[start:end]
-    assert "if (!trackLoopActive || trackingCallbackId !== null) return;" in body
-    assert "cam.requestVideoFrameCallback" in body
-    assert "callbackType: 'video_frame'" in body
-    assert "callbackType: 'animation_frame'" in body
+    assert "if (!trackLoopActive || trackingCallbackId !== null) return false;" in body
+    assert "const useRVFC = rvfcHealthState !== 'RAF_FALLBACK' && typeof cam.requestVideoFrameCallback === 'function';" in body
+    assert "onTrackingCallbackFired(myCallbackId, 'video_frame', now, metadata);" in body
+    assert "onTrackingCallbackFired(myCallbackId, 'animation_frame', now, null);" in body
+    fired_start = html.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata)")
+    fired_body = html[fired_start:start]
+    assert "if (trackingCallbackId !== callbackId) {" in fired_body  # one-owner: stale callback never proceeds
     stop_start = html.index("function stopTrackingLoop()")
-    stop_body = html[stop_start:start]
-    assert "cam.cancelVideoFrameCallback(trackingCallbackId)" in stop_body
-    assert "cancelAnimationFrame(trackingCallbackId)" in stop_body
+    stop_body = html[stop_start:html.index("function scheduleTrackingFrame(reason, previousCallbackId)")]
+    assert "cam.cancelVideoFrameCallback(trackingCallbackHandle)" in stop_body
+    assert "cancelAnimationFrame(trackingCallbackHandle)" in stop_body
 
 
 def test_bootstrap_failure_uses_bounded_tracking_loss_cleanup():
@@ -2362,13 +2369,18 @@ def test_detect_once_from_server_blocks_direct_or_watchdog_capture_while_trackin
 
 
 def test_attempt_finalizer_does_not_schedule_successor_while_tracking_healthy():
+    """Pass 5 Task E: scheduleAttemptSuccessor also suppresses while trackerBootstrapPending
+    — an accepted response starts local bootstrap synchronously (before this finalizer runs
+    in the outer `finally`), so a normal server successor must never be scheduled for it in
+    the first place, rather than scheduled and then cancelled once bootstrap completes."""
     html = _scanner_html()
     start = html.index("function scheduleAttemptSuccessor(")
     body = html[start:html.index("function finalizeDetectionAttempt", start)]
-    healthy_at = body.index("if (isHealthyLocalTracking())")
+    healthy_at = body.index("if (isHealthyLocalTracking() || trackerBootstrapPending)")
     schedule_at = body.index("scheduleNextScan(reason || 'after_attempt');")
     assert healthy_at < schedule_at
     assert "healthy_tracking_successor_suppressed" in body
+    assert "tracker_bootstrap_pending_successor_suppressed" in body
 
 
 def test_tracking_loss_reenters_single_scheduler_for_reacquisition():
@@ -2701,21 +2713,27 @@ def test_pose_hold_keeps_video_playing_only_stop_overlay_pauses_it():
 # ---------------------------------------------------------------------------
 
 def test_frame_gap_policy_uses_presented_video_frame_time_before_optical_flow():
-    """Stream B item 10: a long gap since the last tracking tick (reused
+    """Stream B item 10 / Pass 5 Task C: a long gap since the last tracking tick (reused
     TRACKING_GRACE_MS threshold — the codebase's own existing wall-clock ceiling, not an
     invented value) invalidates correspondence and drops tracking BEFORE a new gray frame
     is even captured or LK is called — never applies optical flow across a gap that makes
-    frame correspondence invalid."""
+    frame correspondence invalid. A genuine hard drop additionally requires two-sided
+    presented-frame evidence (hasPresentedFrameEvidence + genuinePresentedGap) — missing
+    evidence routes to the soft-suspend/reacquire path instead, never a bare wall-clock
+    drop (Task C: do not call tracking_frame_gap_exceeded merely because time passed)."""
     body = _track_frame_body()
     gap_check_at = body.index("if (gapSinceLastTick > TRACKING_GRACE_MS) {")
-    presented_at = body.index("const gapIsFromPresentedFrames = presentedFrameGapMs == null || presentedFrameGapMs > TRACKING_GRACE_MS;", gap_check_at)
+    evidence_at = body.index("const hasPresentedFrameEvidence = presentedFrameGapMs != null;", gap_check_at)
+    genuine_at = body.index("const genuinePresentedGap = hasPresentedFrameEvidence && presentedFrameGapMs > TRACKING_GRACE_MS;", gap_check_at)
     workload_at = body.index("const workloadActive = diagState.encodeInFlight || diagState.fetchInFlight || diagState.capturePhase !== 'idle';", gap_check_at)
     suspend_at = body.index("clearTrackingGeometry('tracking_gap_suspended', { holdPose: true });", gap_check_at)
     drop_at = body.index("dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({", gap_check_at)
     gray_at = body.index("gray = matFromVideoGray();")
     lk_at = body.index("cv.calcOpticalFlowPyrLK(")
-    assert gap_check_at < presented_at < workload_at < suspend_at < drop_at < gray_at < lk_at
-    assert "presentedFrameGapMs: presentedFrameGapMs != null ? Math.round(presentedFrameGapMs) : null" in body[drop_at:gray_at]
+    assert gap_check_at < evidence_at < genuine_at < workload_at < suspend_at < drop_at < gray_at < lk_at
+    assert "if (!genuinePresentedGap || document.hidden || workloadActive) {" in body[gap_check_at:suspend_at]
+    assert "presentedFrameGapMs: Math.round(presentedFrameGapMs)" in body[drop_at:gray_at]
+    assert "no_presented_frame_evidence" in body[gap_check_at:drop_at]
     assert "scheduler_delay_without_new_presented_frame" in body[gap_check_at:drop_at]
 
 
@@ -2843,3 +2861,230 @@ def test_applywarp_and_render_path_use_frameW_frameH_not_cap_dimensions():
     assert "isOverlayFrameQuadRenderable(cornersFrame, frameW, frameH)" in warp_body
     assert "cap.width" not in warp_body
     assert "cap.height" not in warp_body
+
+
+# ---------------------------------------------------------------------------
+# Pass 5: rVFC callback ownership, callback-stall health state machine, and
+# accepted-response successor-order fix. Only the local-tracking-callback lifecycle
+# and the successor-scheduling gate are touched — capture/encoding/AbortController/
+# backend thresholds/native loop are untouched (verified below).
+# ---------------------------------------------------------------------------
+
+def _tracking_callback_functions_body():
+    html = _scanner_html()
+    start = html.index("function clearRvfcStallWatchdog()")
+    end = html.index("function startTrackingLoop()")
+    return html[start:end]
+
+
+def test_bootstrap_callback_rearms_exactly_one_ordinary_callback():
+    """Task G item 1: trackFrame's own scheduleTrackingFrame('tick_rearm', ...) call runs
+    unconditionally at the top of every tick, before the trackerBootstrapPending branch —
+    so the bootstrap tick already rearms exactly one ordinary callback before
+    initializeFreshLiveTracker even runs. initializeFreshLiveTracker itself never calls
+    scheduleTrackingFrame — there is exactly one rearm site per tick, not two."""
+    html = _scanner_html()
+    track_start = html.index("function trackFrame(nowArg, metadata)")
+    track_end = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
+    track_body = html[track_start:track_end]
+    rearm_at = track_body.index("scheduleTrackingFrame('tick_rearm'")
+    bootstrap_branch_at = track_body.index("if (trackerBootstrapPending) {")
+    assert rearm_at < bootstrap_branch_at
+    assert track_body.count("scheduleTrackingFrame(") == 1
+    init_start = html.index("function initializeFreshLiveTracker(now, metadata)")
+    init_end = html.index("function dropTracking(reason, extraMats")
+    assert "scheduleTrackingFrame(" not in html[init_start:init_end]
+
+
+def test_consumed_callback_id_cleared_only_after_stale_id_check():
+    """Task G item 2: onTrackingCallbackFired clears trackingCallbackId (and type/handle)
+    ONLY after confirming this callback is still the current owner — a stale/superseded
+    callback returns before touching any of that shared state."""
+    body = _tracking_callback_functions_body()
+    fired_start = body.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata)")
+    stale_check_at = body.index("if (trackingCallbackId !== callbackId) {", fired_start)
+    stale_return_at = body.index("return;", stale_check_at)
+    clear_id_at = body.index("trackingCallbackId = null; // clears only the just-consumed callback id", fired_start)
+    assert fired_start < stale_check_at < stale_return_at < clear_id_at
+
+
+def test_entering_tracking_mode_does_not_cancel_active_tracking_callback():
+    """Task G item 3: setScannerWorkMode's TRACKING branch only cancels the pending NORMAL
+    server-scan timer (cancelPendingNormalScan) — it never touches trackingCallbackId,
+    trackingCallbackHandle, or calls stopTrackingLoop/cancelVideoFrameCallback."""
+    html = _scanner_html()
+    start = html.index("function setScannerWorkMode(mode, reason)")
+    end = html.index("function isHealthyLocalTracking()")
+    body = html[start:end]
+    assert "cancelPendingNormalScan('entered_healthy_tracking')" in body
+    assert "trackingCallbackId" not in body
+    assert "trackingCallbackHandle" not in body
+    assert "stopTrackingLoop" not in body
+    assert "cancelVideoFrameCallback" not in body
+
+
+def test_stale_callback_cannot_cancel_or_mutate_current_callback_state():
+    """Task G item 4: the stale-callback branch in onTrackingCallbackFired returns
+    immediately after logging [TRACK CALLBACK SKIPPED] — it never assigns
+    trackingCallbackId/Type/Handle, so a late-firing stale callback can never clear or
+    otherwise disturb whichever callback currently owns those variables."""
+    body = _tracking_callback_functions_body()
+    fired_start = body.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata)")
+    stale_start = body.index("if (trackingCallbackId !== callbackId) {", fired_start)
+    stale_end = body.index("return;", stale_start) + len("return;")
+    stale_block = body[stale_start:stale_end]
+    assert "[TRACK CALLBACK SKIPPED]" in stale_block
+    assert "trackingCallbackId =" not in stale_block
+    assert "trackingCallbackType =" not in stale_block
+    assert "trackingCallbackHandle =" not in stale_block
+
+
+def test_duplicate_presented_frame_skips_lk_but_callback_already_rearmed():
+    """Task G item 5: trackFrame's duplicate-frameKey dedup check (lastPresentedFrameKey)
+    runs AFTER scheduleTrackingFrame('tick_rearm', ...) — a duplicate presented frame
+    still gets a fresh callback armed for the next one; only the LK/geometry work for
+    THIS tick is skipped."""
+    track_body = _track_frame_body()
+    rearm_at = track_body.index("scheduleTrackingFrame('tick_rearm'")
+    dedup_at = track_body.index("if (frameKey && frameKey === lastPresentedFrameKey) {")
+    lk_at = track_body.index("cv.calcOpticalFlowPyrLK(")
+    assert rearm_at < dedup_at < lk_at
+
+
+def test_callback_absence_becomes_stalled_not_frame_gap_exceeded():
+    """Task G item 6: the independent stall watchdog (fires when NO callback arrived at
+    all) reports 'tracking_callback_stalled' — a distinct reason from
+    'tracking_frame_gap_exceeded', which only ever fires from inside trackFrame's own
+    in-band check when a callback DID arrive, late, with genuine presented-frame evidence."""
+    html = _scanner_html()
+    fired_start = html.index("function onRvfcStallWatchdogFired(callbackId)")
+    fired_end = html.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata)")
+    body = html[fired_start:fired_end]
+    assert "'tracking_callback_stalled'" in body
+    assert "tracking_frame_gap_exceeded" not in body
+    assert "dropTracking(" not in body  # a stall reschedules/falls back — it never itself drops tracking
+
+
+def test_genuine_presented_frame_delta_can_still_produce_frame_gap_exceeded():
+    """Task G item 7: genuinePresentedGap requires BOTH hasPresentedFrameEvidence (mediaTime
+    present on both sides) AND presentedFrameGapMs exceeding the grace ceiling — when both
+    hold, the hard dropTracking('tracking_frame_gap_exceeded', ...) path is still reachable
+    and unchanged from before Task C's evidence requirement was added."""
+    track_body = _track_frame_body()
+    assert "const genuinePresentedGap = hasPresentedFrameEvidence && presentedFrameGapMs > TRACKING_GRACE_MS;" in track_body
+    guard_at = track_body.index("if (!genuinePresentedGap || document.hidden || workloadActive) {")
+    drop_at = track_body.index("dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({")
+    assert guard_at < drop_at  # the drop is only reached when the suspend-branch's `if` is false
+
+
+def test_exactly_one_rvfc_rearm_is_attempted_before_falling_back():
+    """Task G item 8/9: onRvfcStallWatchdogFired attempts exactly one rVFC rearm
+    (rvfcRearmAttempted flips true before scheduling it) — a second stall while already
+    RVFC_STALLED (or with rvfcRearmAttempted already true) falls through to the RAF
+    fallback branch instead of attempting rVFC again."""
+    html = _scanner_html()
+    start = html.index("function onRvfcStallWatchdogFired(callbackId)")
+    end = html.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata)")
+    body = html[start:end]
+    rearm_guard_at = body.index("if (rvfcHealthState === 'RVFC_ACTIVE' && !rvfcRearmAttempted) {")
+    flip_at = body.index("rvfcRearmAttempted = true;", rearm_guard_at)
+    rearm_schedule_at = body.index("scheduleTrackingFrame('rvfc_stall_rearm_attempt', callbackId);", rearm_guard_at)
+    fallback_at = body.index("rvfcHealthState = 'RAF_FALLBACK';")
+    fallback_schedule_at = body.index("scheduleTrackingFrame('rvfc_stalled_raf_fallback', callbackId);")
+    assert rearm_guard_at < flip_at < rearm_schedule_at < fallback_at < fallback_schedule_at
+
+
+def test_raf_fallback_processes_only_new_video_frames():
+    """Task G item 10: in RAF fallback, onTrackingCallbackFired compares cam.currentTime
+    against the last observed value — a duplicate is skipped (no LK) but still rearms;
+    only a genuinely new currentTime reaches trackFrame."""
+    body = _tracking_callback_functions_body()
+    animation_branch_at = body.index("if (callbackType === 'animation_frame') {")
+    dup_check_at = body.index("if (lastRafFallbackCurrentTime !== null && observedCurrentTime === lastRafFallbackCurrentTime) {", animation_branch_at)
+    dup_rearm_at = body.index("scheduleTrackingFrame('raf_fallback_duplicate_rearm', callbackId);", dup_check_at)
+    dup_return_at = body.index("return;", dup_rearm_at)
+    assert animation_branch_at < dup_check_at < dup_rearm_at < dup_return_at
+    rvfc_health_branch_at = body.index("} else if (rvfcHealthState !== 'RVFC_ACTIVE') {", animation_branch_at)
+    assert "lastRafFallbackCurrentTime = observedCurrentTime;" in body[animation_branch_at:rvfc_health_branch_at]
+
+
+def test_no_duplicate_rvfc_or_raf_loops_can_be_armed():
+    """Task G item 11: scheduleTrackingFrame's own guard (trackingCallbackId !== null)
+    is the single place that prevents a second callback of either kind from ever being
+    armed while one is already pending — the same guard covers both the rVFC and RAF
+    branches, since it runs before either is chosen."""
+    html = _scanner_html()
+    start = html.index("function scheduleTrackingFrame(reason, previousCallbackId)")
+    end = html.index("function startTrackingLoop()")
+    body = html[start:end]
+    guard_at = body.index("if (!trackLoopActive || trackingCallbackId !== null) return false;")
+    rvfc_branch_at = body.index("if (useRVFC) {")
+    assert guard_at < rvfc_branch_at
+    assert body.count("trackingCallbackId = myCallbackId;") == 1
+
+
+def test_accepted_response_marks_bootstrap_pending_before_attempt_finalizes():
+    """Task G item 12: the accepted-response branch sets trackerBootstrapPending = true
+    (and calls startTrackingLoop, establishing callback ownership) synchronously, entirely
+    within the try block — strictly before finalizeDetectionAttempt ever runs (called from
+    the outer `finally`, after the try block completes). This is what makes
+    scheduleAttemptSuccessor's trackerBootstrapPending check (see the finalizer test above)
+    correctly see bootstrap-pending state and suppress the normal successor."""
+    html = _scanner_html()
+    detect_start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
+    detect_end = html.index("async function scanTick(token)")
+    body = html[detect_start:detect_end]
+    bootstrap_pending_at = body.index("trackerBootstrapPending = true;")
+    start_loop_at = body.index("startTrackingLoop();")
+    finally_finalize_at = body.index("finalizeDetectionAttempt(attempt, (attempt.cancelled || sessionEnding) ? 'cancelled' : 'complete', 'finally');")
+    assert bootstrap_pending_at < start_loop_at < finally_finalize_at
+
+
+def test_all_new_tracking_loss_reasons_still_funnel_through_one_reacquisition_path():
+    """Task G item 13: every new Pass 5 dropTracking reason (frame-gap, dimension
+    mismatch, exception, epoch-superseded, bootstrap failure/exception) routes through the
+    SAME single dropTracking() function — which already schedules exactly one immediate
+    reacquisition (scheduleNextScan('tracking_lost_reacquire', 0), no ad-hoc setTimeout) —
+    not a separate scheduling path per reason."""
+    html = _scanner_html()
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_end = html.index("function handleDetectionTimeout()", drop_start)
+    drop_body = html[drop_start:drop_end]
+    assert "scheduleNextScan('tracking_lost_reacquire', 0);" in drop_body
+    assert "setTimeout(" not in drop_body
+    for reason_call in (
+        "dropTracking('tracking_frame_gap_exceeded'",
+        "dropTracking('tracking_frame_dimension_mismatch'",
+        "dropTracking('tracking_exception'",
+        "dropTracking('tracking_epoch_superseded'",
+        "dropTracking('tracker_bootstrap_failed'",
+        "dropTracking('tracker_bootstrap_exception'",
+    ):
+        assert reason_call in html  # all reachable, all funneled through the one function above
+
+
+def test_pass5_did_not_change_any_recognition_or_geometry_threshold():
+    """Task G item 14: MIN_GOOD_POINTS/MAX_ERR/RANSAC_REPROJ/TRACKING_GRACE_FRAMES/
+    TRACKING_GRACE_MS/POSE_HOLD_MS are unchanged. RVFC_STALL_TIMEOUT_MS reuses
+    TRACKING_GRACE_MS's value rather than introducing an independent, undocumented number."""
+    html = _scanner_html()
+    assert "const TRACKING_GRACE_FRAMES = 3;" in html
+    assert "const TRACKING_GRACE_MS = 900;" in html
+    assert "const POSE_HOLD_MS = 500;" in html
+    assert "const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;" in html
+
+
+def test_pass5_callback_functions_never_touch_video_source_or_currenttime_or_loop():
+    """Task G item 15: none of the new Pass 5 callback/health-state functions (
+    scheduleTrackingFrame, onTrackingCallbackFired, armRvfcStallWatchdog,
+    onRvfcStallWatchdogFired) assign overlay.src or overlay.currentTime, and the native
+    <video loop> attribute remains untouched — a temporary rVFC stall or RAF fallback must
+    never reset the overlay's source, scrub its playback position, or touch native looping."""
+    html = _scanner_html()
+    start = html.index("function clearRvfcStallWatchdog()")
+    end = html.index("function startTrackingLoop()")
+    body = html[start:end]
+    assert "overlay.src =" not in body
+    assert "overlay.currentTime =" not in body
+    assert "overlay.loop" not in body
+    assert html.count('<video id="overlay"') == 1

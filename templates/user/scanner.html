@@ -1370,6 +1370,13 @@
     const HEALTHY_TRACK_SUPPRESS_MS = 1200;
     const TRACKING_GRACE_FRAMES = 3;  // frames of bad optical flow before dropping tracking
     const TRACKING_GRACE_MS = 900;    // wall-clock ceiling on grace — frame count alone can hang on throttled/low-FPS devices
+    // rVFC health watchdog: same 900ms ceiling as TRACKING_GRACE_MS, reused rather than
+    // invented — it is already the codebase's accepted bound for "this is too slow to
+    // trust without evidence." The two mechanisms never conflict: if a tracking callback
+    // DOES arrive (even late), trackFrame's own in-band gapSinceLastTick check classifies
+    // it; this watchdog only fires when NO callback has arrived at all by this deadline —
+    // a case in-band code structurally cannot detect, since nothing runs to notice it.
+    const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;
 
     const POSE_HOLD_MS = 500;
     const POSE_STILL_TAU_MS = 220;
@@ -1528,8 +1535,20 @@
     let activeTrackerInitialPointCount = 0;
     let detectionControllerSeq = 0;
     let watchdogCallbackSeq = 0;
-    let trackingCallbackId = null;
-    let trackingCallbackType = null;
+    let trackingCallbackId = null;      // our own monotonic id — the current callback's ONE owner
+    let trackingCallbackType = null;    // 'video_frame' | 'animation_frame'
+    let trackingCallbackHandle = null;  // raw browser handle, for cancelVideoFrameCallback/cancelAnimationFrame
+    let trackingCallbackSeq = 0;        // generator for trackingCallbackId
+    let trackingCallbackRequestedAt = 0;
+    let rvfcStallWatchdogTimer = null;
+    // rVFC health state machine (Pass 5): RVFC_ACTIVE (preferred) -> RVFC_STALLED (no
+    // callback arrived, one rearm attempted) -> RAF_FALLBACK (rVFC rearm also stalled,
+    // polling cam.currentTime instead) -> back to RVFC_ACTIVE on the next fresh tracking
+    // epoch. RECOVERING is not a distinct rVFC-health value here — tracking recovery is
+    // already owned by scannerWorkMode; this machine only tracks callback-source health.
+    let rvfcHealthState = 'RVFC_ACTIVE';
+    let rvfcRearmAttempted = false;
+    let lastRafFallbackCurrentTime = null;
     let lastPresentedFrameKey = null;
     let trackerBootstrapPending = false;
     let trackerBootstrapStartedAt = 0;
@@ -1637,14 +1656,28 @@
         lastScheduledBy: diagState.lastScheduledBy,
         pendingScanTimer: Boolean(detectLoopTimer),
         pageVisibility: document.visibilityState,
+        // Camera feed (input) readiness — this is what tracking-frame callbacks depend on.
         videoPaused: cam.paused,
         videoEnded: cam.ended,
         videoReadyState: cam.readyState,
+        // Task F: overlay (AR playback) readiness, tracked SEPARATELY. overlay.duration is
+        // NaN until its own metadata loads and is never read anywhere to gate tracking or
+        // capture decisions — only cam's readiness does that. Kept alongside, distinctly
+        // named, so a real-device log can never conflate "camera has no new frame" with
+        // "overlay video hasn't finished loading its own metadata."
+        overlayReadyState: overlay.readyState,
+        overlayCurrentTime: overlay.currentTime,
+        overlayDuration: overlay.duration,
+        overlayPaused: overlay.paused,
+        overlayEnded: overlay.ended,
         lastPresentedVideoFrameAt: diagState.lastPresentedVideoFrameAt,
         currentVideoFrameMediaTime: diagState.currentVideoFrameMediaTime,
         trackingCallbackIntervalMs: diagState.trackingCallbackIntervalMs,
         trackingCallbackMaxIntervalMs: diagState.trackingCallbackMaxIntervalMs,
-        skippedDuplicateVideoFrames: diagState.skippedDuplicateVideoFrames
+        skippedDuplicateVideoFrames: diagState.skippedDuplicateVideoFrames,
+        rvfcHealthState,
+        trackingCallbackId,
+        trackingCallbackType
       }, extra || {});
     }
 
@@ -1738,9 +1771,18 @@
 
     function scheduleAttemptSuccessor(attempt, reason) {
       if (!attempt || attempt.successorScheduled || sessionEnding || attempt.scanLoopToken !== scanLoopToken) return false;
-      if (isHealthyLocalTracking()) {
+      // Task E (Pass 5): finalization inspects the FINAL scanner mode/bootstrap state right
+      // before scheduling — not just already-healthy tracking. An accepted response starts
+      // local-tracking bootstrap (trackerBootstrapPending=true, callback ownership already
+      // established via startTrackingLoop()) synchronously, before this finalizer ever runs
+      // (finalizeDetectionAttempt is called from the outer `finally`, strictly after the
+      // accept branch). Suppressing here — rather than scheduling a normal successor and
+      // relying on cancelPendingNormalScan() to cancel it once bootstrap later completes —
+      // avoids the previously-observed [SCAN SCHEDULED] -> [SCAN TIMER CANCELLED] churn
+      // entirely: nothing is ever scheduled in the first place.
+      if (isHealthyLocalTracking() || trackerBootstrapPending) {
         scannerDiagnostics.push('scan_schedule_skipped', {
-          reason: 'healthy_tracking_successor_suppressed',
+          reason: trackerBootstrapPending ? 'tracker_bootstrap_pending_successor_suppressed' : 'healthy_tracking_successor_suppressed',
           scheduledBy: reason || 'after_attempt',
           scannerWorkMode,
           activeRequestSequence: attempt.requestSequence
@@ -1805,15 +1847,130 @@
       scannerDiagnostics.push('geometry_cleared', { reason, generation: scannerGeneration });
     }
 
+    function clearRvfcStallWatchdog() {
+      if (rvfcStallWatchdogTimer) {
+        clearTimeout(rvfcStallWatchdogTimer);
+        rvfcStallWatchdogTimer = null;
+      }
+    }
+
+    // Independent, timer-based watchdog for "no tracking callback arrived at all" — the
+    // one thing trackFrame's own in-band gap check structurally cannot detect, since
+    // nothing runs to notice a callback that never fires. Only armed while rVFC is the
+    // active mechanism (RAF fallback has no equivalent "did the browser stop calling us"
+    // failure mode — requestAnimationFrame always fires).
+    function armRvfcStallWatchdog(callbackId) {
+      clearRvfcStallWatchdog();
+      if (trackingCallbackType !== 'video_frame') return;
+      rvfcStallWatchdogTimer = setTimeout(() => onRvfcStallWatchdogFired(callbackId), RVFC_STALL_TIMEOUT_MS);
+    }
+
+    function onRvfcStallWatchdogFired(callbackId) {
+      rvfcStallWatchdogTimer = null;
+      if (trackingCallbackId !== callbackId || !trackLoopActive) return; // already consumed/stopped — not a stall
+      if (document.hidden) {
+        // Page-hide/show is handled by the existing visibility-driven recovery path, not
+        // this health state machine — a backgrounded tab is EXPECTED to stop presenting
+        // frames; that alone is not evidence of a stalled callback.
+        scannerDiagnostics.push('rvfc_stall_watchdog_skipped_page_hidden', { callbackId, epoch: trackingEpoch });
+        armRvfcStallWatchdog(callbackId);
+        return;
+      }
+      scannerDiagnostics.push('[TRACK CALLBACK CANCELLED]', {
+        callbackId, epoch: trackingEpoch, reason: 'tracking_callback_stalled', cancelledBy: 'rvfc_stall_watchdog'
+      });
+      scannerDiagnostics.push('tracking_callback_stalled', trackingWorkloadSnapshot({ callbackId, elapsedMs: RVFC_STALL_TIMEOUT_MS }));
+      if (trackingCallbackHandle != null && typeof cam.cancelVideoFrameCallback === 'function') {
+        try { cam.cancelVideoFrameCallback(trackingCallbackHandle); } catch (_) {}
+      }
+      trackingCallbackId = null;
+      trackingCallbackType = null;
+      trackingCallbackHandle = null;
+      animationFrameId = null;
+
+      if (rvfcHealthState === 'RVFC_ACTIVE' && !rvfcRearmAttempted) {
+        // One controlled rearm attempt via rVFC before falling back — never a duplicate
+        // callback, since trackingCallbackId is already cleared above.
+        rvfcRearmAttempted = true;
+        rvfcHealthState = 'RVFC_STALLED';
+        scheduleTrackingFrame('rvfc_stall_rearm_attempt', callbackId);
+        return;
+      }
+      // The rearm attempt also stalled (or health was already degraded) — controlled
+      // fallback to requestAnimationFrame, which only processes genuinely new video
+      // frames (see onTrackingCallbackFired's cam.currentTime dedup below).
+      rvfcHealthState = 'RAF_FALLBACK';
+      lastRafFallbackCurrentTime = null;
+      scheduleTrackingFrame('rvfc_stalled_raf_fallback', callbackId);
+    }
+
+    function onTrackingCallbackFired(callbackId, callbackType, now, metadata) {
+      if (trackingCallbackId !== callbackId) {
+        // One-owner semantics: a callback that fires after its id has already been
+        // consumed (or cancelled by the stall watchdog) must never clear the current
+        // owner or invoke trackFrame with superseded state.
+        scannerDiagnostics.push('[TRACK CALLBACK SKIPPED]', {
+          callbackId, reason: 'stale_callback_id',
+          mediaTime: metadata && metadata.mediaTime != null ? metadata.mediaTime : null,
+          previousMediaTime: lastTrackingMediaTime
+        });
+        return;
+      }
+      if (callbackType === 'video_frame') clearRvfcStallWatchdog();
+      trackingCallbackId = null; // clears only the just-consumed callback id
+      trackingCallbackType = null;
+      trackingCallbackHandle = null;
+      animationFrameId = null;
+
+      let effectiveMetadata = metadata;
+      if (callbackType === 'animation_frame') {
+        // RAF fallback: cam.currentTime is the only "did a new frame actually arrive"
+        // signal available without rVFC. A duplicate value means the compositor hasn't
+        // presented a new frame since the last tick — skip LK for this tick, but still
+        // rearm (never run LK across an unknown/duplicate interval).
+        const observedCurrentTime = cam.currentTime;
+        if (lastRafFallbackCurrentTime !== null && observedCurrentTime === lastRafFallbackCurrentTime) {
+          scannerDiagnostics.push('[TRACK CALLBACK SKIPPED]', {
+            callbackId, reason: 'raf_fallback_duplicate_current_time',
+            mediaTime: observedCurrentTime, previousMediaTime: lastRafFallbackCurrentTime
+          });
+          scheduleTrackingFrame('raf_fallback_duplicate_rearm', callbackId);
+          return;
+        }
+        lastRafFallbackCurrentTime = observedCurrentTime;
+        effectiveMetadata = { mediaTime: observedCurrentTime };
+      } else if (rvfcHealthState !== 'RVFC_ACTIVE') {
+        scannerDiagnostics.push('rvfc_health_restored', { callbackId, epoch: trackingEpoch, from: rvfcHealthState });
+        rvfcHealthState = 'RVFC_ACTIVE';
+        rvfcRearmAttempted = false;
+      }
+
+      const processingStart = performance.now();
+      trackFrame(now, Object.assign({ callbackType, callbackId }, effectiveMetadata || {}));
+      const processingDuration = Math.round(performance.now() - processingStart);
+      scannerDiagnostics.push('[TRACK CALLBACK ENTERED]', {
+        callbackId, epoch: trackingEpoch, ownerToken: callbackId, now,
+        mediaTime: effectiveMetadata && effectiveMetadata.mediaTime != null ? effectiveMetadata.mediaTime : null,
+        presentedFrames: effectiveMetadata && effectiveMetadata.presentedFrames != null ? effectiveMetadata.presentedFrames : null,
+        expectedDisplayTime: effectiveMetadata && effectiveMetadata.expectedDisplayTime != null ? effectiveMetadata.expectedDisplayTime : null,
+        processingDuration
+      });
+    }
+
     function stopTrackingLoop() {
+      clearRvfcStallWatchdog();
       if (trackingCallbackId !== null) {
         if (trackingCallbackType === 'video_frame' && typeof cam.cancelVideoFrameCallback === 'function') {
-          cam.cancelVideoFrameCallback(trackingCallbackId);
-        } else {
-          cancelAnimationFrame(trackingCallbackId);
+          cam.cancelVideoFrameCallback(trackingCallbackHandle);
+        } else if (trackingCallbackHandle != null) {
+          cancelAnimationFrame(trackingCallbackHandle);
         }
+        scannerDiagnostics.push('[TRACK CALLBACK CANCELLED]', {
+          callbackId: trackingCallbackId, epoch: trackingEpoch, reason: 'tracking_loop_stopped', cancelledBy: 'stopTrackingLoop'
+        });
         trackingCallbackId = null;
         trackingCallbackType = null;
+        trackingCallbackHandle = null;
         animationFrameId = null;
         diagState.scanLoopStopCount++;
       }
@@ -1822,26 +1979,40 @@
       firstLkPending = false;
     }
 
-    function scheduleTrackingFrame() {
-      if (!trackLoopActive || trackingCallbackId !== null) return;
-      if (typeof cam.requestVideoFrameCallback === 'function') {
-        trackingCallbackType = 'video_frame';
-        trackingCallbackId = cam.requestVideoFrameCallback((now, metadata) => {
-          trackingCallbackId = null;
-          trackingCallbackType = null;
-          animationFrameId = null;
-          trackFrame(now, Object.assign({ callbackType: 'video_frame' }, metadata || {}));
-        });
-      } else {
-        trackingCallbackType = 'animation_frame';
-        trackingCallbackId = requestAnimationFrame((now) => {
-          trackingCallbackId = null;
-          trackingCallbackType = null;
-          animationFrameId = null;
-          trackFrame(now, { callbackType: 'animation_frame' });
+    // Single entry point for arming the next tracking callback. Exactly one callback is
+    // ever pending (guarded by trackingCallbackId !== null below) — the ONE-OWNER
+    // invariant this whole file relies on. `previousCallbackId`, when given, marks this
+    // as a rearm-after-consumption (vs. the very first arm from startTrackingLoop, which
+    // has no predecessor) and is only used for the [TRACK CALLBACK REARMED] diagnostic.
+    function scheduleTrackingFrame(reason, previousCallbackId) {
+      if (!trackLoopActive || trackingCallbackId !== null) return false;
+      const myCallbackId = ++trackingCallbackSeq;
+      const useRVFC = rvfcHealthState !== 'RAF_FALLBACK' && typeof cam.requestVideoFrameCallback === 'function';
+      trackingCallbackId = myCallbackId;
+      trackingCallbackRequestedAt = performance.now();
+      scannerDiagnostics.push('[TRACK CALLBACK REQUESTED]', {
+        callbackId: myCallbackId, epoch: trackingEpoch, ownerToken: myCallbackId,
+        requestedAt: trackingCallbackRequestedAt, usingRVFC: useRVFC, usingRAF: !useRVFC
+      });
+      if (previousCallbackId != null) {
+        scannerDiagnostics.push('[TRACK CALLBACK REARMED]', {
+          oldCallbackId: previousCallbackId, newCallbackId: myCallbackId, epoch: trackingEpoch, reason: reason || 'tick_rearm'
         });
       }
-      animationFrameId = trackingCallbackId;
+      if (useRVFC) {
+        trackingCallbackType = 'video_frame';
+        trackingCallbackHandle = cam.requestVideoFrameCallback((now, metadata) => {
+          onTrackingCallbackFired(myCallbackId, 'video_frame', now, metadata);
+        });
+        armRvfcStallWatchdog(myCallbackId);
+      } else {
+        trackingCallbackType = 'animation_frame';
+        trackingCallbackHandle = requestAnimationFrame((now) => {
+          onTrackingCallbackFired(myCallbackId, 'animation_frame', now, null);
+        });
+      }
+      animationFrameId = trackingCallbackHandle;
+      return true;
     }
 
     function startTrackingLoop() {
@@ -2644,6 +2815,16 @@
       trackingCanvas.width = width;
       trackingCanvas.height = height;
       trackingEpoch++;
+      // Task D: a fresh tracking epoch (bootstrap or accepted re-detection) is the natural
+      // "clean start" point to try the preferred rVFC path again — no permanent fallback
+      // lock. No separate cooldown timer is introduced; every fresh epoch is itself a
+      // good-faith retry opportunity.
+      if (rvfcHealthState !== 'RVFC_ACTIVE') {
+        scannerDiagnostics.push('rvfc_health_reset_for_new_epoch', { from: rvfcHealthState, epoch: trackingEpoch });
+        rvfcHealthState = 'RVFC_ACTIVE';
+        rvfcRearmAttempted = false;
+        lastRafFallbackCurrentTime = null;
+      }
       return trackingEpoch;
     }
 
@@ -2894,7 +3075,7 @@
         stopTrackingLoop();
         return;
       }
-      scheduleTrackingFrame();
+      scheduleTrackingFrame('tick_rearm', metadata && metadata.callbackId != null ? metadata.callbackId : null);
       if (!cvReady || (!tracking && !trackerBootstrapPending) || cam.readyState < 2) return;
       const frameKey = metadata && metadata.presentedFrames != null
         ? `vf:${metadata.presentedFrames}`
@@ -2940,23 +3121,32 @@
         const epochAtTickStart = trackingEpoch;
 
         if (gapSinceLastTick > TRACKING_GRACE_MS) {
-          const gapIsFromPresentedFrames = presentedFrameGapMs == null || presentedFrameGapMs > TRACKING_GRACE_MS;
+          // Task C: a genuine presented-frame gap requires EVIDENCE from two presented
+          // frames — both the previous and current mediaTime, with a measured delta above
+          // the grace ceiling. Wall-clock time passing with no such evidence (mediaTime
+          // missing on either side, e.g. a RAF-fallback tick with no prior sample, or a
+          // callback that simply never arrived) must NOT be treated as a confirmed gap —
+          // that case is either the independent stall-detection timer's job (callback truly
+          // never fired) or ambiguous and safest to resolve via reacquisition, not a hard
+          // drop with no evidence behind it.
+          const hasPresentedFrameEvidence = presentedFrameGapMs != null;
+          const genuinePresentedGap = hasPresentedFrameEvidence && presentedFrameGapMs > TRACKING_GRACE_MS;
           const workloadActive = diagState.encodeInFlight || diagState.fetchInFlight || diagState.capturePhase !== 'idle';
-          if (!gapIsFromPresentedFrames || document.hidden || workloadActive) {
+          if (!genuinePresentedGap || document.hidden || workloadActive) {
             setScannerWorkMode('RECOVERING', 'tracking_gap_suspended');
             clearTrackingGeometry('tracking_gap_suspended', { holdPose: true });
             startDetectLoop();
             scannerDiagnostics.push('tracking_gap_suspended', trackingWorkloadSnapshot({
               gapMs: Math.round(gapSinceLastTick),
               presentedFrameGapMs: presentedFrameGapMs != null ? Math.round(presentedFrameGapMs) : null,
-              reason: document.hidden ? 'page_hidden' : (workloadActive ? 'capture_workload_active' : 'scheduler_delay_without_new_presented_frame')
+              reason: document.hidden ? 'page_hidden' : (workloadActive ? 'capture_workload_active' : (hasPresentedFrameEvidence ? 'scheduler_delay_without_new_presented_frame' : 'no_presented_frame_evidence'))
             }));
             return;
           }
           dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({
             frameGapMs: gapSinceLastTick,
             gapMs: Math.round(gapSinceLastTick),
-            presentedFrameGapMs: presentedFrameGapMs != null ? Math.round(presentedFrameGapMs) : null
+            presentedFrameGapMs: Math.round(presentedFrameGapMs)
           }));
           return;
         }
