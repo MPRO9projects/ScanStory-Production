@@ -2067,7 +2067,9 @@ def test_marker_loss_reasons_are_all_genuine_local_tracking_failures():
         "'tracking_geometry_invalid'",
     ):
         assert f"dropTracking({reason}" in track_body
-    assert "dropTracking('pose_rejected_' + localPoseQuality.reason" in track_body
+    # Pass 11: pose_rejected_* now folds in weak_geometry_support alongside
+    # poseCompatibility's own reasons — shapeReason is the fused variable name.
+    assert "dropTracking('pose_rejected_' + shapeReason" in track_body
     # none of these are network/session/watchdog-caused
     for forbidden in ("network_timeout", "capture_timeout", "session_ending", "watchdog"):
         assert forbidden not in track_body
@@ -2257,7 +2259,8 @@ def test_fresh_live_bootstrap_initializes_prevgray_and_points_from_same_frame():
     prev_pts_at = body.index("prevPts = features.clone();")
     ready_at = body.index("scannerDiagnostics.push('tracking_bootstrap_ready'")
     assert reset_at < gray_at < features_at < prev_gray_at < prev_pts_at < ready_at
-    assert "mask = maskFromQuad(currCorners);" in body
+    # Pass 12: mask/goodFeaturesToTrack run in track-space now (gray is track-space sized).
+    assert "mask = maskFromQuad(currCornersTrack);" in body
     assert "source: 'fresh_live_presented_frame'" in body
     assert "coverage < 0.25" in body
 
@@ -2633,8 +2636,11 @@ def test_tracking_canvas_dimensions_only_assigned_inside_reset_epoch():
     reset_start = html.index("function resetTrackingEpoch(width, height)")
     reset_end = html.index("function cornersToMat(corners)")
     reset_body = html[reset_start:reset_end]
-    assert "trackingCanvas.width = width;" in reset_body
-    assert "trackingCanvas.height = height;" in reset_body
+    # Pass 12: the canvas is sized to the derived TRACK-space dimensions, not the raw
+    # intrinsic width/height passed in — still assigned only here, still tied to the same
+    # reset.
+    assert "trackingCanvas.width = trackWidth;" in reset_body
+    assert "trackingCanvas.height = trackHeight;" in reset_body
 
 
 def test_reset_tracking_epoch_deletes_prev_mats_before_resizing():
@@ -2647,7 +2653,7 @@ def test_reset_tracking_epoch_deletes_prev_mats_before_resizing():
     body = html[reset_start:reset_end]
     delete_gray_at = body.index("prevGray.delete(); prevGray = null;")
     delete_pts_at = body.index("prevPts.delete(); prevPts = null;")
-    resize_at = body.index("trackingCanvas.width = width;")
+    resize_at = body.index("trackingCanvas.width = trackWidth;")
     epoch_at = body.index("trackingEpoch++;")
     assert delete_gray_at < resize_at
     assert delete_pts_at < resize_at
@@ -2661,7 +2667,9 @@ def test_dimension_and_epoch_mismatch_checked_before_optical_flow_call():
     body = _track_frame_body()
     guard_at = body.index("if (!prevGray || !prevPts || prevGrayEpoch !== trackingEpoch ||")
     assert "prevGray.rows !== gray.rows || prevGray.cols !== gray.cols) {" in body[guard_at:guard_at + 200]
-    assert "dropTracking('tracking_frame_dimension_mismatch', [gray], { gray, frameGapMs: gapSinceLastTick });" in body[guard_at:guard_at + 300]
+    # Pass 11: reportGapOutcome(...) now runs just before dropTracking here too — widened
+    # window accordingly (was 300, now comfortably covers both calls).
+    assert "dropTracking('tracking_frame_dimension_mismatch', [gray], { gray, frameGapMs: gapSinceLastTick });" in body[guard_at:guard_at + 400]
     lk_at = body.index("cv.calcOpticalFlowPyrLK(")
     assert guard_at < lk_at
 
@@ -2741,28 +2749,30 @@ def test_pose_hold_keeps_video_playing_only_stop_overlay_pauses_it():
 # ---------------------------------------------------------------------------
 
 def test_frame_gap_policy_uses_presented_video_frame_time_before_optical_flow():
-    """Stream B item 10 / Pass 5 Task C / Pass 8 Task A/D: the gap-check requires a valid
-    successful-LK baseline (hasValidLkBaseline — same epoch AND continuity token as the
-    last successful LK) before it can even consider a drop, and additionally requires
-    two-sided presented-frame evidence (hasPresentedFrameEvidence + genuinePresentedGap)
-    from that baseline — missing evidence routes to the soft-suspend/reacquire path
-    instead, never a bare wall-clock drop, and everything happens BEFORE a new gray frame
-    is even captured or LK is called."""
+    """Stream B item 10 / Pass 5 Task C / Pass 8 Task A/D / Pass 11 Task A (Blocker 1 fix):
+    the gap-check still requires a valid successful-LK baseline (hasValidLkBaseline — same
+    epoch AND continuity token as the last successful LK) before it does anything at all,
+    and everything happens BEFORE a new gray frame is even captured or LK is called — but
+    a large gap is no longer, by itself, ever a drop reason here. document.hidden is the
+    ONLY thing that still bypasses the current-frame pipeline at this point; any other
+    large gap is merely recorded as suspected (gapWasSuspected = true) and falls through
+    unconditionally into gray conversion + LK."""
     body = _track_frame_body()
     baseline_check_at = body.index("const hasValidLkBaseline = hasSuccessfulLkBaseline &&")
     gap_check_at = body.index("if (hasValidLkBaseline && (now - lastSuccessfulLkWallTime) > TRACKING_GRACE_MS) {")
-    evidence_at = body.index("const hasPresentedFrameEvidence = presentedFrameGapMs != null;", gap_check_at)
-    genuine_at = body.index("const genuinePresentedGap = hasPresentedFrameEvidence && presentedFrameGapMs > TRACKING_GRACE_MS;", gap_check_at)
-    workload_at = body.index("const workloadActive = diagState.encodeInFlight || diagState.fetchInFlight || diagState.capturePhase !== 'idle';", gap_check_at)
+    hidden_at = body.index("if (document.hidden) {", gap_check_at)
     suspend_at = body.index("clearTrackingGeometry('tracking_gap_suspended', { holdPose: true });", gap_check_at)
-    drop_at = body.index("dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({", gap_check_at)
+    suspected_at = body.index("gapWasSuspected = true;", gap_check_at)
+    suspected_log_at = body.index("logCallbackEvent('[TRACK GAP SUSPECTED]',", gap_check_at)
     gray_at = body.index("gray = matFromVideoGray();")
     lk_at = body.index("cv.calcOpticalFlowPyrLK(")
-    assert baseline_check_at < gap_check_at < evidence_at < genuine_at < workload_at < suspend_at < drop_at < gray_at < lk_at
-    assert "if (!genuinePresentedGap || document.hidden || workloadActive) {" in body[gap_check_at:suspend_at]
-    assert "presentedFrameGapMs: Math.round(presentedFrameGapMs)" in body[drop_at:gray_at]
-    assert "no_presented_frame_evidence" in body[gap_check_at:drop_at]
-    assert "scheduler_delay_without_new_presented_frame" in body[gap_check_at:drop_at]
+    assert baseline_check_at < gap_check_at < hidden_at < suspend_at < suspected_at < suspected_log_at < gray_at < lk_at
+    # The old hard drop reason must be entirely gone from this file (Blocker 1 invariant:
+    # tracking_frame_gap_exceeded can never fire with gray/goodPoints unavailable, because
+    # it can no longer fire from this pre-LK location at all).
+    assert "dropTracking('tracking_frame_gap_exceeded'" not in body
+    assert "genuinePresentedGap" not in body
+    assert "workloadActive" not in body
 
 
 def test_epoch_supersede_guard_prevents_stale_epoch_callback_from_mutating_state():
@@ -2773,7 +2783,9 @@ def test_epoch_supersede_guard_prevents_stale_epoch_callback_from_mutating_state
     body = _track_frame_body()
     capture_at = body.index("const epochAtTickStart = trackingEpoch;")
     check_at = body.index("if (trackingEpoch !== epochAtTickStart) {")
-    commit_at = body.index("currCorners = newCorners;\n        if (!applyWarp(currCorners)) {")
+    # Pass 12: the accept-only commit is now currCornersTrack (track-space) followed by
+    # the one-time conversion to currCorners (intrinsic) that applyWarp reads.
+    commit_at = body.index("currCornersTrack = newCorners;\n        currCorners = toIntrinsicSpace(newCorners);\n        if (!applyWarp(currCorners)) {")
     assert capture_at < check_at < commit_at
 
 
@@ -2828,7 +2840,10 @@ def test_server_reacquisition_starts_exactly_one_fresh_epoch():
     assert "tracking_bootstrap_armed" in body
     assert "startTrackingLoop();" in body
     init_start = html.index("function initializeFreshLiveTracker(now, metadata)")
-    init_body = html[init_start:html.index("function dropTracking(reason, extraMats", init_start)]
+    # Pass 14: bounded to initializeFreshLiveTracker's own body specifically — the next
+    # function (attemptInEpochTierReconfig) legitimately calls resetTrackingEpoch too, but
+    # that is a DIFFERENT call site, not a second call within bootstrap itself.
+    init_body = html[init_start:html.index("function attemptInEpochTierReconfig(oldTier, newTier)", init_start)]
     assert init_body.count("resetTrackingEpoch(frameW, frameH)") == 1
     reset_at = init_body.index("resetTrackingEpoch(frameW, frameH);")
     prev_gray_at = init_body.index("prevGray = gray;")
@@ -2843,7 +2858,8 @@ def test_corner_order_and_invalid_geometry_rejection_unchanged():
     not weakened or bypassed by the tracking-canvas/epoch changes."""
     html = _scanner_html()
     track_body = _track_frame_body()
-    assert "normalizeCornerOrder(newCornersRaw, currCorners)" in track_body
+    # Pass 12: normalizeCornerOrder runs in track-space now (currCornersTrack).
+    assert "normalizeCornerOrder(newCornersRaw, currCornersTrack)" in track_body
     for reason in ("'homography_empty'", "'corner_order_invalid'", "'out_of_bounds'"):
         assert f"dropTracking({reason}" in track_body
 
@@ -2884,7 +2900,7 @@ def test_applywarp_and_render_path_use_frameW_frameH_not_cap_dimensions():
     over-broad."""
     html = _scanner_html()
     warp_start = html.index("function applyWarp(cornersFrame, context = {})")
-    warp_end = html.index("function poseCompatibility(nextCorners)")
+    warp_end = html.index("function poseCompatibility(nextCorners, previousCorners, frameMinDim)")
     warp_body = html[warp_start:warp_end]
     assert "isOverlayFrameQuadRenderable(cornersFrame, frameW, frameH)" in warp_body
     assert "cap.width" not in warp_body
@@ -3023,16 +3039,20 @@ def test_callback_absence_becomes_stalled_not_frame_gap_exceeded():
     assert "dropTracking(" not in recovery_body
 
 
-def test_genuine_presented_frame_delta_can_still_produce_frame_gap_exceeded():
-    """Task G item 7: genuinePresentedGap requires BOTH hasPresentedFrameEvidence (mediaTime
-    present on both sides) AND presentedFrameGapMs exceeding the grace ceiling — when both
-    hold, the hard dropTracking('tracking_frame_gap_exceeded', ...) path is still reachable
-    and unchanged from before Task C's evidence requirement was added."""
+def test_genuine_presented_frame_delta_is_only_ever_suspected_not_dropped():
+    """Pass 11 Task A (Blocker 1 fix, supersedes the old Task G item 7 test): a genuine
+    presented-frame delta over the grace ceiling no longer produces a hard
+    dropTracking('tracking_frame_gap_exceeded', ...) at this pre-LK location at all — real-
+    device evidence showed this firing with goodPoints=-/gray=- (the current frame never
+    tested). It is recorded (gapWasSuspected, suspectedMediaTimeGapMs/suspectedWallTimeGapMs,
+    [TRACK GAP SUSPECTED]) and the tick falls through to gray conversion + LK; the real
+    outcome is decided from current-frame evidence at whichever exit point is reached."""
     track_body = _track_frame_body()
-    assert "const genuinePresentedGap = hasPresentedFrameEvidence && presentedFrameGapMs > TRACKING_GRACE_MS;" in track_body
-    guard_at = track_body.index("if (!genuinePresentedGap || document.hidden || workloadActive) {")
-    drop_at = track_body.index("dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({")
-    assert guard_at < drop_at  # the drop is only reached when the suspend-branch's `if` is false
+    gap_check_at = track_body.index("if (hasValidLkBaseline && (now - lastSuccessfulLkWallTime) > TRACKING_GRACE_MS) {")
+    suspected_at = track_body.index("gapWasSuspected = true;", gap_check_at)
+    gray_at = track_body.index("gray = matFromVideoGray();")
+    assert gap_check_at < suspected_at < gray_at
+    assert "dropTracking('tracking_frame_gap_exceeded'" not in track_body
 
 
 def test_exactly_one_rvfc_rearm_is_attempted_before_falling_back():
@@ -3112,7 +3132,8 @@ def test_all_new_tracking_loss_reasons_still_funnel_through_one_reacquisition_pa
     assert "scheduleNextScan('tracking_lost_reacquire', 0);" in drop_body
     assert "setTimeout(" not in drop_body
     for reason_call in (
-        "dropTracking('tracking_frame_gap_exceeded'",
+        # Pass 11: tracking_frame_gap_exceeded is no longer a dropTracking() caller at all
+        # (Blocker 1 fix) — a large gap is only ever SUSPECTED, never itself a drop reason.
         "dropTracking('tracking_frame_dimension_mismatch'",
         "dropTracking('tracking_exception'",
         "dropTracking('tracking_epoch_superseded'",
@@ -3278,17 +3299,15 @@ def test_callback_diagnostics_are_emitted_through_the_always_on_console_logger()
     assert "logCallbackEvent('[TRACK CALLBACK OWNERSHIP ERROR]'" in track_body
 
 
-def test_frame_gap_exceeded_still_requires_two_sided_evidence_after_correction():
-    """Correction Task A: re-confirms, after this correction pass's refactor, that the
-    ONLY remaining dropTracking('tracking_frame_gap_exceeded', ...) call site is still
-    gated on genuinePresentedGap (both-sided mediaTime evidence + delta over threshold) —
-    the correction did not add any additional, less-evidenced caller of this reason."""
+def test_frame_gap_exceeded_reason_no_longer_has_a_dropTracking_caller():
+    """Pass 11 Task A (supersedes the correction-pass test of the same evidence question):
+    tracking_frame_gap_exceeded is no longer a reachable dropTracking() reason anywhere in
+    the file at all — the real-device Blocker 1 evidence (goodPoints=-/gray=- drops) proved
+    that even the "two-sided evidence" gate this reason used to require still fired before
+    the current frame was ever tested. A large gap is now only ever suspected and left to
+    the ordinary, evidence-producing LK/geometry gates below to decide the real outcome."""
     html = _scanner_html()
-    assert html.count("dropTracking('tracking_frame_gap_exceeded'") == 1
-    track_body = _track_frame_body()
-    drop_at = track_body.index("dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({")
-    guard_at = track_body.index("if (!genuinePresentedGap || document.hidden || workloadActive) {")
-    assert guard_at < drop_at
+    assert html.count("dropTracking('tracking_frame_gap_exceeded'") == 0
 
 
 # ---------------------------------------------------------------------------
@@ -3794,10 +3813,14 @@ def test_first_successful_lk_establishes_baseline():
     """Task G item 2: establishFrameGapBaseline() is called exactly once in the whole file,
     at the point in trackFrame immediately after LK + geometry validation + applyWarp have
     ALL succeeded (right after lastSuccessfulLkAt is stamped) — never at callback entry,
-    bootstrap, or rearm."""
+    bootstrap, or rearm. Pass 11: the reason argument grew a third case (gap_recovered),
+    so the call now spans two lines — matched here by its stable prefix instead of the
+    old single-line literal."""
     html = _scanner_html()
-    assert html.count("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending ? 'first_post_reseed_lk' : 'successful_lk');") == 1  # the one real call site
-    call_at = html.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending ? 'first_post_reseed_lk' : 'successful_lk');")
+    call_prefix = "establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending"
+    assert html.count(call_prefix) == 1  # the one real call site
+    call_at = html.index(call_prefix)
+    assert "? 'first_post_reseed_lk' : (gapWasSuspected ? 'gap_recovered' : 'successful_lk'));" in html[call_at:call_at + 200]
     stamp_at = html.index("lastSuccessfulLkAt = performance.now();")
     playoverlay_at = html.rindex("playOverlay();", 0, call_at)
     assert playoverlay_at < stamp_at < call_at
@@ -3907,15 +3930,17 @@ def test_callback_entered_prints_captured_and_current_epoch_separately():
     assert "id: callbackId, callbackEpoch, currentEpoch: trackingEpoch," in call_text
 
 
-def test_genuine_two_frame_media_gap_can_still_drop_tracking():
-    """Task G item 17: with a valid baseline (same epoch, same continuity token) and a
-    real measured media-time delta above the grace ceiling, the hard
-    dropTracking('tracking_frame_gap_exceeded', ...) path is still reachable — Pass 8 only
-    narrowed WHEN the check applies, it did not remove genuine-gap detection entirely."""
+def test_genuine_two_frame_media_gap_is_suspected_and_falls_through_to_lk():
+    """Pass 11 Task A (supersedes the old Task G item 17 test): with a valid baseline (same
+    epoch, same continuity token) and a real measured media-time delta above the grace
+    ceiling, the tick no longer drops here at all — it records the suspicion and falls
+    through to gray conversion + LK, same as any other tick. Only document.hidden still
+    bypasses this pipeline at this point."""
     track_body = _track_frame_body()
-    guard_at = track_body.index("if (!genuinePresentedGap || document.hidden || workloadActive) {")
-    drop_at = track_body.index("dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({")
-    assert guard_at < drop_at
+    gap_check_at = track_body.index("if (hasValidLkBaseline && (now - lastSuccessfulLkWallTime) > TRACKING_GRACE_MS) {")
+    suspected_at = track_body.index("gapWasSuspected = true;", gap_check_at)
+    gray_at = track_body.index("gray = matFromVideoGray();")
+    assert gap_check_at < suspected_at < gray_at
 
 
 def test_pass8_new_functions_never_touch_video_source_or_currenttime_or_loop():
@@ -3974,7 +3999,7 @@ def test_healthy_full_point_population_does_not_reseed():
     needs_at = track_body.index(
         "const needsReseed = (prunedNext.length / 2) < reseedThreshold || survivingGridCells < RESEED_MIN_GRID_CELLS;"
     )
-    call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells);")
+    call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCornersTrack, prunedNext, survivingCoverage, survivingGridCells);")
     guard_at = track_body.index("if (needsReseed && !reseedInProgress &&")
     assert threshold_at < needs_at < guard_at < call_at
 
@@ -3986,7 +4011,7 @@ def test_low_point_population_with_valid_geometry_triggers_one_reseed():
     so a single low-population tick triggers exactly one reseed attempt, not a loop
     within the same tick."""
     track_body = _track_frame_body()
-    assert track_body.count("attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells)") == 1
+    assert track_body.count("attemptFeatureReseed(gray, currCornersTrack, prunedNext, survivingCoverage, survivingGridCells)") == 1
     reseed_body = _attempt_feature_reseed_body()
     assert reseed_body.count("reseedAttemptsForEpoch++;") == 1
 
@@ -3997,7 +4022,7 @@ def test_low_spatial_coverage_may_trigger_reseed_independent_of_raw_count():
     trigger a reseed — point count alone is never sufficient to skip it."""
     track_body = _track_frame_body()
     assert "survivingGridCells < RESEED_MIN_GRID_CELLS" in track_body
-    grid_cells_computed_at = track_body.index("const survivingGridCells = countOccupiedGridCells(prunedNext, currCorners, POINT_GRID_SIZE);")
+    grid_cells_computed_at = track_body.index("const survivingGridCells = countOccupiedGridCells(prunedNext, currCornersTrack, POINT_GRID_SIZE);")
     needs_at = track_body.index("const needsReseed = (prunedNext.length / 2) < reseedThreshold || survivingGridCells < RESEED_MIN_GRID_CELLS;")
     assert grid_cells_computed_at < needs_at
 
@@ -4012,7 +4037,7 @@ def test_reseed_mask_uses_the_current_valid_marker_quad():
     assert "const bounds = pointBounds(quad.flatMap(function (p) { return [p.x, p.y]; }));" in body
     assert "cv.fillConvexPoly(roiMask, quadRoiMat, new cv.Scalar(255));" in body
     track_body = _track_frame_body()
-    assert "attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells)" in track_body
+    assert "attemptFeatureReseed(gray, currCornersTrack, prunedNext, survivingCoverage, survivingGridCells)" in track_body
 
 
 def test_fresh_points_are_restricted_to_marker_roi():
@@ -4042,11 +4067,12 @@ def test_surviving_and_fresh_points_are_spatially_deduplicated():
 
 
 def test_merged_points_are_capped_at_target_capacity():
-    """Task H item 7: the merge loop's own guard, (merged.length / 2) >= MAX_TRACK_POINTS,
+    """Task H item 7: the merge loop's own guard, (merged.length / 2) >= tierMaxPoints,
     breaks out of the loop before any further push — the merged set can never exceed the
-    existing target point capacity, the same cap bootstrap itself uses."""
+    CURRENT TIER's target point capacity (Pass 13), the same cap bootstrap itself uses."""
     body = _attempt_feature_reseed_body()
-    assert "if ((merged.length / 2) >= MAX_TRACK_POINTS) break;" in body
+    assert "const tierMaxPoints = currentMaxTrackPoints();" in body
+    assert "if ((merged.length / 2) >= tierMaxPoints) break;" in body
     assert "merged.push(cx, cy);" in body
 
 
@@ -4074,8 +4100,8 @@ def test_successful_reseed_establishes_a_fresh_lk_baseline():
     evaluated — so a tick that reseeds always already has a freshly-established baseline
     for itself, never a stale one."""
     track_body = _track_frame_body()
-    establish_at = track_body.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending ? 'first_post_reseed_lk' : 'successful_lk');")
-    reseed_call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells);")
+    establish_at = track_body.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending")
+    reseed_call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCornersTrack, prunedNext, survivingCoverage, survivingGridCells);")
     assert establish_at < reseed_call_at
 
 
@@ -4134,7 +4160,7 @@ def test_invalid_geometry_or_quad_never_permits_reseeding():
     — Task D is satisfied by this placement: an invalid-geometry tick returns long before
     ever reaching the reseed code."""
     track_body = _track_frame_body()
-    reseed_call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells);")
+    reseed_call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCornersTrack, prunedNext, survivingCoverage, survivingGridCells);")
     for rejecting_reason in (
         "dropTracking('homography_empty'",
         "dropTracking('corner_order_invalid'",
@@ -4150,8 +4176,8 @@ def test_background_drifted_points_are_removed_before_reseed_decision():
     currCorners) is computed BEFORE survivingCoverage/survivingGridCells/needsReseed —
     every downstream decision already excludes points that drifted outside the marker."""
     track_body = _track_frame_body()
-    prune_loop_at = track_body.index("if (isPointInQuadPadded(goodNext[i], goodNext[i + 1], currCorners, POINT_RETENTION_PAD)) {")
-    coverage_at = track_body.index("const survivingCoverage = pointCoverage(prunedNext, currCorners);")
+    prune_loop_at = track_body.index("if (isPointInQuadPadded(goodNext[i], goodNext[i + 1], currCornersTrack, POINT_RETENTION_PAD)) {")
+    coverage_at = track_body.index("const survivingCoverage = pointCoverage(prunedNext, currCornersTrack);")
     needs_at = track_body.index("const needsReseed = (prunedNext.length / 2) < reseedThreshold || survivingGridCells < RESEED_MIN_GRID_CELLS;")
     assert prune_loop_at < coverage_at < needs_at
 
@@ -4275,8 +4301,9 @@ def test_first_successful_post_reseed_lk_establishes_baseline_with_distinct_reas
     flag immediately after, so only that ONE tick is labeled this way."""
     track_body = _track_frame_body()
     call_at = track_body.index(
-        "establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending ? 'first_post_reseed_lk' : 'successful_lk');"
+        "establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending"
     )
+    assert "? 'first_post_reseed_lk' : (gapWasSuspected ? 'gap_recovered' : 'successful_lk'));" in track_body[call_at:call_at + 200]
     clear_at = track_body.index("if (firstPostReseedLkPending) firstPostReseedLkPending = false;")
     assert call_at < clear_at
     establish_fn_start = _scanner_html().index("function establishFrameGapBaseline(mediaTime, wallTime, reason)")
@@ -4378,3 +4405,1949 @@ def test_pass10_did_not_change_any_recognition_or_geometry_threshold():
     assert "const RANSAC_REPROJ = 5.0;" in html
     assert "const RESEED_POINT_FRACTION = 0.35;" in html
     assert "const RESEED_MIN_COVERAGE_AFTER_MERGE = 0.25;" in html
+
+
+# ---------------------------------------------------------------------------
+# Pass 11: POST-LK GAP VALIDATION + OVERLAY SHAPE STABILITY.
+#
+# Blocker 1 (Task A/B): the pre-LK frame-gap check no longer drops tracking by itself —
+# it only records a suspicion (gapWasSuspected) and falls through into the real LK/
+# geometry pipeline; the real outcome is reported by reportGapOutcome() at whichever
+# existing exit point the tick actually reaches.
+#
+# Blocker 2 (Task C/D/E/F/G/H): an unstable proposed homography is no longer rendered
+# outright — poseCompatibility's own jump reasons plus a new weak_geometry_support check
+# (RANSAC-inlier population + spatial spread) feed a three-way ACCEPT/HOLD/REJECT
+# decision, with HOLD bounded by dedicated shapeHold* state (never the generic
+# trackingBadFrames/graceEnteredAt pair).
+# ---------------------------------------------------------------------------
+
+def test_i01_large_media_time_gap_is_recorded_as_suspected_not_dropped_pre_lk():
+    """Task I item 1: a large gap since the last successful LK sets gapWasSuspected = true
+    and logs [TRACK GAP SUSPECTED] — it never calls dropTracking from within the gap-check
+    block itself."""
+    track_body = _track_frame_body()
+    gap_check_at = track_body.index("if (hasValidLkBaseline && (now - lastSuccessfulLkWallTime) > TRACKING_GRACE_MS) {")
+    hidden_at = track_body.index("if (document.hidden) {", gap_check_at)
+    suspected_at = track_body.index("gapWasSuspected = true;", gap_check_at)
+    gray_at = track_body.index("gray = matFromVideoGray();")
+    assert gap_check_at < hidden_at < suspected_at < gray_at
+    assert "dropTracking(" not in track_body[gap_check_at:suspected_at]
+
+
+def test_i02_gray_conversion_still_occurs_after_a_suspected_gap():
+    """Task I item 2: gray = matFromVideoGray() runs unconditionally after the suspicion
+    is recorded — the suspected-gap branch never returns before it."""
+    track_body = _track_frame_body()
+    suspected_at = track_body.index("gapWasSuspected = true;")
+    gray_at = track_body.index("gray = matFromVideoGray();")
+    assert suspected_at < gray_at
+
+
+def test_i03_lk_still_runs_after_a_suspected_gap():
+    """Task I item 3: calcOpticalFlowPyrLK runs unconditionally after a suspected gap —
+    no return between the suspicion being recorded and LK actually executing."""
+    track_body = _track_frame_body()
+    suspected_at = track_body.index("gapWasSuspected = true;")
+    lk_at = track_body.index("cv.calcOpticalFlowPyrLK(")
+    assert suspected_at < lk_at
+
+
+def test_i04_valid_current_lk_recovers_a_suspected_gap():
+    """Task I item 4: on the true ACCEPT point (LK + geometry + applyWarp all succeeded),
+    reportGapOutcome(null, ...) is called — which is exactly the call that logs
+    [TRACK GAP RECOVERED] when gapWasSuspected is true."""
+    track_body = _track_frame_body()
+    apply_warp_at = track_body.index("if (!applyWarp(currCorners)) {")
+    recovered_at = track_body.index("reportGapOutcome(null, goodPrev.length / 2, geometryInlierCount);")
+    establish_at = track_body.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending")
+    assert apply_warp_at < recovered_at < establish_at
+    report_fn_at = track_body.index("function reportGapOutcome(failureReason, goodPointCount, geometryGoodCount) {")
+    report_fn_body = track_body[report_fn_at:track_body.index("try {", report_fn_at)]
+    assert "diagState.frameGapRecoveredByCurrentFrame++;" in report_fn_body
+    assert "logCallbackEvent('[TRACK GAP RECOVERED]'," in report_fn_body
+
+
+def test_i05_recovered_gap_does_not_call_backend():
+    """Task I item 5: trackFrame never calls detectOnceFromServer — a recovered gap is
+    resolved entirely from local LK/geometry evidence, no network request involved."""
+    track_body = _track_frame_body()
+    assert "detectOnceFromServer(" not in track_body
+
+
+def test_i06_recovered_gap_resets_or_refreshes_baseline_safely():
+    """Task I item 6: establishFrameGapBaseline() (which refreshes lastSuccessfulLkWallTime/
+    MediaTime) runs right after reportGapOutcome(null, ...) reports the recovery — the very
+    next tick is compared against this fresh timestamp, never the stale pre-gap one. The
+    reason argument distinguishes a recovered-gap baseline (gap_recovered) from an ordinary
+    one (successful_lk)."""
+    track_body = _track_frame_body()
+    recovered_at = track_body.index("reportGapOutcome(null, goodPrev.length / 2, geometryInlierCount);")
+    establish_at = track_body.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending", recovered_at)
+    assert recovered_at < establish_at
+    assert "? 'first_post_reseed_lk' : (gapWasSuspected ? 'gap_recovered' : 'successful_lk'));" in track_body[establish_at:establish_at + 200]
+
+
+def test_i07_invalid_current_lk_drops_with_insufficient_flow_points():
+    """Task I item 7: when the current frame's own LK yields too few points, the tick still
+    drops with the real evidence-based reason (insufficient_flow_points), reported via
+    reportGapOutcome before dropTracking — never a frame-gap reason."""
+    track_body = _track_frame_body()
+    report_at = track_body.index("reportGapOutcome('insufficient_flow_points', goodPrev.length / 2, null);")
+    drop_at = track_body.index("dropTracking('insufficient_flow_points', [gray, nextPts, status, err], {", report_at)
+    assert report_at < drop_at
+
+
+def test_i08_invalid_geometry_drops_with_its_real_geometry_reason():
+    """Task I item 8: a proposed shape that fails corner ordering drops with
+    corner_order_invalid (its real, evidence-based reason) — reportGapOutcome is called
+    with that exact reason, never a generic frame-gap one."""
+    track_body = _track_frame_body()
+    report_at = track_body.index("reportGapOutcome('corner_order_invalid', goodPrev.length / 2, geometryInlierCount);")
+    drop_at = track_body.index("dropTracking('corner_order_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {", report_at)
+    assert report_at < drop_at
+
+
+def test_i09_tracking_frame_gap_exceeded_cannot_occur_with_gray_missing():
+    """Task I item 9: tracking_frame_gap_exceeded is no longer a dropTracking() reason
+    anywhere in the file — it structurally cannot fire before gray is populated (or at
+    all), since the call site was removed entirely in favor of suspect-then-fall-through."""
+    html = _scanner_html()
+    assert html.count("dropTracking('tracking_frame_gap_exceeded'") == 0
+
+
+def test_i10_tracking_frame_gap_exceeded_cannot_occur_with_good_points_missing():
+    """Task I item 10: same invariant as item 9, from the goodPoints angle — since the
+    reason has no dropTracking() caller left at all, it cannot fire with goodPoints
+    unpopulated (or in any other state)."""
+    html = _scanner_html()
+    assert html.count("dropTracking('tracking_frame_gap_exceeded'") == 0
+    assert "genuinePresentedGap" not in html
+    assert "workloadActive" not in html
+
+
+def test_i11_preLkFrameGapDrops_remains_zero():
+    """Task I item 11: preLkFrameGapDrops is declared (init + Reset Diagnostics) but never
+    incremented anywhere in the file — it is a pure regression tripwire, always reading 0."""
+    html = _scanner_html()
+    assert "preLkFrameGapDrops: 0" in html
+    assert html.count("preLkFrameGapDrops: 0") == 2  # diagState init + Reset Diagnostics handler
+    assert "preLkFrameGapDrops++" not in html
+    assert "diagState.preLkFrameGapDrops++" not in html
+
+
+def test_i12_stable_proposed_shape_is_accepted():
+    """Task I item 12: when shapeReason is falsy (poseCompatibility ok AND geometry support
+    sufficient), the tick resets the hold/reject counters and proceeds to the epoch check
+    and applyWarp — it never enters the hold/reject branch at all."""
+    track_body = _track_frame_body()
+    shape_reason_at = track_body.index("const shapeReason = !localPoseQuality.ok ? localPoseQuality.reason : (weakGeometrySupport ? 'weak_geometry_support' : null);")
+    reset_at = track_body.index("shapeHoldFrames = 0;\n        consecutiveShapeRejects = 0;", shape_reason_at)
+    apply_warp_at = track_body.index("currCornersTrack = newCorners;\n        currCorners = toIntrinsicSpace(newCorners);\n        if (!applyWarp(currCorners)) {")
+    assert shape_reason_at < reset_at < apply_warp_at
+
+
+def test_i13_one_suspicious_shape_may_hold_previous_quad():
+    """Task I item 13: a suspicious (but not immediately-rejectable) shape enters the HOLD
+    branch, which returns WITHOUT ever reaching `currCorners = newCorners` — the previously
+    rendered quad keeps being what's on screen."""
+    track_body = _track_frame_body()
+    hold_at = track_body.index("if (decision === 'hold') {")
+    hold_return_region = track_body[hold_at:track_body.index("return;", hold_at) + len("return;")]
+    assert "deleteMats(gray, nextPts, status, err, prevMat, nextMat, mask, H);" in hold_return_region
+    apply_warp_at = track_body.index("currCornersTrack = newCorners;\n        currCorners = toIntrinsicSpace(newCorners);\n        if (!applyWarp(currCorners)) {")
+    assert hold_at < apply_warp_at  # HOLD's return is textually before the accept-only commit
+
+
+def test_i14_held_shape_keeps_overlay_playback_uninterrupted():
+    """Task I item 14: the HOLD branch never calls stopOverlayImmediate/pause/clearTracking
+    Geometry — it only deletes this tick's Mats and returns, leaving overlay/tracking state
+    exactly as the last accepted tick left it."""
+    track_body = _track_frame_body()
+    hold_at = track_body.index("if (decision === 'hold') {")
+    hold_end_at = track_body.index("return;", hold_at) + len("return;")
+    hold_body = track_body[hold_at:hold_end_at]
+    assert "stopOverlayImmediate(" not in hold_body
+    assert "overlay.pause(" not in hold_body
+    assert "clearTrackingGeometry(" not in hold_body
+
+
+def test_i15_held_shape_does_not_replace_lastAcceptedCorners():
+    """Task I item 15: lastAcceptedCorners is only ever assigned at the true ACCEPT point
+    (right after applyWarp succeeds) — the HOLD branch's return is textually before that
+    assignment, so it can never reach it."""
+    track_body = _track_frame_body()
+    hold_return_at = track_body.index("if (decision === 'hold') {")
+    hold_return_end = track_body.index("return;", hold_return_at)
+    accept_assign_at = track_body.index("lastAcceptedCorners = cloneCorners(currCorners);")
+    assert hold_return_end < accept_assign_at
+    assert track_body.count("lastAcceptedCorners = cloneCorners(currCorners);") == 1
+
+
+def test_i16_held_shape_does_not_reseed_from_suspicious_geometry():
+    """Task I item 16: attemptFeatureReseed is only ever called after the accept-only
+    commit (currCorners = newCorners + applyWarp success) — the HOLD branch's return sits
+    textually before that call, so a held, suspicious proposed quad can never reach it."""
+    track_body = _track_frame_body()
+    hold_return_end = track_body.index("return;", track_body.index("if (decision === 'hold') {"))
+    reseed_call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCornersTrack, prunedNext, survivingCoverage, survivingGridCells);")
+    assert hold_return_end < reseed_call_at
+
+
+def test_i17_second_valid_shape_after_hold_resumes_normal_tracking():
+    """Task I item 17: once a subsequent tick's shapeReason is falsy, shapeHoldFrames/
+    consecutiveShapeRejects reset to 0 and the tick proceeds through the normal epoch-check/
+    applyWarp/reseed path exactly like any other accepted tick — no separate "resuming from
+    hold" code path exists."""
+    track_body = _track_frame_body()
+    reset_at = track_body.index("shapeHoldFrames = 0;\n        consecutiveShapeRejects = 0;")
+    epoch_check_at = track_body.index("if (trackingEpoch !== epochAtTickStart) {", reset_at)
+    assert reset_at < epoch_check_at
+
+
+def test_i18_repeated_suspicious_shapes_exhaust_bounded_hold_and_drop():
+    """Task I item 18: shapeHoldFrames/shapeHoldStartedAt accumulate across consecutive
+    suspicious ticks; once shapeHoldFrames >= SHAPE_HOLD_MAX_FRAMES OR the elapsed time >=
+    SHAPE_HOLD_MAX_MS, holdExpired becomes true, decision becomes 'reject', and the tick
+    finally drops via the normal dropTracking() path — exactly one reacquisition, same as
+    every other drop reason."""
+    track_body = _track_frame_body()
+    assert "if (shapeHoldFrames === 0) shapeHoldStartedAt = performance.now();" in track_body
+    assert "shapeHoldFrames++;" in track_body
+    assert "holdExpired = shapeHoldFrames >= SHAPE_HOLD_MAX_FRAMES || (performance.now() - shapeHoldStartedAt) >= SHAPE_HOLD_MAX_MS;" in track_body
+    reject_report_at = track_body.index("reportGapOutcome('pose_rejected_' + shapeReason, errorGoodCount, geometryInlierCount);")
+    reject_drop_at = track_body.index("dropTracking('pose_rejected_' + shapeReason, [gray, nextPts, status, err, prevMat, nextMat, mask, H], {", reject_report_at)
+    assert reject_report_at < reject_drop_at
+
+
+def test_i19_crossed_corners_reject_immediately():
+    """Task I item 19: a self-intersecting proposed quad is rejected by validateOverlayQuad
+    (self_intersecting_quad) inside normalizeCornerOrder — normalizeCornerOrder returns null,
+    and the EXISTING corner_order_invalid dropTracking() fires BEFORE the shape-continuity
+    HOLD logic is even reached, so it can never be held."""
+    track_body = _track_frame_body()
+    assert "if (edges.some(edge => edge < 1)) return { ok: false, reason: 'zero_edge', edges };" in _scanner_html()
+    corner_order_drop_at = track_body.index("dropTracking('corner_order_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {")
+    shape_reason_at = track_body.index("const shapeReason = !localPoseQuality.ok ? localPoseQuality.reason : (weakGeometrySupport ? 'weak_geometry_support' : null);")
+    assert corner_order_drop_at < shape_reason_at
+
+
+def test_i20_non_convex_quad_rejects_immediately():
+    """Task I item 20: validateOverlayQuad's diagonals_do_not_cross_inside check (the
+    codebase's existing convexity proxy for a simple quad) rejects a non-convex proposal
+    inside normalizeCornerOrder, before the shape-continuity HOLD logic is reached — same
+    structural guarantee as crossed corners."""
+    html = _scanner_html()
+    assert "if (!diagonalsCross) return { ok: false, reason: 'diagonals_do_not_cross_inside'" in html
+    track_body = _track_frame_body()
+    corner_order_drop_at = track_body.index("dropTracking('corner_order_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {")
+    shape_reason_at = track_body.index("const shapeReason =")
+    assert corner_order_drop_at < shape_reason_at
+
+
+def test_i21_non_finite_corners_reject_immediately():
+    """Task I item 21: cloneCorners() returns null for any non-finite coordinate, which
+    validateOverlayQuad turns into reason 'non_finite_or_not_four', which normalizeCornerOrder
+    propagates as null — same corner_order_invalid immediate-reject path, before HOLD."""
+    html = _scanner_html()
+    assert "if (!clean) return { ok: false, reason: 'non_finite_or_not_four' };" in html
+    assert "return copy.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)) ? copy : null;" in html
+
+
+def test_i22_out_of_bounds_remains_an_immediate_rejection():
+    """Task I item 22: the existing out_of_bounds pad-based check is untouched and still
+    sits before the shape-continuity block — an out-of-bounds proposal drops immediately,
+    never entering HOLD."""
+    track_body = _track_frame_body()
+    out_of_bounds_drop_at = track_body.index("dropTracking('out_of_bounds', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {")
+    shape_reason_at = track_body.index("const shapeReason =")
+    assert out_of_bounds_drop_at < shape_reason_at
+    assert "const pad = 0.40;" in track_body
+
+
+def test_i23_impossible_area_collapse_rejects():
+    """Task I item 23: poseCompatibility's area_jump reason (areaRatio < 0.4, an impossible
+    single-frame collapse) is in IMMEDIATE_SHAPE_REJECT_REASONS — it bypasses HOLD entirely,
+    going straight to dropTracking."""
+    html = _scanner_html()
+    assert "if (areaRatio > 2.5 || areaRatio < 0.4) return { ok: false, reason: 'area_jump'" in html
+    track_body = _track_frame_body()
+    assert "const IMMEDIATE_SHAPE_REJECT_REASONS = { area_jump: true, winding_flip: true, self_intersecting_quad: true };" in track_body
+    immediate_at = track_body.index("const IMMEDIATE_SHAPE_REJECT_REASONS = { area_jump: true, winding_flip: true, self_intersecting_quad: true };")
+    is_immediate_at = track_body.index("const isImmediateReject = Boolean(IMMEDIATE_SHAPE_REJECT_REASONS[shapeReason]);")
+    assert immediate_at < is_immediate_at
+
+
+def test_i24_impossible_area_expansion_rejects():
+    """Task I item 24: the same area_jump reason also covers impossible expansion
+    (areaRatio > 2.5) — one reason, one immediate-reject bucket, both directions."""
+    html = _scanner_html()
+    assert "areaRatio > 2.5" in html
+    assert "reason: 'area_jump'" in html
+
+
+def test_i25_excessive_single_corner_jump_is_not_rendered():
+    """Task I item 25: poseCompatibility's corner_jump reason (maxCornerJump > 0.55) is NOT
+    in the immediate-reject bucket — it is holdable — but the HOLD branch's return sits
+    textually before `currCorners = newCorners`, so a large single-corner jump is never
+    applied/rendered while it is being held."""
+    html = _scanner_html()
+    assert "if (maxCornerJump > 0.55) return { ok: false, reason: 'corner_jump'" in html
+    track_body = _track_frame_body()
+    assert "corner_jump" not in track_body[track_body.index("const IMMEDIATE_SHAPE_REJECT_REASONS"):track_body.index("const IMMEDIATE_SHAPE_REJECT_REASONS") + 120]
+    hold_at = track_body.index("if (decision === 'hold') {")
+    apply_warp_at = track_body.index("currCornersTrack = newCorners;\n        currCorners = toIntrinsicSpace(newCorners);\n        if (!applyWarp(currCorners)) {")
+    assert hold_at < apply_warp_at
+
+
+def test_i26_poor_geometry_inlier_ratio_cannot_be_accepted():
+    """Task I item 26: weakGeometrySupport requires geometryInlierCount >= MIN_GOOD_POINTS
+    (reusing the existing hard floor, never a weaker invented threshold) — falling short
+    forces shapeReason = 'weak_geometry_support', which can never fall through to ACCEPT."""
+    track_body = _track_frame_body()
+    assert "const weakGeometrySupport = geometryInlierCount < MIN_GOOD_POINTS || geometryInlierGridCells < RESEED_MIN_GRID_CELLS;" in track_body
+
+
+def test_i27_poor_geometry_spatial_distribution_cannot_be_accepted():
+    """Task I item 27: weakGeometrySupport also requires geometryInlierGridCells (spatial
+    spread of the RANSAC-inlier subset, via the existing countOccupiedGridCells/
+    RESEED_MIN_GRID_CELLS machinery) to clear the bar — a clustered-but-numerous inlier set
+    still cannot be accepted."""
+    track_body = _track_frame_body()
+    assert "const geometryInlierGridCells = currCornersTrack ? countOccupiedGridCells(geometryInlierNext, currCornersTrack, POINT_GRID_SIZE) : 0;" in track_body
+    assert "geometryInlierGridCells < RESEED_MIN_GRID_CELLS" in track_body
+
+
+def test_i28_smoothing_runs_only_after_accept():
+    """Task I item 28: applyWarp (which internally calls smoothPoseCorners) is only ever
+    invoked with currCorners, and currCorners is only ever reassigned AFTER the
+    shape-continuity block's HOLD/REJECT branches have already returned — smoothing can
+    structurally never see an un-accepted proposed shape."""
+    track_body = _track_frame_body()
+    shape_reason_at = track_body.index("const shapeReason =")
+    reject_return_at = track_body.rindex("return;", shape_reason_at, track_body.index("currCornersTrack = newCorners;\n        currCorners = toIntrinsicSpace(newCorners);\n        if (!applyWarp(currCorners)) {"))
+    commit_at = track_body.index("currCornersTrack = newCorners;\n        currCorners = toIntrinsicSpace(newCorners);\n        if (!applyWarp(currCorners)) {")
+    assert shape_reason_at < reject_return_at < commit_at
+
+
+def test_i29_smoothing_state_resets_on_epoch_change():
+    """Task I item 29: the existing accept-branch isSameTarget check (preserved, unchanged)
+    already resets lastOrdered/smoothCorners on a cross-target re-anchor, immediately
+    before the epoch-bumping bootstrap runs — the dedicated shapeHold* state gets its own
+    explicit reset directly inside resetTrackingEpoch() as a belt-and-suspenders measure
+    for the epoch boundary itself."""
+    html = _scanner_html()
+    same_target_at = html.index("const isSameTarget = wasSameTarget && wasTracking;")
+    smoothing_reset_at = html.index("lastOrdered = null;\n          smoothCorners = null;", same_target_at)
+    assert same_target_at < smoothing_reset_at
+    epoch_start = html.index("function resetTrackingEpoch(width, height)")
+    epoch_end = html.index("function cornersToMat(corners)")
+    epoch_body = html[epoch_start:epoch_end]
+    assert "shapeHoldFrames = 0;" in epoch_body
+    assert "lastAcceptedCorners = null;" in epoch_body
+
+
+def test_i30_shape_history_resets_on_reacquisition():
+    """Task I item 30: clearTrackingGeometry() (called by dropTracking, i.e. every
+    reacquisition) resets the dedicated shapeHold*/lastAcceptedCorners state — a fresh
+    tracking session never inherits a stale "last accepted shape" from before the drop."""
+    html = _scanner_html()
+    clear_start = html.index("function clearTrackingGeometry(reason, options = {})")
+    clear_end = html.index("function logCallbackEvent(tag, summaryFields, structuredData)")
+    clear_body = html[clear_start:clear_end]
+    for var_reset in (
+        "shapeHoldFrames = 0;", "shapeHoldStartedAt = 0;", "consecutiveShapeRejects = 0;",
+        "lastAcceptedCorners = null;", "lastAcceptedShapeAt = 0;"
+    ):
+        assert var_reset in clear_body
+
+
+def test_i31_accepted_shape_may_be_used_for_reseed_mask():
+    """Task I item 31: attemptFeatureReseed is called with currCorners — which by this
+    point in the tick has ALREADY been set to the just-accepted newCorners (right after
+    applyWarp succeeded) — so a reseed mask always comes from an accepted quad."""
+    track_body = _track_frame_body()
+    commit_at = track_body.index("currCornersTrack = newCorners;\n        currCorners = toIntrinsicSpace(newCorners);\n        if (!applyWarp(currCorners)) {")
+    reseed_call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCornersTrack, prunedNext, survivingCoverage, survivingGridCells);")
+    assert commit_at < reseed_call_at
+
+
+def test_i32_held_or_rejected_proposed_shape_cannot_be_used_for_reseed_mask():
+    """Task I item 32: both the HOLD and REJECT branches return before
+    `currCorners = newCorners` is ever reached — attemptFeatureReseed (which is only ever
+    called much later, using currCorners) is structurally unreachable from either branch."""
+    track_body = _track_frame_body()
+    shape_reason_at = track_body.index("const shapeReason =")
+    shape_block_end = track_body.index("// Accepted shape: reset the dedicated hold/reject state.")
+    shape_block = track_body[shape_reason_at:shape_block_end]
+    assert "attemptFeatureReseed(" not in shape_block
+    assert "currCornersTrack = newCorners;" not in shape_block
+
+
+def test_i33_pass10_post_reseed_baseline_still_works():
+    """Task I item 33: firstPostReseedLkPending still takes priority over gap_recovered/
+    successful_lk in establishFrameGapBaseline's reason argument, and is still cleared
+    immediately after — Pass 10's reseed-boundary labeling is unchanged by Pass 11."""
+    track_body = _track_frame_body()
+    establish_at = track_body.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending")
+    assert "? 'first_post_reseed_lk' : (gapWasSuspected ? 'gap_recovered' : 'successful_lk'));" in track_body[establish_at:establish_at + 200]
+    clear_at = track_body.index("if (firstPostReseedLkPending) firstPostReseedLkPending = false;")
+    assert establish_at < clear_at
+
+
+def test_i34_pass10_recovery_ownership_remains_single_owner():
+    """Task I item 34: dropTracking still logs [RECOVERY SCAN OWNER] and calls
+    scheduleNextScan('tracking_lost_reacquire', 0) exactly once per drop — Pass 11 added
+    new dropTracking() callers (pose_rejected_weak_geometry_support etc.) but they all
+    funnel through this same single function, so single-owner recovery is unaffected."""
+    html = _scanner_html()
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_end = html.index("function handleDetectionTimeout()", drop_start)
+    drop_body = html[drop_start:drop_end]
+    assert drop_body.count("scheduleNextScan('tracking_lost_reacquire', 0);") == 1
+    assert "owner: 'tracking_lost_reacquire', timerPending: true," in drop_body
+
+
+def test_i35_pass9_feature_reseeding_remains_functional():
+    """Task I item 35: attemptFeatureReseed's own signature, ROI-crop, spatial-dedup-grid,
+    and bounded-attempt guards are untouched by Pass 11 — only its callers' upstream
+    shape-continuity gating changed, never the reseed function itself."""
+    body = _attempt_feature_reseed_body()
+    assert "function createSpatialDedupGrid(cellSize)" not in body  # defined earlier, just used here
+    assert "reseedInProgress = true;" in body or "reseedInProgress" in body
+    assert "MAX_RESEED_ATTEMPTS_PER_EPOCH" in _track_frame_body()
+
+
+def test_i36_pass8_successful_lk_baseline_remains_functional():
+    """Task I item 36: hasValidLkBaseline's own definition (epoch + continuity token match)
+    is untouched by Pass 11 — only what happens once a large gap is detected changed, not
+    how a valid baseline is recognized in the first place."""
+    track_body = _track_frame_body()
+    assert (
+        "const hasValidLkBaseline = hasSuccessfulLkBaseline &&\n"
+        "          successfulLkEpoch === trackingEpoch &&\n"
+        "          successfulLkContinuityToken === frameGapContinuityToken;"
+    ) in track_body
+
+
+def test_i37_pass7_callback_owner_repair_remains_functional():
+    """Task I item 37: the ownership self-check at the top of trackFrame (tracking must
+    never be true with trackingCallbackId === null) is untouched by Pass 11's changes
+    further down the function."""
+    track_body = _track_frame_body()
+    assert "if (tracking && trackingCallbackId === null) {" in track_body
+    assert "logCallbackEvent('[TRACK CALLBACK OWNERSHIP ERROR]'," in track_body
+
+
+def test_i38_backend_thresholds_unchanged():
+    """Task I item 38: no backend/recognition threshold changed — only new client-side
+    geometry-support/shape-continuity constants were added, all reused from existing
+    values (SHAPE_HOLD_MAX_MS = POSE_HOLD_MS, SHAPE_HOLD_MAX_FRAMES = TRACKING_GRACE_FRAMES)."""
+    html = _scanner_html()
+    assert "const TRACKING_GRACE_FRAMES = 3;" in html
+    assert "const TRACKING_GRACE_MS = 900;" in html
+    assert "const POSE_HOLD_MS = 500;" in html
+    assert "const SHAPE_HOLD_MAX_MS = POSE_HOLD_MS;" in html
+    assert "const SHAPE_HOLD_MAX_FRAMES = TRACKING_GRACE_FRAMES;" in html
+    assert "const MIN_GOOD_POINTS = scannerMode === 'lightweight' ? 12 : (deviceInfo.isLowEnd ? 16 : 20);" in html
+    assert "const RESEED_MIN_GRID_CELLS = 5;" in html
+
+
+def test_i39_overlay_src_currenttime_and_native_loop_unchanged():
+    """Task I item 39: none of Pass 11's new code (gap-suspicion tracking, shape-continuity
+    decision, reportGapOutcome) ever assigns overlay.src/overlay.currentTime, or touches
+    native <video loop>."""
+    track_body = _track_frame_body()
+    assert "overlay.src" not in track_body
+    assert "overlay.currentTime" not in track_body
+    assert "overlay.loop" not in track_body
+    html = _scanner_html()
+    assert html.count('<video id="overlay"') == 1
+
+
+def test_i40_existing_hard_geometry_checks_unchanged():
+    """Task I item 40: normalizeCornerOrder/validateOverlayQuad/the out_of_bounds pad check
+    are byte-for-byte unchanged by Pass 11 — the new shape-continuity logic sits strictly
+    AFTER these existing hard checks, never replacing or weakening them. Pass 12: the pad
+    check itself (0.40, the comparison operators) is untouched — only its bound switched
+    from frameW/frameH to trackWidth/trackHeight, since it now runs in track space."""
+    html = _scanner_html()
+    assert "function normalizeCornerOrder(pts, previous) {" in html
+    assert "return validation.signedArea > 0 ? ordered : null;" in html
+    assert "const pad = 0.40;" in html
+    assert (
+        "const inBounds = newCorners.every(p =>\n"
+        "          p.x > -pad * trackWidth && p.x < trackWidth * (1 + pad) &&\n"
+        "          p.y > -pad * trackHeight && p.y < trackHeight * (1 + pad)\n"
+        "        );"
+    ) in html
+
+
+# ---------------------------------------------------------------------------
+# Pass 12: REDUCE LOCAL TRACKING LATENCY AND PREVENT MULTI-FRAME LK COLLAPSE.
+#
+# Task B: a dedicated, lower-resolution local-tracking coordinate space — camera
+# capture/backend upload/displayed overlay stay at frameW/frameH; only LK/homography/
+# point-filtering/reseed run at trackWidth/trackHeight (derived from TRACK_SPACE_MAX_DIM,
+# aspect-ratio preserved, never upscaled).
+#
+# Task D/E: trackingFrameProcessing is a single-flight guard — coalesce a callback that
+# arrives while a previous trackFrame computation is active instead of starting a second
+# one, and the rVFC stall watchdog no longer misclassifies "we are actively computing" as
+# "the browser never delivered the callback."
+#
+# Task F: three console.log verbosity tiers (errors/events/verbose) — real-device mode no
+# longer emits a large Object log on every single frame.
+# ---------------------------------------------------------------------------
+
+def test_p12_01_track_space_is_lower_resolution_on_qualifying_frames():
+    """Task I item 1 (Pass 13: tier map supersedes the old single constant):
+    computeTrackSpaceDimensions scales DOWN whenever the source's larger dimension
+    exceeds the CURRENT tier's TIER_TRACK_MAX_DIM entry — e.g. a 1200x675 source (larger
+    side 1200) is reduced under every tier (480/560/720 are all below 1200)."""
+    html = _scanner_html()
+    assert "const TIER_TRACK_MAX_DIM = { low: 480, medium: 560, high: 720 };" in html
+    fn_start = html.index("function computeTrackSpaceDimensions(sourceWidth, sourceHeight, tier)")
+    fn_end = html.index("function toTrackSpace(corners)")
+    body = html[fn_start:fn_end]
+    assert "const maxDimCap = TIER_TRACK_MAX_DIM[tier];" in body
+    assert "const maxDim = Math.max(sourceWidth, sourceHeight);" in body
+    assert "if (!(maxDim > maxDimCap)) {" in body
+    assert "const scale = maxDimCap / maxDim;" in body
+
+
+def test_p12_02_aspect_ratio_is_preserved():
+    """Task I item 2: width and height are both derived from the SAME `scale` factor
+    (sourceWidth * scale, sourceHeight * scale) — never independent per-axis scaling that
+    could distort the aspect ratio."""
+    html = _scanner_html()
+    fn_start = html.index("function computeTrackSpaceDimensions(sourceWidth, sourceHeight, tier)")
+    fn_end = html.index("function toTrackSpace(corners)")
+    body = html[fn_start:fn_end]
+    assert "const width = Math.max(2, Math.round(sourceWidth * scale));" in body
+    assert "const height = Math.max(2, Math.round(sourceHeight * scale));" in body
+    # A source at or under the cap is returned completely unscaled (scale 1 on both axes).
+    assert "return { width: sourceWidth, height: sourceHeight, scaleX: 1, scaleY: 1 };" in body
+
+
+def test_p12_03_server_bootstrap_corners_convert_into_track_space():
+    """Task I item 3: resetTrackingEpoch computes currCornersTrack from whatever
+    currCorners currently holds (the just-accepted server/bootstrap quad, in intrinsic
+    space) via toTrackSpace — every fresh tracking session starts with a track-space quad
+    derived from the real accepted one, never a stale or unconverted one."""
+    html = _scanner_html()
+    reset_start = html.index("function resetTrackingEpoch(width, height)")
+    reset_end = html.index("function cornersToMat(corners)")
+    body = html[reset_start:reset_end]
+    assert "currCornersTrack = currCorners ? toTrackSpace(currCorners) : null;" in body
+
+
+def test_p12_04_accepted_tracking_quad_converts_back_before_applywarp():
+    """Task I item 4: the ONE conversion back to intrinsic/display space (toIntrinsicSpace)
+    happens immediately before applyWarp is called — currCornersTrack carries the
+    track-space quad forward for the next tick, currCorners gets the converted one."""
+    track_body = _track_frame_body()
+    assert (
+        "currCornersTrack = newCorners;\n"
+        "        currCorners = toIntrinsicSpace(newCorners);\n"
+        "        if (!applyWarp(currCorners)) {"
+    ) in track_body
+
+
+def test_p12_05_overlay_geometry_remains_in_intrinsic_display_coordinates():
+    """Task I item 5: applyWarp itself is untouched — it still reads module-level frameW/
+    frameH (never trackWidth/trackHeight) for its own renderability/conversion checks, so
+    the overlay is always positioned using intrinsic/display-space geometry."""
+    html = _scanner_html()
+    warp_start = html.index("function applyWarp(cornersFrame, context = {})")
+    warp_end = html.index("function quadArea2(pts)")
+    body = html[warp_start:warp_end]
+    assert "isOverlayFrameQuadRenderable(cornersFrame, frameW, frameH)" in body
+    assert "convertBackendCornersToOverlay(cornersFrame, frameW, frameH, lastOrdered)" in body
+    assert "trackWidth" not in body
+    assert "trackHeight" not in body
+
+
+def test_p12_06_backend_upload_dimensions_remain_unchanged():
+    """Task I item 6: frameW/frameH are still assigned directly from the server response's
+    own frame_width/frame_height — backend capture/upload dimensions are completely
+    untouched by the local-tracking-space work."""
+    html = _scanner_html()
+    assert "frameW = Number(data.frame_width);" in html
+    assert "frameH = Number(data.frame_height);" in html
+
+
+def test_p12_07_prevgray_and_gray_always_share_track_dimensions():
+    """Task I item 7: the existing dimension/epoch-mismatch guard (unchanged) still
+    compares prevGray.rows/cols against gray.rows/cols — both are now sized from the SAME
+    trackingCanvas (resized to trackWidth/trackHeight by resetTrackingEpoch), so they can
+    only ever match or mismatch together, never independently drift."""
+    track_body = _track_frame_body()
+    assert (
+        "if (!prevGray || !prevPts || prevGrayEpoch !== trackingEpoch ||\n"
+        "            prevGray.rows !== gray.rows || prevGray.cols !== gray.cols) {"
+    ) in track_body
+    html = _scanner_html()
+    assert "trackingCanvas.width = trackWidth;" in html
+    assert "trackingCanvas.height = trackHeight;" in html
+
+
+def test_p12_08_point_coordinates_remain_in_track_space_during_lk():
+    """Task I item 8: the homography source corners (cornersToMat) and poseCompatibility's
+    own previous-quad/normalization-dimension arguments are all currCornersTrack/
+    trackWidth/trackHeight — LK's point coordinates are never mixed with intrinsic-space
+    numbers mid-pipeline."""
+    track_body = _track_frame_body()
+    assert "const cornerMat = cornersToMat(currCornersTrack);" in track_body
+    assert "poseCompatibility(newCorners, currCornersTrack, Math.max(Math.min(trackWidth, trackHeight), 1))" in track_body
+
+
+def test_p12_09_reseed_mask_uses_track_space_accepted_quad():
+    """Task I item 9: attemptFeatureReseed is called with currCornersTrack (not currCorners)
+    — gray is track-space sized, so its ROI/mask quad must be too."""
+    track_body = _track_frame_body()
+    assert "finalPts = attemptFeatureReseed(gray, currCornersTrack, prunedNext, survivingCoverage, survivingGridCells);" in track_body
+
+
+def test_p12_10_normalized_shape_checks_remain_scale_independent():
+    """Task I item 10: poseCompatibility's jump thresholds (2.5/0.4 area, 0.35 center, 0.55
+    corner, 2.0/0.5 edge, 2.0 diagonal) are byte-identical to Pass 11 — only the space
+    (track vs intrinsic) and explicit parameter-passing changed. Ratios computed the same
+    way in a consistently-scaled space are mathematically equivalent regardless of which
+    consistent space is used."""
+    html = _scanner_html()
+    fn_start = html.index("function poseCompatibility(nextCorners, previousCorners, frameMinDim)")
+    fn_end = html.index("function computeTrackSpaceDimensions(sourceWidth, sourceHeight, tier)")
+    body = html[fn_start:fn_end]
+    assert "if (areaRatio > 2.5 || areaRatio < 0.4) return { ok: false, reason: 'area_jump'" in body
+    assert "if (centerJump > 0.35) return { ok: false, reason: 'center_jump'" in body
+    assert "if (maxCornerJump > 0.55) return { ok: false, reason: 'corner_jump'" in body
+    assert "if (maxEdgeRatio > 2.0 || minEdgeRatio < 0.5) return { ok: false, reason: 'edge_ratio_jump'" in body
+    assert "if (diagonalRatioChange > 2.0) return { ok: false, reason: 'diagonal_jump'" in body
+
+
+def test_p12_11_only_one_trackframe_computation_runs_at_once():
+    """Task I item 11: the trackingFrameProcessing guard is the FIRST thing checked after
+    the loop-active/generation guards — before the top-of-tick rearm even runs — so a
+    reentrant call can never proceed into a second computation."""
+    track_body = _track_frame_body()
+    generation_check_at = track_body.index("if (trackingGeneration !== scannerGeneration) {")
+    guard_at = track_body.index("if (trackingFrameProcessing) {")
+    rearm_at = track_body.index("scheduleTrackingFrame('tick_rearm',")
+    set_true_at = track_body.index("trackingFrameProcessing = true;")
+    assert generation_check_at < guard_at < rearm_at < set_true_at
+
+
+def test_p12_12_overlapping_callbacks_are_coalesced():
+    """Task I item 12: a callback that arrives while trackingFrameProcessing is true logs
+    [TRACK FRAME COALESCED] and returns immediately — it never calls scheduleTrackingFrame
+    or proceeds into the LK pipeline."""
+    track_body = _track_frame_body()
+    guard_at = track_body.index("if (trackingFrameProcessing) {")
+    return_at = track_body.index("return;", guard_at)
+    guard_body = track_body[guard_at:return_at]
+    assert "logCallbackEvent('[TRACK FRAME COALESCED]'," in guard_body
+    assert "scheduleTrackingFrame(" not in guard_body
+
+
+def test_p12_13_only_newest_deferred_callback_is_retained():
+    """Task I item 13: latestDeferredFrameMetadata is a single slot (declared as one
+    object-or-null, never an array/push) — each coalesced arrival unconditionally
+    OVERWRITES it, so only the newest survives."""
+    html = _scanner_html()
+    assert "let latestDeferredFrameMetadata = null; // { nowArg, metadata } — at most one, newest wins" in html
+    track_body = _track_frame_body()
+    assert "latestDeferredFrameMetadata = { nowArg, metadata };" in track_body
+    assert "latestDeferredFrameMetadata.push(" not in track_body
+
+
+def test_p12_14_deferred_callback_runs_after_active_processing_completes():
+    """Task I item 14: the deferred frame is only processed AFTER the try/catch/finally
+    block (which clears trackingFrameProcessing) has fully exited — never from inside the
+    finally block itself, and never while the flag could still read true."""
+    track_body = _track_frame_body()
+    finally_end_at = track_body.index("      }\n      // Task D (Pass 12): process the single newest coalesced frame")
+    recurse_at = track_body.index("trackFrame(deferredToProcess.nowArg, deferredToProcess.metadata);")
+    clear_flag_at = track_body.index("trackingFrameProcessing = false;")
+    assert clear_flag_at < finally_end_at < recurse_at
+
+
+def test_p12_15_no_unbounded_callback_queue_is_created():
+    """Task I item 15: the deferred-frame mechanism is a single named variable (an object
+    or null), never an array, list, or queue data structure — coalescing can only ever
+    hold at most one pending frame."""
+    html = _scanner_html()
+    assert "let latestDeferredFrameMetadata = null;" in html
+    assert "latestDeferredFrameMetadata = []" not in html
+    assert "latestDeferredFrameMetadata.length" not in html
+
+
+def test_p12_16_watchdog_does_not_call_callback_stalled_while_processing_active():
+    """Task I item 16: onRvfcStallWatchdogFired checks trackingFrameProcessing and returns
+    (after re-arming) strictly BEFORE it can ever reach enterCallbackStallRecovery — an
+    active computation is never misclassified as a delivery stall."""
+    html = _scanner_html()
+    fn_start = html.index("function onRvfcStallWatchdogFired(callbackId)")
+    fn_end = html.index("// Task C (Pass 6): the single validity check")
+    body = html[fn_start:fn_end]
+    overrun_check_at = body.index("if (trackingFrameProcessing) {")
+    overrun_return_at = body.index("return;", overrun_check_at)
+    stall_recovery_at = body.index("enterCallbackStallRecovery(callbackId, 'rvfc_stall_watchdog');")
+    assert overrun_check_at < overrun_return_at < stall_recovery_at
+
+
+def test_p12_17_processing_overrun_is_logged_separately():
+    """Task I item 17: the overrun branch logs [TRACK PROCESSING OVERRUN] with callbackId/
+    elapsedMs/stage — a distinct tag from [TRACK CALLBACK STALLED], so a real-device log
+    can tell the two cases apart."""
+    html = _scanner_html()
+    fn_start = html.index("function onRvfcStallWatchdogFired(callbackId)")
+    fn_end = html.index("// Task C (Pass 6): the single validity check")
+    body = html[fn_start:fn_end]
+    assert "logCallbackEvent('[TRACK PROCESSING OVERRUN]', {" in body
+    assert "callbackId, elapsedMs: Math.round(performance.now() - trackingFrameStartedAt)," in body
+    assert "stage: trackingFrameStage || 'unknown'" in body
+
+
+def test_p12_18_next_callback_is_armed_after_processing_completes():
+    """Task I item 18: the overrun branch re-arms a FRESH watchdog window for the SAME
+    callback (armRvfcStallWatchdog(callbackId)) rather than cancelling/cycling ownership —
+    RVFC_STALL_TIMEOUT_MS itself is never extended as the fix."""
+    html = _scanner_html()
+    fn_start = html.index("function onRvfcStallWatchdogFired(callbackId)")
+    fn_end = html.index("// Task C (Pass 6): the single validity check")
+    body = html[fn_start:fn_end]
+    overrun_at = body.index("if (trackingFrameProcessing) {")
+    rearm_at = body.index("armRvfcStallWatchdog(callbackId);", overrun_at)
+    assert overrun_at < rearm_at
+    assert "const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;" in html  # unchanged, never extended
+
+
+def test_p12_19_mats_are_reused_or_deterministically_deleted():
+    """Task I item 19: the unnecessary Array.from() copy of the bootstrap feature Mat's
+    data was removed — features.data32F (a typed array) is read directly, and deleteMats/
+    explicit .delete() calls throughout trackFrame are untouched."""
+    html = _scanner_html()
+    init_start = html.index("function initializeFreshLiveTracker(now, metadata)")
+    init_end = html.index("function dropTracking(reason, extraMats", init_start)
+    body = html[init_start:init_end]
+    assert "const flat = features.data32F;" in body
+    assert "Array.from(features.data32F" not in body
+    assert "deleteMats(mask, features);" in body
+
+
+def test_p12_20_no_deleted_mat_is_reused():
+    """Task I item 20: prevGray is only ever reassigned in the SAME statement pair that
+    deletes the old one first (prevGray.delete(); prevGray = gray;) — never reassigned
+    without the preceding delete, and never read again after being deleted within the same
+    tick."""
+    track_body = _track_frame_body()
+    assert "prevGray.delete();\n        prevGray = gray;" in track_body
+    assert "prevPts.delete();\n        prevPts = cv.matFromArray(finalPts.length / 2, 1, cv.CV_32FC2, finalPts);" in track_body
+
+
+def test_p12_21_per_frame_verbose_logging_is_disabled_by_default():
+    """Task I item 21: diagnosticLevel defaults to 'events' (not 'verbose') unless
+    ?scanner_debug=1 is set, and the highest-volume per-frame tags ([TRACK POINT HEALTH],
+    [TRACK CALLBACK ENTERED]/REQUESTED/REARMED/SKIPPED, [TRACK OWNER STATE], [TRACK GAP
+    SUSPECTED]/RECOVERED, [TRACK FRAME PROCESSING COMPLETE]) are all classified 'verbose'
+    — suppressed by default."""
+    html = _scanner_html()
+    assert "let diagnosticLevel = diagnosticsEnabled ? 'verbose' : 'events';" in html
+    for verbose_tag in (
+        "'[TRACK POINT HEALTH]': 'verbose'",
+        "'[TRACK CALLBACK ENTERED]': 'verbose'",
+        "'[TRACK CALLBACK REQUESTED]': 'verbose'",
+        "'[TRACK OWNER STATE]': 'verbose'",
+        "'[TRACK GAP SUSPECTED]': 'verbose'",
+        "'[TRACK FRAME PROCESSING COMPLETE]': 'verbose'",
+    ):
+        assert verbose_tag in html
+
+
+def test_p12_22_loss_reseed_shape_logs_remain_available():
+    """Task I item 22: dropTracking's own [TRACKING LOST] console.log is a raw, always-on
+    call (never routed through logCallbackEvent's level gate), and the 'events'-tier tags
+    (shape hold/reject, reseed success/failure, frame-gap confirmation) are visible even in
+    the default (non-verbose) level — never demoted to 'verbose'."""
+    html = _scanner_html()
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_end = html.index("function handleDetectionTimeout()")
+    drop_body = html[drop_start:drop_end]
+    assert "console.log(" in drop_body
+    for events_tag in (
+        "'[TRACK SHAPE HEALTH]': 'events'",
+        "'[TRACK RESEED SUCCESS]': 'events'",
+        "'[TRACK RESEED FAILED]': 'events'",
+        "'[TRACK GAP CONFIRMED]': 'events'",
+        "'[TRACK FRAME PERFORMANCE]': 'events'",
+    ):
+        assert events_tag in html
+
+
+def test_p12_23_pass11_gap_suspect_flow_remains_functional():
+    """Task I item 23: gapWasSuspected/[TRACK GAP SUSPECTED] and reportGapOutcome are
+    unchanged by Pass 12, and tracking_frame_gap_exceeded is still never a dropTracking()
+    reason anywhere in the file."""
+    track_body = _track_frame_body()
+    assert "gapWasSuspected = true;" in track_body
+    assert "logCallbackEvent('[TRACK GAP SUSPECTED]', {" in track_body
+    html = _scanner_html()
+    assert html.count("dropTracking('tracking_frame_gap_exceeded'") == 0
+
+
+def test_p12_24_pass11_accept_hold_reject_remains_functional():
+    """Task I item 24: shapeReason/decision/IMMEDIATE_SHAPE_REJECT_REASONS and the bounded
+    SHAPE_HOLD_MAX_FRAMES/SHAPE_HOLD_MAX_MS allowance are unchanged by Pass 12 (only the
+    space they operate in changed)."""
+    track_body = _track_frame_body()
+    assert "const shapeReason = !localPoseQuality.ok ? localPoseQuality.reason : (weakGeometrySupport ? 'weak_geometry_support' : null);" in track_body
+    assert "const decision = (isImmediateReject || holdExpired) ? 'reject' : 'hold';" in track_body
+    html = _scanner_html()
+    assert "const SHAPE_HOLD_MAX_MS = POSE_HOLD_MS;" in html
+    assert "const SHAPE_HOLD_MAX_FRAMES = TRACKING_GRACE_FRAMES;" in html
+
+
+def test_p12_25_weak_geometry_support_remains_a_rejection():
+    """Task I item 25: weakGeometrySupport's formula (geometryInlierCount < MIN_GOOD_POINTS
+    OR geometryInlierGridCells < RESEED_MIN_GRID_CELLS) is unchanged — both existing
+    constants reused, never a weaker invented threshold."""
+    track_body = _track_frame_body()
+    assert "const weakGeometrySupport = geometryInlierCount < MIN_GOOD_POINTS || geometryInlierGridCells < RESEED_MIN_GRID_CELLS;" in track_body
+
+
+def test_p12_26_corner_order_invalid_remains_a_rejection():
+    """Task I item 26: corner_order_invalid is still an unconditional, immediate
+    dropTracking() reason — never routed through the shape-continuity HOLD allowance."""
+    track_body = _track_frame_body()
+    assert "dropTracking('corner_order_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {" in track_body
+
+
+def test_p12_27_out_of_bounds_remains_a_rejection():
+    """Task I item 27: out_of_bounds is still an unconditional, immediate dropTracking()
+    reason — never routed through the shape-continuity HOLD allowance."""
+    track_body = _track_frame_body()
+    assert "dropTracking('out_of_bounds', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {" in track_body
+
+
+def test_p12_28_pass10_reseed_baseline_remains_functional():
+    """Task I item 28: a successful reseed still resets the frame-gap baseline
+    ('feature_reseed_success') and sets firstPostReseedLkPending — unchanged by Pass 12's
+    track-space/timing/coalescing work."""
+    body = _attempt_feature_reseed_body()
+    assert "resetFrameGapBaseline('feature_reseed_success');" in body
+    assert "firstPostReseedLkPending = true;" in body
+
+
+def test_p12_29_pass10_recovery_ownership_remains_single_owner():
+    """Task I item 29: dropTracking still schedules exactly one tracking_lost_reacquire
+    attempt — Pass 12 added no second reacquisition path."""
+    html = _scanner_html()
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_end = html.index("function handleDetectionTimeout()")
+    drop_body = html[drop_start:drop_end]
+    assert drop_body.count("scheduleNextScan('tracking_lost_reacquire', 0);") == 1
+
+
+def test_p12_30_pass9_reseeding_remains_functional():
+    """Task I item 30: attemptFeatureReseed's ROI-crop (gray.roi) and bounded-attempt
+    guards (reseedAttemptsForEpoch/consecutiveReseedFailures vs MAX_RESEED_ATTEMPTS_PER_
+    EPOCH/MAX_CONSECUTIVE_RESEED_FAILURES) are unchanged — only its caller's argument
+    (currCornersTrack instead of currCorners) changed."""
+    body = _attempt_feature_reseed_body()
+    assert "roiGray = gray.roi(new cv.Rect(roiX, roiY, roiW, roiH));" in body
+    track_body = _track_frame_body()
+    assert "reseedAttemptsForEpoch < MAX_RESEED_ATTEMPTS_PER_EPOCH &&" in track_body
+    assert "consecutiveReseedFailures < MAX_CONSECUTIVE_RESEED_FAILURES) {" in track_body
+
+
+def test_p12_31_pass8_baseline_remains_functional():
+    """Task I item 31: hasValidLkBaseline's own definition (epoch + continuity token match)
+    is byte-for-byte unchanged by Pass 12."""
+    track_body = _track_frame_body()
+    assert (
+        "const hasValidLkBaseline = hasSuccessfulLkBaseline &&\n"
+        "          successfulLkEpoch === trackingEpoch &&\n"
+        "          successfulLkContinuityToken === frameGapContinuityToken;"
+    ) in track_body
+
+
+def test_p12_32_pass7_callback_repair_remains_functional():
+    """Task I item 32: the top-of-tick ownership self-check (tracking must never be true
+    with trackingCallbackId === null) is unchanged and still runs on every non-coalesced
+    tick."""
+    track_body = _track_frame_body()
+    assert "if (tracking && trackingCallbackId === null) {" in track_body
+    assert "logCallbackEvent('[TRACK CALLBACK OWNERSHIP ERROR]', { reason: 'tracking_without_pending_callback' }, {" in track_body
+
+
+def test_p12_33_backend_thresholds_unchanged():
+    """Task I item 33: MIN_GOOD_POINTS/MAX_ERR/RANSAC_REPROJ/TRACKING_GRACE_FRAMES/
+    TRACKING_GRACE_MS/POSE_HOLD_MS/RVFC_STALL_TIMEOUT_MS are exactly the same values as
+    before Pass 12 — none of Task A-F's changes touched a recognition or geometry
+    acceptance threshold."""
+    html = _scanner_html()
+    assert "const MIN_GOOD_POINTS = scannerMode === 'lightweight' ? 12 : (deviceInfo.isLowEnd ? 16 : 20);" in html
+    assert "const MAX_ERR = scannerMode === 'lightweight' ? 55 : (deviceInfo.isLowEnd ? 45 : 35);" in html
+    assert "const RANSAC_REPROJ = 5.0;" in html
+    assert "const TRACKING_GRACE_FRAMES = 3;" in html
+    assert "const TRACKING_GRACE_MS = 900;" in html
+    assert "const POSE_HOLD_MS = 500;" in html
+    assert "const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;" in html
+
+
+def test_p12_34_overlay_src_currenttime_native_loop_unchanged():
+    """Task I item 34: none of Pass 12's new code (track-space conversion, timing
+    instrumentation, coalescing, watchdog fix, diagnostic levels) ever assigns
+    overlay.src/overlay.currentTime, or touches the native <video loop> attribute."""
+    track_body = _track_frame_body()
+    assert "overlay.src =" not in track_body
+    assert "overlay.currentTime =" not in track_body
+    assert "overlay.loop =" not in track_body
+    html = _scanner_html()
+    for fn_start_marker, fn_end_marker in (
+        ("function computeTrackSpaceDimensions(sourceWidth, sourceHeight, tier)", "function toTrackSpace(corners)"),
+        ("function onRvfcStallWatchdogFired(callbackId)", "// Task C (Pass 6): the single validity check"),
+    ):
+        body = html[html.index(fn_start_marker):html.index(fn_end_marker)]
+        assert "overlay.src" not in body
+        assert "overlay.currentTime" not in body
+        assert "overlay.loop" not in body
+    assert html.count('<video id="overlay"') == 1
+
+
+# ---------------------------------------------------------------------------
+# Pass 13: LOWER LK COST ON SLOW MOBILE DEVICES.
+#
+# Task A/C: an explicit, downgradable performance TIER (low/medium/high) — starts from
+# the same static device signal Pass 12 used directly, then only ever DOWNGRADES (never
+# auto-upgrades within the same epoch) based on a bounded consecutive-overrun streak.
+#
+# Task B/D: TIER_MAX_TRACK_POINTS (60/80/existing) governs both bootstrap's initial
+# goodFeaturesToTrack request and every reseed's target — never the hard quality floors
+# (MIN_GOOD_POINTS, RESEED_MIN_GRID_CELLS, weak_geometry_support).
+# ---------------------------------------------------------------------------
+
+def test_p13_01_low_tier_long_side_is_approximately_480():
+    """Task F item 1: TIER_TRACK_MAX_DIM.low is 480 — a 675x1200 portrait source's larger
+    side (1200) is capped down to 480 on the low tier."""
+    html = _scanner_html()
+    assert "const TIER_TRACK_MAX_DIM = { low: 480, medium: 560, high: 720 };" in html
+
+
+def test_p13_02_aspect_ratio_is_preserved_across_tiers():
+    """Task F item 2: computeTrackSpaceDimensions still derives width AND height from the
+    SAME `scale` factor regardless of which tier's cap is in effect — unchanged by the
+    tier map replacing the single constant."""
+    html = _scanner_html()
+    fn_start = html.index("function computeTrackSpaceDimensions(sourceWidth, sourceHeight, tier)")
+    fn_end = html.index("function toTrackSpace(corners)")
+    body = html[fn_start:fn_end]
+    assert "const maxDimCap = TIER_TRACK_MAX_DIM[tier];" in body
+    assert "const scale = maxDimCap / maxDim;" in body
+    assert "const width = Math.max(2, Math.round(sourceWidth * scale));" in body
+    assert "const height = Math.max(2, Math.round(sourceHeight * scale));" in body
+
+
+def test_p13_03_backend_upload_dimensions_remain_unchanged():
+    """Task F item 3: frameW/frameH are still assigned directly from the server response's
+    frame_width/frame_height — untouched by tiering."""
+    html = _scanner_html()
+    assert "frameW = Number(data.frame_width);" in html
+    assert "frameH = Number(data.frame_height);" in html
+
+
+def test_p13_04_applywarp_still_receives_intrinsic_coordinates():
+    """Task F item 4: applyWarp is called with currCorners (intrinsic, post-conversion) —
+    never currCornersTrack — and its own renderability check still reads frameW/frameH."""
+    track_body = _track_frame_body()
+    assert (
+        "currCornersTrack = newCorners;\n"
+        "        currCorners = toIntrinsicSpace(newCorners);\n"
+        "        if (!applyWarp(currCorners)) {"
+    ) in track_body
+    html = _scanner_html()
+    warp_start = html.index("function applyWarp(cornersFrame, context = {})")
+    warp_end = html.index("function quadArea2(pts)")
+    assert "isOverlayFrameQuadRenderable(cornersFrame, frameW, frameH)" in html[warp_start:warp_end]
+
+
+def test_p13_05_low_tier_targets_approximately_60_points():
+    """Task F item 5: TIER_MAX_TRACK_POINTS.low is 60."""
+    html = _scanner_html()
+    assert "const TIER_MAX_TRACK_POINTS = { low: 60, medium: 80, high: MAX_TRACK_POINTS };" in html
+
+
+def test_p13_06_medium_tier_targets_approximately_80_points():
+    """Task F item 6: TIER_MAX_TRACK_POINTS.medium is 80 (same literal as item 5 — kept as
+    its own test since Task F lists it as a distinct proof point)."""
+    html = _scanner_html()
+    assert "medium: 80" in html
+
+
+def test_p13_07_high_tier_preserves_the_existing_target():
+    """Task F item 7: TIER_MAX_TRACK_POINTS.high reuses MAX_TRACK_POINTS directly — never a
+    second, competing definition of the device-mode ceiling."""
+    html = _scanner_html()
+    assert "high: MAX_TRACK_POINTS" in html
+    assert "const MAX_TRACK_POINTS = scannerMode === 'full' ? 180 : (scannerMode === 'standard' ? 120 : 70);" in html
+
+
+def test_p13_08_point_distribution_rules_remain_enforced():
+    """Task F item 8: reducing the point TARGET never touches the spatial-distribution
+    gates — attemptFeatureReseed's own grid-cell/coverage checks and trackFrame's
+    weakGeometrySupport check are unchanged."""
+    body = _attempt_feature_reseed_body()
+    assert "const mergedGridCells = countOccupiedGridCells(merged, quad, POINT_GRID_SIZE);" in body
+    assert "if (mergedCoverage < RESEED_MIN_COVERAGE_AFTER_MERGE) {" in body
+    track_body = _track_frame_body()
+    assert "const weakGeometrySupport = geometryInlierCount < MIN_GOOD_POINTS || geometryInlierGridCells < RESEED_MIN_GRID_CELLS;" in track_body
+
+
+def test_p13_09_repeated_lk_overruns_downgrade_one_tier():
+    """Task F item 9: consecutiveTierOverrunTicks increments on lkOverrun/totalOverrun;
+    once it reaches TIER_DOWNGRADE_STREAK, the tier steps down exactly ONE level (high->
+    medium or medium->low, never a two-level jump) and the streak resets."""
+    track_body = _track_frame_body()
+    # Pass 15: lkOverrun is now computed once, shared with the perf-log trigger — same
+    # underlying LK_MS_SAFE_BUDGET comparison, just guarded by opticalFlow > 0 first.
+    assert "const lkOverrun = stageTimingsMs.opticalFlow > 0 && stageTimingsMs.opticalFlow > LK_MS_SAFE_BUDGET;" in track_body
+    assert "const totalOverrun = totalTrackFrameMs > SLOW_TRACK_FRAME_MS;" in track_body
+    assert "consecutiveTierOverrunTicks++;" in track_body
+    assert "if (consecutiveTierOverrunTicks >= TIER_DOWNGRADE_STREAK && performanceTier !== 'low') {" in track_body
+    assert "performanceTier = performanceTier === 'high' ? 'medium' : 'low';" in track_body
+    assert "consecutiveTierOverrunTicks = 0;" in track_body
+
+
+def test_p13_10_one_isolated_slow_frame_does_not_immediately_downgrade():
+    """Task F item 10: TIER_DOWNGRADE_STREAK is 3 (not 1) — a single overrun tick only
+    increments the counter, it cannot by itself reach the downgrade threshold."""
+    html = _scanner_html()
+    assert "const TIER_DOWNGRADE_STREAK = 3;" in html
+
+
+def test_p13_11_tiering_does_not_oscillate_per_frame():
+    """Task F item 11: a healthy (non-overrun) tick resets consecutiveTierOverrunTicks to
+    0 — the downgrade check only ever evaluates a BOUNDED consecutive streak, never a
+    single frame in isolation, and there is no automatic upgrade path inside the
+    per-tick downgrade block (only ever a downgrade ternary)."""
+    track_body = _track_frame_body()
+    downgrade_block_at = track_body.index("if (stageTimingsMs.opticalFlow > 0) {")
+    tier_change_log_at = track_body.index("logCallbackEvent('[TRACK PERFORMANCE TIER CHANGE]',", downgrade_block_at)
+    block = track_body[downgrade_block_at:tier_change_log_at]
+    assert "consecutiveTierOverrunTicks = 0;" in block  # the healthy-tick reset (else branch)
+    assert "performanceTier = performanceTier === 'high' ? 'medium' : 'low';" in block
+
+
+def test_p13_12_tier_state_resets_on_new_session_or_camera_restart():
+    """Task F item 12: recoverScannerInner's real-restart branch (not the "avoided,
+    stream alive" early-return) resets performanceTier back to initialPerformanceTier(),
+    resets performanceTierReason, and zeroes the overrun streak."""
+    html = _scanner_html()
+    restart_start = html.index("async function recoverScannerInner(reason, restartCamera)")
+    restart_end = html.index("await new Promise(resolve => setTimeout(resolve, 250));", restart_start)
+    body = html[restart_start:restart_end]
+    avoided_at = body.index("scannerDiagnostics.push('camera_restart_avoided_stream_alive'")
+    reset_at = body.index("performanceTier = initialPerformanceTier();")
+    reason_reset_at = body.index("performanceTierReason = 'camera_restart';")
+    streak_reset_at = body.index("consecutiveTierOverrunTicks = 0;")
+    assert avoided_at < reset_at < reason_reset_at < streak_reset_at
+
+
+def test_p13_13_reseed_target_follows_current_tier():
+    """Task F item 13: attemptFeatureReseed computes tierMaxPoints via
+    currentMaxTrackPoints() and uses it (never MAX_TRACK_POINTS directly) for both the
+    initial targetNew calculation and the merge loop's cap."""
+    body = _attempt_feature_reseed_body()
+    assert "const tierMaxPoints = currentMaxTrackPoints();" in body
+    assert "const targetNew = tierMaxPoints - survivingCount;" in body
+    assert "if ((merged.length / 2) >= tierMaxPoints) break;" in body
+    assert "MAX_TRACK_POINTS" not in body  # only the tier-derived local is used inside this function
+
+
+def test_p13_14_held_or_rejected_geometry_cannot_reseed():
+    """Task F item 14: attemptFeatureReseed is still only ever called with currCornersTrack
+    AFTER the accept-only commit — the HOLD/REJECT branches' returns remain textually
+    before that call (unchanged structural guarantee from Pass 11/12)."""
+    track_body = _track_frame_body()
+    shape_reason_at = track_body.index("const shapeReason =")
+    shape_block_end = track_body.index("// Accepted shape: reset the dedicated hold/reject state.")
+    shape_block = track_body[shape_reason_at:shape_block_end]
+    assert "attemptFeatureReseed(" not in shape_block
+    reseed_call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCornersTrack, prunedNext, survivingCoverage, survivingGridCells);")
+    assert shape_block_end < reseed_call_at
+
+
+def test_p13_15_weak_geometry_support_remains_unchanged():
+    """Task F item 15: weakGeometrySupport's formula is byte-identical to Pass 11/12 —
+    reduced point targets never weaken this gate."""
+    track_body = _track_frame_body()
+    assert "const weakGeometrySupport = geometryInlierCount < MIN_GOOD_POINTS || geometryInlierGridCells < RESEED_MIN_GRID_CELLS;" in track_body
+
+
+def test_p13_16_corner_order_invalid_remains_unchanged():
+    """Task F item 16: corner_order_invalid is still an immediate, unconditional
+    dropTracking() reason."""
+    track_body = _track_frame_body()
+    assert "dropTracking('corner_order_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {" in track_body
+
+
+def test_p13_17_out_of_bounds_remains_unchanged():
+    """Task F item 17: out_of_bounds is still an immediate, unconditional dropTracking()
+    reason."""
+    track_body = _track_frame_body()
+    assert "dropTracking('out_of_bounds', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {" in track_body
+
+
+def test_p13_18_pass12_coordinate_conversion_remains_correct():
+    """Task F item 18: the ONE conversion back to intrinsic space still happens right
+    before applyWarp, and currCornersTrack still carries the track-space quad forward."""
+    track_body = _track_frame_body()
+    commit_at = track_body.index("currCornersTrack = newCorners;")
+    convert_at = track_body.index("currCorners = toIntrinsicSpace(newCorners);", commit_at)
+    warp_at = track_body.index("if (!applyWarp(currCorners)) {", convert_at)
+    assert commit_at < convert_at < warp_at
+
+
+def test_p13_19_pass12_watchdog_processing_state_logic_remains_correct():
+    """Task F item 19: onRvfcStallWatchdogFired still checks trackingFrameProcessing and
+    re-arms (never cancels) before it can ever reach enterCallbackStallRecovery."""
+    html = _scanner_html()
+    fn_start = html.index("function onRvfcStallWatchdogFired(callbackId)")
+    fn_end = html.index("// Task C (Pass 6): the single validity check")
+    body = html[fn_start:fn_end]
+    overrun_at = body.index("if (trackingFrameProcessing) {")
+    rearm_at = body.index("armRvfcStallWatchdog(callbackId);", overrun_at)
+    stall_at = body.index("enterCallbackStallRecovery(callbackId, 'rvfc_stall_watchdog');")
+    assert overrun_at < rearm_at < stall_at
+
+
+def test_p13_20_pass11_accept_hold_reject_remains_correct():
+    """Task F item 20: shapeReason/decision/IMMEDIATE_SHAPE_REJECT_REASONS and the bounded
+    SHAPE_HOLD_MAX_FRAMES/SHAPE_HOLD_MAX_MS allowance are unchanged by Pass 13."""
+    track_body = _track_frame_body()
+    assert "const shapeReason = !localPoseQuality.ok ? localPoseQuality.reason : (weakGeometrySupport ? 'weak_geometry_support' : null);" in track_body
+    assert "const decision = (isImmediateReject || holdExpired) ? 'reject' : 'hold';" in track_body
+    html = _scanner_html()
+    assert "const SHAPE_HOLD_MAX_MS = POSE_HOLD_MS;" in html
+    assert "const SHAPE_HOLD_MAX_FRAMES = TRACKING_GRACE_FRAMES;" in html
+
+
+def test_p13_21_pass10_reseed_baseline_remains_correct():
+    """Task F item 21: a successful reseed still resets the frame-gap baseline and sets
+    firstPostReseedLkPending — unchanged by the tier-target change."""
+    body = _attempt_feature_reseed_body()
+    assert "resetFrameGapBaseline('feature_reseed_success');" in body
+    assert "firstPostReseedLkPending = true;" in body
+
+
+def test_p13_22_recovery_ownership_remains_single_owner():
+    """Task F item 22: dropTracking still schedules exactly one tracking_lost_reacquire
+    attempt — Pass 13 added no second reacquisition path."""
+    html = _scanner_html()
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_end = html.index("function handleDetectionTimeout()")
+    drop_body = html[drop_start:drop_end]
+    assert drop_body.count("scheduleNextScan('tracking_lost_reacquire', 0);") == 1
+
+
+def test_p13_23_backend_thresholds_remain_unchanged():
+    """Task F item 23: MIN_GOOD_POINTS/MAX_ERR/RANSAC_REPROJ/TRACKING_GRACE_FRAMES/
+    TRACKING_GRACE_MS/POSE_HOLD_MS/RVFC_STALL_TIMEOUT_MS are exactly the same values as
+    before Pass 13."""
+    html = _scanner_html()
+    assert "const MIN_GOOD_POINTS = scannerMode === 'lightweight' ? 12 : (deviceInfo.isLowEnd ? 16 : 20);" in html
+    assert "const MAX_ERR = scannerMode === 'lightweight' ? 55 : (deviceInfo.isLowEnd ? 45 : 35);" in html
+    assert "const RANSAC_REPROJ = 5.0;" in html
+    assert "const TRACKING_GRACE_FRAMES = 3;" in html
+    assert "const TRACKING_GRACE_MS = 900;" in html
+    assert "const POSE_HOLD_MS = 500;" in html
+    assert "const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;" in html
+
+
+def test_p13_24_overlay_src_currenttime_native_loop_remain_unchanged():
+    """Task F item 24: none of Pass 13's new code (tier selection, downgrade logic, tier
+    reset on restart) ever assigns overlay.src/overlay.currentTime, or touches the native
+    <video loop> attribute."""
+    html = _scanner_html()
+    track_body = _track_frame_body()
+    downgrade_block_at = track_body.index("if (stageTimingsMs.opticalFlow > 0) {")
+    downgrade_block_end = track_body.index("      }\n      // Task D (Pass 12): process the single newest coalesced frame")
+    downgrade_block = track_body[downgrade_block_at:downgrade_block_end]
+    assert "overlay.src" not in downgrade_block
+    assert "overlay.currentTime" not in downgrade_block
+    assert "overlay.loop" not in downgrade_block
+    restart_start = html.index("async function recoverScannerInner(reason, restartCamera)")
+    restart_reset_end = html.index("consecutiveTierOverrunTicks = 0;", restart_start) + len("consecutiveTierOverrunTicks = 0;")
+    restart_body = html[restart_start:restart_reset_end]
+    assert "overlay.src" not in restart_body
+    assert "overlay.currentTime" not in restart_body
+    assert html.count('<video id="overlay"') == 1
+
+
+# ---------------------------------------------------------------------------
+# Pass 14: APPLY TIER DOWNGRADE IN-EPOCH AND COMPLETE PRODUCTION LOGGING CLEANUP.
+#
+# Task A/B/D: attemptInEpochTierReconfig applies a performance-tier downgrade to the
+# CURRENTLY ACTIVE tracking epoch (cancel owned callback -> resetTrackingEpoch -> fresh
+# gray/points from the SAME captured frame -> rearm) instead of waiting for the next
+# natural bootstrap. Bounded to one attempt per epoch plus a cooldown; falls back to the
+# existing tracking-loss/recovery path on any failure.
+#
+# Task E/F: logTimingCheckpoint now shares the same level-gating as logCallbackEvent
+# (Pass 12) — routine watchdog/capture/fetch/scan-timer logs suppressed by default; a
+# genuine callback stall now reports what the main thread was actually doing.
+# ---------------------------------------------------------------------------
+
+def test_p14_01_active_medium_to_low_downgrade_starts_inepoch_reconfig():
+    """Task H item 1: attemptInEpochTierReconfig is called immediately after the
+    [TRACK PERFORMANCE TIER CHANGE] log, inside the SAME downgrade branch — every
+    downgrade decision attempts an in-epoch reconfiguration, not just a future one."""
+    track_body = _track_frame_body()
+    tier_change_at = track_body.index("logCallbackEvent('[TRACK PERFORMANCE TIER CHANGE]',")
+    reconfig_call_at = track_body.index("attemptInEpochTierReconfig(oldTier, performanceTier);", tier_change_at)
+    assert tier_change_at < reconfig_call_at
+
+
+def test_p14_02_overlay_remains_visible_during_reconfiguration():
+    """Task H item 2: attemptInEpochTierReconfig's SUCCESS path never calls
+    clearTrackingGeometry/stopOverlayImmediate/requestPoseHold — only the FAILURE path
+    (via dropTracking, the existing bounded loss/recovery flow) ever touches overlay
+    visibility. The overlay's own transform is simply never written during reconfig."""
+    html = _scanner_html()
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_end = html.index("function dropTracking(reason, extraMats", fn_start)
+    body = html[fn_start:fn_end]
+    success_at = body.index("logCallbackEvent('[TRACK TIER RECONFIG SUCCESS]',")
+    failure_at = body.index("dropTracking('tier_reconfig_failed'")
+    success_region = body[:failure_at]
+    assert "clearTrackingGeometry(" not in success_region
+    assert "stopOverlayImmediate(" not in success_region
+    assert "requestPoseHold(" not in success_region
+    assert success_at < failure_at
+
+
+def test_p14_03_old_callback_is_cancelled_once():
+    """Task H item 3: cancelCurrentTrackingCallback('tier_reconfig') is called exactly
+    once, before any of the rebuild work begins."""
+    html = _scanner_html()
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_end = html.index("function dropTracking(reason, extraMats", fn_start)
+    body = html[fn_start:fn_end]
+    assert body.count("cancelCurrentTrackingCallback('tier_reconfig')") == 1
+    cancel_at = body.index("cancelCurrentTrackingCallback('tier_reconfig');")
+    reset_epoch_at = body.index("resetTrackingEpoch(frameW, frameH);")
+    assert cancel_at < reset_epoch_at
+
+
+def test_p14_04_stale_callback_cannot_mutate_new_epoch():
+    """Task H item 4: reconfiguration reuses resetTrackingEpoch, which bumps trackingEpoch
+    — any callback captured under the OLD epoch fails the existing
+    trackingCallbackValidityFailureReason 'stale_epoch' check if it ever fires."""
+    html = _scanner_html()
+    reset_start = html.index("function resetTrackingEpoch(width, height)")
+    reset_end = html.index("function cornersToMat(corners)")
+    assert "trackingEpoch++;" in html[reset_start:reset_end]
+    assert "if (callbackEpoch !== trackingEpoch) return 'stale_epoch';" in html
+
+
+def test_p14_05_old_resolution_mats_are_deleted():
+    """Task H item 5: resetTrackingEpoch (reused inside reconfig) deletes the old
+    prevGray/prevPts BEFORE the fresh frame is even captured — no old-resolution Mat
+    survives into the new tracking space."""
+    html = _scanner_html()
+    reset_start = html.index("function resetTrackingEpoch(width, height)")
+    body = html[reset_start:reset_start + 400]
+    assert "if (prevGray) { prevGray.delete(); prevGray = null; }" in body
+    assert "if (prevPts) { prevPts.delete(); prevPts = null; }" in body
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_body = html[fn_start:html.index("function dropTracking(reason, extraMats", fn_start)]
+    reset_call_at = fn_body.index("resetTrackingEpoch(frameW, frameH);")
+    gray_at = fn_body.index("gray = matFromVideoGray();")
+    assert reset_call_at < gray_at
+
+
+def test_p14_06_new_tracking_dimensions_applied_immediately():
+    """Task H item 6: resetTrackingEpoch recomputes trackWidth/trackHeight from the
+    (already-updated) performanceTier the moment reconfig calls it — no deferred
+    application to a later tick."""
+    html = _scanner_html()
+    reset_start = html.index("function resetTrackingEpoch(width, height)")
+    reset_end = html.index("function cornersToMat(corners)")
+    body = html[reset_start:reset_end]
+    assert "const trackSpace = computeTrackSpaceDimensions(width, height, performanceTier);" in body
+    assert "trackWidth = trackSpace.width;" in body
+    assert "trackingCanvas.width = trackWidth;" in body
+
+
+def test_p14_07_accepted_intrinsic_quad_converts_to_new_track_space():
+    """Task H item 7: resetTrackingEpoch converts the PRESERVED currCorners (the last
+    accepted intrinsic quad, untouched by reconfig) into the NEW track space, and
+    attemptInEpochTierReconfig's mask/goodFeaturesToTrack use exactly that."""
+    html = _scanner_html()
+    reset_start = html.index("function resetTrackingEpoch(width, height)")
+    reset_end = html.index("function cornersToMat(corners)")
+    assert "currCornersTrack = currCorners ? toTrackSpace(currCorners) : null;" in html[reset_start:reset_end]
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_body = html[fn_start:html.index("function dropTracking(reason, extraMats", fn_start)]
+    assert "mask = maskFromQuad(currCornersTrack);" in fn_body
+
+
+def test_p14_08_gray_and_points_come_from_the_same_fresh_frame():
+    """Task H item 8: gray is captured ONCE (matFromVideoGray) and that SAME local
+    variable feeds both maskFromQuad-driven goodFeaturesToTrack and (on success)
+    prevGray — never a second, separately-captured frame."""
+    html = _scanner_html()
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_body = html[fn_start:html.index("function dropTracking(reason, extraMats", fn_start)]
+    assert fn_body.count("matFromVideoGray()") == 1
+    gray_at = fn_body.index("gray = matFromVideoGray();")
+    features_at = fn_body.index("cv.goodFeaturesToTrack(gray, features, currentMaxTrackPoints(), 0.01, 8, mask, 3, false, 0.04);")
+    prev_gray_at = fn_body.index("prevGray = gray;")
+    assert gray_at < features_at < prev_gray_at
+
+
+def test_p14_09_low_tier_point_cap_becomes_60_immediately():
+    """Task H item 9: reconfig's own goodFeaturesToTrack call reads currentMaxTrackPoints()
+    live — once performanceTier is already 'low' (set by the caller before reconfig
+    runs), this immediately requests the 60-point low-tier target, not the old tier's."""
+    html = _scanner_html()
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_body = html[fn_start:html.index("function dropTracking(reason, extraMats", fn_start)]
+    assert "cv.goodFeaturesToTrack(gray, features, currentMaxTrackPoints(), 0.01, 8, mask, 3, false, 0.04);" in fn_body
+    assert "const TIER_MAX_TRACK_POINTS = { low: 60, medium: 80, high: MAX_TRACK_POINTS };" in html
+
+
+def test_p14_10_reseed_cap_becomes_60_immediately():
+    """Task H item 10: attemptFeatureReseed already computes tierMaxPoints via
+    currentMaxTrackPoints() fresh every call (Pass 13) — unaffected by, and immediately
+    consistent with, an in-epoch tier downgrade."""
+    body = _attempt_feature_reseed_body()
+    assert "const tierMaxPoints = currentMaxTrackPoints();" in body
+
+
+def test_p14_11_reconfiguration_runs_at_most_once_per_downgrade_event():
+    """Task H item 11: tierReconfigAttemptsThisEpoch is checked against
+    MAX_TIER_RECONFIG_ATTEMPTS_PER_EPOCH (1) and incremented before any rebuild work
+    begins — a second attempt within the same epoch is refused."""
+    html = _scanner_html()
+    assert "const MAX_TIER_RECONFIG_ATTEMPTS_PER_EPOCH = 1;" in html
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_body = html[fn_start:html.index("function dropTracking(reason, extraMats", fn_start)]
+    guard_at = fn_body.index("if (tierReconfigAttemptsThisEpoch >= MAX_TIER_RECONFIG_ATTEMPTS_PER_EPOCH) {")
+    increment_at = fn_body.index("tierReconfigAttemptsThisEpoch++;")
+    assert guard_at < increment_at
+
+
+def test_p14_12_cooldown_prevents_repeated_transitions():
+    """Task H item 12: a time-based cooldown (TIER_RECONFIG_COOLDOWN_MS, reusing
+    TRACKING_GRACE_MS) additionally guards against a repeat attempt, independent of the
+    per-epoch counter."""
+    html = _scanner_html()
+    assert "const TIER_RECONFIG_COOLDOWN_MS = TRACKING_GRACE_MS;" in html
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_body = html[fn_start:html.index("function dropTracking(reason, extraMats", fn_start)]
+    assert "if (startedAt - lastTierReconfigAttemptAt < TIER_RECONFIG_COOLDOWN_MS) {" in fn_body
+
+
+def test_p14_13_successful_transition_rearms_one_callback():
+    """Task H item 13: ensureTrackingCallbackOwnership is called exactly once, only in the
+    success path, only after trackingTierReconfigActive is cleared."""
+    html = _scanner_html()
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_body = html[fn_start:html.index("function dropTracking(reason, extraMats", fn_start)]
+    assert fn_body.count("ensureTrackingCallbackOwnership(") == 1
+    clear_at = fn_body.index("trackingTierReconfigActive = false;")
+    rearm_at = fn_body.index("ensureTrackingCallbackOwnership('tier_reconfig_success_rearm');")
+    assert clear_at < rearm_at
+
+
+def test_p14_14_failed_transition_falls_back_safely():
+    """Task H item 14: any exception inside the rebuild (including the explicit
+    insufficient_reconfig_points throw) is caught and routed through the existing
+    dropTracking('tier_reconfig_failed', ...) path — never a bare, unhandled failure."""
+    html = _scanner_html()
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_body = html[fn_start:html.index("function dropTracking(reason, extraMats", fn_start)]
+    assert "throw new Error('insufficient_reconfig_points');" in fn_body
+    assert "} catch (e) {" in fn_body
+    assert "dropTracking('tier_reconfig_failed', [gray, mask, features], {" in fn_body
+
+
+def test_p14_15_watchdog_does_not_report_intentional_transition_as_stall():
+    """Task H item 15: onRvfcStallWatchdogFired checks trackingTierReconfigActive and
+    returns (without touching ownership) strictly BEFORE it can ever reach
+    enterCallbackStallRecovery."""
+    html = _scanner_html()
+    fn_start = html.index("function onRvfcStallWatchdogFired(callbackId)")
+    fn_end = html.index("// Task C (Pass 6): the single validity check")
+    body = html[fn_start:fn_end]
+    reconfig_check_at = body.index("if (trackingTierReconfigActive) {")
+    reconfig_return_at = body.index("return;", reconfig_check_at)
+    stall_at = body.index("enterCallbackStallRecovery(callbackId, 'rvfc_stall_watchdog');")
+    assert reconfig_check_at < reconfig_return_at < stall_at
+
+
+def test_p14_16_default_mode_suppresses_routine_watchdog_logs():
+    """Task H item 16: WATCHDOG TICK and WATCHDOG SKIP are both 'verbose' — suppressed
+    unless ?scanner_debug=1 (diagnosticLevel === 'verbose')."""
+    html = _scanner_html()
+    assert "'[WATCHDOG TICK]': 'verbose'," in html
+    assert "'[WATCHDOG SKIP]': 'verbose'," in html
+
+
+def test_p14_17_default_mode_suppresses_routine_capture_fetch_logs():
+    """Task H item 17: FRAME CAPTURE/DRAW IMAGE/TOBLOB/FETCH START and END are all
+    'verbose'."""
+    html = _scanner_html()
+    for tag in (
+        "'[FRAME CAPTURE START]': 'verbose',", "'[FRAME CAPTURE END]': 'verbose',",
+        "'[DRAW IMAGE START]': 'verbose',", "'[DRAW IMAGE END]': 'verbose',",
+        "'[TOBLOB START]': 'verbose',", "'[TOBLOB END]': 'verbose',",
+        "'[FETCH START]': 'verbose',", "'[FETCH END]': 'verbose',",
+        "'[SCAN SCHEDULED]': 'verbose',", "'[SCAN TIMER FIRED]': 'verbose',",
+    ):
+        assert tag in html
+    fn_start = html.index("function logTimingCheckpoint(tag, reason, extra)")
+    fn_body = html[fn_start:fn_start + 500]
+    assert "if (!shouldEmitDiagnosticLevel(tag)) return;" in fn_body
+
+
+def test_p14_18_default_mode_suppresses_normal_performance_logs():
+    """Task H item 18: [TRACK FRAME PERFORMANCE] is only logged when the tick was slow,
+    an lkMs/point-collapse/tier-change/rescue/exception condition fired, or verbose was
+    requested — never unconditionally on a healthy, fast tick. Pass 15 replaced the old
+    gapWasSuspected/droppedThisTick triggers with this more precise set."""
+    track_body = _track_frame_body()
+    assert (
+        "if (totalOverrun || lkOverrun || pointCollapseDetectedThisTick || tierChangedThisTick ||\n"
+        "            rescueTriggeredThisTick || exceptionThisTick || diagnosticLevel === 'verbose') {"
+    ) in track_body
+
+
+def test_p14_19_slow_performance_logs_remain_visible():
+    """Task H item 19: [TRACK FRAME PERFORMANCE] itself is tagged 'events' (visible by
+    default whenever its own trigger condition fires) — never demoted to verbose-only."""
+    html = _scanner_html()
+    assert "'[TRACK FRAME PERFORMANCE]': 'events'," in html
+
+
+def test_p14_20_verbose_mode_still_shows_all_detailed_logs():
+    """Task H item 20: diagnosticLevel becomes 'verbose' whenever ?scanner_debug=1 is set,
+    and 'verbose' outranks every other level in DIAG_LEVEL_RANK — nothing is suppressed
+    in that mode."""
+    html = _scanner_html()
+    assert "let diagnosticLevel = diagnosticsEnabled ? 'verbose' : 'events';" in html
+    assert "const DIAG_LEVEL_RANK = { errors: 0, events: 1, verbose: 2 };" in html
+
+
+def test_p14_21_weak_geometry_support_unchanged():
+    """Task H item 21: weakGeometrySupport's formula is byte-identical to Pass 11-13."""
+    track_body = _track_frame_body()
+    assert "const weakGeometrySupport = geometryInlierCount < MIN_GOOD_POINTS || geometryInlierGridCells < RESEED_MIN_GRID_CELLS;" in track_body
+
+
+def test_p14_22_corner_order_invalid_unchanged():
+    """Task H item 22: corner_order_invalid is still an immediate, unconditional
+    dropTracking() reason."""
+    track_body = _track_frame_body()
+    assert "dropTracking('corner_order_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {" in track_body
+
+
+def test_p14_23_out_of_bounds_unchanged():
+    """Task H item 23: out_of_bounds is still an immediate, unconditional dropTracking()
+    reason."""
+    track_body = _track_frame_body()
+    assert "dropTracking('out_of_bounds', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {" in track_body
+
+
+def test_p14_24_accept_hold_reject_unchanged():
+    """Task H item 24: shapeReason/decision/IMMEDIATE_SHAPE_REJECT_REASONS and the bounded
+    SHAPE_HOLD_MAX_FRAMES/SHAPE_HOLD_MAX_MS allowance are unchanged by Pass 14."""
+    track_body = _track_frame_body()
+    assert "const shapeReason = !localPoseQuality.ok ? localPoseQuality.reason : (weakGeometrySupport ? 'weak_geometry_support' : null);" in track_body
+    assert "const decision = (isImmediateReject || holdExpired) ? 'reject' : 'hold';" in track_body
+    html = _scanner_html()
+    assert "const SHAPE_HOLD_MAX_MS = POSE_HOLD_MS;" in html
+    assert "const SHAPE_HOLD_MAX_FRAMES = TRACKING_GRACE_FRAMES;" in html
+
+
+def test_p14_25_backend_thresholds_unchanged():
+    """Task H item 25: MIN_GOOD_POINTS/MAX_ERR/RANSAC_REPROJ/TRACKING_GRACE_FRAMES/
+    TRACKING_GRACE_MS/POSE_HOLD_MS/RVFC_STALL_TIMEOUT_MS are exactly the same values as
+    before Pass 14."""
+    html = _scanner_html()
+    assert "const MIN_GOOD_POINTS = scannerMode === 'lightweight' ? 12 : (deviceInfo.isLowEnd ? 16 : 20);" in html
+    assert "const MAX_ERR = scannerMode === 'lightweight' ? 55 : (deviceInfo.isLowEnd ? 45 : 35);" in html
+    assert "const RANSAC_REPROJ = 5.0;" in html
+    assert "const TRACKING_GRACE_FRAMES = 3;" in html
+    assert "const TRACKING_GRACE_MS = 900;" in html
+    assert "const POSE_HOLD_MS = 500;" in html
+    assert "const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;" in html
+
+
+def test_p14_26_overlay_src_currenttime_native_loop_unchanged():
+    """Task H item 26: none of Pass 14's new code (reconfig function, watchdog checks,
+    logging gates) ever assigns overlay.src/overlay.currentTime, or touches the native
+    <video loop> attribute."""
+    html = _scanner_html()
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_body = html[fn_start:html.index("function dropTracking(reason, extraMats", fn_start)]
+    assert "overlay.src" not in fn_body
+    assert "overlay.currentTime" not in fn_body
+    assert "overlay.loop" not in fn_body
+    assert html.count('<video id="overlay"') == 1
+
+
+def test_p14_27_pass13_tier_logic_preserved():
+    """Task H item 27: TIER_TRACK_MAX_DIM/TIER_MAX_TRACK_POINTS/consecutiveTierOverrunTicks/
+    TIER_DOWNGRADE_STREAK are unchanged by Pass 14 — only WHEN the downgrade takes visible
+    effect changed (immediately, in-epoch), never the decision logic itself."""
+    html = _scanner_html()
+    assert "const TIER_TRACK_MAX_DIM = { low: 480, medium: 560, high: 720 };" in html
+    assert "const TIER_MAX_TRACK_POINTS = { low: 60, medium: 80, high: MAX_TRACK_POINTS };" in html
+    assert "const TIER_DOWNGRADE_STREAK = 3;" in html
+    track_body = _track_frame_body()
+    assert "consecutiveTierOverrunTicks++;" in track_body
+    assert "performanceTier = performanceTier === 'high' ? 'medium' : 'low';" in track_body
+
+
+def test_p14_28_pass12_coordinate_conversion_preserved():
+    """Task H item 28: the ONE conversion back to intrinsic space still happens right
+    before applyWarp in trackFrame's own accept path — reconfig is a SEPARATE mechanism,
+    it does not alter this."""
+    track_body = _track_frame_body()
+    assert (
+        "currCornersTrack = newCorners;\n"
+        "        currCorners = toIntrinsicSpace(newCorners);\n"
+        "        if (!applyWarp(currCorners)) {"
+    ) in track_body
+
+
+def test_p14_29_pass10_reseed_baseline_preserved():
+    """Task H item 29: a successful reseed still resets the frame-gap baseline and sets
+    firstPostReseedLkPending — unchanged by Pass 14."""
+    body = _attempt_feature_reseed_body()
+    assert "resetFrameGapBaseline('feature_reseed_success');" in body
+    assert "firstPostReseedLkPending = true;" in body
+
+
+def test_p14_30_recovery_ownership_remains_single_owner():
+    """Task H item 30: dropTracking still schedules exactly one tracking_lost_reacquire
+    attempt — Pass 14 added no second reacquisition path, including on a failed
+    in-epoch tier reconfig (which itself just calls the SAME dropTracking)."""
+    html = _scanner_html()
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_end = html.index("function handleDetectionTimeout()")
+    drop_body = html[drop_start:drop_end]
+    assert drop_body.count("scheduleNextScan('tracking_lost_reacquire', 0);") == 1
+
+
+# ---------------------------------------------------------------------------
+# Pass 15 (Release Candidate): CONTINUITY RESCUE AND FINAL LOG FILTERING.
+#
+# Task A/B/C/D: attemptFeatureRescue — one bounded, last-resort feature-rescue attempt
+# for a sharp point-population collapse, called ONLY from trackFrame's
+# insufficient_flow_points branch after graceExpired(), strictly before the actual drop.
+# Never reachable after any hard geometry rejection (those live later in the same tick's
+# pipeline). Bounded to one attempt per epoch, blocked during tier reconfiguration and
+# until one accepted frame has proven a post-reconfig baseline.
+#
+# Task E/F: logTimingCheckpoint/logVideoCheckpoint's remaining routine tags (ENCODE
+# COMPLETE, RESPONSE HANDLED, overlay play/pause/loop) now share the same level-gating;
+# the performance-log trigger set is now precise (slow/lkMs-over-budget/point-collapse/
+# tier-change/rescue/exception), and SLOW_TRACK_FRAME_MS raised to 350 to match Pass
+# 13/14's new healthy baseline (~200-290ms).
+# ---------------------------------------------------------------------------
+
+def _attempt_feature_rescue_body():
+    html = _scanner_html()
+    start = html.index("function attemptFeatureRescue(gray, pointsBefore, pointsAfterLk, rescueReason)")
+    end = html.index("function dropTracking(reason, extraMats", start)
+    return html[start:end]
+
+
+def test_p15_01_sharp_point_collapse_triggers_one_feature_rescue():
+    """Task G item 1: sharpCollapse (previous points >= 40 AND current good points <= 15)
+    labels the rescue attempt 'sharp_point_collapse' and calls attemptFeatureRescue."""
+    track_body = _track_frame_body()
+    assert "const sharpCollapse = initialPointCountThisRound >= 40 && (goodPrev.length / 2) <= 15;" in track_body
+    assert "sharpCollapse ? 'sharp_point_collapse' : 'near_minimum'" in track_body
+    assert "const rescued = attemptFeatureRescue(" in track_body
+
+
+def test_p15_02_near_minimum_points_can_trigger_rescue():
+    """Task G item 2: whenever sharpCollapse is false, the rescue is still attempted
+    (this code path is only reached once goodPrev.length/2 already fell below
+    MIN_GOOD_POINTS and grace expired), just labeled 'near_minimum' instead."""
+    track_body = _track_frame_body()
+    assert "sharpCollapse ? 'sharp_point_collapse' : 'near_minimum'" in track_body
+
+
+def test_p15_03_healthy_gradual_point_reduction_does_not_trigger_rescue():
+    """Task G item 3: the entire rescue block sits inside the
+    `(goodPrev.length / 2) < MIN_GOOD_POINTS` branch, strictly after graceExpired() — a
+    tick that never falls below MIN_GOOD_POINTS (healthy, even if gradually shrinking)
+    never reaches the rescue code at all."""
+    track_body = _track_frame_body()
+    min_points_check_at = track_body.index("if ((goodPrev.length / 2) < MIN_GOOD_POINTS) {")
+    grace_expired_at = track_body.index("if (!graceExpired()) {", min_points_check_at)
+    rescue_eligible_at = track_body.index("const rescueEligible =", grace_expired_at)
+    assert min_points_check_at < grace_expired_at < rescue_eligible_at
+
+
+def test_p15_04_rescue_requires_a_last_accepted_quad():
+    """Task G item 4: rescueEligible requires both currCorners (intrinsic) and
+    currCornersTrack (track-space) to be truthy — no accepted quad, no rescue attempt."""
+    track_body = _track_frame_body()
+    assert "currCorners && currCornersTrack && !rescueInProgress &&" in track_body
+
+
+def test_p15_05_rescue_uses_current_tier_dimensions():
+    """Task G item 5: attemptFeatureRescue's own goodFeaturesToTrack call reads
+    currentMaxTrackPoints() live — whatever the tier is RIGHT NOW."""
+    body = _attempt_feature_rescue_body()
+    assert "cv.goodFeaturesToTrack(gray, features, currentMaxTrackPoints(), 0.01, 8, mask, 3, false, 0.04);" in body
+
+
+def test_p15_06_rescue_uses_one_fresh_gray_frame():
+    """Task G item 6: attemptFeatureRescue never calls matFromVideoGray() itself — it only
+    ever operates on the `gray` Mat passed in by trackFrame (this tick's own already-
+    captured frame), never a second capture."""
+    body = _attempt_feature_rescue_body()
+    assert "matFromVideoGray()" not in body
+
+
+def test_p15_07_gray_and_feature_points_come_from_the_same_frame():
+    """Task G item 7: mask is built, then goodFeaturesToTrack runs against the SAME
+    `gray` — in that order, never re-assigning `gray` in between."""
+    body = _attempt_feature_rescue_body()
+    mask_at = body.index("mask = maskFromQuad(currCornersTrack);")
+    features_at = body.index("cv.goodFeaturesToTrack(gray, features, currentMaxTrackPoints(), 0.01, 8, mask, 3, false, 0.04);")
+    assert mask_at < features_at
+
+
+def test_p15_08_rescue_mask_from_accepted_intrinsic_quad_converted_to_tracking_space():
+    """Task G item 8: the rescue mask comes from currCornersTrack — the last accepted
+    INTRINSIC quad (currCorners), already converted into the current tracking space by
+    resetTrackingEpoch/toTrackSpace — never a raw intrinsic-space quad, never a
+    speculative one."""
+    body = _attempt_feature_rescue_body()
+    assert "mask = maskFromQuad(currCornersTrack);" in body
+
+
+def test_p15_09_spatial_distribution_requirements_remain_enforced():
+    """Task G item 9: the rescue's own success floor reuses the EXISTING
+    RESEED_MIN_COVERAGE_AFTER_MERGE/RESEED_MIN_GRID_CELLS/MIN_GOOD_POINTS constants —
+    never a weaker, rescue-specific threshold."""
+    body = _attempt_feature_rescue_body()
+    assert (
+        "if (count < MIN_GOOD_POINTS || coverage < RESEED_MIN_COVERAGE_AFTER_MERGE || gridCells < RESEED_MIN_GRID_CELLS) {"
+    ) in body
+
+
+def test_p15_10_rescue_replaces_prevgray_only_after_success():
+    """Task G item 10: prevGray.delete()/prevGray = gray only happens AFTER the count/
+    coverage/gridCells check — the explicit throw on failure sits strictly before it."""
+    body = _attempt_feature_rescue_body()
+    throw_at = body.index("throw new Error('insufficient_rescue_points');")
+    prev_gray_at = body.index("prevGray = gray;")
+    assert throw_at < prev_gray_at
+
+
+def test_p15_11_rescue_replaces_prevpts_only_after_success():
+    """Task G item 11: prevPts.delete()/prevPts = features.clone() only happens on the
+    SAME success path as prevGray's replacement, strictly after the failure throw."""
+    body = _attempt_feature_rescue_body()
+    throw_at = body.index("throw new Error('insufficient_rescue_points');")
+    prev_pts_at = body.index("prevPts = features.clone();")
+    assert throw_at < prev_pts_at
+
+
+def test_p15_12_collapsed_points_are_not_merged_into_rescue_points():
+    """Task G item 12: attemptFeatureRescue never references goodPrev/goodNext/merged —
+    it only ever uses the fresh goodFeaturesToTrack output, never combined with the
+    collapsed LK survivors."""
+    body = _attempt_feature_rescue_body()
+    assert "goodPrev" not in body
+    assert "goodNext" not in body
+    # Checked as the actual variable-usage patterns (not the bare substring "merged",
+    # which also appears in this function's own explanatory prose comments).
+    assert "const merged" not in body
+    assert "merged.push(" not in body
+
+
+def test_p15_13_successful_rescue_does_not_call_backend():
+    """Task G item 13: attemptFeatureRescue never calls detectOnceFromServer or
+    scheduleNextScan — a successful rescue is resolved entirely from local evidence."""
+    body = _attempt_feature_rescue_body()
+    assert "detectOnceFromServer(" not in body
+    assert "scheduleNextScan(" not in body
+
+
+def test_p15_14_failed_rescue_falls_back_to_normal_tracking_loss():
+    """Task G item 14: on failure, attemptFeatureRescue returns false and the CALLER
+    (trackFrame) falls through to the existing dropTracking('insufficient_flow_points',
+    ...) call — never a bare, unhandled failure."""
+    track_body = _track_frame_body()
+    rescue_call_at = track_body.index("const rescued = attemptFeatureRescue(")
+    if_rescued_at = track_body.index("if (rescued) {", rescue_call_at)
+    drop_at = track_body.index("dropTracking('insufficient_flow_points', [gray, nextPts, status, err], {", if_rescued_at)
+    assert rescue_call_at < if_rescued_at < drop_at
+
+
+def test_p15_15_original_evidence_based_loss_reason_is_preserved():
+    """Task G item 15: the drop reason after a failed rescue is still the ORIGINAL
+    'insufficient_flow_points' — never replaced with a generic rescue-failure reason."""
+    track_body = _track_frame_body()
+    assert "dropTracking('insufficient_flow_points', [gray, nextPts, status, err], {" in track_body
+    assert "dropTracking('rescue_failed'" not in track_body
+
+
+def test_p15_16_maximum_one_rescue_per_epoch():
+    """Task G item 16: MAX_RESCUE_ATTEMPTS_PER_EPOCH is 1, and rescueEligible checks
+    rescueAttemptsForEpoch against it before ever calling attemptFeatureRescue."""
+    html = _scanner_html()
+    assert "const MAX_RESCUE_ATTEMPTS_PER_EPOCH = 1;" in html
+    track_body = _track_frame_body()
+    assert "rescueAttemptsForEpoch < MAX_RESCUE_ATTEMPTS_PER_EPOCH &&" in track_body
+
+
+def test_p15_17_rescue_cannot_loop_repeatedly():
+    """Task G item 17: rescueInProgress guards against reentrancy, and
+    attemptFeatureRescue increments rescueAttemptsForEpoch unconditionally at its own
+    start — a second attempt this epoch is refused by the caller's own guard."""
+    track_body = _track_frame_body()
+    assert "!rescueInProgress &&" in track_body
+    body = _attempt_feature_rescue_body()
+    assert "rescueAttemptsForEpoch++;" in body
+
+
+def test_p15_18_rescue_is_blocked_during_tier_reconfiguration():
+    """Task G item 18: rescueEligible requires !trackingTierReconfigActive."""
+    track_body = _track_frame_body()
+    assert "!trackingTierReconfigActive && hasAcceptedFrameSinceTierReconfig &&" in track_body
+
+
+def test_p15_19_rescue_is_blocked_during_recovery():
+    """Task G item 19: rescueEligible requires scannerWorkMode === 'TRACKING' — a
+    RECOVERING scanner (mid drop/reacquisition) can never attempt a rescue."""
+    track_body = _track_frame_body()
+    assert "const rescueEligible = tracking && scannerWorkMode === 'TRACKING' &&" in track_body
+
+
+def test_p15_20_rescue_is_blocked_during_camera_restart():
+    """Task G item 20: a camera restart runs clearTrackingGeometry (via stopTrackingLoop's
+    caller path), which sets tracking = false — rescueEligible's own `tracking` guard
+    already covers this, and clearTrackingGeometry additionally resets rescue state."""
+    html = _scanner_html()
+    clear_start = html.index("function clearTrackingGeometry(reason, options = {})")
+    clear_end = html.index("function logCallbackEvent(tag, summaryFields, structuredData)")
+    clear_body = html[clear_start:clear_end]
+    assert "tracking = false;" in clear_body
+    assert "rescueInProgress = false;" in clear_body
+    assert "rescueAttemptsForEpoch = 0;" in clear_body
+
+
+def test_p15_21_rescue_is_blocked_before_one_accepted_frame_after_tier_transition():
+    """Task G item 21: hasAcceptedFrameSinceTierReconfig is set false the instant a tier
+    reconfig succeeds, and only set true again at the true ACCEPT point — rescue's own
+    guard requires it to be true."""
+    html = _scanner_html()
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_body = html[fn_start:html.index("function dropTracking(reason, extraMats", fn_start)]
+    assert "hasAcceptedFrameSinceTierReconfig = false;" in fn_body
+    track_body = _track_frame_body()
+    assert "hasAcceptedFrameSinceTierReconfig = true;" in track_body
+    assert "hasAcceptedFrameSinceTierReconfig &&" in track_body
+
+
+def test_p15_22_stale_callbacks_cannot_mutate_rescue_state():
+    """Task G item 22: rescue only ever runs inside trackFrame's own synchronous LK
+    pipeline, which the EXISTING top-of-tick ownership/epoch-validity checks already gate
+    — a stale callback never reaches this deep into the tick at all (same structural
+    guarantee Pass 7-14 already rely on)."""
+    track_body = _track_frame_body()
+    assert "if (tracking && trackingCallbackId === null) {" in track_body
+    assert "if (callbackEpoch !== trackingEpoch) return 'stale_epoch';" in _scanner_html()
+
+
+def test_p15_23_out_of_bounds_bypasses_rescue():
+    """Task G item 23: out_of_bounds is still an immediate, unconditional dropTracking()
+    reason, positioned entirely AFTER the insufficient_flow_points/rescue branch — never
+    reachable from it."""
+    track_body = _track_frame_body()
+    rescue_at = track_body.index("function attemptFeatureRescue") if "function attemptFeatureRescue" in track_body else track_body.index("const rescueEligible =")
+    out_of_bounds_at = track_body.index("dropTracking('out_of_bounds', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {")
+    assert rescue_at < out_of_bounds_at
+
+
+def test_p15_24_corner_order_invalid_bypasses_rescue():
+    """Task G item 24: corner_order_invalid is still an immediate, unconditional
+    dropTracking() reason, positioned entirely AFTER the insufficient_flow_points/rescue
+    branch — never reachable from it."""
+    track_body = _track_frame_body()
+    rescue_at = track_body.index("const rescueEligible =")
+    corner_order_at = track_body.index("dropTracking('corner_order_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {")
+    assert rescue_at < corner_order_at
+
+
+def test_p15_25_weak_geometry_support_bypasses_rescue():
+    """Task G item 25: weakGeometrySupport's formula is unchanged, and it is evaluated
+    entirely AFTER the insufficient_flow_points/rescue branch — never reachable from it."""
+    track_body = _track_frame_body()
+    assert "const weakGeometrySupport = geometryInlierCount < MIN_GOOD_POINTS || geometryInlierGridCells < RESEED_MIN_GRID_CELLS;" in track_body
+    rescue_at = track_body.index("const rescueEligible =")
+    weak_geom_at = track_body.index("const weakGeometrySupport =")
+    assert rescue_at < weak_geom_at
+
+
+def test_p15_26_non_convex_non_finite_geometry_bypasses_rescue():
+    """Task G item 26: validateOverlayQuad's hard checks (zero_edge, collapsed_area,
+    self_intersecting_quad, diagonals_do_not_cross_inside, non_finite_or_not_four) are
+    unchanged — normalizeCornerOrder (which uses them) runs entirely AFTER the
+    insufficient_flow_points/rescue branch, never reachable from it."""
+    html = _scanner_html()
+    assert "if (!clean) return { ok: false, reason: 'non_finite_or_not_four' };" in html
+    assert "if (edges.some(edge => edge < 1)) return { ok: false, reason: 'zero_edge', edges };" in html
+    assert "if (!diagonalsCross) return { ok: false, reason: 'diagonals_do_not_cross_inside'" in html
+    track_body = _track_frame_body()
+    rescue_at = track_body.index("const rescueEligible =")
+    normalize_at = track_body.index("const newCorners = normalizeCornerOrder(newCornersRaw, currCornersTrack);")
+    assert rescue_at < normalize_at
+
+
+def test_p15_27_accept_hold_reject_unchanged():
+    """Task G item 27: shapeReason/decision/IMMEDIATE_SHAPE_REJECT_REASONS and the bounded
+    SHAPE_HOLD_MAX_FRAMES/SHAPE_HOLD_MAX_MS allowance are unchanged by Pass 15."""
+    track_body = _track_frame_body()
+    assert "const shapeReason = !localPoseQuality.ok ? localPoseQuality.reason : (weakGeometrySupport ? 'weak_geometry_support' : null);" in track_body
+    assert "const decision = (isImmediateReject || holdExpired) ? 'reject' : 'hold';" in track_body
+    html = _scanner_html()
+    assert "const SHAPE_HOLD_MAX_MS = POSE_HOLD_MS;" in html
+    assert "const SHAPE_HOLD_MAX_FRAMES = TRACKING_GRACE_FRAMES;" in html
+
+
+def test_p15_28_current_point_caps_remain_unchanged():
+    """Task G item 28: TIER_MAX_TRACK_POINTS (60/80/existing) is byte-identical to
+    Pass 13/14."""
+    html = _scanner_html()
+    assert "const TIER_MAX_TRACK_POINTS = { low: 60, medium: 80, high: MAX_TRACK_POINTS };" in html
+
+
+def test_p15_29_current_reseed_behavior_remains_unchanged():
+    """Task G item 29: attemptFeatureReseed's own tier-target/merge-cap logic is
+    byte-identical to Pass 13/14 — Pass 15 only added a SEPARATE, more tightly bounded
+    rescue mechanism, never modified reseed itself."""
+    body = _attempt_feature_reseed_body()
+    assert "const tierMaxPoints = currentMaxTrackPoints();" in body
+    assert "const targetNew = tierMaxPoints - survivingCount;" in body
+    assert "if ((merged.length / 2) >= tierMaxPoints) break;" in body
+
+
+def test_p15_30_default_mode_suppresses_encode_complete():
+    """Task G item 30: [ENCODE COMPLETE] is 'verbose'."""
+    html = _scanner_html()
+    assert "'[ENCODE COMPLETE]': 'verbose'," in html
+
+
+def test_p15_31_default_mode_suppresses_response_handled():
+    """Task G item 31: [RESPONSE HANDLED] is 'verbose'."""
+    html = _scanner_html()
+    assert "'[RESPONSE HANDLED]': 'verbose'," in html
+
+
+def test_p15_32_default_mode_suppresses_overlay_play_pause_loop_logs():
+    """Task G item 32: [OVERLAY VIDEO PAUSE]/[OVERLAY VIDEO PLAY]/[OVERLAY VIDEO LOOP] are
+    all 'verbose', and logVideoCheckpoint shares the same level-gating."""
+    html = _scanner_html()
+    assert "'[OVERLAY VIDEO PAUSE]': 'verbose'," in html
+    assert "'[OVERLAY VIDEO PLAY]': 'verbose'," in html
+    assert "'[OVERLAY VIDEO LOOP]': 'verbose'," in html
+    fn_start = html.index("function logVideoCheckpoint(tag, reason, extra)")
+    fn_body = html[fn_start:fn_start + 400]
+    assert "if (!shouldEmitDiagnosticLevel(tag)) return;" in fn_body
+
+
+def test_p15_33_default_mode_suppresses_normal_performance_logs():
+    """Task G item 33/Task F: SLOW_TRACK_FRAME_MS is raised to 350 (above the new healthy
+    ~200-290ms baseline), and the perf-log trigger requires totalOverrun/lkOverrun/point-
+    collapse/tier-change/rescue/exception/verbose — never fires on an ordinary tick."""
+    html = _scanner_html()
+    assert "const SLOW_TRACK_FRAME_MS = 350;" in html
+    track_body = _track_frame_body()
+    assert (
+        "if (totalOverrun || lkOverrun || pointCollapseDetectedThisTick || tierChangedThisTick ||\n"
+        "            rescueTriggeredThisTick || exceptionThisTick || diagnosticLevel === 'verbose') {"
+    ) in track_body
+
+
+def test_p15_34_slow_performance_logs_remain_visible():
+    """Task G item 34: [TRACK FRAME PERFORMANCE] itself is tagged 'events' — visible by
+    default whenever its own trigger condition fires."""
+    html = _scanner_html()
+    assert "'[TRACK FRAME PERFORMANCE]': 'events'," in html
+
+
+def test_p15_35_rescue_logs_remain_visible():
+    """Task G item 35: [TRACK FEATURE RESCUE START]/SUCCESS/FAILED are all 'events'."""
+    html = _scanner_html()
+    assert "'[TRACK FEATURE RESCUE START]': 'events'," in html
+    assert "'[TRACK FEATURE RESCUE SUCCESS]': 'events'," in html
+    assert "'[TRACK FEATURE RESCUE FAILED]': 'events'" in html
+
+
+def test_p15_36_verbose_mode_still_shows_all_logs():
+    """Task G item 36: diagnosticLevel becomes 'verbose' whenever ?scanner_debug=1 is set,
+    and 'verbose' outranks every other level — nothing is suppressed in that mode."""
+    html = _scanner_html()
+    assert "let diagnosticLevel = diagnosticsEnabled ? 'verbose' : 'events';" in html
+    assert "const DIAG_LEVEL_RANK = { errors: 0, events: 1, verbose: 2 };" in html
+
+
+def test_p15_37_backend_thresholds_remain_unchanged():
+    """Task G item 37: MIN_GOOD_POINTS/MAX_ERR/RANSAC_REPROJ/TRACKING_GRACE_FRAMES/
+    TRACKING_GRACE_MS/POSE_HOLD_MS/RVFC_STALL_TIMEOUT_MS are exactly the same values as
+    before Pass 15."""
+    html = _scanner_html()
+    assert "const MIN_GOOD_POINTS = scannerMode === 'lightweight' ? 12 : (deviceInfo.isLowEnd ? 16 : 20);" in html
+    assert "const MAX_ERR = scannerMode === 'lightweight' ? 55 : (deviceInfo.isLowEnd ? 45 : 35);" in html
+    assert "const RANSAC_REPROJ = 5.0;" in html
+    assert "const TRACKING_GRACE_FRAMES = 3;" in html
+    assert "const TRACKING_GRACE_MS = 900;" in html
+    assert "const POSE_HOLD_MS = 500;" in html
+    assert "const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;" in html
+
+
+def test_p15_38_overlay_src_currenttime_native_loop_remain_unchanged():
+    """Task G item 38: attemptFeatureRescue never assigns overlay.src/overlay.currentTime,
+    and never touches the native <video loop> attribute."""
+    html = _scanner_html()
+    body = _attempt_feature_rescue_body()
+    assert "overlay.src" not in body
+    assert "overlay.currentTime" not in body
+    assert "overlay.loop" not in body
+    assert html.count('<video id="overlay"') == 1
+
+
+def test_p15_39_recovery_ownership_remains_single_owner():
+    """Task G item 39: dropTracking still schedules exactly one tracking_lost_reacquire
+    attempt — Pass 15's rescue mechanism adds no second reacquisition path (a failed
+    rescue falls through to the SAME existing dropTracking call)."""
+    html = _scanner_html()
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_end = html.index("function handleDetectionTimeout()")
+    drop_body = html[drop_start:drop_end]
+    assert drop_body.count("scheduleNextScan('tracking_lost_reacquire', 0);") == 1
+
+
+def test_p15_40_pass14_inepoch_tier_reconfiguration_remains_correct():
+    """Task G item 40: attemptInEpochTierReconfig's own cancel -> resetTrackingEpoch ->
+    rebuild -> rearm sequence is unchanged by Pass 15."""
+    html = _scanner_html()
+    fn_start = html.index("function attemptInEpochTierReconfig(oldTier, newTier)")
+    fn_body = html[fn_start:html.index("function attemptFeatureRescue(gray, pointsBefore, pointsAfterLk, rescueReason)", fn_start)]
+    cancel_at = fn_body.index("cancelCurrentTrackingCallback('tier_reconfig');")
+    reset_at = fn_body.index("resetTrackingEpoch(frameW, frameH);")
+    rearm_at = fn_body.index("ensureTrackingCallbackOwnership('tier_reconfig_success_rearm');")
+    assert cancel_at < reset_at < rearm_at

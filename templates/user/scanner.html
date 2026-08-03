@@ -780,11 +780,133 @@
     const DETECT_INTERVAL_MS = runtimeConfig.detectIntervalMs || (deviceInfo.isLowEnd ? 400 : 300);
     const MIN_GOOD_POINTS = scannerMode === 'lightweight' ? 12 : (deviceInfo.isLowEnd ? 16 : 20);
     const MAX_ERR = scannerMode === 'lightweight' ? 55 : (deviceInfo.isLowEnd ? 45 : 35);
+    // Task A (Pass 13): local-tracking-space cap on the larger frame dimension, now keyed
+    // by an explicit, downgradable performance TIER instead of a single fixed constant —
+    // same three numbers Pass 12 already picked from the existing device-tier signal
+    // (MIN_GOOD_POINTS/MAX_ERR), never new arbitrary ones. A source frame at or under the
+    // selected tier's cap is used unscaled (never upscaled). Camera capture, backend
+    // upload, and the displayed overlay are UNAFFECTED — this only bounds the size of the
+    // dedicated LK/homography working space.
+    const TIER_TRACK_MAX_DIM = { low: 480, medium: 560, high: 720 };
+    // Task C (Pass 13): the starting tier is still picked from the SAME existing device
+    // signal Pass 12 used directly — this is what makes the initial choice behaviorally
+    // identical to Pass 12's fixed TRACK_SPACE_MAX_DIM. From here on, only a DOWNGRADE
+    // (never an automatic upgrade within the same tracking epoch) can move it further,
+    // based on actually-measured performance — see the tier-downgrade logic in trackFrame.
+    function initialPerformanceTier() {
+      if (scannerMode === 'lightweight' || deviceInfo.isLowEnd) return 'low';
+      if (scannerMode === 'standard') return 'medium';
+      return 'high';
+    }
+    let performanceTier = initialPerformanceTier();
+    // Reported in [TRACK SPACE CONFIG]/[TRACK PERFORMANCE TIER CHANGE] — why the CURRENT
+    // tier is what it is, provable from a real-device log without guessing.
+    let performanceTierReason = 'initial_device_tier';
+    // Bounded, reset-on-healthy consecutive-overrun counter — never a per-frame decision,
+    // never an unbounded rolling buffer. See the downgrade check inside trackFrame's
+    // finally block.
+    let consecutiveTierOverrunTicks = 0;
+    const TIER_DOWNGRADE_STREAK = 3;
+    // Task A (Pass 12): diagnostic-only threshold for when a tick's total cost is worth
+    // logging on its own merit — not a recognition/geometry/timing correctness threshold.
+    // Task C (Pass 13): also the "total" half of the tier-downgrade overrun check.
+    // Task F (Pass 15): raised from 200 to 350 — Pass 13/14's tiering settled the NEW
+    // healthy baseline at roughly 200-290ms (device evidence), so 200 was marking normal,
+    // routine ticks as "slow" and defeating Task E's logging cleanup. 350 gives clear
+    // headroom above that healthy range while still catching genuine regressions (the
+    // 500-800ms+ cases earlier passes fixed). Diagnostic-only — never a validation/
+    // acceptance threshold, so raising it does not weaken anything Pass 7-14 protects.
+    const SLOW_TRACK_FRAME_MS = 350;
     const detectionPolicy = runtime.createRequestPolicy(scannerMode === 'fallback' ? 'standard' : scannerMode);
     const diagnosticsEnabled = new URLSearchParams(location.search).get('scanner_debug') === '1';
     const scannerDiagnostics = runtime.createDiagnostics(diagnosticsEnabled, function (event) {
       console.debug('[scanner]', event);
     });
+    // Task F (Pass 12): three console.log verbosity tiers for logCallbackEvent — errors
+    // (losses/exceptions/ownership corruption) < events (bootstrap/reseed/shape hold-
+    // reject/recovery) < verbose (callback-by-callback and point-health, every tick).
+    // scannerDiagnostics.push (the dev-panel/export buffer) is NEVER gated by this — only
+    // the always-on console.log this file's real-device evidence showed flooding DevTools
+    // is. Reuses the EXISTING ?scanner_debug=1 flag rather than inventing a new one, so
+    // tests/users that already rely on it to see everything keep doing so unchanged.
+    let diagnosticLevel = diagnosticsEnabled ? 'verbose' : 'events';
+    const DIAG_LEVEL_RANK = { errors: 0, events: 1, verbose: 2 };
+    const LOG_TAG_LEVEL = {
+      '[TRACK CALLBACK REQUESTED]': 'verbose',
+      '[TRACK CALLBACK ENTERED]': 'verbose',
+      '[TRACK CALLBACK REARMED]': 'verbose',
+      '[TRACK CALLBACK CANCELLED]': 'events',
+      '[TRACK CALLBACK SKIPPED]': 'verbose',
+      '[TRACK CALLBACK STALLED]': 'events',
+      '[TRACK RAF FALLBACK]': 'events',
+      '[TRACK OWNER STATE]': 'verbose',
+      '[TRACK CALLBACK OWNERSHIP ERROR]': 'errors',
+      '[TRACK GAP SUSPECTED]': 'verbose',
+      '[TRACK GAP RECOVERED]': 'verbose',
+      '[TRACK GAP CONFIRMED]': 'events',
+      '[TRACK GAP BASELINE RESET]': 'verbose',
+      '[TRACK GAP BASELINE ESTABLISHED]': 'verbose',
+      '[TRACK POINT HEALTH]': 'verbose',
+      '[TRACK SHAPE HEALTH]': 'events',
+      '[TRACK SPACE CONFIG]': 'events',
+      '[TRACK RESEED START]': 'verbose',
+      '[TRACK RESEED PERFORMANCE]': 'verbose',
+      '[TRACK RESEED SUCCESS]': 'events',
+      '[TRACK RESEED FAILED]': 'events',
+      '[TRACK FRAME PERFORMANCE]': 'events',
+      '[TRACK FRAME COALESCED]': 'events',
+      '[TRACK FRAME PROCESSING COMPLETE]': 'verbose',
+      '[TRACK PROCESSING OVERRUN]': 'errors',
+      // Task E (Pass 13): explicit entries for the "keep visible by default" list —
+      // tier changes and recovery ownership must never be demoted to verbose-only.
+      '[TRACK PERFORMANCE TIER CHANGE]': 'events',
+      '[RECOVERY SCAN OWNER]': 'events',
+      // Task A/D (Pass 14): in-epoch tier reconfiguration — start/success are events
+      // (worth seeing by default, but only fire around a downgrade), failed is bundled
+      // with the tier-change/overrun family at 'events' too, since it names its own
+      // fallback and is never routine.
+      '[TRACK TIER RECONFIG START]': 'events',
+      '[TRACK TIER RECONFIG SUCCESS]': 'events',
+      '[TRACK TIER RECONFIG FAILED]': 'events',
+      // Task E (Pass 14): logTimingCheckpoint's own tags — same shared level machinery,
+      // reused rather than a second gating mechanism. These are the exact routine,
+      // per-scan-cycle logs the device evidence showed flooding DevTools by default.
+      '[WATCHDOG TICK]': 'verbose',
+      '[WATCHDOG SKIP]': 'verbose',
+      '[WATCHDOG ABORT]': 'events',
+      '[FRAME CAPTURE START]': 'verbose',
+      '[FRAME CAPTURE END]': 'verbose',
+      '[DRAW IMAGE START]': 'verbose',
+      '[DRAW IMAGE END]': 'verbose',
+      '[TOBLOB START]': 'verbose',
+      '[TOBLOB END]': 'verbose',
+      '[FETCH START]': 'verbose',
+      '[FETCH END]': 'verbose',
+      '[SCAN SCHEDULED]': 'verbose',
+      '[SCAN TIMER FIRED]': 'verbose',
+      '[SCAN TIMER CANCELLED]': 'events',
+      // Task E (Pass 15): the remaining routine per-request/per-play logs the device
+      // evidence showed still flooding DevTools by default.
+      '[ENCODE COMPLETE]': 'verbose',
+      '[RESPONSE HANDLED]': 'verbose',
+      '[OVERLAY VIDEO PAUSE]': 'verbose',
+      '[OVERLAY VIDEO PLAY]': 'verbose',
+      '[OVERLAY VIDEO LOOP]': 'verbose',
+      // Meaningful video-lifecycle events, never explicitly listed as routine — kept
+      // visible by default.
+      '[OVERLAY VIDEO ENDED]': 'events',
+      '[OVERLAY VIDEO SOURCE CHANGE]': 'events',
+      '[TRACKING LOST DURING PLAYBACK]': 'events',
+      // Task A (Pass 15): feature rescue — always worth seeing by default (bounded to at
+      // most once per epoch, never routine).
+      '[TRACK FEATURE RESCUE START]': 'events',
+      '[TRACK FEATURE RESCUE SUCCESS]': 'events',
+      '[TRACK FEATURE RESCUE FAILED]': 'events'
+    };
+    function shouldEmitDiagnosticLevel(tag) {
+      const level = LOG_TAG_LEVEL[tag] || 'events';
+      return DIAG_LEVEL_RANK[level] <= DIAG_LEVEL_RANK[diagnosticLevel];
+    }
     // Dev-only diagnostics panel state — cheap counters/last-values only, piggybacked onto
     // existing diagnostics push sites below. No frame pixels, no PII, nothing beyond what
     // scannerDiagnostics already computes. The panel DOM only exists when the server
@@ -940,7 +1062,16 @@
       reseedFailures: 0,
       pointsAddedByReseed: 0,
       dropsAfterFailedReseed: 0,
-      callbacksSkippedAfterCancellation: 0
+      callbacksSkippedAfterCancellation: 0,
+      // Task B (Pass 11): frame-gap suspicion funnel — frameGapSuspected counts every tick
+      // where a large media/wall-clock gap was recorded (never itself a drop); the other
+      // three are its only possible outcomes. preLkFrameGapDrops must always read 0 — the
+      // old pre-LK hard-drop code path (tracking_frame_gap_exceeded before gray/LK ran) no
+      // longer exists, so nothing ever increments it; it stays as a regression tripwire.
+      frameGapSuspected: 0,
+      frameGapRecoveredByCurrentFrame: 0,
+      frameGapConfirmedAfterLk: 0,
+      preLkFrameGapDrops: 0
     };
     markStartupCheckpoint('scanner_constants_initialized');
 
@@ -958,6 +1089,21 @@
     const MAX_TRACK_POINTS = scannerMode === 'full' ? 180 : (scannerMode === 'standard' ? 120 : 70);
     const TRACK_FRAME_INTERVAL_MS = scannerMode === 'lightweight' ? 90 : (scannerMode === 'standard' ? 66 : 50);
     const RECOVERY_RETRY_LIMIT = scannerMode === 'lightweight' ? 5 : 4;
+    // Task B (Pass 13): fewer, but still spatially-checked, active LK points on slower
+    // tiers — 'high' reuses MAX_TRACK_POINTS exactly as already derived above (never a
+    // second, competing definition). Every existing hard quality gate (MIN_GOOD_POINTS,
+    // RESEED_MIN_GRID_CELLS, geometry-inlier support) is completely untouched — this only
+    // caps how many points are REQUESTED/RETAINED, never what counts as "good enough."
+    const TIER_MAX_TRACK_POINTS = { low: 60, medium: 80, high: MAX_TRACK_POINTS };
+    function currentMaxTrackPoints() {
+      return TIER_MAX_TRACK_POINTS[performanceTier];
+    }
+    // Task C (Pass 13): the "LK-only" half of the tier-downgrade overrun check — reuses
+    // the existing per-tick cadence target (TRACK_FRAME_INTERVAL_MS) rather than inventing
+    // an unrelated number: LK alone regularly costing more than 2x the intended tick
+    // interval is itself the problem this pass's real-device evidence showed (lkMs=231-
+    // 800+ against tick intervals of 50-90ms), independent of whatever else that tick did.
+    const LK_MS_SAFE_BUDGET = Math.max(150, TRACK_FRAME_INTERVAL_MS * 2);
     // Task B (Pass 9) — proactive reseed thresholds. Derived from EXISTING quantities
     // (MIN_GOOD_POINTS, the tracker's own initialPoints, bootstrap's own coverage floor),
     // never invented blind constants:
@@ -1442,6 +1588,13 @@
     const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;
 
     const POSE_HOLD_MS = 500;
+    // Task E (Pass 11): bounded shape-continuity hold — reuses POSE_HOLD_MS directly
+    // (never extends TRACKING_GRACE_MS) as the wall-clock bound, and TRACKING_GRACE_FRAMES
+    // as the frame-count sibling, exactly like graceExpired()'s own dual bound. Dedicated
+    // to the shapeHold* state below — never shared with trackingBadFrames/graceEnteredAt,
+    // which stay reserved for insufficient_flow_points.
+    const SHAPE_HOLD_MAX_MS = POSE_HOLD_MS;
+    const SHAPE_HOLD_MAX_FRAMES = TRACKING_GRACE_FRAMES;
     const POSE_STILL_TAU_MS = 220;
     const POSE_MOVING_TAU_MS = 80;
     const OVERLAY_SOURCE_WIDTH = 1000;
@@ -1551,6 +1704,17 @@
     let activeDetectionAttempt = null;
     let clientRequestSeq = 0; // real-device gap investigation: numbers every detect_init request client-side
     let frameW = 0, frameH = 0;
+    // Task B (Pass 12): the dedicated, lower-resolution local-tracking coordinate space —
+    // camera capture, backend upload (frameW/frameH above), and the displayed overlay all
+    // stay at their existing resolution; ONLY LK/homography/point-filtering/reseed run in
+    // this smaller space. trackSpaceScaleX/Y convert between the two (trackSpace = source
+    // * scale). currCornersTrack mirrors currCorners but in track-space — it is what
+    // trackFrame's own LK/geometry/shape-continuity pipeline reads and writes internally;
+    // currCorners itself is updated only once per accept, converted back to intrinsic
+    // space, and remains what applyWarp/poseCompatibility-callers-outside-trackFrame see.
+    let trackWidth = 0, trackHeight = 0;
+    let trackSpaceScaleX = 1, trackSpaceScaleY = 1;
+    let currCornersTrack = null;
     let prevGray = null;
     let prevPts = null;
     let currCorners = null;
@@ -1648,6 +1812,62 @@
     // successful LK tick (the first one after this continuity boundary) is labeled
     // 'first_post_reseed_lk' when it establishes the fresh baseline, then this clears.
     let firstPostReseedLkPending = false;
+    // Task E (Pass 11): dedicated shape-continuity HOLD state — separate from the generic
+    // trackingBadFrames/graceEnteredAt pair (reserved for insufficient_flow_points).
+    // lastAcceptedCorners/lastAcceptedShapeAt are updated ONLY at the true ACCEPT point
+    // (mirroring currCorners = newCorners + applyWarp success); shapeHoldFrames/
+    // shapeHoldStartedAt bound how long a suspicious-but-not-conclusively-invalid proposed
+    // shape may be held before falling back to the existing reacquisition flow.
+    let shapeHoldFrames = 0;
+    let shapeHoldStartedAt = 0;
+    let lastAcceptedShapeAt = 0;
+    let lastAcceptedCorners = null;
+    let consecutiveShapeRejects = 0;
+    // Task D/E (Pass 12): single-flight trackFrame processing guard + coalescing. In this
+    // file's fully-synchronous implementation, onTrackingCallbackFired cannot literally be
+    // re-entered while a previous trackFrame() call is still on the stack (JS has one
+    // thread) — kept as an explicit, correct guard rather than an assumption anyway (same
+    // pattern as this file's other "should be structurally unreachable" checks), and it is
+    // what lets the rVFC stall watchdog (Task E) distinguish "genuinely no callback
+    // arrived" from "our own CPU-bound work is still running."
+    let trackingFrameProcessing = false;
+    let trackingFrameStartedAt = 0;
+    let trackingFrameStage = null;
+    let activeProcessingCallbackId = null;
+    // Task F (Pass 14): the most recently COMPLETED tick's own totalMs/lkMs — always kept
+    // up to date (never gated by diagnosticLevel), so a genuine callback-stall diagnostic
+    // can report what tracking cost looked like right before the stall, regardless of
+    // whether that tick's own [TRACK FRAME PERFORMANCE] log was itself suppressed.
+    let lastCompletedTickTotalMs = 0;
+    let lastCompletedTickLkMs = 0;
+    let latestDeferredFrameMetadata = null; // { nowArg, metadata } — at most one, newest wins
+    // Task D (Pass 14): explicit state for an in-epoch performance-tier reconfiguration —
+    // separate from trackingFrameProcessing (which already covers the general single-
+    // flight guard). Used specifically so the rVFC stall watchdog can recognize this as
+    // an active controlled state, never a delivery stall, and so tests/diagnostics can
+    // observe reconfiguration in progress by name.
+    let trackingTierReconfigActive = false;
+    let trackingTierReconfigStartedAt = 0;
+    let trackingTierReconfigTarget = null;
+    // Task A (Pass 14): bounded guard — at most one in-epoch reconfig attempt per epoch,
+    // plus a cooldown reusing the existing TRACKING_GRACE_MS wall-clock ceiling rather
+    // than inventing a new one. Reset alongside every other per-epoch counter.
+    let tierReconfigAttemptsThisEpoch = 0;
+    let lastTierReconfigAttemptAt = 0;
+    const MAX_TIER_RECONFIG_ATTEMPTS_PER_EPOCH = 1;
+    const TIER_RECONFIG_COOLDOWN_MS = TRACKING_GRACE_MS;
+    // Task C (Pass 15): a tier reconfig's fresh baseline needs at least one PROVEN
+    // accepted tracking frame before a rescue is allowed to touch it too — set false the
+    // instant a reconfig succeeds, set true again at the next true ACCEPT point.
+    let hasAcceptedFrameSinceTierReconfig = true;
+    // Task A/C (Pass 15): dedicated feature-rescue state — reseedInProgress/
+    // reseedAttemptsForEpoch stay reserved for the EXISTING proactive reseed mechanism;
+    // this is a separate, much more tightly bounded (1-per-epoch) last-resort attempt
+    // specifically for a sharp point-population collapse right before the drop that
+    // insufficient_flow_points would otherwise cause.
+    let rescueInProgress = false;
+    let rescueAttemptsForEpoch = 0;
+    const MAX_RESCUE_ATTEMPTS_PER_EPOCH = 1;
     let lastCancelledCallbackId = null; // Task F (Pass 9) — see cancelCurrentTrackingCallback
     let rvfcStallWatchdogTimer = null;
     // rVFC health state machine (Pass 5): RVFC_ACTIVE (preferred) -> RVFC_STALLED (no
@@ -2022,6 +2242,24 @@
       lastTrustedPoseTs = 0;
       lastSmoothGeneration = 0;
       trackingBadFrames = 0;
+      // Task F (Pass 11): shape-continuity/hold history must not survive a tracking drop —
+      // the next epoch/bootstrap starts with no held state and no stale "last accepted
+      // shape" to compare a brand-new target's first proposed quad against.
+      shapeHoldFrames = 0;
+      shapeHoldStartedAt = 0;
+      consecutiveShapeRejects = 0;
+      lastAcceptedCorners = null;
+      lastAcceptedShapeAt = 0;
+      // Task A/D (Pass 14): a tracking drop (including a failed in-epoch tier reconfig
+      // falling back to tracking_loss_recovery) must never leave reconfig state stuck.
+      tierReconfigAttemptsThisEpoch = 0;
+      trackingTierReconfigActive = false;
+      trackingTierReconfigTarget = null;
+      // Task A/C (Pass 15): a tracking drop (including a failed rescue falling back to
+      // tracking_loss_recovery) must never leave rescue state stuck.
+      rescueInProgress = false;
+      rescueAttemptsForEpoch = 0;
+      hasAcceptedFrameSinceTierReconfig = true;
       if (prevGray) { prevGray.delete(); prevGray = null; }
       if (prevPts) { prevPts.delete(); prevPts = null; }
       if (options.holdPose) {
@@ -2042,15 +2280,21 @@
     // itself (grep-able in DevTools without expanding an object); structuredData is the
     // secondary console argument. Also still feeds scannerDiagnostics for the dev panel.
     function logCallbackEvent(tag, summaryFields, structuredData) {
-      const summary = Object.keys(summaryFields || {})
-        .map(function (k) { return k + '=' + summaryFields[k]; })
-        .join(' ');
-      console.log(tag + (summary ? ' ' + summary : ''), Object.assign({
-        now: Math.round(performance.now()),
-        tracking,
-        scannerWorkMode,
-        epoch: trackingEpoch
-      }, summaryFields || {}, structuredData || {}));
+      // Task F (Pass 12): scannerDiagnostics.push below is UNCONDITIONAL — every event is
+      // always kept for the dev panel/export, "keep all critical failure evidence." Only
+      // the console.log is level-gated, since that is what real-device evidence showed
+      // flooding DevTools on nearly every frame.
+      if (shouldEmitDiagnosticLevel(tag)) {
+        const summary = Object.keys(summaryFields || {})
+          .map(function (k) { return k + '=' + summaryFields[k]; })
+          .join(' ');
+        console.log(tag + (summary ? ' ' + summary : ''), Object.assign({
+          now: Math.round(performance.now()),
+          tracking,
+          scannerWorkMode,
+          epoch: trackingEpoch
+        }, summaryFields || {}, structuredData || {}));
+      }
       scannerDiagnostics.push(tag, Object.assign({}, summaryFields || {}, structuredData || {}));
     }
 
@@ -2082,6 +2326,18 @@
     // media time keeps advancing with real time regardless of when our callback happens
     // to be invoked — a big mediaTime delta cannot by itself distinguish "camera stalled"
     // from "we were slow to be called back" — so this path must never call dropTracking).
+    // Task F (Pass 14): what the main thread was actually doing at the moment a genuine
+    // stall is declared — 'processing'/'tier_reconfig' are checked FIRST in
+    // onRvfcStallWatchdogFired (see below) and never reach enterCallbackStallRecovery at
+    // all, so by the time this runs it is normally 'waiting_for_callback'; kept as a
+    // function (not inlined) so onTrackingCallbackFired's late-arrival-race call site
+    // reports the same, consistently-derived value.
+    function callbackStallState() {
+      if (trackingTierReconfigActive) return 'tier_reconfig';
+      if (trackingFrameProcessing) return 'processing';
+      return 'waiting_for_callback';
+    }
+
     function enterCallbackStallRecovery(callbackId, reason) {
       // Task B (Pass 8): boundaries #3/#4/#5 (stall detection, rVFC rearm, RAF-fallback
       // entry) all funnel through this one function — reset here, once, before either
@@ -2091,8 +2347,14 @@
       logCallbackEvent('[TRACK CALLBACK CANCELLED]', { id: callbackId, reason: 'tracking_callback_stalled' }, {
         epoch: trackingEpoch, cancelledBy: reason
       });
-      logCallbackEvent('[TRACK CALLBACK STALLED]', { id: callbackId, elapsedMs: RVFC_STALL_TIMEOUT_MS },
-        trackingWorkloadSnapshot({ callbackId, source: reason }));
+      // Task F (Pass 14): distinguishes a genuine stall's context — was the main thread
+      // busy with a trackFrame computation, an in-epoch tier reconfiguration, or truly
+      // just waiting on the browser — plus what the last completed tick actually cost, so
+      // a real-device log can tell "the browser never delivered it" from "we were slow."
+      logCallbackEvent('[TRACK CALLBACK STALLED]', {
+        id: callbackId, elapsedMs: RVFC_STALL_TIMEOUT_MS, state: callbackStallState(),
+        lastFrameTotalMs: lastCompletedTickTotalMs, lastLkMs: lastCompletedTickLkMs
+      }, trackingWorkloadSnapshot({ callbackId, source: reason }));
       if (trackingCallbackHandle != null && typeof cam.cancelVideoFrameCallback === 'function') {
         try { cam.cancelVideoFrameCallback(trackingCallbackHandle); } catch (_) {}
       }
@@ -2128,6 +2390,33 @@
         // frames; that alone is not evidence of a stalled callback.
         scannerDiagnostics.push('rvfc_stall_watchdog_skipped_page_hidden', { callbackId, epoch: trackingEpoch });
         armRvfcStallWatchdog(callbackId);
+        return;
+      }
+      // Task E (Pass 12): a trackFrame computation actively running on the main thread is
+      // exactly why this callback hasn't been delivered/entered yet — that elapsed time
+      // was consumed by OUR OWN CPU-bound work, not evidence the browser/camera failed to
+      // deliver it. Do not extend RVFC_STALL_TIMEOUT_MS as the fix (explicitly forbidden);
+      // instead re-arm a FRESH watchdog window for the SAME callback and keep waiting —
+      // ownership is untouched, since callbackId may still be about to arrive the instant
+      // the main thread frees up.
+      if (trackingFrameProcessing) {
+        logCallbackEvent('[TRACK PROCESSING OVERRUN]', {
+          callbackId, elapsedMs: Math.round(performance.now() - trackingFrameStartedAt),
+          stage: trackingFrameStage || 'unknown'
+        }, {});
+        armRvfcStallWatchdog(callbackId);
+        return;
+      }
+      // Task D (Pass 14): an in-epoch tier reconfiguration deliberately cancelled this
+      // exact callback and hasn't rearmed a replacement yet — that is exactly why nothing
+      // is pending, never evidence the browser failed to deliver anything. Re-arming here
+      // would also be wrong (reconfig's own success path arms the next callback itself,
+      // exactly once) — just wait for reconfig to finish.
+      if (trackingTierReconfigActive) {
+        logCallbackEvent('[TRACK PROCESSING OVERRUN]', {
+          callbackId, elapsedMs: Math.round(performance.now() - trackingTierReconfigStartedAt),
+          stage: 'tier_reconfig'
+        }, {});
         return;
       }
       enterCallbackStallRecovery(callbackId, 'rvfc_stall_watchdog');
@@ -2551,6 +2840,30 @@
         return;
       }
       scannerGeneration++;
+      // Task C (Pass 13): a genuine camera restart is one of the two explicit reset
+      // points for the performance tier — whatever measured overrun caused a prior
+      // downgrade (or a prior session's downgraded state, if this is a resumed page)
+      // must not be carried into a fresh camera session. Re-derives from the same static
+      // device signal the tier started from, never a stale downgraded value.
+      if (performanceTier !== initialPerformanceTier()) {
+        logCallbackEvent('[TRACK PERFORMANCE TIER CHANGE]', {
+          oldTier: performanceTier, newTier: initialPerformanceTier(), reason: 'camera_restart',
+          recentLkMs: 0, recentTotalMs: 0
+        }, {});
+      }
+      performanceTier = initialPerformanceTier();
+      performanceTierReason = 'camera_restart';
+      consecutiveTierOverrunTicks = 0;
+      // Task D (Pass 14): a camera restart is also an explicit reset point for the
+      // in-epoch reconfig guard/state — never carried across into a fresh session.
+      tierReconfigAttemptsThisEpoch = 0;
+      trackingTierReconfigActive = false;
+      trackingTierReconfigTarget = null;
+      // Task C (Pass 15): a camera restart is also an explicit reset point for rescue
+      // state — never carried across into a fresh session.
+      rescueInProgress = false;
+      rescueAttemptsForEpoch = 0;
+      hasAcceptedFrameSinceTierReconfig = true;
       recoveryAttempt++;
       diagState.recoveryAttemptCount = recoveryAttempt;
       scannerDiagnostics.push('camera_restart_requested', { reason, restartCamera, generation: scannerGeneration, attempt: recoveryAttempt });
@@ -2778,6 +3091,10 @@
     // one timeline: currentTime/duration/ended/paused/loop/readyState/networkState plus
     // tracking + overlay state + which pair/video this is about.
     function logVideoCheckpoint(tag, reason, extra) {
+      // Task E (Pass 15): same shared level-gating as logCallbackEvent/logTimingCheckpoint
+      // — reused, not a third mechanism. Console-only (never fed scannerDiagnostics), so
+      // gating this one call is the complete fix.
+      if (!shouldEmitDiagnosticLevel(tag)) return;
       console.log(tag, Object.assign({
         currentTime: overlay.currentTime,
         duration: overlay.duration,
@@ -3214,28 +3531,62 @@
       return pts.reduce((acc, p) => ({ x: acc.x + p.x / pts.length, y: acc.y + p.y / pts.length }), { x: 0, y: 0 });
     }
 
-    function poseCompatibility(nextCorners) {
-      if (!currCorners || currCorners.length !== 4) return { ok: true, reason: 'first_pose' };
-      if (signedQuadArea(currCorners) <= 0 || signedQuadArea(nextCorners) <= 0) return { ok: false, reason: 'winding_flip' };
+    // Task C (Pass 11): bounding box of a corner set — reuses the existing pointBounds
+    // helper (already used for LK-point bounds) rather than a new one.
+    function cornerBounds(pts) {
+      return pointBounds(pts.flatMap(function (p) { return [p.x, p.y]; }));
+    }
+
+    // Task C (Pass 11): frame-size-independent shape-instability measurements, comparing
+    // a proposed quad against the last rendered (accepted) one. Reuses poseCompatibility's
+    // own frameMin normalization so both diagnostics agree on scale.
+    function computeShapeDisplacement(prevCorners, nextCorners, frameMinDim) {
+      const perCorner = nextCorners.map(function (p, i) {
+        return Math.hypot(p.x - prevCorners[i].x, p.y - prevCorners[i].y) / frameMinDim;
+      });
+      const sorted = perCorner.slice().sort(function (a, b) { return a - b; });
+      const medianCornerShiftNorm = (sorted[1] + sorted[2]) / 2;
+      const prevB = cornerBounds(prevCorners), nextB = cornerBounds(nextCorners);
+      const widthRatio = nextB.width / Math.max(prevB.width, 1);
+      const heightRatio = nextB.height / Math.max(prevB.height, 1);
+      return {
+        perCorner,
+        maxCornerShiftNorm: Math.max.apply(null, perCorner),
+        medianCornerShiftNorm,
+        widthRatio,
+        heightRatio
+      };
+    }
+
+    // Task B (Pass 12): poseCompatibility now takes the previous quad + normalization
+    // dimension explicitly instead of reading module-level currCorners/frameW/frameH —
+    // its ONE caller (trackFrame) passes currCornersTrack + trackWidth/trackHeight, so
+    // this hard geometry check runs consistently in track-space. Every threshold below
+    // (2.5/0.4, 0.35, 0.55, 2.0/0.5, 2.0) is byte-identical to before — only the space and
+    // parameter-passing changed, never weakened (ratios are scale-independent by
+    // construction, so the accept/hold/reject decision this produces is unchanged).
+    function poseCompatibility(nextCorners, previousCorners, frameMinDim) {
+      if (!previousCorners || previousCorners.length !== 4) return { ok: true, reason: 'first_pose' };
+      if (signedQuadArea(previousCorners) <= 0 || signedQuadArea(nextCorners) <= 0) return { ok: false, reason: 'winding_flip' };
       if (isSelfIntersectingQuad(nextCorners)) return { ok: false, reason: 'self_intersecting_quad' };
-      const prevArea = Math.max(quadArea2(currCorners), 1);
+      const prevArea = Math.max(quadArea2(previousCorners), 1);
       const nextArea = Math.max(quadArea2(nextCorners), 1);
       const areaRatio = nextArea / prevArea;
-      const prevCenter = quadCenter(currCorners);
+      const prevCenter = quadCenter(previousCorners);
       const nextCenter = quadCenter(nextCorners);
-      const frameMin = Math.max(Math.min(frameW, frameH), 1);
+      const frameMin = Math.max(frameMinDim || 1, 1);
       const centerJump = Math.hypot(nextCenter.x - prevCenter.x, nextCenter.y - prevCenter.y) / frameMin;
       let maxCornerJump = 0;
       for (let i = 0; i < 4; i++) {
-        maxCornerJump = Math.max(maxCornerJump, Math.hypot(nextCorners[i].x - currCorners[i].x, nextCorners[i].y - currCorners[i].y) / frameMin);
+        maxCornerJump = Math.max(maxCornerJump, Math.hypot(nextCorners[i].x - previousCorners[i].x, nextCorners[i].y - previousCorners[i].y) / frameMin);
       }
-      const prevEdges = currCorners.map((p, i) => Math.hypot(currCorners[(i + 1) % 4].x - p.x, currCorners[(i + 1) % 4].y - p.y));
+      const prevEdges = previousCorners.map((p, i) => Math.hypot(previousCorners[(i + 1) % 4].x - p.x, previousCorners[(i + 1) % 4].y - p.y));
       const nextEdges = nextCorners.map((p, i) => Math.hypot(nextCorners[(i + 1) % 4].x - p.x, nextCorners[(i + 1) % 4].y - p.y));
       const edgeRatios = nextEdges.map((edge, i) => edge / Math.max(prevEdges[i], 1));
       const maxEdgeRatio = Math.max(...edgeRatios);
       const minEdgeRatio = Math.min(...edgeRatios);
-      const prevDiagA = Math.hypot(currCorners[2].x - currCorners[0].x, currCorners[2].y - currCorners[0].y);
-      const prevDiagB = Math.hypot(currCorners[3].x - currCorners[1].x, currCorners[3].y - currCorners[1].y);
+      const prevDiagA = Math.hypot(previousCorners[2].x - previousCorners[0].x, previousCorners[2].y - previousCorners[0].y);
+      const prevDiagB = Math.hypot(previousCorners[3].x - previousCorners[1].x, previousCorners[3].y - previousCorners[1].y);
       const nextDiagA = Math.hypot(nextCorners[2].x - nextCorners[0].x, nextCorners[2].y - nextCorners[0].y);
       const nextDiagB = Math.hypot(nextCorners[3].x - nextCorners[1].x, nextCorners[3].y - nextCorners[1].y);
       const diagonalRatioChange = Math.max(nextDiagA / Math.max(prevDiagA, 1), nextDiagB / Math.max(prevDiagB, 1));
@@ -3245,6 +3596,32 @@
       if (maxEdgeRatio > 2.0 || minEdgeRatio < 0.5) return { ok: false, reason: 'edge_ratio_jump', areaRatio, centerJump, maxCornerJump, maxEdgeRatio, minEdgeRatio, diagonalRatioChange };
       if (diagonalRatioChange > 2.0) return { ok: false, reason: 'diagonal_jump', areaRatio, centerJump, maxCornerJump, maxEdgeRatio, minEdgeRatio, diagonalRatioChange };
       return { ok: true, reason: 'compatible', areaRatio, centerJump, maxCornerJump, maxEdgeRatio, minEdgeRatio, diagonalRatioChange };
+    }
+
+    // Task A (Pass 13): derive the local-tracking-space dimensions from the source
+    // (intrinsic) frame size — capped at the CURRENT tier's TIER_TRACK_MAX_DIM entry on
+    // the larger side, aspect ratio preserved, never upscaled (a source already at or
+    // under the cap is used as-is, scale 1). scaleX/scaleY are computed from the ACTUAL
+    // rounded track dimensions (not the raw ratio), so toTrackSpace/toIntrinsicSpace
+    // round-trip using the same numbers reported in [TRACK SPACE CONFIG].
+    function computeTrackSpaceDimensions(sourceWidth, sourceHeight, tier) {
+      const maxDimCap = TIER_TRACK_MAX_DIM[tier];
+      const maxDim = Math.max(sourceWidth, sourceHeight);
+      if (!(maxDim > maxDimCap)) {
+        return { width: sourceWidth, height: sourceHeight, scaleX: 1, scaleY: 1 };
+      }
+      const scale = maxDimCap / maxDim;
+      const width = Math.max(2, Math.round(sourceWidth * scale));
+      const height = Math.max(2, Math.round(sourceHeight * scale));
+      return { width, height, scaleX: width / sourceWidth, scaleY: height / sourceHeight };
+    }
+
+    function toTrackSpace(corners) {
+      return corners.map(p => ({ x: p.x * trackSpaceScaleX, y: p.y * trackSpaceScaleY }));
+    }
+
+    function toIntrinsicSpace(corners) {
+      return corners.map(p => ({ x: p.x / trackSpaceScaleX, y: p.y / trackSpaceScaleY }));
     }
 
     function matFromVideoGray() {
@@ -3265,8 +3642,24 @@
     function resetTrackingEpoch(width, height) {
       if (prevGray) { prevGray.delete(); prevGray = null; }
       if (prevPts) { prevPts.delete(); prevPts = null; }
-      trackingCanvas.width = width;
-      trackingCanvas.height = height;
+      // Task B (Pass 12): the tracking canvas — and everything derived from it (gray,
+      // prevGray, LK points, homography) — is sized to the dedicated LOWER-resolution
+      // track space, never the intrinsic width/height directly. currCornersTrack is
+      // (re)computed here from whatever currCorners currently holds (already the fresh
+      // accepted intrinsic quad by the time this runs — see initializeFreshLiveTracker).
+      const trackSpace = computeTrackSpaceDimensions(width, height, performanceTier);
+      trackWidth = trackSpace.width;
+      trackHeight = trackSpace.height;
+      trackSpaceScaleX = trackSpace.scaleX;
+      trackSpaceScaleY = trackSpace.scaleY;
+      trackingCanvas.width = trackWidth;
+      trackingCanvas.height = trackHeight;
+      currCornersTrack = currCorners ? toTrackSpace(currCorners) : null;
+      logCallbackEvent('[TRACK SPACE CONFIG]', {
+        sourceWidth: width, sourceHeight: height, trackWidth, trackHeight,
+        scaleX: Number(trackSpaceScaleX.toFixed(4)), scaleY: Number(trackSpaceScaleY.toFixed(4)),
+        tier: performanceTier, reason: performanceTierReason
+      }, {});
       trackingEpoch++;
       // Task B (Pass 8): boundary #2 (epoch change) — redundant-safe alongside
       // startTrackingLoop()'s own reset (this can fire on its own tick, one after
@@ -3279,6 +3672,25 @@
       reseedAttemptsForEpoch = 0;
       consecutiveReseedFailures = 0;
       firstPostReseedLkPending = false;
+      // Task F (Pass 11): belt-and-suspenders reset for the shape-continuity/hold state at
+      // the "new tracking epoch" boundary specifically — clearTrackingGeometry (called by
+      // dropTracking) already resets this on a drop, but a fresh epoch can also start from
+      // an accepted re-anchor that never went through dropTracking.
+      shapeHoldFrames = 0;
+      shapeHoldStartedAt = 0;
+      consecutiveShapeRejects = 0;
+      lastAcceptedCorners = null;
+      lastAcceptedShapeAt = 0;
+      // Task A (Pass 14): a fresh epoch (whether from a genuine bootstrap or a successful
+      // in-epoch tier reconfiguration) resets the reconfig-attempt budget — the NEW epoch
+      // gets its own fresh allowance, never inheriting the old one's exhausted count.
+      tierReconfigAttemptsThisEpoch = 0;
+      // Task A/C (Pass 15): fresh rescue budget for the new epoch too. Set true here
+      // (a genuine fresh bootstrap has no reconfig history to wait out) — when this call
+      // came from attemptInEpochTierReconfig itself, its own success path sets this back
+      // to false immediately afterward, overriding this default.
+      rescueAttemptsForEpoch = 0;
+      hasAcceptedFrameSinceTierReconfig = true;
       // Task D: a fresh tracking epoch (bootstrap or accepted re-detection) is the natural
       // "clean start" point to try the preferred rVFC path again — no permanent fallback
       // lock. No separate cooldown timer is introduced; every fresh epoch is itself a
@@ -3463,7 +3875,11 @@
 
       let roiGray = null, roiMask = null, candidates = null;
       try {
-        const targetNew = MAX_TRACK_POINTS - survivingCount;
+        // Task D (Pass 13): reseed targets the CURRENT tier's point cap, never the
+        // device-mode ceiling directly — a downgrade takes effect on the very next reseed
+        // within the same epoch, not just at the next bootstrap.
+        const tierMaxPoints = currentMaxTrackPoints();
+        const targetNew = tierMaxPoints - survivingCount;
         if (targetNew < RESEED_MIN_NEW_POINTS) {
           return fail('no_capacity_remaining', 0);
         }
@@ -3514,7 +3930,7 @@
         const merged = survivingPts.slice();
         let added = 0;
         for (let i = 0; i < candData.length; i += 2) {
-          if ((merged.length / 2) >= MAX_TRACK_POINTS) break;
+          if ((merged.length / 2) >= tierMaxPoints) break;
           const cx = candData[i] + roiX, cy = candData[i + 1] + roiY;
           if (!grid.isNear(cx, cy)) {
             merged.push(cx, cy);
@@ -3571,12 +3987,21 @@
       try {
         resetTrackingEpoch(frameW, frameH);
         gray = matFromVideoGray();
-        mask = maskFromQuad(currCorners);
+        // Task B (Pass 12): mask/goodFeaturesToTrack/coverage all run in track-space now —
+        // currCornersTrack (computed inside resetTrackingEpoch above from the fresh
+        // currCorners) is the correct quad for a gray Mat sized to trackWidth/trackHeight.
+        mask = maskFromQuad(currCornersTrack);
         features = new cv.Mat();
-        cv.goodFeaturesToTrack(gray, features, MAX_TRACK_POINTS, 0.01, 8, mask, 3, false, 0.04);
-        const flat = Array.from(features.data32F || []);
+        // Task B (Pass 13): bootstrap also requests the CURRENT tier's point target, not
+        // always the device-mode ceiling — a low/medium tier starts with fewer points,
+        // meaning less LK work every subsequent tick for the rest of this epoch too.
+        cv.goodFeaturesToTrack(gray, features, currentMaxTrackPoints(), 0.01, 8, mask, 3, false, 0.04);
+        // Task C (Pass 12): read the typed array directly — no Array.from() copy. Every
+        // consumer below (pointCoverage/pointBounds) already indexes with a plain for-loop,
+        // which works identically on a Float32Array.
+        const flat = features.data32F;
         const count = flat.length / 2;
-        const coverage = pointCoverage(flat, currCorners);
+        const coverage = pointCoverage(flat, currCornersTrack);
         activeTrackerCoverage = coverage;
         activeTrackerInitialPointCount = count;
         activeTrackerInitializedAt = now || performance.now();
@@ -3616,6 +4041,185 @@
         });
         return false;
       } finally {
+        deleteMats(mask, features);
+      }
+    }
+
+    // Task A/B/D (Pass 14): apply a performance-tier downgrade to the CURRENTLY ACTIVE
+    // tracking epoch instead of waiting for the next natural bootstrap/reacquisition —
+    // real-device evidence showed tracking continuing at the OLD (slower) resolution and
+    // point count for the rest of a long-lived epoch after a downgrade decision, entirely
+    // defeating the point of downgrading. Bounded to at most one attempt per epoch (see
+    // MAX_TIER_RECONFIG_ATTEMPTS_PER_EPOCH) plus a cooldown (TIER_RECONFIG_COOLDOWN_MS,
+    // reusing TRACKING_GRACE_MS rather than inventing a new ceiling). Falls back to the
+    // existing tracking-loss/recovery path on any failure — never renders a speculative
+    // quad built from an unverified point rebuild (Task B).
+    function attemptInEpochTierReconfig(oldTier, newTier) {
+      const startedAt = performance.now();
+      // Pre-flight guard: nothing to reconfigure without an actively-tracked, already-
+      // accepted intrinsic quad — the tier value itself still takes effect at the next
+      // natural bootstrap regardless (Pass 13's existing behavior), so this is a safe,
+      // inert no-op, never a partial/broken state.
+      if (!tracking || trackerBootstrapPending || !currCorners) {
+        logCallbackEvent('[TRACK TIER RECONFIG FAILED]', {
+          reason: 'not_actively_tracking', fallback: 'continue_old_tier'
+        }, {});
+        return;
+      }
+      if (tierReconfigAttemptsThisEpoch >= MAX_TIER_RECONFIG_ATTEMPTS_PER_EPOCH) {
+        logCallbackEvent('[TRACK TIER RECONFIG FAILED]', {
+          reason: 'attempt_budget_exhausted', fallback: 'continue_old_tier'
+        }, {});
+        return;
+      }
+      if (startedAt - lastTierReconfigAttemptAt < TIER_RECONFIG_COOLDOWN_MS) {
+        logCallbackEvent('[TRACK TIER RECONFIG FAILED]', {
+          reason: 'cooldown_active', fallback: 'continue_old_tier'
+        }, {});
+        return;
+      }
+      tierReconfigAttemptsThisEpoch++;
+      lastTierReconfigAttemptAt = startedAt;
+
+      const oldWidth = trackWidth, oldHeight = trackHeight;
+      const preview = computeTrackSpaceDimensions(frameW, frameH, newTier);
+      logCallbackEvent('[TRACK TIER RECONFIG START]', {
+        oldTier, newTier, oldWidth, oldHeight,
+        newWidth: preview.width, newHeight: preview.height, epoch: trackingEpoch
+      }, {});
+      trackingTierReconfigActive = true;
+      trackingTierReconfigStartedAt = startedAt;
+      trackingTierReconfigTarget = newTier;
+
+      // Task D: cancel only the currently-owned tracking callback, safely — this also
+      // clears its own stall watchdog and records it as the last-cancelled id, so a late
+      // physical delivery (a documented browser race) is still correctly recognized as
+      // 'cancelled_callback' rather than ever being reported as a stall.
+      cancelCurrentTrackingCallback('tier_reconfig');
+
+      let gray = null, mask = null, features = null;
+      try {
+        // resetTrackingEpoch already does everything Task A/B require for the rebuild
+        // boundary itself: deletes the old-resolution prevGray/prevPts, computes the NEW
+        // tier's dimensions (from the now-updated performanceTier) and resizes the
+        // tracking canvas, converts the PRESERVED currCorners into the new track space,
+        // bumps trackingEpoch and the frame-gap continuity token (so a stale callback can
+        // never mutate the new epoch's state), and resets the reseed/shape-hold counters
+        // for a genuinely fresh baseline. tracking/scannerWorkMode/the overlay's own
+        // transform are completely untouched by it — the overlay stays visible throughout.
+        resetTrackingEpoch(frameW, frameH);
+        // Task B: fresh gray frame, fresh feature points, and the just-converted quad —
+        // all derived from this SAME captured frame; never the old-resolution Mats/points.
+        gray = matFromVideoGray();
+        mask = maskFromQuad(currCornersTrack);
+        features = new cv.Mat();
+        cv.goodFeaturesToTrack(gray, features, currentMaxTrackPoints(), 0.01, 8, mask, 3, false, 0.04);
+        const flat = features.data32F;
+        const count = flat.length / 2;
+        const coverage = pointCoverage(flat, currCornersTrack);
+        if (count < MIN_GOOD_POINTS || coverage < 0.25) {
+          throw new Error('insufficient_reconfig_points');
+        }
+        prevGray = gray;
+        gray = null;
+        prevGrayEpoch = trackingEpoch;
+        prevPts = features.clone();
+        activeTrackerInitialPointCount = count;
+        activeTrackerCoverage = coverage;
+        firstLkPending = true;
+        firstLiveTrackingFrameAt = performance.now();
+        firstLkFrameGapMs = null;
+        trackingTierReconfigActive = false;
+        // Task C (Pass 15): overrides resetTrackingEpoch's own default (true) — a rescue
+        // must wait for at least one PROVEN accepted frame on this new baseline before it
+        // is allowed to touch it too.
+        hasAcceptedFrameSinceTierReconfig = false;
+        const durationMs = Math.round(performance.now() - startedAt);
+        logCallbackEvent('[TRACK TIER RECONFIG SUCCESS]', {
+          tier: newTier, trackWidth, trackHeight, points: count, durationMs, epoch: trackingEpoch
+        }, {});
+        // Task D: the next callback is armed ONLY after successful reconfiguration —
+        // never before, never a duplicate (ensureTrackingCallbackOwnership no-ops if a
+        // callback somehow already pending).
+        ensureTrackingCallbackOwnership('tier_reconfig_success_rearm');
+      } catch (e) {
+        trackingTierReconfigActive = false;
+        logCallbackEvent('[TRACK TIER RECONFIG FAILED]', {
+          reason: e && e.message ? e.message : 'tier_reconfig_exception', fallback: 'tracking_loss_recovery'
+        }, {});
+        // Task B: do not render a speculative quad — fall back to the existing, bounded
+        // tracking-loss/single-reacquisition path exactly like any other tracking failure.
+        dropTracking('tier_reconfig_failed', [gray, mask, features], {
+          validation: { ok: false, reason: 'tier_reconfig_failed', message: e && e.message ? e.message : String(e) }
+        });
+        return;
+      }
+      // Success path only — the failure path above already handed mask/features to
+      // dropTracking's own extraMats deletion (never delete them twice).
+      deleteMats(mask, features);
+    }
+
+    // Task A/B (Pass 15): one bounded, last-resort feature-rescue attempt for a sharp
+    // point-population collapse — called ONLY from trackFrame's insufficient_flow_points
+    // branch, strictly AFTER graceExpired() and strictly BEFORE the actual drop, and only
+    // when the caller's own eligibility guard (tracking active, last-accepted quad still
+    // trustworthy, rescue budget/cooldown-after-reconfig clear, gap evidence within
+    // existing limits) already passed. Never called after ANY hard geometry rejection —
+    // those all live later in trackFrame's own pipeline (homography/corner-order/
+    // out-of-bounds/weak-geometry-support), which this insufficient_flow_points branch
+    // returns before ever reaching (Task D satisfied by call-site placement, exactly like
+    // the existing accepted-only reseed guarantee).
+    function attemptFeatureRescue(gray, pointsBefore, pointsAfterLk, rescueReason) {
+      const startedAt = performance.now();
+      rescueInProgress = true;
+      rescueAttemptsForEpoch++;
+      logCallbackEvent('[TRACK FEATURE RESCUE START]', {
+        epoch: trackingEpoch, tier: performanceTier, pointsBefore, pointsAfterLk,
+        reason: rescueReason, budgetUsed: rescueAttemptsForEpoch
+      }, {});
+      let mask = null, features = null;
+      try {
+        // Task B: mask/goodFeaturesToTrack run against the SAME gray this tick already
+        // captured (never a second capture) and currCornersTrack — the LAST ACCEPTED quad
+        // converted to the current tracking space, untouched by this tick's own failed LK
+        // (insufficient_flow_points fires before homography/corner extraction even run,
+        // so currCornersTrack still holds exactly the last accepted geometry).
+        mask = maskFromQuad(currCornersTrack);
+        features = new cv.Mat();
+        cv.goodFeaturesToTrack(gray, features, currentMaxTrackPoints(), 0.01, 8, mask, 3, false, 0.04);
+        const flat = features.data32F;
+        const count = flat.length / 2;
+        // Task B items 7/8: the SAME existing spatial-distribution/coverage/minimum-count
+        // floors reseed already requires — never a weaker, rescue-specific threshold.
+        const coverage = pointCoverage(flat, currCornersTrack);
+        const gridCells = countOccupiedGridCells(flat, currCornersTrack, POINT_GRID_SIZE);
+        if (count < MIN_GOOD_POINTS || coverage < RESEED_MIN_COVERAGE_AFTER_MERGE || gridCells < RESEED_MIN_GRID_CELLS) {
+          throw new Error('insufficient_rescue_points');
+        }
+        // Task B items 9/12: replace prevGray/prevPts ONLY now, on complete success —
+        // never merged with the collapsed LK survivors, never a partial application.
+        prevGray.delete();
+        prevGray = gray;
+        prevGrayEpoch = trackingEpoch;
+        prevPts.delete();
+        prevPts = features.clone();
+        const durationMs = Math.round(performance.now() - startedAt);
+        logCallbackEvent('[TRACK FEATURE RESCUE SUCCESS]', {
+          epoch: trackingEpoch, tier: performanceTier, newPoints: count, gridCells, durationMs
+        }, {});
+        return true;
+      } catch (e) {
+        // Task C: never render a speculative quad, never call the backend here — the
+        // caller falls back to the ORIGINAL evidence-based insufficient_flow_points drop,
+        // not a generic rescue-failure reason (Task C's explicit "do not replace the loss
+        // reason" instruction).
+        logCallbackEvent('[TRACK FEATURE RESCUE FAILED]', {
+          epoch: trackingEpoch, reason: e && e.message ? e.message : 'rescue_exception',
+          fallback: 'tracking_loss_recovery'
+        }, {});
+        return false;
+      } finally {
+        rescueInProgress = false;
         deleteMats(mask, features);
       }
     }
@@ -3764,6 +4368,26 @@
         stopTrackingLoop();
         return;
       }
+      // Task D (Pass 12): at most one trackFrame computation may be active at a time. In
+      // this file's fully-synchronous implementation this should never actually trigger —
+      // JS's single thread makes true reentrancy impossible without an await somewhere in
+      // the call chain — kept as an explicit, correct safety net rather than an assumption,
+      // matching this file's other "should be structurally unreachable" guards. Coalesce:
+      // keep only the newest deferred callback's (nowArg, metadata), discard anything
+      // older, and do NOT touch callback ownership here — the active computation's own
+      // top-of-tick rearm already owns that; scheduling a second one would violate the
+      // one-owner invariant.
+      if (trackingFrameProcessing) {
+        const deferredCallbackId = metadata && metadata.callbackId != null ? metadata.callbackId : null;
+        const replacedDeferred = latestDeferredFrameMetadata !== null;
+        latestDeferredFrameMetadata = { nowArg, metadata };
+        logCallbackEvent('[TRACK FRAME COALESCED]', {
+          activeCallbackId: activeProcessingCallbackId != null ? activeProcessingCallbackId : '-',
+          deferredCallbackId: deferredCallbackId != null ? deferredCallbackId : '-',
+          replacedDeferred
+        }, {});
+        return;
+      }
       scheduleTrackingFrame('tick_rearm', metadata && metadata.callbackId != null ? metadata.callbackId : null);
       // Task C ownership self-check: tracking must never be true with nothing pending to
       // continue it — trackingCallbackId null here (right after the rearm attempt above)
@@ -3808,41 +4432,99 @@
       const gapSinceLastTick = lastTrackFrameTs ? (now - lastTrackFrameTs) : 0;
       lastTrackFrameTs = now;
 
-      if (trackerBootstrapPending) {
-        // Task B (Pass 7): the unconditional top-of-tick rearm above already captured
-        // (and armed a successor under) whatever trackingEpoch held BEFORE bootstrap runs.
-        // initializeFreshLiveTracker() below calls resetTrackingEpoch(), which bumps it —
-        // so that already-armed successor would otherwise enter with a stale captured
-        // epoch the instant bootstrap succeeds (proven in the Pass 7 evidence: id=5
-        // captured epoch=0, bootstrap bumped trackingEpoch to 1 inside id=4's tick, id=5
-        // was then skipped as stale_epoch with nothing left to replace it). Cancel that
-        // successor and reissue a fresh one under the now-final epoch, in the same tick,
-        // before anything else can observe the mismatch.
-        const epochBeforeBootstrap = trackingEpoch;
-        const bootstrapped = initializeFreshLiveTracker(now, metadata);
-        if (bootstrapped && trackingEpoch !== epochBeforeBootstrap) {
-          cancelCurrentTrackingCallback('bootstrap_epoch_advanced');
-          ensureTrackingCallbackOwnership('bootstrap_epoch_advanced_rearm');
-        }
-        return;
+      // Task A/D/E (Pass 12): trackingFrameProcessing spans BOTH the bootstrap branch and
+      // the main LK/geometry pipeline below — cleared in the shared `finally`, regardless
+      // of which return path fires, so it can never get stuck true. stageTimingsMs/
+      // markStage are Task A's per-stage timing evidence; markStage records "time since
+      // the previous marked boundary," so whichever stages this tick actually reaches get
+      // a real duration and any stage never reached simply stays 0 (accurate — it took no
+      // time, since it never ran).
+      trackingFrameProcessing = true;
+      trackingFrameStartedAt = now;
+      activeProcessingCallbackId = metadata && metadata.callbackId != null ? metadata.callbackId : null;
+      let stageStartedAt = now;
+      const stageTimingsMs = {
+        gray: 0, opticalFlow: 0, pointFilter: 0, homography: 0,
+        geometry: 0, shape: 0, render: 0, reseed: 0
+      };
+      function markStage(name) {
+        const t = performance.now();
+        stageTimingsMs[name] = Math.round(t - stageStartedAt);
+        stageStartedAt = t;
+        trackingFrameStage = name;
       }
+      let pointsBeforeThisTick = 0;
+      let pointsAfterThisTick = 0;
+      let deferredToProcess = null;
+      // Task F (Pass 15): the precise, exhaustive [TRACK FRAME PERFORMANCE] trigger set —
+      // set at the specific point each condition actually occurs, read together in the
+      // finally block below. Replaces the old, broader gapWasSuspected/droppedThisTick
+      // triggers (which counted every drop, not just the ones worth surfacing by default).
+      let pointCollapseDetectedThisTick = false;
+      let tierChangedThisTick = false;
+      let rescueTriggeredThisTick = false;
+      let exceptionThisTick = false;
 
       let gray = null, nextPts = null, status = null, err = null;
       let prevMat = null, nextMat = null, mask = null, H = null;
+      // Task A/B (Pass 11): a large gap since the last successful LK is now only ever
+      // SUSPECTED here, never dropped here — see the fall-through comment below. These
+      // three are set (at most once, per tick) if a suspicion is recorded, and read by
+      // reportGapOutcome() at whichever existing exit point this tick actually reaches.
+      // Declared outside the try block so the catch block (tracking_exception) can also
+      // report an outcome for a tick that was mid-gap-recovery when it threw.
+      let gapWasSuspected = false;
+      let suspectedMediaTimeGapMs = null;
+      let suspectedWallTimeGapMs = null;
+      function reportGapOutcome(failureReason, goodPointCount, geometryGoodCount) {
+        if (!gapWasSuspected) return;
+        if (failureReason == null) {
+          diagState.frameGapRecoveredByCurrentFrame++;
+          logCallbackEvent('[TRACK GAP RECOVERED]', {
+            epoch: trackingEpoch, mediaTimeGapMs: suspectedMediaTimeGapMs,
+            goodPoints: goodPointCount != null ? goodPointCount : '-',
+            geometryGood: geometryGoodCount != null ? geometryGoodCount : '-',
+            reason: 'current_frame_valid'
+          }, {});
+        } else {
+          diagState.frameGapConfirmedAfterLk++;
+          logCallbackEvent('[TRACK GAP CONFIRMED]', {
+            epoch: trackingEpoch, mediaTimeGapMs: suspectedMediaTimeGapMs,
+            goodPoints: goodPointCount != null ? goodPointCount : '-',
+            geometryGood: geometryGoodCount != null ? geometryGoodCount : '-',
+            failureReason
+          }, {});
+        }
+      }
       try {
+        if (trackerBootstrapPending) {
+          // Task B (Pass 7): the unconditional top-of-tick rearm above already captured
+          // (and armed a successor under) whatever trackingEpoch held BEFORE bootstrap
+          // runs. initializeFreshLiveTracker() below calls resetTrackingEpoch(), which
+          // bumps it — so that already-armed successor would otherwise enter with a stale
+          // captured epoch the instant bootstrap succeeds (proven in the Pass 7 evidence:
+          // id=5 captured epoch=0, bootstrap bumped trackingEpoch to 1 inside id=4's tick,
+          // id=5 was then skipped as stale_epoch with nothing left to replace it). Cancel
+          // that successor and reissue a fresh one under the now-final epoch, in the same
+          // tick, before anything else can observe the mismatch.
+          const epochBeforeBootstrap = trackingEpoch;
+          const bootstrapped = initializeFreshLiveTracker(now, metadata);
+          if (bootstrapped && trackingEpoch !== epochBeforeBootstrap) {
+            cancelCurrentTrackingCallback('bootstrap_epoch_advanced');
+            ensureTrackingCallbackOwnership('bootstrap_epoch_advanced_rearm');
+          }
+          return;
+        }
+
         const epochAtTickStart = trackingEpoch;
 
-        // Task A/D (Pass 8): tracking_frame_gap_exceeded may ONLY fire when there are two
-        // consecutive, successfully processed LK frames from the same uninterrupted epoch
-        // and continuity generation. hasValidLkBaseline requires an actual prior
+        // Task A (Pass 8): hasValidLkBaseline requires an actual prior
         // establishFrameGapBaseline() call (only ever made after LK+geometry+applyWarp all
         // succeeded) whose epoch/continuityToken still match — never merely "trackFrame
         // was called before" (that included bootstrap ticks, bare rearm ticks, and the
         // first tick after any stall/RAF-fallback/ownership-repair recovery, none of which
         // is itself a successful LK frame). Without a valid baseline, this tick is not
-        // gap-evaluated at all — it falls through to normal gray/LK processing below, so a
-        // first-post-recovery frame can only fail (if it does) through the ordinary,
-        // evidence-producing LK-quality gates (goodPoints/gray populated), never this one.
+        // gap-evaluated at all — it falls through to normal gray/LK processing below.
         const hasValidLkBaseline = hasSuccessfulLkBaseline &&
           successfulLkEpoch === trackingEpoch &&
           successfulLkContinuityToken === frameGapContinuityToken;
@@ -3850,30 +4532,41 @@
           const presentedFrameGapMs = mediaTime != null && lastSuccessfulLkMediaTime != null
             ? (mediaTime - lastSuccessfulLkMediaTime) * 1000
             : null;
-          const hasPresentedFrameEvidence = presentedFrameGapMs != null;
-          const genuinePresentedGap = hasPresentedFrameEvidence && presentedFrameGapMs > TRACKING_GRACE_MS;
-          const workloadActive = diagState.encodeInFlight || diagState.fetchInFlight || diagState.capturePhase !== 'idle';
           const gapSinceLastSuccessfulLk = now - lastSuccessfulLkWallTime;
-          if (!genuinePresentedGap || document.hidden || workloadActive) {
+          if (document.hidden) {
+            // Page not visible is a distinct signal from "camera gap" — the tab isn't
+            // presenting frames to test at all — so this alone still bypasses the
+            // current-frame pipeline below, same as before Pass 11.
             setScannerWorkMode('RECOVERING', 'tracking_gap_suspended');
             clearTrackingGeometry('tracking_gap_suspended', { holdPose: true });
             startDetectLoop();
             scannerDiagnostics.push('tracking_gap_suspended', trackingWorkloadSnapshot({
               gapMs: Math.round(gapSinceLastSuccessfulLk),
               presentedFrameGapMs: presentedFrameGapMs != null ? Math.round(presentedFrameGapMs) : null,
-              reason: document.hidden ? 'page_hidden' : (workloadActive ? 'capture_workload_active' : (hasPresentedFrameEvidence ? 'scheduler_delay_without_new_presented_frame' : 'no_presented_frame_evidence'))
+              reason: 'page_hidden'
             }));
             return;
           }
-          dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({
-            frameGapMs: gapSinceLastSuccessfulLk,
-            gapMs: Math.round(gapSinceLastSuccessfulLk),
-            presentedFrameGapMs: Math.round(presentedFrameGapMs)
-          }));
-          return;
+          // Task A (Pass 11) — Blocker 1 fix: a large gap since the last successful LK is
+          // no longer sufficient, by itself, to drop tracking (real-device evidence:
+          // tracking_frame_gap_exceeded firing with goodPoints=-/gray=- — the current
+          // frame was never actually tested). Record the suspicion only, then fall through
+          // UNCONDITIONALLY into gray conversion and the full LK/geometry pipeline below;
+          // reportGapOutcome() logs the real outcome at whichever exit point this tick
+          // actually reaches — never a separate frame-gap drop.
+          gapWasSuspected = true;
+          suspectedMediaTimeGapMs = presentedFrameGapMs != null ? Math.round(presentedFrameGapMs) : null;
+          suspectedWallTimeGapMs = Math.round(gapSinceLastSuccessfulLk);
+          diagState.frameGapSuspected++;
+          logCallbackEvent('[TRACK GAP SUSPECTED]', {
+            epoch: trackingEpoch, continuityToken: frameGapContinuityToken,
+            mediaTimeGapMs: suspectedMediaTimeGapMs, wallTimeGapMs: suspectedWallTimeGapMs,
+            callbackId: trackingCallbackId
+          }, {});
         }
 
         gray = matFromVideoGray();
+        markStage('gray');
 
         // OpenCV safety: calcOpticalFlowPyrLK requires prevImg/nextImg of equal size.
         // A dimension or epoch mismatch here means prevGray/prevPts belong to a different
@@ -3881,6 +4574,7 @@
         // into LK; fail through the same controlled path as any other tracking loss.
         if (!prevGray || !prevPts || prevGrayEpoch !== trackingEpoch ||
             prevGray.rows !== gray.rows || prevGray.cols !== gray.cols) {
+          reportGapOutcome('tracking_frame_dimension_mismatch', null, null);
           dropTracking('tracking_frame_dimension_mismatch', [gray], { gray, frameGapMs: gapSinceLastTick });
           return;
         }
@@ -3892,6 +4586,7 @@
           firstLkFrameGapMs = firstLiveTrackingFrameAt ? now - firstLiveTrackingFrameAt : null;
         }
         cv.calcOpticalFlowPyrLK(prevGray, gray, prevPts, nextPts, status, err, new cv.Size(21, 21), 3);
+        markStage('opticalFlow');
 
         const goodPrev = [];
         const goodNext = [];
@@ -3904,6 +4599,7 @@
         // reason has always called "goodPoints").
         let lkStatusGoodCount = 0;
         const initialPointCountThisRound = prevPts.rows || (prevPts.data32F.length / 2);
+        pointsBeforeThisTick = initialPointCountThisRound;
 
         for (let i = 0; i < st.length; i++) {
           if (st[i] === 1) {
@@ -3917,19 +4613,23 @@
         }
 
         // Task A: in-bounds/ROI-contained are measured here against the QUAD this frame
-        // started with (currCorners hasn't been updated yet this tick) — a reasonable,
+        // started with (currCornersTrack hasn't been updated yet this tick) — a reasonable,
         // cheap proxy at this point in the pipeline; geometryGood (RANSAC inliers) isn't
         // known until findHomography runs below, so it's null whenever this frame fails
-        // before reaching that point (never fabricated).
+        // before reaching that point (never fabricated). Task B (Pass 12): bounds/ROI are
+        // measured in TRACK space now (trackWidth/trackHeight, currCornersTrack) — LK
+        // itself ran on the track-space gray/points.
         const inBoundsCount = goodNext.reduce(function (count, _, idx) {
           if (idx % 2 !== 0) return count;
           const x = goodNext[idx], y = goodNext[idx + 1];
-          return count + ((x >= 0 && x <= frameW && y >= 0 && y <= frameH) ? 1 : 0);
+          return count + ((x >= 0 && x <= trackWidth && y >= 0 && y <= trackHeight) ? 1 : 0);
         }, 0);
-        const roiGoodCount = currCorners ? goodNext.reduce(function (count, _, idx) {
+        const roiGoodCount = currCornersTrack ? goodNext.reduce(function (count, _, idx) {
           if (idx % 2 !== 0) return count;
-          return count + (isPointInQuadPadded(goodNext[idx], goodNext[idx + 1], currCorners, POINT_RETENTION_PAD) ? 1 : 0);
+          return count + (isPointInQuadPadded(goodNext[idx], goodNext[idx + 1], currCornersTrack, POINT_RETENTION_PAD) ? 1 : 0);
         }, 0) : null;
+        pointsAfterThisTick = goodPrev.length / 2;
+        markStage('pointFilter');
 
         if ((goodPrev.length / 2) < MIN_GOOD_POINTS) {
           logCallbackEvent('[TRACK POINT HEALTH]', {
@@ -3937,8 +4637,8 @@
             errorGood: goodPrev.length / 2, inBounds: inBoundsCount, roiGood: roiGoodCount,
             geometryGood: null, final: goodPrev.length / 2
           }, {
-            coverage: currCorners ? Number(pointCoverage(goodNext, currCorners).toFixed(3)) : null,
-            gridCells: currCorners ? countOccupiedGridCells(goodNext, currCorners, POINT_GRID_SIZE) : null,
+            coverage: currCornersTrack ? Number(pointCoverage(goodNext, currCornersTrack).toFixed(3)) : null,
+            gridCells: currCornersTrack ? countOccupiedGridCells(goodNext, currCornersTrack, POINT_GRID_SIZE) : null,
             medianError: medianOf(goodErrors)
           });
           enterGrace('insufficient_flow_points');
@@ -3952,6 +4652,34 @@
           // the bounded-grace-policy fallback Task C requires when reseeding couldn't
           // rescue the population in time.
           if (consecutiveReseedFailures > 0) diagState.dropsAfterFailedReseed++;
+          // Task A/C (Pass 15): one bounded feature-rescue opportunity, strictly before
+          // the drop — only when tracking is still genuinely anchored to a trustworthy
+          // last-accepted quad, no rescue is already active, this epoch's rescue budget
+          // isn't spent, this tick's own gap evidence is within the existing safe limit,
+          // and (if a tier reconfiguration happened this epoch) at least one real accepted
+          // frame has already proven the new baseline. Never reached after a hard geometry
+          // rejection — those all happen later in this same tick's pipeline, which this
+          // branch returns before ever reaching.
+          const rescueEligible = tracking && scannerWorkMode === 'TRACKING' &&
+            currCorners && currCornersTrack && !rescueInProgress &&
+            !trackingTierReconfigActive && hasAcceptedFrameSinceTierReconfig &&
+            rescueAttemptsForEpoch < MAX_RESCUE_ATTEMPTS_PER_EPOCH &&
+            gapSinceLastTick <= TRACKING_GRACE_MS;
+          pointCollapseDetectedThisTick = true;
+          if (rescueEligible) {
+            rescueTriggeredThisTick = true;
+            const sharpCollapse = initialPointCountThisRound >= 40 && (goodPrev.length / 2) <= 15;
+            const rescued = attemptFeatureRescue(
+              gray, initialPointCountThisRound, goodPrev.length / 2,
+              sharpCollapse ? 'sharp_point_collapse' : 'near_minimum'
+            );
+            if (rescued) {
+              // gray is now prevGray — never hand it to deleteMats.
+              deleteMats(nextPts, status, err);
+              return;
+            }
+          }
+          reportGapOutcome('insufficient_flow_points', goodPrev.length / 2, null);
           dropTracking('insufficient_flow_points', [gray, nextPts, status, err], {
             gray,
             frameGapMs: gapSinceLastTick,
@@ -3988,6 +4716,8 @@
         H = cv.findHomography(prevMat, nextMat, cv.RANSAC, RANSAC_REPROJ, mask);
 
         if (H.empty()) {
+          markStage('homography');
+          reportGapOutcome('homography_empty', goodPrev.length / 2, null);
           dropTracking('homography_empty', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
             gray,
             frameGapMs: gapSinceLastTick,
@@ -3997,13 +4727,38 @@
           return;
         }
 
-        const cornerMat = cornersToMat(currCorners);
+        // Task G (Pass 11): the RANSAC-inlier population + its spatial spread, computed
+        // once right after the homography is known so every downstream decision (the
+        // weak_geometry_support check below, and the [TRACK POINT HEALTH] log further
+        // down) reuses this SAME evidence instead of recomputing it. Reuses existing
+        // MIN_GOOD_POINTS/RESEED_MIN_GRID_CELLS/countOccupiedGridCells — no new threshold.
+        let geometryInlierCount = 0;
+        const geometryInlierNext = [];
+        for (let i = 0; i < mask.data.length; i++) {
+          if (mask.data[i]) {
+            geometryInlierCount++;
+            geometryInlierNext.push(goodNext[i * 2], goodNext[i * 2 + 1]);
+          }
+        }
+        // Task B (Pass 12): track-space quad — LK/homography/mask all just ran in track
+        // space, so the inlier population's spatial spread must be measured against the
+        // SAME-space quad.
+        const geometryInlierGridCells = currCornersTrack ? countOccupiedGridCells(geometryInlierNext, currCornersTrack, POINT_GRID_SIZE) : 0;
+        markStage('homography');
+
+        // Task B (Pass 12): perspectiveTransform/normalizeCornerOrder/out-of-bounds all
+        // operate on currCornersTrack (track-space) — newCorners stays track-space through
+        // the ENTIRE shape-continuity decision below; the one-time conversion back to
+        // intrinsic space happens only once, right before applyWarp, at the true accept.
+        const cornerMat = cornersToMat(currCornersTrack);
         const newCornerMat = new cv.Mat();
         cv.perspectiveTransform(cornerMat, newCornerMat, H);
         const newCornersRaw = matToCorners(newCornerMat);
         cornerMat.delete(); newCornerMat.delete();
-        const newCorners = normalizeCornerOrder(newCornersRaw, currCorners);
+        const newCorners = normalizeCornerOrder(newCornersRaw, currCornersTrack);
         if (!newCorners) {
+          markStage('geometry');
+          reportGapOutcome('corner_order_invalid', goodPrev.length / 2, geometryInlierCount);
           dropTracking('corner_order_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
             gray,
             frameGapMs: gapSinceLastTick,
@@ -4015,13 +4770,17 @@
           return;
         }
 
-        // Drop tracking if ALL corners drift >40% outside frame — target has left view
+        // Drop tracking if ALL corners drift >40% outside the tracking frame — target has
+        // left view. Task B (Pass 12): bound is trackWidth/trackHeight — newCorners is
+        // still track-space here.
         const pad = 0.40;
         const inBounds = newCorners.every(p =>
-          p.x > -pad * frameW && p.x < frameW * (1 + pad) &&
-          p.y > -pad * frameH && p.y < frameH * (1 + pad)
+          p.x > -pad * trackWidth && p.x < trackWidth * (1 + pad) &&
+          p.y > -pad * trackHeight && p.y < trackHeight * (1 + pad)
         );
         if (!inBounds) {
+          markStage('geometry');
+          reportGapOutcome('out_of_bounds', goodPrev.length / 2, geometryInlierCount);
           dropTracking('out_of_bounds', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
             gray,
             frameGapMs: gapSinceLastTick,
@@ -4032,25 +4791,91 @@
           });
           return;
         }
+        markStage('geometry');
 
-        const localPoseQuality = poseCompatibility(newCorners);
-        if (!localPoseQuality.ok) {
-          scannerDiagnostics.push('tracking_pose_rejected', localPoseQuality);
-          enterGrace('pose_rejected_' + localPoseQuality.reason);
-          if (!graceExpired()) {
+        const localPoseQuality = poseCompatibility(newCorners, currCornersTrack, Math.max(Math.min(trackWidth, trackHeight), 1));
+        // Task G (Pass 11): weak_geometry_support — require the RANSAC-inlier population
+        // itself (not just total errorGood LK survivors) to clear the SAME bar already
+        // required for tracking to be viable at all (MIN_GOOD_POINTS), with sufficient
+        // spatial spread (RESEED_MIN_GRID_CELLS) so a single small textured patch can never
+        // alone support the homography. Both constants reused, never invented.
+        const weakGeometrySupport = geometryInlierCount < MIN_GOOD_POINTS || geometryInlierGridCells < RESEED_MIN_GRID_CELLS;
+        const shapeReason = !localPoseQuality.ok ? localPoseQuality.reason : (weakGeometrySupport ? 'weak_geometry_support' : null);
+
+        if (shapeReason) {
+          // Task C/D/E (Pass 11) — Blocker 2 fix: an unstable proposed shape must never be
+          // rendered outright, but a single transient tick (motion blur, brief occlusion)
+          // shouldn't drop tracking either. Hard, structural failures (impossible area
+          // collapse/explosion, winding flip, self-intersection — the last two are already
+          // unreachable here since normalizeCornerOrder rejected them earlier as
+          // corner_order_invalid) reject immediately, bypassing HOLD. Everything else
+          // (center/corner/edge/diagonal jump, weak_geometry_support) is potentially a
+          // single-frame artifact, so it gets the dedicated, bounded shapeHold* allowance —
+          // never the generic trackingBadFrames/graceEnteredAt, which stays reserved for
+          // insufficient_flow_points.
+          const IMMEDIATE_SHAPE_REJECT_REASONS = { area_jump: true, winding_flip: true, self_intersecting_quad: true };
+          const isImmediateReject = Boolean(IMMEDIATE_SHAPE_REJECT_REASONS[shapeReason]);
+          let holdExpired = true;
+          if (!isImmediateReject) {
+            if (shapeHoldFrames === 0) shapeHoldStartedAt = performance.now();
+            shapeHoldFrames++;
+            consecutiveShapeRejects++;
+            holdExpired = shapeHoldFrames >= SHAPE_HOLD_MAX_FRAMES || (performance.now() - shapeHoldStartedAt) >= SHAPE_HOLD_MAX_MS;
+          }
+          const decision = (isImmediateReject || holdExpired) ? 'reject' : 'hold';
+          const errorGoodCount = goodPrev.length / 2;
+          // Task B (Pass 12): normalized in TRACK space — scale-independent ratios/deltas
+          // are unaffected by which consistent space they're computed in (Task B's
+          // "measurements must remain normalized and equivalent" requirement).
+          const frameMinDim = Math.max(Math.min(trackWidth, trackHeight), 1);
+          const shapeDisp = currCornersTrack ? computeShapeDisplacement(currCornersTrack, newCorners, frameMinDim) : null;
+          scannerDiagnostics.push('tracking_pose_rejected', Object.assign({}, localPoseQuality, {
+            weakGeometrySupport, geometryInlierCount, geometryInlierGridCells, shapeReason, decision
+          }));
+          // Task C: ONE bounded diagnostic when suspicious — never logged on a healthy
+          // (accepted) frame.
+          logCallbackEvent('[TRACK SHAPE HEALTH]', {
+            epoch: trackingEpoch, decision, reason: shapeReason,
+            geometryGood: geometryInlierCount, gridCells: geometryInlierGridCells
+          }, {
+            maxCornerShiftNorm: shapeDisp ? Number(shapeDisp.maxCornerShiftNorm.toFixed(3)) : null,
+            medianCornerShiftNorm: shapeDisp ? Number(shapeDisp.medianCornerShiftNorm.toFixed(3)) : null,
+            areaRatio: localPoseQuality.areaRatio != null ? Number(localPoseQuality.areaRatio.toFixed(3)) : null,
+            widthRatio: shapeDisp ? Number(shapeDisp.widthRatio.toFixed(3)) : null,
+            heightRatio: shapeDisp ? Number(shapeDisp.heightRatio.toFixed(3)) : null,
+            edgeRatioDelta: localPoseQuality.maxEdgeRatio != null
+              ? Number(Math.max(localPoseQuality.maxEdgeRatio - 1, 1 - localPoseQuality.minEdgeRatio).toFixed(3)) : null,
+            diagonalRatioDelta: localPoseQuality.diagonalRatioChange != null
+              ? Number((localPoseQuality.diagonalRatioChange - 1).toFixed(3)) : null,
+            centroidShiftNorm: localPoseQuality.centerJump != null ? Number(localPoseQuality.centerJump.toFixed(3)) : null,
+            geometryInlierRatio: errorGoodCount > 0 ? Number((geometryInlierCount / errorGoodCount).toFixed(3)) : null
+          });
+
+          if (decision === 'hold') {
+            // HOLD: keep rendering the last accepted shape (currCorners/overlay untouched),
+            // never update lastAcceptedCorners from unaccepted geometry, never reseed from
+            // it, never call the backend — just skip this tick's proposed shape.
+            markStage('shape');
             deleteMats(gray, nextPts, status, err, prevMat, nextMat, mask, H);
             return;
           }
-          dropTracking('pose_rejected_' + localPoseQuality.reason, [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
+
+          markStage('shape');
+          reportGapOutcome('pose_rejected_' + shapeReason, errorGoodCount, geometryInlierCount);
+          dropTracking('pose_rejected_' + shapeReason, [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
             gray,
             frameGapMs: gapSinceLastTick,
-            goodPointCount: goodPrev.length / 2,
+            goodPointCount: errorGoodCount,
             pointBounds: pointBounds(goodNext),
             proposedCorners: newCorners,
             validation: localPoseQuality
           });
           return;
         }
+        // Accepted shape: reset the dedicated hold/reject state.
+        shapeHoldFrames = 0;
+        consecutiveShapeRejects = 0;
+        markStage('shape');
 
         if (trackingEpoch !== epochAtTickStart) {
           // Defensive: the tracking epoch changed underneath this tick. Structurally this
@@ -4058,6 +4883,7 @@
           // fresh accepted detection or a controlled failure bumps trackingEpoch, and
           // neither can interleave with a synchronous function body — kept as an explicit
           // guard so a result computed against a superseded epoch can never be applied.
+          reportGapOutcome('tracking_epoch_superseded', goodPrev.length / 2, geometryInlierCount);
           dropTracking('tracking_epoch_superseded', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
             gray,
             frameGapMs: gapSinceLastTick,
@@ -4069,8 +4895,15 @@
           return;
         }
 
-        currCorners = newCorners;
+        // Task B (Pass 12): newCorners is the accepted TRACK-space quad — currCornersTrack
+        // carries it forward for next tick's internal pipeline; currCorners gets the ONE
+        // conversion back to intrinsic/display space, which is what applyWarp (and every
+        // caller outside trackFrame) expects.
+        currCornersTrack = newCorners;
+        currCorners = toIntrinsicSpace(newCorners);
         if (!applyWarp(currCorners)) {
+          markStage('render');
+          reportGapOutcome('tracking_geometry_invalid', goodPrev.length / 2, geometryInlierCount);
           dropTracking('tracking_geometry_invalid', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
             gray,
             frameGapMs: gapSinceLastTick,
@@ -4088,31 +4921,46 @@
         if (frameW > 0 && frameH > 0) diagState.visibleAreaRatio = quadArea2(currCorners) / (frameW * frameH);
         lastSuccessfulLkAt = performance.now();
         lastPoseUpdateAt = lastSuccessfulLkAt;
+        // Task E (Pass 11): the true ACCEPT point — the only place lastAcceptedCorners/
+        // lastAcceptedShapeAt are updated, mirroring currCorners itself.
+        lastAcceptedCorners = cloneCorners(currCorners);
+        lastAcceptedShapeAt = lastSuccessfulLkAt;
+        // Task C (Pass 15): this tick's ACCEPT is the "at least one valid accepted
+        // tracking frame" a rescue must wait for after an in-epoch tier reconfiguration.
+        hasAcceptedFrameSinceTierReconfig = true;
+        reportGapOutcome(null, goodPrev.length / 2, geometryInlierCount);
         // Task A/C (Pass 8): LK + geometry validation + applyWarp have ALL just succeeded
         // for this exact tick — the only point in this file allowed to establish the
         // frame-gap baseline. Task B (Pass 10): if this is the first successful LK after
         // a reseed boundary, label it distinctly and clear the pending flag — this
         // baseline (not the one from before reseed) is what the tick AFTER this one gets
-        // gap-compared against.
-        establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending ? 'first_post_reseed_lk' : 'successful_lk');
+        // gap-compared against. Task A (Pass 11): a baseline established right after a
+        // recovered suspected gap is labeled distinctly too — same mechanism (refreshes
+        // lastSuccessfulLkWallTime/MediaTime), just a provable reason in the log.
+        establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt, firstPostReseedLkPending
+          ? 'first_post_reseed_lk' : (gapWasSuspected ? 'gap_recovered' : 'successful_lk'));
         if (firstPostReseedLkPending) firstPostReseedLkPending = false;
+        markStage('render');
 
         // Task E: retain only survivors still inside the quad JUST applied this tick —
         // a point that drifted into the background must never keep being carried
         // forward. Task D is satisfied by placement: everything below only ever runs
         // after homography/corners/geometry have ALL already been validated above.
+        // Task B (Pass 12): goodNext/gray are still track-space — pruning/coverage/reseed
+        // all use currCornersTrack, never the just-converted intrinsic currCorners.
         const prunedNext = [];
         for (let i = 0; i < goodNext.length; i += 2) {
-          if (isPointInQuadPadded(goodNext[i], goodNext[i + 1], currCorners, POINT_RETENTION_PAD)) {
+          if (isPointInQuadPadded(goodNext[i], goodNext[i + 1], currCornersTrack, POINT_RETENTION_PAD)) {
             prunedNext.push(goodNext[i], goodNext[i + 1]);
           }
         }
-        const survivingCoverage = pointCoverage(prunedNext, currCorners);
-        const survivingGridCells = countOccupiedGridCells(prunedNext, currCorners, POINT_GRID_SIZE);
-        let geometryInlierCount = 0;
-        for (let i = 0; i < mask.data.length; i++) { if (mask.data[i]) geometryInlierCount++; }
+        const survivingCoverage = pointCoverage(prunedNext, currCornersTrack);
+        const survivingGridCells = countOccupiedGridCells(prunedNext, currCornersTrack, POINT_GRID_SIZE);
+        pointsAfterThisTick = prunedNext.length / 2;
 
         // Task A: the "final" funnel stage — after ROI-pruning, before any reseed.
+        // geometryInlierCount reused from right after findHomography (Task G) — no need
+        // to recompute the RANSAC-inlier count a second time.
         logCallbackEvent('[TRACK POINT HEALTH]', {
           epoch: trackingEpoch, before: initialPointCountThisRound, lkGood: lkStatusGoodCount,
           errorGood: goodPrev.length / 2, inBounds: inBoundsCount, roiGood: prunedNext.length / 2,
@@ -4133,8 +4981,10 @@
         if (needsReseed && !reseedInProgress &&
             reseedAttemptsForEpoch < MAX_RESEED_ATTEMPTS_PER_EPOCH &&
             consecutiveReseedFailures < MAX_CONSECUTIVE_RESEED_FAILURES) {
-          finalPts = attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells);
+          finalPts = attemptFeatureReseed(gray, currCornersTrack, prunedNext, survivingCoverage, survivingGridCells);
+          pointsAfterThisTick = finalPts.length / 2;
         }
+        markStage('reseed');
 
         prevGray.delete();
         prevGray = gray;
@@ -4162,11 +5012,94 @@
         // broken epoch, records an explicit reason, and enters the existing bounded
         // pose-hold/recovery policy instead of leaving stale geometry visible indefinitely.
         console.error('Track frame error:', e);
+        exceptionThisTick = true;
+        reportGapOutcome('tracking_exception', null, null);
         dropTracking('tracking_exception', [gray, nextPts, status, err, prevMat, nextMat, mask, H], {
           gray,
           frameGapMs: gapSinceLastTick,
           validation: { ok: false, reason: 'tracking_exception', message: e && e.message ? e.message : String(e) }
         });
+      } finally {
+        // Task A/D/E (Pass 12): runs on EVERY exit from the try block above (every
+        // dropTracking return, the HOLD return, the bootstrap return, and the catch
+        // block) — this is the one place trackingFrameProcessing is guaranteed to clear,
+        // [TRACK FRAME PROCESSING COMPLETE] is guaranteed to log, and a coalesced deferred
+        // frame is guaranteed to be picked up, regardless of which stage this tick reached.
+        const completedCallbackId = activeProcessingCallbackId;
+        const totalTrackFrameMs = Math.round(performance.now() - trackingFrameStartedAt);
+        // Task F (Pass 14): always recorded, never gated by diagnosticLevel — a stall
+        // diagnostic needs to know what the last tick actually cost regardless of whether
+        // that tick's own performance log was itself suppressed as routine.
+        lastCompletedTickTotalMs = totalTrackFrameMs;
+        lastCompletedTickLkMs = stageTimingsMs.opticalFlow;
+        trackingFrameProcessing = false;
+        activeProcessingCallbackId = null;
+        trackingFrameStage = null;
+        deferredToProcess = latestDeferredFrameMetadata;
+        latestDeferredFrameMetadata = null;
+        logCallbackEvent('[TRACK FRAME PROCESSING COMPLETE]', {
+          callbackId: completedCallbackId != null ? completedCallbackId : '-',
+          durationMs: totalTrackFrameMs, deferredPending: deferredToProcess !== null
+        }, {});
+        // Task F (Pass 15): computed once, shared by BOTH the performance-log trigger
+        // below and the tier-downgrade decision further down — only ever meaningful on a
+        // genuine LK tick (a bootstrap tick never ran LK; stageTimingsMs.opticalFlow
+        // stays 0, so both read false).
+        const lkOverrun = stageTimingsMs.opticalFlow > 0 && stageTimingsMs.opticalFlow > LK_MS_SAFE_BUDGET;
+        const totalOverrun = totalTrackFrameMs > SLOW_TRACK_FRAME_MS;
+        // Task C (Pass 13): performance-adaptive tier downgrade — only evaluated on a
+        // genuine LK tick (stageTimingsMs.opticalFlow > 0; a bootstrap tick never ran LK
+        // and must never count toward this). A bounded consecutive-overrun streak (never
+        // a single slow frame, never a per-frame decision) downgrades exactly ONE tier and
+        // resets the streak; a healthy tick resets it to 0. No automatic upgrade within
+        // the same tracking epoch — the tier only ever recovers via the explicit reset in
+        // recoverScannerInner's real-restart path (or a fresh page load).
+        if (stageTimingsMs.opticalFlow > 0) {
+          if (lkOverrun || totalOverrun) {
+            consecutiveTierOverrunTicks++;
+          } else {
+            consecutiveTierOverrunTicks = 0;
+          }
+          if (consecutiveTierOverrunTicks >= TIER_DOWNGRADE_STREAK && performanceTier !== 'low') {
+            const oldTier = performanceTier;
+            performanceTier = performanceTier === 'high' ? 'medium' : 'low';
+            performanceTierReason = lkOverrun ? 'lk_ms_overrun' : 'total_ms_overrun';
+            consecutiveTierOverrunTicks = 0;
+            tierChangedThisTick = true;
+            logCallbackEvent('[TRACK PERFORMANCE TIER CHANGE]', {
+              oldTier, newTier: performanceTier, reason: performanceTierReason,
+              recentLkMs: stageTimingsMs.opticalFlow, recentTotalMs: totalTrackFrameMs
+            }, {});
+            // Task A (Pass 14): apply the downgrade to THIS epoch's tracking space
+            // immediately, rather than waiting for the next natural bootstrap — its own
+            // internal try/catch routes any failure through the existing tracking-loss/
+            // recovery path, never throwing back up into this finally block.
+            attemptInEpochTierReconfig(oldTier, performanceTier);
+          }
+        }
+        // Task F (Pass 15): the exhaustive, precise trigger set — totalMs slow, lkMs over
+        // budget, a point-population collapse was detected, a tier change or rescue fired
+        // this tick (tierChangedThisTick is already known — computed just above), an
+        // exception occurred, or verbose mode was requested explicitly. Replaces the old,
+        // broader gapWasSuspected/droppedThisTick triggers, which made routine 200-290ms
+        // healthy ticks (and every ordinary drop) visible by default.
+        if (totalOverrun || lkOverrun || pointCollapseDetectedThisTick || tierChangedThisTick ||
+            rescueTriggeredThisTick || exceptionThisTick || diagnosticLevel === 'verbose') {
+          logCallbackEvent('[TRACK FRAME PERFORMANCE]', {
+            epoch: trackingEpoch, callbackId: completedCallbackId != null ? completedCallbackId : '-',
+            grayMs: stageTimingsMs.gray, lkMs: stageTimingsMs.opticalFlow, filterMs: stageTimingsMs.pointFilter,
+            homographyMs: stageTimingsMs.homography, geometryMs: stageTimingsMs.geometry, shapeMs: stageTimingsMs.shape,
+            renderMs: stageTimingsMs.render, reseedMs: stageTimingsMs.reseed, totalMs: totalTrackFrameMs,
+            frameWidth: trackWidth, frameHeight: trackHeight,
+            pointsBefore: pointsBeforeThisTick, pointsAfter: pointsAfterThisTick
+          }, {});
+        }
+      }
+      // Task D (Pass 12): process the single newest coalesced frame, if any, only AFTER
+      // this tick's own processing has fully finished (trackingFrameProcessing already
+      // false by the time this runs) — bounded to one recursive call, never a queue.
+      if (deferredToProcess) {
+        trackFrame(deferredToProcess.nowArg, deferredToProcess.metadata);
       }
     }
 
@@ -4495,7 +5428,9 @@
           requestId, pairId: newPairId, sessionId: scannerSessionId,
           inliers: data.inliers, homographyQuality: data.homography_quality || null
         });
-        const poseQuality = poseCompatibility(newCorners);
+        // Task B (Pass 12): this is the server-response accept path, entirely in
+        // intrinsic space (newCorners/currCorners/frameW/frameH) — never track-space.
+        const poseQuality = poseCompatibility(newCorners, currCorners, Math.max(Math.min(frameW, frameH), 1));
         scannerDiagnostics.push('pose_quality', {
           requestId,
           pairId: newPairId,
@@ -4675,6 +5610,10 @@
     // and every subsequent "schedule the next one" are literally the same moment, not two
     // different stages; `reason` (e.g. 'loop_start' vs 'after_tick') distinguishes them.
     function logTimingCheckpoint(tag, reason, extra) {
+      // Task E (Pass 14): same shared level-gating as logCallbackEvent — reused, not a
+      // second mechanism. This function has never fed scannerDiagnostics (console-only),
+      // so gating its one console.log call is the complete fix, not a partial one.
+      if (!shouldEmitDiagnosticLevel(tag)) return;
       const track = cameraStream ? cameraStream.getVideoTracks()[0] : null;
       console.log(tag, Object.assign({
         now: Math.round(performance.now()),
@@ -5146,7 +6085,9 @@
           callbacksRearmedWhileInactive: 0, watchdogForcedWhileTracking: 0,
           staleEpochCallbacks: 0, staleOwnerCallbacks: 0,
           reseedAttempts: 0, reseedSuccesses: 0, reseedFailures: 0, pointsAddedByReseed: 0,
-          dropsAfterFailedReseed: 0, callbacksSkippedAfterCancellation: 0
+          dropsAfterFailedReseed: 0, callbacksSkippedAfterCancellation: 0,
+          frameGapSuspected: 0, frameGapRecoveredByCurrentFrame: 0,
+          frameGapConfirmedAfterLk: 0, preLkFrameGapDrops: 0
         });
         renderDiagPanel();
       });

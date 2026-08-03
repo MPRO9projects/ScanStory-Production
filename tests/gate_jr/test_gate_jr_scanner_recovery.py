@@ -234,14 +234,17 @@ def test_healthy_tracking_suppresses_repeated_detect_init_and_limits_inflight():
 
 def test_temporal_pose_rejection_prevents_overlay_state_mutation():
     html = _scanner_html()
-    assert "function poseCompatibility(nextCorners)" in html
+    # Pass 12: poseCompatibility takes explicit previous-quad/normalization-dimension
+    # params now — this (server-response) call site passes currCorners/frameW/frameH,
+    # since it's entirely in intrinsic space (never track-space).
+    assert "function poseCompatibility(nextCorners, previousCorners, frameMinDim)" in html
     assert "areaRatio > 2.5 || areaRatio < 0.4" in html
     assert "centerJump > 0.35" in html
     assert "maxCornerJump > 0.55" in html
     assert "tracking_pose_rejected" in html
     assert "if (!poseQuality.ok && tracking && currCorners)" in html
     assert "clearTrackingGeometry('pose_rejected_' + poseQuality.reason)" in html
-    assert html.index("const poseQuality = poseCompatibility(newCorners)") < html.index("overlay.src = newVideoUrl")
+    assert html.index("const poseQuality = poseCompatibility(newCorners, currCorners, Math.max(Math.min(frameW, frameH), 1));") < html.index("overlay.src = newVideoUrl")
 
 
 def test_detect_init_echoes_generation_frame_and_orientation_metadata(client, project_with_pair):
