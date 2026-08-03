@@ -2073,10 +2073,21 @@ def test_marker_loss_reasons_are_all_genuine_local_tracking_failures():
     bootstrap_body = html[bootstrap_start:bootstrap_end]
     assert "dropTracking('tracker_bootstrap_failed'" in bootstrap_body
     assert "dropTracking('tracker_bootstrap_exception'" in bootstrap_body
-    # dropTracking is only ever CALLED from local tracking/bootstrap code — never from
-    # detect_init response handling, watchdog, or session-end code. (dropTracking's own
-    # function DEFINITION lives earlier in the file, before trackFrame — that's the "+1".)
-    assert html.count("dropTracking(") == track_body.count("dropTracking(") + bootstrap_body.count("dropTracking(") + 1
+    # Correction pass: onTrackingCallbackFired's bounded RAF-fallback-no-fresh-frame path
+    # is a third, legitimate caller — still a local-tracking-continuity failure (no fresh
+    # camera frame observed), never network/session/watchdog-caused.
+    callback_start = html.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata)")
+    callback_end = html.index("function stopTrackingLoop()", callback_start)
+    callback_body = html[callback_start:callback_end]
+    assert "dropTracking('tracking_callback_stalled'" in callback_body
+    for forbidden in ("network_timeout", "capture_timeout", "session_ending"):
+        assert forbidden not in callback_body
+    # dropTracking is only ever CALLED from local tracking/bootstrap/callback-health code —
+    # never from detect_init response handling, watchdog, or session-end code. (dropTracking's
+    # own function DEFINITION lives earlier in the file, before trackFrame — that's the "+1".)
+    assert html.count("dropTracking(") == (
+        track_body.count("dropTracking(") + bootstrap_body.count("dropTracking(") + callback_body.count("dropTracking(") + 1
+    )
 
 
 def test_at_most_one_pending_scan_timer_is_still_structurally_guaranteed():
@@ -2882,7 +2893,10 @@ def test_bootstrap_callback_rearms_exactly_one_ordinary_callback():
     unconditionally at the top of every tick, before the trackerBootstrapPending branch —
     so the bootstrap tick already rearms exactly one ordinary callback before
     initializeFreshLiveTracker even runs. initializeFreshLiveTracker itself never calls
-    scheduleTrackingFrame — there is exactly one rearm site per tick, not two."""
+    scheduleTrackingFrame — there is exactly one UNCONDITIONAL rearm site per tick. A
+    second, conditional call exists only inside the Task C ownership self-check (fires
+    only if the unconditional rearm above somehow left no callback owner while tracking
+    is true — defensive, not a second normal-path rearm)."""
     html = _scanner_html()
     track_start = html.index("function trackFrame(nowArg, metadata)")
     track_end = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
@@ -2890,7 +2904,10 @@ def test_bootstrap_callback_rearms_exactly_one_ordinary_callback():
     rearm_at = track_body.index("scheduleTrackingFrame('tick_rearm'")
     bootstrap_branch_at = track_body.index("if (trackerBootstrapPending) {")
     assert rearm_at < bootstrap_branch_at
-    assert track_body.count("scheduleTrackingFrame(") == 1
+    assert track_body.count("scheduleTrackingFrame(") == 2
+    ownership_check_at = track_body.index("if (tracking && trackingCallbackId === null) {")
+    ownership_recovery_at = track_body.index("scheduleTrackingFrame('ownership_error_recovery')")
+    assert rearm_at < ownership_check_at < ownership_recovery_at
     init_start = html.index("function initializeFreshLiveTracker(now, metadata)")
     init_end = html.index("function dropTracking(reason, extraMats")
     assert "scheduleTrackingFrame(" not in html[init_start:init_end]
@@ -2953,16 +2970,23 @@ def test_duplicate_presented_frame_skips_lk_but_callback_already_rearmed():
 
 def test_callback_absence_becomes_stalled_not_frame_gap_exceeded():
     """Task G item 6: the independent stall watchdog (fires when NO callback arrived at
-    all) reports 'tracking_callback_stalled' — a distinct reason from
-    'tracking_frame_gap_exceeded', which only ever fires from inside trackFrame's own
-    in-band check when a callback DID arrive, late, with genuine presented-frame evidence."""
+    all) routes into the shared enterCallbackStallRecovery(), which reports
+    'tracking_callback_stalled' — a distinct reason from 'tracking_frame_gap_exceeded',
+    which only ever fires from inside trackFrame's own in-band check when a callback DID
+    arrive, promptly, with genuine presented-frame evidence."""
     html = _scanner_html()
-    fired_start = html.index("function onRvfcStallWatchdogFired(callbackId)")
-    fired_end = html.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata)")
-    body = html[fired_start:fired_end]
-    assert "'tracking_callback_stalled'" in body
-    assert "tracking_frame_gap_exceeded" not in body
-    assert "dropTracking(" not in body  # a stall reschedules/falls back — it never itself drops tracking
+    watchdog_start = html.index("function onRvfcStallWatchdogFired(callbackId)")
+    watchdog_end = html.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata)")
+    watchdog_body = html[watchdog_start:watchdog_end]
+    assert "enterCallbackStallRecovery(callbackId, 'rvfc_stall_watchdog');" in watchdog_body
+    assert "tracking_frame_gap_exceeded" not in watchdog_body
+    assert "dropTracking(" not in watchdog_body  # a stall reschedules/falls back — never drops tracking itself
+    recovery_start = html.index("function enterCallbackStallRecovery(callbackId, reason)")
+    recovery_end = html.index("function onRvfcStallWatchdogFired(callbackId)")
+    recovery_body = html[recovery_start:recovery_end]
+    assert "'tracking_callback_stalled'" in recovery_body
+    assert "tracking_frame_gap_exceeded" not in recovery_body
+    assert "dropTracking(" not in recovery_body
 
 
 def test_genuine_presented_frame_delta_can_still_produce_frame_gap_exceeded():
@@ -2978,13 +3002,14 @@ def test_genuine_presented_frame_delta_can_still_produce_frame_gap_exceeded():
 
 
 def test_exactly_one_rvfc_rearm_is_attempted_before_falling_back():
-    """Task G item 8/9: onRvfcStallWatchdogFired attempts exactly one rVFC rearm
-    (rvfcRearmAttempted flips true before scheduling it) — a second stall while already
-    RVFC_STALLED (or with rvfcRearmAttempted already true) falls through to the RAF
-    fallback branch instead of attempting rVFC again."""
+    """Task G item 8/9: enterCallbackStallRecovery (reached from both the stall watchdog
+    AND the late-arrival-race path in onTrackingCallbackFired) attempts exactly one rVFC
+    rearm (rvfcRearmAttempted flips true before scheduling it) — a second stall while
+    already RVFC_STALLED (or with rvfcRearmAttempted already true) falls through to the
+    RAF fallback branch instead of attempting rVFC again."""
     html = _scanner_html()
-    start = html.index("function onRvfcStallWatchdogFired(callbackId)")
-    end = html.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata)")
+    start = html.index("function enterCallbackStallRecovery(callbackId, reason)")
+    end = html.index("function onRvfcStallWatchdogFired(callbackId)")
     body = html[start:end]
     rearm_guard_at = body.index("if (rvfcHealthState === 'RVFC_ACTIVE' && !rvfcRearmAttempted) {")
     flip_at = body.index("rvfcRearmAttempted = true;", rearm_guard_at)
@@ -3088,3 +3113,145 @@ def test_pass5_callback_functions_never_touch_video_source_or_currenttime_or_loo
     assert "overlay.currentTime =" not in body
     assert "overlay.loop" not in body
     assert html.count('<video id="overlay"') == 1
+
+
+# ---------------------------------------------------------------------------
+# Pass 5 correction: remove the legacy frame-gap race, make callback-stall recovery
+# own callback absence (including the "callback arrives late but wins the race
+# against the watchdog" case), fix console-visible diagnostics, and add a bounded
+# RAF-fallback reacquisition path. Root cause of "no Pass 5 console messages appear":
+# scannerDiagnostics.push is gated behind ?scanner_debug=1 and never itself calls
+# console.log — logCallbackEvent fixes this by always calling console.log, matching
+# logTimingCheckpoint's existing behavior for [SCAN SCHEDULED]/[FETCH START]/etc.
+# ---------------------------------------------------------------------------
+
+def test_late_arriving_rvfc_callback_is_redirected_before_reaching_trackframe():
+    """Correction Task A/G item 1: a callback whose own round trip (requestedAt -> now)
+    exceeded RVFC_STALL_TIMEOUT_MS is redirected to enterCallbackStallRecovery BEFORE
+    trackFrame is ever called — this is what prevents a callback that merely arrived late
+    (but still arrived, winning the race against the watchdog's own setTimeout) from
+    reaching trackFrame's in-band gap check and emitting tracking_frame_gap_exceeded from
+    stale wall-clock evidence alone."""
+    html = _scanner_html()
+    start = html.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata)")
+    end = html.index("function stopTrackingLoop()")
+    body = html[start:end]
+    latency_calc_at = body.index("const latencyMs = requestedAt ? (performance.now() - requestedAt) : 0;")
+    stall_check_at = body.index("if (latencyMs > RVFC_STALL_TIMEOUT_MS) {", latency_calc_at)
+    recovery_call_at = body.index("enterCallbackStallRecovery(callbackId, 'late_arrival_race');", stall_check_at)
+    return_at = body.index("return;", recovery_call_at)
+    trackframe_call_at = body.index("trackFrame(now, Object.assign(")
+    assert latency_calc_at < stall_check_at < recovery_call_at < return_at < trackframe_call_at
+
+
+def test_second_stall_does_not_reattempt_rvfc_once_rearm_already_tried():
+    """Correction Task B/G item 4: enterCallbackStallRecovery's rVFC-rearm branch is
+    gated on `rvfcHealthState === 'RVFC_ACTIVE' && !rvfcRearmAttempted` — once a first
+    rearm attempt has run (rvfcRearmAttempted = true, state = RVFC_STALLED), a SECOND
+    stall for the same tracking epoch falls straight through to the RAF fallback branch
+    instead of trying rVFC again, since that guard condition is now false."""
+    html = _scanner_html()
+    start = html.index("function enterCallbackStallRecovery(callbackId, reason)")
+    end = html.index("function onRvfcStallWatchdogFired(callbackId)")
+    body = html[start:end]
+    guard_at = body.index("if (rvfcHealthState === 'RVFC_ACTIVE' && !rvfcRearmAttempted) {")
+    fallback_at = body.index("rvfcHealthState = 'RAF_FALLBACK';", guard_at)
+    guard_block = body[guard_at:fallback_at]
+    assert "rvfcRearmAttempted = true;" in guard_block
+    assert "rvfcHealthState = 'RVFC_STALLED';" in guard_block
+    # the guard condition itself is what makes a second call skip straight to fallback —
+    # both flags it checks are flipped inside this same branch, so a re-entry with them
+    # already set structurally cannot re-enter it.
+    assert "!rvfcRearmAttempted" in body
+
+
+def test_raf_fallback_bounded_and_permits_one_reacquisition_on_no_fresh_frame():
+    """Correction Task B/G item 6: RAF fallback duplicate-currentTime handling is itself
+    bounded by TRACKING_GRACE_MS (reused, not invented) — if no fresh camera frame is
+    observed within that window, it calls dropTracking('tracking_callback_stalled', ...)
+    instead of rescheduling forever, which (via dropTracking's existing body) transitions
+    to RECOVERING and schedules exactly one tracking_lost_reacquire attempt."""
+    html = _scanner_html()
+    start = html.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata)")
+    end = html.index("function stopTrackingLoop()")
+    body = html[start:end]
+    duplicate_at = body.index("if (lastRafFallbackCurrentTime !== null && observedCurrentTime === lastRafFallbackCurrentTime) {")
+    bound_check_at = body.index("if (performance.now() - rafFallbackDuplicateSinceMs > TRACKING_GRACE_MS) {", duplicate_at)
+    drop_at = body.index("dropTracking('tracking_callback_stalled', [], trackingWorkloadSnapshot({", bound_check_at)
+    reschedule_at = body.index("scheduleTrackingFrame('raf_fallback_duplicate_rearm', callbackId);", bound_check_at)
+    assert duplicate_at < bound_check_at < drop_at < reschedule_at  # drop path precedes the still-within-bound reschedule path
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_body = html[drop_start:html.index("function handleDetectionTimeout()", drop_start)]
+    assert "scheduleNextScan('tracking_lost_reacquire', 0);" in drop_body
+
+
+def test_tracking_true_always_has_a_pending_callback_owner():
+    """Correction Task C/G item 8: the ownership self-check in trackFrame fires
+    [TRACK CALLBACK OWNERSHIP ERROR] with reason=tracking_without_pending_callback if
+    tracking is true right after the tick's own rearm attempt but trackingCallbackId
+    somehow ended up null — and immediately requests one safe recovery callback rather
+    than silently leaving tracking active with nothing scheduled to continue it."""
+    track_body = _track_frame_body()
+    rearm_at = track_body.index("scheduleTrackingFrame('tick_rearm'")
+    check_at = track_body.index("if (tracking && trackingCallbackId === null) {", rearm_at)
+    error_log_at = track_body.index("'[TRACK CALLBACK OWNERSHIP ERROR]'", check_at)
+    reason_at = track_body.index("reason: 'tracking_without_pending_callback'", check_at)
+    recovery_at = track_body.index("scheduleTrackingFrame('ownership_error_recovery');", check_at)
+    assert rearm_at < check_at < error_log_at < reason_at < recovery_at
+
+
+def test_accepted_detection_establishes_callback_ownership_before_finalizer_runs():
+    """Correction Task C/G item 9: the accepted-response branch calls startTrackingLoop()
+    (which arms the first tracking callback via scheduleTrackingFrame, establishing
+    trackingCallbackId ownership) synchronously — strictly before finalizeDetectionAttempt
+    runs in the outer `finally`, and strictly after trackerBootstrapPending is set."""
+    html = _scanner_html()
+    detect_start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
+    detect_end = html.index("async function scanTick(token)")
+    body = html[detect_start:detect_end]
+    bootstrap_pending_at = body.index("trackerBootstrapPending = true;")
+    start_loop_at = body.index("startTrackingLoop();")
+    finally_finalize_at = body.index("finalizeDetectionAttempt(attempt, (attempt.cancelled || sessionEnding) ? 'cancelled' : 'complete', 'finally');")
+    assert bootstrap_pending_at < start_loop_at < finally_finalize_at
+
+
+def test_callback_diagnostics_are_emitted_through_the_always_on_console_logger():
+    """Correction Task D/G item 10: every [TRACK CALLBACK ...]/[TRACK RAF FALLBACK]
+    console tag is emitted through logCallbackEvent, which — unlike a bare
+    scannerDiagnostics.push call — ALWAYS calls console.log (never gated behind the
+    ?scanner_debug=1 diagnosticsEnabled flag), exactly like logTimingCheckpoint already
+    does for [SCAN SCHEDULED]/[FETCH START]/[RESPONSE HANDLED]."""
+    html = _scanner_html()
+    log_fn_start = html.index("function logCallbackEvent(tag, summaryFields, structuredData)")
+    log_fn_end = html.index("function clearRvfcStallWatchdog()")
+    log_fn_body = html[log_fn_start:log_fn_end]
+    assert "console.log(tag" in log_fn_body
+    assert "scannerDiagnostics.push(tag" in log_fn_body  # still feeds the dev panel, but console.log is unconditional
+    callback_functions_start = html.index("function armRvfcStallWatchdog(callbackId)")
+    callback_functions_end = html.index("function startTrackingLoop()")
+    callback_functions_body = html[callback_functions_start:callback_functions_end]
+    for tag in (
+        "'[TRACK CALLBACK REQUESTED]'",
+        "'[TRACK CALLBACK ENTERED]'",
+        "'[TRACK CALLBACK REARMED]'",
+        "'[TRACK CALLBACK CANCELLED]'",
+        "'[TRACK CALLBACK STALLED]'",
+        "'[TRACK RAF FALLBACK]'",
+        "'[TRACK CALLBACK SKIPPED]'",
+    ):
+        assert f"logCallbackEvent({tag}" in callback_functions_body
+    track_body = _track_frame_body()
+    assert "logCallbackEvent('[TRACK CALLBACK OWNERSHIP ERROR]'" in track_body
+
+
+def test_frame_gap_exceeded_still_requires_two_sided_evidence_after_correction():
+    """Correction Task A: re-confirms, after this correction pass's refactor, that the
+    ONLY remaining dropTracking('tracking_frame_gap_exceeded', ...) call site is still
+    gated on genuinePresentedGap (both-sided mediaTime evidence + delta over threshold) —
+    the correction did not add any additional, less-evidenced caller of this reason."""
+    html = _scanner_html()
+    assert html.count("dropTracking('tracking_frame_gap_exceeded'") == 1
+    track_body = _track_frame_body()
+    drop_at = track_body.index("dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({")
+    guard_at = track_body.index("if (!genuinePresentedGap || document.hidden || workloadActive) {")
+    assert guard_at < drop_at
