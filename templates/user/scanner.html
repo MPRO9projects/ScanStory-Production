@@ -924,7 +924,16 @@
       resolvedBackDestination: RESOLVED_BACK_DESTINATION,
       backDestinationReason: BACK_DESTINATION_REASON,
       entryRouteType: ENTRY_ROUTE_TYPE,
-      entryAuthorizationResult: ENTRY_AUTHORIZATION_RESULT
+      entryAuthorizationResult: ENTRY_AUTHORIZATION_RESULT,
+      // Pass 6 (Task G) — tracking-callback ownership/health counters. All four should
+      // read 0 during a healthy real-device tracking run; any nonzero value is direct,
+      // provable evidence of exactly the class of bug this pass targets.
+      callbacksRequestedWhileInactive: 0,
+      callbacksEnteredWhileInactive: 0,
+      callbacksRearmedWhileInactive: 0,
+      watchdogForcedWhileTracking: 0,
+      staleEpochCallbacks: 0,
+      staleOwnerCallbacks: 0
     };
     markStartupCheckpoint('scanner_constants_initialized');
 
@@ -1540,6 +1549,19 @@
     let trackingCallbackHandle = null;  // raw browser handle, for cancelVideoFrameCallback/cancelAnimationFrame
     let trackingCallbackSeq = 0;        // generator for trackingCallbackId
     let trackingCallbackRequestedAt = 0;
+    // Task C/D (Pass 6): identifies the current tracking-LOOP "session" — distinct from
+    // trackingCallbackId (which identifies one specific callback instance). Bumped only by
+    // startTrackingLoop() when it actually (re)starts the loop (a no-op restart while
+    // already active does not bump it). A callback captures this at schedule time; if the
+    // loop was stopped and restarted since, the token no longer matches even in the
+    // (already-guarded-against) case where a stale callbackId might otherwise coincide.
+    let trackingCallbackOwnerToken = 0;
+    // Task E (Pass 7) — tracked/diagnosed, not a second independent watchdog: reused by the
+    // existing 500ms system watchdog as supporting evidence alongside the ownerless-callback
+    // check, and surfaced in [TRACK OWNER STATE].
+    let lastTrackingCallbackEnteredAt = 0;
+    let lastSuccessfulLkAt = 0;
+    let lastPoseUpdateAt = 0;
     let rvfcStallWatchdogTimer = null;
     // rVFC health state machine (Pass 5): RVFC_ACTIVE (preferred) -> RVFC_STALLED (no
     // callback arrived, one rearm attempted) -> RAF_FALLBACK (rVFC rearm also stalled,
@@ -1617,14 +1639,73 @@
       return true;
     }
 
+    // Pass 6 root-cause fix: this used to also require trackingBadFrames === 0 — meaning
+    // a single transient optical-flow blip (well within the existing bounded grace period,
+    // never itself a tracking-loss event) made every caller of this function — the watchdog's
+    // "should I force a server detection" check AND the successor-scheduling suppression —
+    // believe local tracking was no longer active/owned, right in the middle of a normal
+    // recoverable grace window. That is what let a real-device watchdog force a redundant
+    // detectOnceFromServer() call ~30-40s into otherwise-healthy tracking, whose capture
+    // work then collided with the in-progress local tracking tick and caused the actual
+    // hard drop. "Healthy" here means "local tracking currently owns this marker," not
+    // "the single most recent frame was perfect" — a frame in grace is still owned.
     function isHealthyLocalTracking() {
       return scannerWorkMode === 'TRACKING' &&
         tracking &&
         !trackerBootstrapPending &&
         currCorners &&
         prevGray &&
-        prevPts &&
-        trackingBadFrames === 0;
+        prevPts;
+    }
+
+    // Task A (Pass 6): the single ownership predicate the watchdog uses to decide whether
+    // it may ever force a server detection. Broader than isHealthyLocalTracking() alone —
+    // the watchdog must also stand down while a bootstrap is in flight, or while the
+    // callback-health state machine (stall recovery / rVFC rearm / RAF fallback) is
+    // actively working, or while a detection attempt is already active — none of those
+    // are "healthy tracking" in the strict sense, but all of them mean local recovery (or
+    // an existing request) already owns this responsibility.
+    function watchdogTrackingSkipReason() {
+      if (isHealthyLocalTracking()) return 'healthy_tracking';
+      if (trackerBootstrapPending) return 'tracker_bootstrap';
+      if (trackingCallbackId !== null || rvfcHealthState !== 'RVFC_ACTIVE') return 'callback_recovery';
+      if (activeDetectionAttempt && !activeDetectionAttempt.terminal) return 'attempt_active';
+      return null;
+    }
+
+    // Task D (Pass 7): isHealthyLocalTracking()/watchdogTrackingSkipReason() only ever
+    // checked STATE FLAGS (tracking/mode/corners/mats) — never whether anything is
+    // actually still scheduled to keep advancing that state. The Pass 7 evidence proved
+    // tracking can read true, mode can read 'TRACKING', and the watchdog will then skip
+    // forever ([WATCHDOG SKIP] reason=healthy_tracking on every tick) even though
+    // trackingCallbackId is null and nothing will ever call trackFrame again — a silent,
+    // permanent deadlock the old check could never see. Called BEFORE
+    // watchdogTrackingSkipReason() so it can repair (or, failing that, drop) before the
+    // watchdog ever reaches its "stand down" branch.
+    function watchdogHasLiveCallbackOwner() {
+      return trackingCallbackId !== null || trackerBootstrapPending || rvfcHealthState !== 'RVFC_ACTIVE';
+    }
+
+    function watchdogHandleOwnerlessTracking(watchdogId) {
+      if (!(tracking && scannerWorkMode === 'TRACKING' && trackLoopActive)) return false;
+      // Task F: owner-state snapshot at the point the watchdog itself checks ownership —
+      // logged whether or not it turns out to be missing, so a real-device log always
+      // shows what the watchdog saw, not only the error cases.
+      logCallbackEvent('[TRACK OWNER STATE]', {
+        tracking, mode: scannerWorkMode, trackLoopActive, callbackId: trackingCallbackId,
+        currentEpoch: trackingEpoch, reason: 'watchdog_owner_check'
+      }, trackOwnerState({ watchdogId }));
+      if (watchdogHasLiveCallbackOwner()) return false;
+      logCallbackEvent('[TRACK CALLBACK OWNERSHIP ERROR]', {
+        reason: 'watchdog_found_tracking_without_callback'
+      }, trackOwnerState({ watchdogId }));
+      if (ensureTrackingCallbackOwnership('watchdog_ownership_repair')) return true;
+      // Repair could not arm anything (should be unreachable given the guard above, but
+      // never leave tracking claimed with no owner and no repair) — genuine recovery
+      // failure: drop tracking through the normal bounded path, which itself transitions
+      // to RECOVERING and schedules exactly one tracking_lost_reacquire attempt.
+      dropTracking('tracking_callback_owner_missing', []);
+      return true;
     }
 
     function cancelPendingNormalScan(reason) {
@@ -1825,8 +1906,18 @@
 
     function clearTrackingGeometry(reason, options = {}) {
       tracking = false;
-      trackerBootstrapPending = false;
-      firstLkPending = false;
+      // Task B (Pass 6): stop the tracking-callback loop HERE, synchronously, as the very
+      // first thing that happens. This is what makes dropTracking (which calls this
+      // function) satisfy the full required invariant in one place: trackLoopActive=false,
+      // the exact pending rVFC/RAF callback cancelled, its owner id/handle cleared, and —
+      // critically — the callback that trackFrame's own top-of-tick already rearmed BEFORE
+      // this drop was decided (dropTracking can run partway through a trackFrame tick,
+      // after that unconditional rearm already happened) gets cancelled too, since
+      // stopTrackingLoop() cancels whatever trackingCallbackId currently holds. Previously
+      // nothing here ever stopped the loop, so tracking=false left the callback chain
+      // running indefinitely — callback ids climbing into the hundreds/thousands, and a
+      // stale loop from an old epoch surviving into a newly-bootstrapped one.
+      stopTrackingLoop(); // also clears trackerBootstrapPending/firstLkPending — see stopTrackingLoop
       if (scannerWorkMode === 'TRACKING') setScannerWorkMode('RECOVERING', reason || 'tracking_geometry_cleared');
       currCorners = null;
       lastOrdered = null;
@@ -1943,17 +2034,135 @@
       enterCallbackStallRecovery(callbackId, 'rvfc_stall_watchdog');
     }
 
-    function onTrackingCallbackFired(callbackId, callbackType, now, metadata) {
-      if (trackingCallbackId !== callbackId) {
-        // One-owner semantics: a callback that fires after its id has already been
-        // consumed (or cancelled by the stall watchdog) must never clear the current
-        // owner or invoke trackFrame with superseded state.
-        logCallbackEvent('[TRACK CALLBACK SKIPPED]', { id: callbackId, reason: 'stale_callback_id' }, {
+    // Task C (Pass 6): the single validity check every callback must pass at entry, using
+    // ONLY values captured at schedule time (never the live global epoch/token compared
+    // against itself, which would trivially always match). trackerBootstrapPending is the
+    // one legitimate case where tracking is still false and scannerWorkMode is still
+    // 'RECOVERING' for a callback that is nonetheless exactly the one we're waiting for —
+    // every other case requires tracking===true && scannerWorkMode==='TRACKING'.
+    function trackingCallbackValidityFailureReason(callbackId, callbackEpoch, callbackOwnerToken) {
+      if (trackingCallbackId !== callbackId) return 'stale_owner';
+      if (callbackOwnerToken !== trackingCallbackOwnerToken) return 'stale_owner';
+      if (!trackLoopActive) return 'tracking_inactive';
+      if (callbackEpoch !== trackingEpoch) return 'stale_epoch';
+      if (!trackerBootstrapPending) {
+        if (!tracking) return 'tracking_inactive';
+        if (scannerWorkMode !== 'TRACKING') return 'mode_not_tracking';
+      }
+      return null;
+    }
+
+    // Task F (Pass 7): one shared snapshot of every field the required [TRACK OWNER
+    // STATE] diagnostic must carry — used at every one of its 5 required log points so
+    // the shape never drifts between call sites.
+    function trackOwnerState(extra) {
+      return Object.assign({
+        tracking, mode: scannerWorkMode, trackLoopActive,
+        callbackId: trackingCallbackId, callbackType: trackingCallbackType,
+        currentEpoch: trackingEpoch, ownerToken: trackingCallbackOwnerToken,
+        bootstrapPending: trackerBootstrapPending, recoveryState: rvfcHealthState,
+        lastTrackingCallbackEnteredAt, lastSuccessfulLkAt, lastPoseUpdateAt
+      }, extra || {});
+    }
+
+    // Task C (Pass 7): cancels whatever tracking callback currently holds ownership —
+    // WITHOUT touching trackLoopActive/trackerBootstrapPending — so it can be reused both
+    // by stopTrackingLoop() (full loop teardown) and by an in-tick reissue (Task B: cancel
+    // a callback that captured an epoch which has since advanced, without stopping the
+    // loop itself). Returns whether there was anything to cancel.
+    function cancelCurrentTrackingCallback(reason) {
+      if (trackingCallbackId === null) return false;
+      clearRvfcStallWatchdog();
+      if (trackingCallbackType === 'video_frame' && typeof cam.cancelVideoFrameCallback === 'function') {
+        cam.cancelVideoFrameCallback(trackingCallbackHandle);
+      } else if (trackingCallbackHandle != null) {
+        cancelAnimationFrame(trackingCallbackHandle);
+      }
+      logCallbackEvent('[TRACK CALLBACK CANCELLED]', { id: trackingCallbackId, reason }, {
+        epoch: trackingEpoch, cancelledBy: reason
+      });
+      trackingCallbackId = null;
+      trackingCallbackType = null;
+      trackingCallbackHandle = null;
+      animationFrameId = null;
+      return true;
+    }
+
+    // Task C (Pass 7): the single idempotent ownership-repair entry point. Returns false
+    // (a safe no-op) whenever a callback is already pending, whenever the loop isn't
+    // active, or whenever there is genuinely nothing to track — so any caller (stale-skip
+    // repair, watchdog repair, post-bootstrap reissue) can call it freely without risking
+    // a duplicate callback.
+    function ensureTrackingCallbackOwnership(reason) {
+      if (!trackLoopActive) return false;
+      if (!tracking && !trackerBootstrapPending) return false;
+      if (trackingCallbackId !== null) return false; // already owned — idempotent no-op
+      const repaired = scheduleTrackingFrame(reason);
+      if (repaired) {
+        // Task F: owner-state snapshot right after a repair actually arms something —
+        // proves the repaired state (new callbackId) rather than the pre-repair one.
+        logCallbackEvent('[TRACK OWNER STATE]', {
+          tracking, mode: scannerWorkMode, trackLoopActive, callbackId: trackingCallbackId,
+          currentEpoch: trackingEpoch, reason: 'callback_repair:' + reason
+        }, trackOwnerState());
+      }
+      return repaired;
+    }
+
+    function onTrackingCallbackFired(callbackId, callbackType, now, metadata, callbackEpoch, callbackOwnerToken) {
+      const failureReason = trackingCallbackValidityFailureReason(callbackId, callbackEpoch, callbackOwnerToken);
+      if (failureReason) {
+        // One-owner semantics: a callback that fails ANY of these checks must never
+        // process LK or change scanner mode. Only the specific counter for this failure
+        // kind is incremented here; the rest of this branch (below) decides ownership
+        // cleanup/repair, never LK processing.
+        if (failureReason === 'stale_epoch') diagState.staleEpochCallbacks++;
+        if (failureReason === 'stale_owner') diagState.staleOwnerCallbacks++;
+        logCallbackEvent('[TRACK CALLBACK SKIPPED]', {
+          id: callbackId, callbackEpoch, currentEpoch: trackingEpoch, reason: failureReason
+        }, {
           mediaTime: metadata && metadata.mediaTime != null ? metadata.mediaTime : null,
           previousMediaTime: lastTrackingMediaTime
         });
+        // Task F: owner-state snapshot on every stale-callback skip — this captured
+        // callbackEpoch (never the live global) is what makes it possible to tell, from a
+        // real-device log alone, exactly how far epoch/state had already moved on.
+        logCallbackEvent('[TRACK OWNER STATE]', {
+          tracking, mode: scannerWorkMode, trackLoopActive, callbackId: trackingCallbackId,
+          callbackEpoch, currentEpoch: trackingEpoch, reason: 'stale_callback_skip:' + failureReason
+        }, trackOwnerState());
+        // Task A/C (Pass 7): every failureReason EXCEPT 'stale_owner' implies this
+        // callback instance was still the recorded owner (the owner/token checks run
+        // first and would have already returned 'stale_owner' otherwise). Such a callback
+        // has now fired — one-shot, it will never fire again — so its ownership slot MUST
+        // be released here, or trackingCallbackId stays permanently non-null with nothing
+        // left to ever process it. This is the exact deadlock proven in the Pass 7
+        // evidence: id=5 skipped as stale_epoch, trackingCallbackId stuck at 5 forever,
+        // blocking every future scheduleTrackingFrame/ensureTrackingCallbackOwnership call.
+        if (failureReason !== 'stale_owner' && trackingCallbackId === callbackId) {
+          cancelCurrentTrackingCallback('stale_skip_' + failureReason);
+        }
+        if (failureReason === 'tracking_inactive' || failureReason === 'mode_not_tracking') {
+          // Task A: genuinely inactive (SEARCHING, or RECOVERING with no bootstrap) —
+          // never rearm, never enter callback-stall-recovery, never RAF-fallback here.
+          return;
+        }
+        // Case 2 (Task C): tracking is claimed (true, TRACKING mode, loop active) but no
+        // valid owner remains after this stale callback was released — repair exactly
+        // once, idempotently (ensureTrackingCallbackOwnership no-ops if anything is
+        // already pending), rather than leaving tracking claimed with nothing to advance it.
+        if (trackingCallbackId === null && tracking && trackLoopActive && scannerWorkMode === 'TRACKING') {
+          logCallbackEvent('[TRACK CALLBACK OWNERSHIP ERROR]', {
+            reason: 'tracking_without_pending_callback_after_stale_skip'
+          }, trackOwnerState());
+          ensureTrackingCallbackOwnership('stale_skip_ownership_repair');
+        }
         return;
       }
+      // Task G: should be structurally unreachable given the validity gate above (it
+      // already requires tracking||trackerBootstrapPending to pass) — counted, not assumed.
+      if (!tracking && !trackerBootstrapPending) diagState.callbacksEnteredWhileInactive++;
+      lastTrackingCallbackEnteredAt = performance.now();
       const requestedAt = trackingCallbackRequestedAt;
       if (callbackType === 'video_frame') clearRvfcStallWatchdog();
       trackingCallbackId = null; // clears only the just-consumed callback id
@@ -2029,20 +2238,7 @@
     }
 
     function stopTrackingLoop() {
-      clearRvfcStallWatchdog();
-      if (trackingCallbackId !== null) {
-        if (trackingCallbackType === 'video_frame' && typeof cam.cancelVideoFrameCallback === 'function') {
-          cam.cancelVideoFrameCallback(trackingCallbackHandle);
-        } else if (trackingCallbackHandle != null) {
-          cancelAnimationFrame(trackingCallbackHandle);
-        }
-        logCallbackEvent('[TRACK CALLBACK CANCELLED]', { id: trackingCallbackId, reason: 'tracking_loop_stopped' }, {
-          epoch: trackingEpoch, cancelledBy: 'stopTrackingLoop'
-        });
-        trackingCallbackId = null;
-        trackingCallbackType = null;
-        trackingCallbackHandle = null;
-        animationFrameId = null;
+      if (cancelCurrentTrackingCallback('tracking_loop_stopped')) {
         diagState.scanLoopStopCount++;
       }
       trackLoopActive = false;
@@ -2057,28 +2253,46 @@
     // has no predecessor) and is only used for the [TRACK CALLBACK REARMED] diagnostic.
     function scheduleTrackingFrame(reason, previousCallbackId) {
       if (!trackLoopActive || trackingCallbackId !== null) return false;
+      // Task A (Pass 7): a callback may only be requested when there is something to
+      // track — healthy ongoing tracking OR an in-progress bootstrap. Without this gate,
+      // startTrackingLoop() being called unconditionally at OpenCV-ready/camera-recovery
+      // time (before any detection has ever been accepted) armed a callback immediately,
+      // which then had nowhere to go but tracking_inactive-skip -> stall -> RAF fallback,
+      // forever, until a real detection eventually arrived — the exact real-device
+      // "callback storm at startup" evidence (id=1/2/3 all skipped, cycling through
+      // rVFC-stall/RAF-fallback with nothing to track). trackLoopActive itself being true
+      // before any detection is harmless bookkeeping; only ARMING a callback is gated.
+      if (!tracking && !trackerBootstrapPending) {
+        diagState.callbacksRequestedWhileInactive++;
+        return false;
+      }
       const myCallbackId = ++trackingCallbackSeq;
+      // Task C: captured HERE, immutable for this callback's entire lifetime — never the
+      // live global read again at entry time.
+      const myEpoch = trackingEpoch;
+      const myOwnerToken = trackingCallbackOwnerToken;
       const useRVFC = rvfcHealthState !== 'RAF_FALLBACK' && typeof cam.requestVideoFrameCallback === 'function';
       trackingCallbackId = myCallbackId;
       trackingCallbackRequestedAt = performance.now();
       logCallbackEvent('[TRACK CALLBACK REQUESTED]', {
-        id: myCallbackId, epoch: trackingEpoch, owner: myCallbackId
-      }, { requestedAt: trackingCallbackRequestedAt, usingRVFC: useRVFC, usingRAF: !useRVFC });
+        id: myCallbackId, epoch: myEpoch, owner: myCallbackId
+      }, { requestedAt: trackingCallbackRequestedAt, usingRVFC: useRVFC, usingRAF: !useRVFC, ownerToken: myOwnerToken });
       if (previousCallbackId != null) {
+        if (!tracking && !trackerBootstrapPending) diagState.callbacksRearmedWhileInactive++;
         logCallbackEvent('[TRACK CALLBACK REARMED]', {
           old: previousCallbackId, new: myCallbackId, reason: reason || 'tick_rearm'
-        }, { epoch: trackingEpoch });
+        }, { epoch: myEpoch });
       }
       if (useRVFC) {
         trackingCallbackType = 'video_frame';
         trackingCallbackHandle = cam.requestVideoFrameCallback((now, metadata) => {
-          onTrackingCallbackFired(myCallbackId, 'video_frame', now, metadata);
+          onTrackingCallbackFired(myCallbackId, 'video_frame', now, metadata, myEpoch, myOwnerToken);
         });
         armRvfcStallWatchdog(myCallbackId);
       } else {
         trackingCallbackType = 'animation_frame';
         trackingCallbackHandle = requestAnimationFrame((now) => {
-          onTrackingCallbackFired(myCallbackId, 'animation_frame', now, null);
+          onTrackingCallbackFired(myCallbackId, 'animation_frame', now, null, myEpoch, myOwnerToken);
         });
       }
       animationFrameId = trackingCallbackHandle;
@@ -2089,6 +2303,7 @@
       if (trackLoopActive) return; // repeated calls are a no-op — one loop, ever
       trackLoopActive = true;
       trackingGeneration = scannerGeneration;
+      trackingCallbackOwnerToken++; // new loop session — see declaration comment
       diagState.scanLoopStartCount++;
       scheduleTrackingFrame();
     }
@@ -3016,6 +3231,12 @@
     }
 
     function dropTracking(reason, extraMats, details = {}) {
+      // Task F: owner-state snapshot at the exact moment of the drop decision, before
+      // anything (mode, geometry, callback ownership) below is torn down.
+      logCallbackEvent('[TRACK OWNER STATE]', {
+        tracking, mode: scannerWorkMode, trackLoopActive, callbackId: trackingCallbackId,
+        currentEpoch: trackingEpoch, reason: 'drop_tracking:' + reason
+      }, trackOwnerState());
       setScannerWorkMode('RECOVERING', reason || 'tracking_lost');
       recordRejection(reason);
       diagState.consecutiveRejected++;
@@ -3194,7 +3415,21 @@
       lastTrackFrameTs = now;
 
       if (trackerBootstrapPending) {
-        initializeFreshLiveTracker(now, metadata);
+        // Task B (Pass 7): the unconditional top-of-tick rearm above already captured
+        // (and armed a successor under) whatever trackingEpoch held BEFORE bootstrap runs.
+        // initializeFreshLiveTracker() below calls resetTrackingEpoch(), which bumps it —
+        // so that already-armed successor would otherwise enter with a stale captured
+        // epoch the instant bootstrap succeeds (proven in the Pass 7 evidence: id=5
+        // captured epoch=0, bootstrap bumped trackingEpoch to 1 inside id=4's tick, id=5
+        // was then skipped as stale_epoch with nothing left to replace it). Cancel that
+        // successor and reissue a fresh one under the now-final epoch, in the same tick,
+        // before anything else can observe the mismatch.
+        const epochBeforeBootstrap = trackingEpoch;
+        const bootstrapped = initializeFreshLiveTracker(now, metadata);
+        if (bootstrapped && trackingEpoch !== epochBeforeBootstrap) {
+          cancelCurrentTrackingCallback('bootstrap_epoch_advanced');
+          ensureTrackingCallbackOwnership('bootstrap_epoch_advanced_rearm');
+        }
         return;
       }
 
@@ -3408,6 +3643,8 @@
         diagState.consecutiveAccepted++;
         diagState.consecutiveRejected = 0;
         if (frameW > 0 && frameH > 0) diagState.visibleAreaRatio = quadArea2(currCorners) / (frameW * frameH);
+        lastSuccessfulLkAt = performance.now();
+        lastPoseUpdateAt = lastSuccessfulLkAt;
 
         prevGray.delete();
         prevGray = gray;
@@ -3829,6 +4066,15 @@
         firstLkFrameGapMs = null;
         firstLkPending = false;
         setScannerWorkMode('RECOVERING', 'server_pose_accepted_bootstrap_pending');
+        // Task E (Pass 6): unconditionally stop/invalidate the previous tracker generation
+        // BEFORE arming anything new — cancels whatever callback owner (if any) belonged to
+        // the prior epoch and forces the startTrackingLoop() call below to be a genuine
+        // fresh start (bumping trackingCallbackOwnerToken) rather than a silent no-op that
+        // would otherwise leave an old-epoch callback as the still-pending owner. Matters
+        // even when wasTracking was already true (a healthy re-anchor onto the same
+        // target) — every accepted response gets its own clean callback-ownership handoff,
+        // never relying on an old callback happening to still validate correctly.
+        stopTrackingLoop();
         trackerBootstrapPending = true;
         trackerBootstrapStartedAt = performance.now();
         scannerDiagnostics.push('tracking_bootstrap_armed', {
@@ -3839,6 +4085,13 @@
           frameWidth: frameW,
           frameHeight: frameH
         });
+        // Task F: owner-state snapshot right as bootstrap is armed — the "before" picture
+        // for whatever the first tracking callback captures a few lines later, once
+        // startTrackingLoop() runs below.
+        logCallbackEvent('[TRACK OWNER STATE]', {
+          tracking, mode: scannerWorkMode, trackLoopActive, callbackId: trackingCallbackId,
+          currentEpoch: trackingEpoch, reason: 'accepted_pose_bootstrap_armed'
+        }, trackOwnerState({ requestId }));
 
         // When re-anchoring while already tracking same pair, preserve smoothCorners
         // to avoid a visible jump — only reset when switching pairs or first detection
@@ -4080,13 +4333,21 @@
         scheduleWatchdog(token); // never forces anything in these states — just keeps checking
         return;
       }
-      if (isHealthyLocalTracking()) {
-        diagState.lastWatchdogReason = 'healthy_tracking_observed';
-        logTimingCheckpoint('[WATCHDOG SKIP]', 'healthy_tracking', {
+      if (watchdogHandleOwnerlessTracking(watchdogId)) {
+        // Either repaired (a fresh callback is now pending) or genuinely dropped — either
+        // way this tick is fully handled; never fall through to a stale healthy_tracking
+        // skip on the same tick that just discovered there was nothing behind it.
+        scheduleWatchdog(token);
+        return;
+      }
+      const trackingSkipReason = watchdogTrackingSkipReason();
+      if (trackingSkipReason) {
+        diagState.lastWatchdogReason = trackingSkipReason + '_observed';
+        logTimingCheckpoint('[WATCHDOG SKIP]', trackingSkipReason, {
           watchdogId,
           abortAttempted: false,
           abortExecuted: false,
-          skipReason: 'healthy_tracking'
+          skipReason: trackingSkipReason
         });
         scheduleWatchdog(token);
         return;
@@ -4098,6 +4359,9 @@
       diagState.watchdogDeadline = baseline + WATCHDOG_TIMEOUT_MS;
       if (!detectInFlight && !isStreamDead()) {
         if (elapsed > WATCHDOG_TIMEOUT_MS) {
+          // Task G: diagnostic-only proof that watchdogTrackingSkipReason() above already
+          // caught every tracking-active case — this should always read 0 on a healthy run.
+          if (tracking) diagState.watchdogForcedWhileTracking++;
           diagState.watchdogTriggered = true;
           diagState.lastWatchdogReason = 'forced_detection';
           diagState.lastWatchdogElapsedMs = elapsed;
@@ -4379,7 +4643,10 @@
           capturesWhileSearching: 0, capturesWhileTracking: 0, capturesWhileRecovering: 0,
           encodeOver500Ms: 0, encodeOver1500Ms: 0, encodeOver3000Ms: 0,
           trackingCallbackIntervalMs: null, trackingCallbackMaxIntervalMs: 0,
-          skippedDuplicateVideoFrames: 0, largeGapDuringCaptureWork: false
+          skippedDuplicateVideoFrames: 0, largeGapDuringCaptureWork: false,
+          callbacksRequestedWhileInactive: 0, callbacksEnteredWhileInactive: 0,
+          callbacksRearmedWhileInactive: 0, watchdogForcedWhileTracking: 0,
+          staleEpochCallbacks: 0, staleOwnerCallbacks: 0
         });
         renderDiagPanel();
       });
