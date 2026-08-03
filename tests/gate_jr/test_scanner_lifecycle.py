@@ -3944,3 +3944,266 @@ def test_pass8_did_not_change_any_recognition_or_geometry_threshold():
     assert "const POSE_HOLD_MS = 500;" in html
     assert "const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;" in html
     assert "const RANSAC_REPROJ = 5.0;" in html
+
+
+# ---------------------------------------------------------------------------
+# Pass 9: proactive LK feature reseeding + callback-after-cancellation log ordering.
+# Real-device evidence: tracking survived ~10-11s then genuinely exhausted its optical-
+# flow point population (goodPoints=2, goodPoints=0 out of initialPoints=120) — prevPts
+# was carried forward tick after tick with no reference to the current marker geometry,
+# no pruning of background-drifted points, and no way to top the population back up
+# before hitting the hard MIN_GOOD_POINTS floor.
+# ---------------------------------------------------------------------------
+
+def _attempt_feature_reseed_body():
+    html = _scanner_html()
+    start = html.index("function attemptFeatureReseed(gray, quad, survivingPts, survivingCoverage, survivingGridCells)")
+    end = html.index("function initializeFreshLiveTracker(now, metadata)")
+    return html[start:end]
+
+
+def test_healthy_full_point_population_does_not_reseed():
+    """Task H item 1: needsReseed is false whenever the surviving point count is at or
+    above reseedThreshold AND spatial grid coverage is at or above RESEED_MIN_GRID_CELLS
+    — attemptFeatureReseed is only ever called inside that combined OR-condition's
+    truthy branch, never unconditionally per tick."""
+    track_body = _track_frame_body()
+    threshold_at = track_body.index(
+        "const reseedThreshold = Math.max(\n          MIN_GOOD_POINTS * 2,\n          Math.round(activeTrackerInitialPointCount * RESEED_POINT_FRACTION)\n        );"
+    )
+    needs_at = track_body.index(
+        "const needsReseed = (prunedNext.length / 2) < reseedThreshold || survivingGridCells < RESEED_MIN_GRID_CELLS;"
+    )
+    call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells);")
+    guard_at = track_body.index("if (needsReseed && !reseedInProgress &&")
+    assert threshold_at < needs_at < guard_at < call_at
+
+
+def test_low_point_population_with_valid_geometry_triggers_one_reseed():
+    """Task H item 2: the reseed guard checks reseedAttemptsForEpoch/
+    consecutiveReseedFailures BEFORE calling attemptFeatureReseed, and
+    attemptFeatureReseed itself increments reseedAttemptsForEpoch exactly once per call —
+    so a single low-population tick triggers exactly one reseed attempt, not a loop
+    within the same tick."""
+    track_body = _track_frame_body()
+    assert track_body.count("attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells)") == 1
+    reseed_body = _attempt_feature_reseed_body()
+    assert reseed_body.count("reseedAttemptsForEpoch++;") == 1
+
+
+def test_low_spatial_coverage_may_trigger_reseed_independent_of_raw_count():
+    """Task H item 3/18: needsReseed's OR-condition means a healthy raw point count with
+    poor spatial grid distribution (survivingGridCells < RESEED_MIN_GRID_CELLS) can still
+    trigger a reseed — point count alone is never sufficient to skip it."""
+    track_body = _track_frame_body()
+    assert "survivingGridCells < RESEED_MIN_GRID_CELLS" in track_body
+    grid_cells_computed_at = track_body.index("const survivingGridCells = countOccupiedGridCells(prunedNext, currCorners, POINT_GRID_SIZE);")
+    needs_at = track_body.index("const needsReseed = (prunedNext.length / 2) < reseedThreshold || survivingGridCells < RESEED_MIN_GRID_CELLS;")
+    assert grid_cells_computed_at < needs_at
+
+
+def test_reseed_mask_uses_the_current_valid_marker_quad():
+    """Task H item 4: attemptFeatureReseed builds its search mask via maskFromQuad(quad)
+    — `quad` is the parameter trackFrame passes as currCorners, the just-applied,
+    already-validated marker quad for this tick, never a stale or unvalidated one."""
+    body = _attempt_feature_reseed_body()
+    assert "mask = maskFromQuad(quad);" in body
+    track_body = _track_frame_body()
+    assert "attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells)" in track_body
+
+
+def test_fresh_points_are_restricted_to_marker_roi():
+    """Task H item 5: cv.goodFeaturesToTrack is called with the quad-derived mask (not
+    the full frame) — candidate points can only be found inside the marker ROI."""
+    body = _attempt_feature_reseed_body()
+    mask_built_at = body.index("mask = maskFromQuad(quad);")
+    gft_at = body.index("cv.goodFeaturesToTrack(gray, candidates, targetNew, 0.01, 8, mask, 3, false, 0.04);")
+    assert mask_built_at < gft_at
+
+
+def test_surviving_and_fresh_points_are_spatially_deduplicated():
+    """Task H item 6: every fresh candidate is checked against RESEED_DEDUP_RADIUS
+    before being merged — a candidate too close to an already-accepted point (surviving
+    or already-merged) is dropped, never double-counted."""
+    body = _attempt_feature_reseed_body()
+    assert "if (dx * dx + dy * dy < RESEED_DEDUP_RADIUS * RESEED_DEDUP_RADIUS) { tooClose = true; break; }" in body
+    assert "if (!tooClose && (merged.length / 2) < MAX_TRACK_POINTS) {" in body
+
+
+def test_merged_points_are_capped_at_target_capacity():
+    """Task H item 7: the merge loop's own guard, (merged.length / 2) < MAX_TRACK_POINTS,
+    is checked before every push — the merged set can never exceed the existing target
+    point capacity, the same cap bootstrap itself uses."""
+    body = _attempt_feature_reseed_body()
+    assert "(merged.length / 2) < MAX_TRACK_POINTS" in body
+    assert "merged.push(cxp, cyp);" in body
+
+
+def test_successful_reseed_preserves_current_homography_and_overlay():
+    """Task H item 8/9: attemptFeatureReseed never references H, currCorners assignment,
+    applyWarp, or any overlay/video property — reseeding only ever replaces the POINT SET
+    used for future LK ticks, never the already-applied geometry or playback state."""
+    body = _attempt_feature_reseed_body()
+    for forbidden in ("applyWarp(", "currCorners =", " H.", "overlay.src", "overlay.currentTime", "overlay.pause", "overlay.play"):
+        assert forbidden not in body
+
+
+def test_successful_reseed_does_not_schedule_server_detection():
+    """Task H item 10: attemptFeatureReseed never calls scheduleNextScan, startDetectLoop,
+    or detectOnceFromServer — a reseed is purely local and must never itself trigger a
+    server round-trip."""
+    body = _attempt_feature_reseed_body()
+    for forbidden in ("scheduleNextScan(", "startDetectLoop(", "detectOnceFromServer("):
+        assert forbidden not in body
+
+
+def test_successful_reseed_establishes_a_fresh_lk_baseline():
+    """Task H item 11: establishFrameGapBaseline() already runs unconditionally earlier in
+    this same successful tick (Pass 8), strictly before the reseed trigger is even
+    evaluated — so a tick that reseeds always already has a freshly-established baseline
+    for itself, never a stale one."""
+    track_body = _track_frame_body()
+    establish_at = track_body.index("establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt);")
+    reseed_call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells);")
+    assert establish_at < reseed_call_at
+
+
+def test_failed_reseed_cannot_loop_indefinitely():
+    """Task H item 12: the reseed guard in trackFrame requires
+    reseedAttemptsForEpoch < MAX_RESEED_ATTEMPTS_PER_EPOCH AND
+    consecutiveReseedFailures < MAX_CONSECUTIVE_RESEED_FAILURES — both bounded constants,
+    reset only at the next tracking-epoch boundary (resetTrackingEpoch), never
+    unconditionally retried tick after tick within the same epoch once exhausted."""
+    track_body = _track_frame_body()
+    assert "reseedAttemptsForEpoch < MAX_RESEED_ATTEMPTS_PER_EPOCH &&" in track_body
+    assert "consecutiveReseedFailures < MAX_CONSECUTIVE_RESEED_FAILURES) {" in track_body
+    html = _scanner_html()
+    epoch_start = html.index("function resetTrackingEpoch(width, height)")
+    epoch_end = html.index("function cornersToMat(corners)")
+    epoch_body = html[epoch_start:epoch_end]
+    assert "reseedAttemptsForEpoch = 0;" in epoch_body
+    assert "consecutiveReseedFailures = 0;" in epoch_body
+
+
+def test_failed_reseed_can_still_drop_through_insufficient_flow_points():
+    """Task H item 13: on any validation failure, attemptFeatureReseed returns
+    survivingPts UNCHANGED (never partially applies a bad reseed) — later ticks continue
+    with that same (possibly still-shrinking) point set and can still reach the existing,
+    unmodified insufficient_flow_points drop path normally."""
+    body = _attempt_feature_reseed_body()
+    assert body.count("return survivingPts;") == 3  # one per validation-failure branch
+    track_body = _track_frame_body()
+    assert "dropTracking('insufficient_flow_points', [gray, nextPts, status, err], {" in track_body
+
+
+def test_failed_reseed_schedules_exactly_one_reacquisition():
+    """Task H item 14: dropsAfterFailedReseed increments right before the existing,
+    unmodified dropTracking('insufficient_flow_points', ...) call — which itself (proven
+    elsewhere in this file) still calls scheduleNextScan('tracking_lost_reacquire', 0)
+    exactly once."""
+    track_body = _track_frame_body()
+    counter_at = track_body.index("if (consecutiveReseedFailures > 0) diagState.dropsAfterFailedReseed++;")
+    drop_at = track_body.index("dropTracking('insufficient_flow_points', [gray, nextPts, status, err], {", counter_at)
+    assert counter_at < drop_at
+    html = _scanner_html()
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_end = html.index("function handleDetectionTimeout()", drop_start)
+    assert "scheduleNextScan('tracking_lost_reacquire', 0);" in html[drop_start:drop_end]
+
+
+def test_invalid_geometry_or_quad_never_permits_reseeding():
+    """Task H item 15/16: the reseed trigger/call is positioned strictly AFTER every
+    geometry-rejecting early return (homography_empty, corner_order_invalid,
+    out_of_bounds, pose_rejected_*, tracking_epoch_superseded, tracking_geometry_invalid)
+    — Task D is satisfied by this placement: an invalid-geometry tick returns long before
+    ever reaching the reseed code."""
+    track_body = _track_frame_body()
+    reseed_call_at = track_body.index("finalPts = attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells);")
+    for rejecting_reason in (
+        "dropTracking('homography_empty'",
+        "dropTracking('corner_order_invalid'",
+        "dropTracking('out_of_bounds'",
+        "dropTracking('tracking_epoch_superseded'",
+        "dropTracking('tracking_geometry_invalid'",
+    ):
+        assert track_body.index(rejecting_reason) < reseed_call_at
+
+
+def test_background_drifted_points_are_removed_before_reseed_decision():
+    """Task H item 17: prunedNext (built via isPointInQuadPadded against the just-applied
+    currCorners) is computed BEFORE survivingCoverage/survivingGridCells/needsReseed —
+    every downstream decision already excludes points that drifted outside the marker."""
+    track_body = _track_frame_body()
+    prune_loop_at = track_body.index("if (isPointInQuadPadded(goodNext[i], goodNext[i + 1], currCorners, POINT_RETENTION_PAD)) {")
+    coverage_at = track_body.index("const survivingCoverage = pointCoverage(prunedNext, currCorners);")
+    needs_at = track_body.index("const needsReseed = (prunedNext.length / 2) < reseedThreshold || survivingGridCells < RESEED_MIN_GRID_CELLS;")
+    assert prune_loop_at < coverage_at < needs_at
+
+
+def test_callback_delivered_after_cancellation_is_logged_skipped():
+    """Task H item 19: a callback whose id matches lastCancelledCallbackId (the id
+    cancelCurrentTrackingCallback most recently cancelled) is classified as
+    'cancelled_callback' — a distinct reason from stale_owner/stale_epoch/
+    tracking_inactive/mode_not_tracking — and still routes through the same
+    [TRACK CALLBACK SKIPPED] log."""
+    html = _scanner_html()
+    validity_start = html.index("function trackingCallbackValidityFailureReason(callbackId, callbackEpoch, callbackOwnerToken)")
+    validity_end = html.index("function trackOwnerState(extra)")
+    validity_body = html[validity_start:validity_end]
+    assert "if (callbackId === lastCancelledCallbackId) return 'cancelled_callback';" in validity_body
+    fired_body = _tracking_callback_functions_body()
+    assert "if (failureReason === 'cancelled_callback') diagState.callbacksSkippedAfterCancellation++;" in fired_body
+    assert "logCallbackEvent('[TRACK CALLBACK SKIPPED]', {" in fired_body
+
+
+def test_callback_delivered_after_cancellation_does_not_run_lk_or_rearm_or_mutate_owner():
+    """Task H item 20/21/22: the failureReason branch (which 'cancelled_callback' always
+    enters) returns before ever reaching trackFrame() (no LK), and the "release own slot"
+    cancel call is gated on trackingCallbackId === callbackId — for a cancelled_callback
+    firing, trackingCallbackId no longer equals this stale id (something else owns it, or
+    it's null), so that cancel path correctly never mutates the CURRENT/newer owner."""
+    body = _tracking_callback_functions_body()
+    fired_start = body.index("function onTrackingCallbackFired(callbackId, callbackType, now, metadata, callbackEpoch, callbackOwnerToken)")
+    failure_check_at = body.index("if (failureReason) {", fired_start)
+    failure_return_at = body.index("return;", failure_check_at)
+    trackframe_call_at = body.index("trackFrame(now, Object.assign(")
+    assert failure_check_at < failure_return_at < trackframe_call_at
+    guard_at = body.index("if (failureReason !== 'stale_owner' && trackingCallbackId === callbackId) {")
+    assert "cancelCurrentTrackingCallback('stale_skip_' + failureReason);" in body[guard_at:guard_at + 200]
+
+
+def test_pass9_new_functions_never_touch_video_source_or_currenttime_or_loop():
+    """Task H item 26: none of the new Pass 9 functions (attemptFeatureReseed,
+    isPointInQuadPadded, countOccupiedGridCells, medianOf) assign overlay.src or
+    overlay.currentTime, and none reference the native <video loop> attribute."""
+    html = _scanner_html()
+    for fn_start_marker, fn_end_marker in (
+        ("function isPointInQuadPadded(px, py, quad, pad)", "function countOccupiedGridCells(points, quad, gridSize)"),
+        ("function countOccupiedGridCells(points, quad, gridSize)", "function medianOf(values)"),
+        ("function medianOf(values)", "function attemptFeatureReseed(gray, quad, survivingPts, survivingCoverage, survivingGridCells)"),
+        ("function attemptFeatureReseed(gray, quad, survivingPts, survivingCoverage, survivingGridCells)", "function initializeFreshLiveTracker(now, metadata)"),
+    ):
+        body = html[html.index(fn_start_marker):html.index(fn_end_marker)]
+        assert "overlay.src" not in body
+        assert "overlay.currentTime" not in body
+        assert "overlay.loop" not in body
+    assert html.count('<video id="overlay"') == 1
+
+
+def test_pass9_did_not_change_any_recognition_or_geometry_threshold():
+    """Task H item 27: MIN_GOOD_POINTS/MAX_ERR/RANSAC_REPROJ/TRACKING_GRACE_FRAMES/
+    TRACKING_GRACE_MS/POSE_HOLD_MS/RVFC_STALL_TIMEOUT_MS remain unchanged — this pass
+    only added point-health diagnostics and a bounded, geometry-safe local reseed, never
+    a recognition or geometry acceptance threshold. RESEED_MIN_COVERAGE_AFTER_MERGE
+    deliberately reuses bootstrap's own existing 0.25 coverage floor rather than
+    introducing a separate, weaker one."""
+    html = _scanner_html()
+    assert "const MIN_GOOD_POINTS =" in html
+    assert "const MAX_ERR =" in html
+    assert "const TRACKING_GRACE_FRAMES = 3;" in html
+    assert "const TRACKING_GRACE_MS = 900;" in html
+    assert "const POSE_HOLD_MS = 500;" in html
+    assert "const RVFC_STALL_TIMEOUT_MS = TRACKING_GRACE_MS;" in html
+    assert "const RANSAC_REPROJ = 5.0;" in html
+    assert "const RESEED_MIN_COVERAGE_AFTER_MERGE = 0.25;" in html
+    assert "coverage < 0.25" in html  # initializeFreshLiveTracker's own existing bootstrap floor, unchanged

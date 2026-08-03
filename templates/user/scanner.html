@@ -933,7 +933,14 @@
       callbacksRearmedWhileInactive: 0,
       watchdogForcedWhileTracking: 0,
       staleEpochCallbacks: 0,
-      staleOwnerCallbacks: 0
+      staleOwnerCallbacks: 0,
+      // Pass 9 (Task G) — reseed + post-cancellation-callback counters.
+      reseedAttempts: 0,
+      reseedSuccesses: 0,
+      reseedFailures: 0,
+      pointsAddedByReseed: 0,
+      dropsAfterFailedReseed: 0,
+      callbacksSkippedAfterCancellation: 0
     };
     markStartupCheckpoint('scanner_constants_initialized');
 
@@ -951,6 +958,49 @@
     const MAX_TRACK_POINTS = scannerMode === 'full' ? 180 : (scannerMode === 'standard' ? 120 : 70);
     const TRACK_FRAME_INTERVAL_MS = scannerMode === 'lightweight' ? 90 : (scannerMode === 'standard' ? 66 : 50);
     const RECOVERY_RETRY_LIMIT = scannerMode === 'lightweight' ? 5 : 4;
+    // Task B (Pass 9) — proactive reseed thresholds. Derived from EXISTING quantities
+    // (MIN_GOOD_POINTS, the tracker's own initialPoints, bootstrap's own coverage floor),
+    // never invented blind constants:
+    // - RESEED_POINT_FRACTION: reseed triggers with meaningful runway ABOVE the hard
+    //   MIN_GOOD_POINTS floor, scaled to how many good features THIS marker's bootstrap
+    //   actually found (a sparser marker reseeds at a lower absolute count than a richly
+    //   textured one) — real-device evidence lost tracking at goodPoints=2/0 out of
+    //   initialPoints=120; 35% of 120 = 42, giving many frames of runway to reseed before
+    //   ever approaching the hard floor.
+    const RESEED_POINT_FRACTION = 0.35;
+    // - POINT_GRID_SIZE / RESEED_MIN_GRID_CELLS: a coarse 4x4 spatial grid over the
+    //   marker's bounding box; requiring at least 5 of 16 cells occupied (~1/3) catches
+    //   "high point count but all clustered in one textured corner" even when the raw
+    //   count alone still looks healthy (Task E).
+    const POINT_GRID_SIZE = 4;
+    const RESEED_MIN_GRID_CELLS = 5;
+    // - POINT_RETENTION_PAD: 5% outward padding when testing whether a surviving LK point
+    //   is still "inside" the current marker quad — enough slack for perspective/
+    //   quantization noise at the quad edge, deliberately far tighter than the existing
+    //   40% out-of-bounds slack (out_of_bounds tolerates the marker LEAVING the frame;
+    //   this tolerates neither that nor genuine background drift).
+    const POINT_RETENTION_PAD = 0.05;
+    // - RESEED_MIN_COVERAGE_AFTER_MERGE: reuses the EXACT 0.25 coverage floor
+    //   initializeFreshLiveTracker() already requires for a fresh bootstrap to be
+    //   accepted — a reseed that can't clear the bar a brand-new bootstrap would need is
+    //   not a genuine improvement over what's already tracked.
+    const RESEED_MIN_COVERAGE_AFTER_MERGE = 0.25;
+    // - RESEED_MIN_NEW_POINTS: half of MIN_GOOD_POINTS (existing hard floor) — a reseed
+    //   contributing fewer new points than that isn't worth its CPU cost.
+    const RESEED_MIN_NEW_POINTS = Math.max(4, Math.round(MIN_GOOD_POINTS * 0.5));
+    // - RESEED_DEDUP_RADIUS: smaller than goodFeaturesToTrack's own 8px minDistance param
+    //   (used both at bootstrap and here) — this only needs to catch literal duplicates
+    //   slipping past the mask-exclusion circles drawn around survivors, not enforce
+    //   general candidate spacing (goodFeaturesToTrack already does that internally).
+    const RESEED_DEDUP_RADIUS = 6;
+    // - MAX_RESEED_ATTEMPTS_PER_EPOCH / MAX_CONSECUTIVE_RESEED_FAILURES: bounded, never
+    //   indefinite (Task C). 8 attempts at the existing TRACK_FRAME_INTERVAL_MS cadence
+    //   spans several real seconds of continued effort before giving up; 2 consecutive
+    //   failures to find enough usable new texture in the current marker region makes a
+    //   3rd attempt this epoch unlikely to succeed — let the existing bounded grace/drop
+    //   policy proceed normally instead.
+    const MAX_RESEED_ATTEMPTS_PER_EPOCH = 8;
+    const MAX_CONSECUTIVE_RESEED_FAILURES = 2;
     let detectLoopTimer = null;   // truthy while a scan tick is scheduled — read by diagnostics as "is the loop alive"
     let trackLoopActive = false;
     // Loop-ownership token, deliberately SEPARATE from scannerGeneration. scannerGeneration
@@ -1585,6 +1635,16 @@
     let lastSuccessfulLkMediaTime = null;
     let successfulLkEpoch = -1;
     let successfulLkContinuityToken = -1;
+    // Task C (Pass 9) — bounded reseed state, reset per tracking epoch (see
+    // resetTrackingEpoch). reseedInProgress is defensive (JS is single-threaded, so
+    // reentrancy can't actually happen), matching the explicit "no reseed already active"
+    // prerequisite in Task B.
+    let reseedAttemptsForEpoch = 0;
+    let consecutiveReseedFailures = 0;
+    let lastReseedAt = 0;
+    let pointsAddedByLastReseed = 0;
+    let reseedInProgress = false;
+    let lastCancelledCallbackId = null; // Task F (Pass 9) — see cancelCurrentTrackingCallback
     let rvfcStallWatchdogTimer = null;
     // rVFC health state machine (Pass 5): RVFC_ACTIVE (preferred) -> RVFC_STALLED (no
     // callback arrived, one rearm attempted) -> RAF_FALLBACK (rVFC rearm also stalled,
@@ -2069,6 +2129,13 @@
     // 'RECOVERING' for a callback that is nonetheless exactly the one we're waiting for —
     // every other case requires tracking===true && scannerWorkMode==='TRACKING'.
     function trackingCallbackValidityFailureReason(callbackId, callbackEpoch, callbackOwnerToken) {
+      // Task F (Pass 9): distinguish "this exact callback was explicitly cancelled but
+      // still physically fired" (a documented browser race — cancelVideoFrameCallback/
+      // cancelAnimationFrame do not guarantee cancellation of a callback the browser has
+      // already queued to dispatch this frame) from the more general "some other/newer
+      // callback owns the slot now." Both are one-owner violations, but only the former
+      // is literally the specific id we ourselves tried to cancel.
+      if (callbackId === lastCancelledCallbackId) return 'cancelled_callback';
       if (trackingCallbackId !== callbackId) return 'stale_owner';
       if (callbackOwnerToken !== trackingCallbackOwnerToken) return 'stale_owner';
       if (!trackLoopActive) return 'tracking_inactive';
@@ -2139,6 +2206,11 @@
       logCallbackEvent('[TRACK CALLBACK CANCELLED]', { id: trackingCallbackId, reason }, {
         epoch: trackingEpoch, cancelledBy: reason
       });
+      // Task F (Pass 9): remember exactly which id we just cancelled — if the browser
+      // still physically delivers it despite the cancel call above (a documented race),
+      // onTrackingCallbackFired can label it precisely as 'cancelled_callback' rather
+      // than the more generic 'stale_owner'.
+      lastCancelledCallbackId = trackingCallbackId;
       trackingCallbackId = null;
       trackingCallbackType = null;
       trackingCallbackHandle = null;
@@ -2180,6 +2252,7 @@
         // cleanup/repair, never LK processing.
         if (failureReason === 'stale_epoch') diagState.staleEpochCallbacks++;
         if (failureReason === 'stale_owner') diagState.staleOwnerCallbacks++;
+        if (failureReason === 'cancelled_callback') diagState.callbacksSkippedAfterCancellation++;
         logCallbackEvent('[TRACK CALLBACK SKIPPED]', {
           id: callbackId, callbackEpoch, currentEpoch: trackingEpoch, reason: failureReason
         }, {
@@ -2292,15 +2365,16 @@
         resetFrameGapBaseline('rvfc_health_restored');
       }
 
-      const processingStart = performance.now();
-      trackFrame(now, Object.assign({ callbackType, callbackId }, effectiveMetadata || {}));
-      const processingDuration = Math.round(performance.now() - processingStart);
-      // Task E (Pass 8): callbackEpoch (captured, immutable — what THIS callback was armed
-      // under) and currentEpoch (live — may have advanced during trackFrame's own call
-      // above, e.g. a bootstrap tick) are always printed as two distinct fields. Never
-      // label the live epoch as though it belonged to the callback — that ambiguity is
-      // exactly what made "[TRACK CALLBACK ENTERED] id=4 epoch=1" (id=4 was actually
-      // requested under epoch=0) misleading in the Pass 7 evidence.
+      // Task F (Pass 9): log ENTERED HERE — immediately before trackFrame runs, after
+      // every validity/redirect check above has already passed — never after. Previously
+      // this was logged AFTER trackFrame() returned (so it could report processing
+      // duration), which meant any nested CANCELLED/dropTracking log this SAME callback's
+      // own processing produced (e.g. it drops tracking, which cancels the successor it
+      // just armed) printed BEFORE this callback's own ENTERED line — reading, in the
+      // console, as if an older callback entered after a newer one was cancelled, when
+      // really the "newer" one was this callback's own successor. schedulingLatencyMs
+      // (request -> entry) is known upfront and replaces the old processingDuration field.
+      const schedulingLatencyMs = requestedAt ? Math.round(now - requestedAt) : null;
       logCallbackEvent('[TRACK CALLBACK ENTERED]', {
         id: callbackId, callbackEpoch, currentEpoch: trackingEpoch,
         mediaTime: effectiveMetadata && effectiveMetadata.mediaTime != null ? effectiveMetadata.mediaTime : null
@@ -2308,8 +2382,9 @@
         ownerToken: callbackId, now,
         presentedFrames: effectiveMetadata && effectiveMetadata.presentedFrames != null ? effectiveMetadata.presentedFrames : null,
         expectedDisplayTime: effectiveMetadata && effectiveMetadata.expectedDisplayTime != null ? effectiveMetadata.expectedDisplayTime : null,
-        processingDuration
+        schedulingLatencyMs
       });
+      trackFrame(now, Object.assign({ callbackType, callbackId }, effectiveMetadata || {}));
     }
 
     function stopTrackingLoop() {
@@ -3183,6 +3258,12 @@
       // startTrackingLoop()'s own reset (this can fire on its own tick, one after
       // startTrackingLoop already ran for the same bootstrap).
       resetFrameGapBaseline('tracking_epoch_changed');
+      // Task C (Pass 9): reseed attempt/failure counters are scoped to one tracking
+      // epoch — a fresh epoch means a fresh tracker (new prevPts from bootstrap), so
+      // whatever reseed history applied to the OLD epoch's point population is no
+      // longer relevant.
+      reseedAttemptsForEpoch = 0;
+      consecutiveReseedFailures = 0;
       // Task D: a fresh tracking epoch (bootstrap or accepted re-detection) is the natural
       // "clean start" point to try the preferred rVFC path again — no permanent fallback
       // lock. No separate cooldown timer is introduced; every fresh epoch is itself a
@@ -3257,6 +3338,147 @@
       cv.fillConvexPoly(mask, quad, new cv.Scalar(255));
       quad.delete();
       return mask;
+    }
+
+    // Task E (Pass 9): pure-JS point-in-convex-quad test (no Mat allocation — this runs
+    // once per surviving LK point, per tick, so avoiding cv.pointPolygonTest's per-call
+    // Mat cost matters). `quad` is assumed convex (already guaranteed by this point in
+    // trackFrame — normalizeCornerOrder/geometry validation already ran). `pad` expands
+    // the quad outward from its own centroid by that fraction before testing, so points
+    // right at the edge (perspective/quantization noise) aren't punished.
+    function isPointInQuadPadded(px, py, quad, pad) {
+      const cx = (quad[0].x + quad[1].x + quad[2].x + quad[3].x) / 4;
+      const cy = (quad[0].y + quad[1].y + quad[2].y + quad[3].y) / 4;
+      let sign = 0;
+      for (let i = 0; i < 4; i++) {
+        const a = quad[i], b = quad[(i + 1) % 4];
+        const ax = cx + (a.x - cx) * (1 + pad), ay = cy + (a.y - cy) * (1 + pad);
+        const bx = cx + (b.x - cx) * (1 + pad), by = cy + (b.y - cy) * (1 + pad);
+        const cross = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+        const thisSign = cross > 0 ? 1 : (cross < 0 ? -1 : 0);
+        if (thisSign !== 0) {
+          if (sign === 0) sign = thisSign;
+          else if (thisSign !== sign) return false;
+        }
+      }
+      return true;
+    }
+
+    // Task A/E (Pass 9): coarse spatial-distribution check — how many cells of a
+    // POINT_GRID_SIZE x POINT_GRID_SIZE grid over the quad's own bounding box contain at
+    // least one point. Catches "point count still looks fine but everything is clustered
+    // in one textured corner" even when raw coverage (bounding-box ratio) still passes.
+    function countOccupiedGridCells(points, quad, gridSize) {
+      const bounds = pointBounds(quad.flatMap(function (p) { return [p.x, p.y]; }));
+      if (!bounds || bounds.width <= 0 || bounds.height <= 0) return 0;
+      const occupied = new Set();
+      for (let i = 0; i < points.length; i += 2) {
+        const gx = Math.min(gridSize - 1, Math.max(0, Math.floor((points[i] - bounds.minX) / bounds.width * gridSize)));
+        const gy = Math.min(gridSize - 1, Math.max(0, Math.floor((points[i + 1] - bounds.minY) / bounds.height * gridSize)));
+        occupied.add(gy * gridSize + gx);
+      }
+      return occupied.size;
+    }
+
+    function medianOf(values) {
+      if (!values || !values.length) return null;
+      const sorted = values.slice().sort(function (a, b) { return a - b; });
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+
+    // Task B/C/D (Pass 9): attempt to top up the surviving point population from the
+    // CURRENT gray frame, inside the CURRENT (already-validated) marker quad — only ever
+    // called from trackFrame's own success branch, after homography/corners/geometry
+    // have ALL already passed, so an invalid-geometry tick can never reach this (Task D
+    // satisfied by call-site placement, not a redundant re-check). Returns the point
+    // array to use going forward — the merged set on success, or the untouched surviving
+    // set on any validation failure (never partially applies a bad reseed).
+    function attemptFeatureReseed(gray, quad, survivingPts, survivingCoverage, survivingGridCells) {
+      reseedAttemptsForEpoch++;
+      diagState.reseedAttempts++;
+      reseedInProgress = true;
+      const survivingCount = survivingPts.length / 2;
+      logCallbackEvent('[TRACK RESEED START]', {
+        epoch: trackingEpoch, survivingPoints: survivingCount,
+        coverage: Number(survivingCoverage.toFixed(3)), gridCells: survivingGridCells
+      }, {});
+      let mask = null, candidates = null;
+      try {
+        const targetNew = MAX_TRACK_POINTS - survivingCount;
+        if (targetNew < RESEED_MIN_NEW_POINTS) {
+          consecutiveReseedFailures++;
+          diagState.reseedFailures++;
+          logCallbackEvent('[TRACK RESEED FAILED]', {
+            epoch: trackingEpoch, reason: 'no_capacity_remaining',
+            survivingPoints: survivingCount, candidatePoints: 0
+          }, {});
+          return survivingPts;
+        }
+        mask = maskFromQuad(quad);
+        // Exclude small neighborhoods around survivors so goodFeaturesToTrack looks for
+        // NEW texture rather than re-finding points it already has.
+        for (let i = 0; i < survivingPts.length; i += 2) {
+          cv.circle(mask, new cv.Point(Math.round(survivingPts[i]), Math.round(survivingPts[i + 1])), 8, new cv.Scalar(0), -1);
+        }
+        candidates = new cv.Mat();
+        cv.goodFeaturesToTrack(gray, candidates, targetNew, 0.01, 8, mask, 3, false, 0.04);
+        const candidateFlat = Array.from(candidates.data32F || []);
+        const candidateCount = candidateFlat.length / 2;
+
+        // Spatial dedup: drop any candidate within RESEED_DEDUP_RADIUS of an
+        // already-accepted point (surviving OR already-merged-from-candidates).
+        const merged = survivingPts.slice();
+        let added = 0;
+        for (let i = 0; i < candidateFlat.length; i += 2) {
+          const cxp = candidateFlat[i], cyp = candidateFlat[i + 1];
+          let tooClose = false;
+          for (let j = 0; j < merged.length; j += 2) {
+            const dx = merged[j] - cxp, dy = merged[j + 1] - cyp;
+            if (dx * dx + dy * dy < RESEED_DEDUP_RADIUS * RESEED_DEDUP_RADIUS) { tooClose = true; break; }
+          }
+          if (!tooClose && (merged.length / 2) < MAX_TRACK_POINTS) {
+            merged.push(cxp, cyp);
+            added++;
+          }
+        }
+
+        if (added < RESEED_MIN_NEW_POINTS) {
+          consecutiveReseedFailures++;
+          diagState.reseedFailures++;
+          logCallbackEvent('[TRACK RESEED FAILED]', {
+            epoch: trackingEpoch, reason: 'insufficient_new_points',
+            survivingPoints: survivingCount, candidatePoints: candidateCount
+          }, {});
+          return survivingPts;
+        }
+
+        const mergedCoverage = pointCoverage(merged, quad);
+        if (mergedCoverage < RESEED_MIN_COVERAGE_AFTER_MERGE) {
+          consecutiveReseedFailures++;
+          diagState.reseedFailures++;
+          logCallbackEvent('[TRACK RESEED FAILED]', {
+            epoch: trackingEpoch, reason: 'insufficient_merged_coverage',
+            survivingPoints: survivingCount, candidatePoints: candidateCount
+          }, {});
+          return survivingPts;
+        }
+
+        const mergedGridCells = countOccupiedGridCells(merged, quad, POINT_GRID_SIZE);
+        consecutiveReseedFailures = 0;
+        lastReseedAt = performance.now();
+        pointsAddedByLastReseed = added;
+        diagState.reseedSuccesses++;
+        diagState.pointsAddedByReseed += added;
+        logCallbackEvent('[TRACK RESEED SUCCESS]', {
+          epoch: trackingEpoch, survivingPoints: survivingCount, newPoints: added,
+          mergedPoints: merged.length / 2, coverage: Number(mergedCoverage.toFixed(3)), gridCells: mergedGridCells
+        }, {});
+        return merged;
+      } finally {
+        deleteMats(mask, candidates);
+        reseedInProgress = false;
+      }
     }
 
     function initializeFreshLiveTracker(now, metadata) {
@@ -3581,17 +3803,52 @@
 
         const goodPrev = [];
         const goodNext = [];
+        const goodErrors = [];
         const st = status.data;
         const e = err.data32F;
+        // Task A: point-count funnel — before (initial bootstrap population, tracked
+        // separately in activeTrackerInitialPointCount), lkGood (status===1, regardless of
+        // error), errorGood (status===1 AND error<MAX_ERR — this is the count every prior
+        // reason has always called "goodPoints").
+        let lkStatusGoodCount = 0;
+        const initialPointCountThisRound = prevPts.rows || (prevPts.data32F.length / 2);
 
         for (let i = 0; i < st.length; i++) {
-          if (st[i] === 1 && e[i] < MAX_ERR) {
-            goodPrev.push(prevPts.data32F[i * 2], prevPts.data32F[i * 2 + 1]);
-            goodNext.push(nextPts.data32F[i * 2], nextPts.data32F[i * 2 + 1]);
+          if (st[i] === 1) {
+            lkStatusGoodCount++;
+            if (e[i] < MAX_ERR) {
+              goodPrev.push(prevPts.data32F[i * 2], prevPts.data32F[i * 2 + 1]);
+              goodNext.push(nextPts.data32F[i * 2], nextPts.data32F[i * 2 + 1]);
+              goodErrors.push(e[i]);
+            }
           }
         }
 
+        // Task A: in-bounds/ROI-contained are measured here against the QUAD this frame
+        // started with (currCorners hasn't been updated yet this tick) — a reasonable,
+        // cheap proxy at this point in the pipeline; geometryGood (RANSAC inliers) isn't
+        // known until findHomography runs below, so it's null whenever this frame fails
+        // before reaching that point (never fabricated).
+        const inBoundsCount = goodNext.reduce(function (count, _, idx) {
+          if (idx % 2 !== 0) return count;
+          const x = goodNext[idx], y = goodNext[idx + 1];
+          return count + ((x >= 0 && x <= frameW && y >= 0 && y <= frameH) ? 1 : 0);
+        }, 0);
+        const roiGoodCount = currCorners ? goodNext.reduce(function (count, _, idx) {
+          if (idx % 2 !== 0) return count;
+          return count + (isPointInQuadPadded(goodNext[idx], goodNext[idx + 1], currCorners, POINT_RETENTION_PAD) ? 1 : 0);
+        }, 0) : null;
+
         if ((goodPrev.length / 2) < MIN_GOOD_POINTS) {
+          logCallbackEvent('[TRACK POINT HEALTH]', {
+            epoch: trackingEpoch, before: initialPointCountThisRound, lkGood: lkStatusGoodCount,
+            errorGood: goodPrev.length / 2, inBounds: inBoundsCount, roiGood: roiGoodCount,
+            geometryGood: null, final: goodPrev.length / 2
+          }, {
+            coverage: currCorners ? Number(pointCoverage(goodNext, currCorners).toFixed(3)) : null,
+            gridCells: currCorners ? countOccupiedGridCells(goodNext, currCorners, POINT_GRID_SIZE) : null,
+            medianError: medianOf(goodErrors)
+          });
           enterGrace('insufficient_flow_points');
           // Grace period: stay locked briefly on either a frame-count or wall-clock ceiling —
           // frame count alone can hang on throttled/low-FPS devices (spec section 4).
@@ -3599,6 +3856,10 @@
             deleteMats(gray, nextPts, status, err);
             return; // skip this frame, keep tracking state
           }
+          // Task G: a reseed was attempted (and failed) earlier this epoch — this drop is
+          // the bounded-grace-policy fallback Task C requires when reseeding couldn't
+          // rescue the population in time.
+          if (consecutiveReseedFailures > 0) diagState.dropsAfterFailedReseed++;
           dropTracking('insufficient_flow_points', [gray, nextPts, status, err], {
             gray,
             frameGapMs: gapSinceLastTick,
@@ -3740,17 +4001,56 @@
         // frame-gap baseline.
         establishFrameGapBaseline(mediaTime, lastSuccessfulLkAt);
 
+        // Task E: retain only survivors still inside the quad JUST applied this tick —
+        // a point that drifted into the background must never keep being carried
+        // forward. Task D is satisfied by placement: everything below only ever runs
+        // after homography/corners/geometry have ALL already been validated above.
+        const prunedNext = [];
+        for (let i = 0; i < goodNext.length; i += 2) {
+          if (isPointInQuadPadded(goodNext[i], goodNext[i + 1], currCorners, POINT_RETENTION_PAD)) {
+            prunedNext.push(goodNext[i], goodNext[i + 1]);
+          }
+        }
+        const survivingCoverage = pointCoverage(prunedNext, currCorners);
+        const survivingGridCells = countOccupiedGridCells(prunedNext, currCorners, POINT_GRID_SIZE);
+        let geometryInlierCount = 0;
+        for (let i = 0; i < mask.data.length; i++) { if (mask.data[i]) geometryInlierCount++; }
+
+        // Task A: the "final" funnel stage — after ROI-pruning, before any reseed.
+        logCallbackEvent('[TRACK POINT HEALTH]', {
+          epoch: trackingEpoch, before: initialPointCountThisRound, lkGood: lkStatusGoodCount,
+          errorGood: goodPrev.length / 2, inBounds: inBoundsCount, roiGood: prunedNext.length / 2,
+          geometryGood: geometryInlierCount, final: prunedNext.length / 2
+        }, {
+          coverage: Number(survivingCoverage.toFixed(3)), gridCells: survivingGridCells,
+          medianError: medianOf(goodErrors)
+        });
+
+        // Task B/C: proactive reseed — only while there's still tracking-epoch headroom
+        // and this epoch hasn't already exhausted its consecutive-failure budget.
+        let finalPts = prunedNext;
+        const reseedThreshold = Math.max(
+          MIN_GOOD_POINTS * 2,
+          Math.round(activeTrackerInitialPointCount * RESEED_POINT_FRACTION)
+        );
+        const needsReseed = (prunedNext.length / 2) < reseedThreshold || survivingGridCells < RESEED_MIN_GRID_CELLS;
+        if (needsReseed && !reseedInProgress &&
+            reseedAttemptsForEpoch < MAX_RESEED_ATTEMPTS_PER_EPOCH &&
+            consecutiveReseedFailures < MAX_CONSECUTIVE_RESEED_FAILURES) {
+          finalPts = attemptFeatureReseed(gray, currCorners, prunedNext, survivingCoverage, survivingGridCells);
+        }
+
         prevGray.delete();
         prevGray = gray;
         prevGrayEpoch = trackingEpoch;
         prevPts.delete();
-        prevPts = nextMat.clone();
+        prevPts = cv.matFromArray(finalPts.length / 2, 1, cv.CV_32FC2, finalPts);
         lastLockTs = performance.now();
         setScannerWorkMode('TRACKING', 'local_tracking_update');
         statusDiv.textContent = `🎬 AR IS ON LIVE${currentPairId + 1}`;
         statusDiv.className = "status track";
         scannerDiagnostics.push('[TRACK UPDATE]', {
-          generation: scannerGeneration, pairId: currentPairId, points: goodNext.length / 2
+          generation: scannerGeneration, pairId: currentPairId, points: finalPts.length / 2
         });
 
         nextPts.delete(); status.delete(); err.delete();
@@ -4740,7 +5040,9 @@
           skippedDuplicateVideoFrames: 0, largeGapDuringCaptureWork: false,
           callbacksRequestedWhileInactive: 0, callbacksEnteredWhileInactive: 0,
           callbacksRearmedWhileInactive: 0, watchdogForcedWhileTracking: 0,
-          staleEpochCallbacks: 0, staleOwnerCallbacks: 0
+          staleEpochCallbacks: 0, staleOwnerCallbacks: 0,
+          reseedAttempts: 0, reseedSuccesses: 0, reseedFailures: 0, pointsAddedByReseed: 0,
+          dropsAfterFailedReseed: 0, callbacksSkippedAfterCancellation: 0
         });
         renderDiagPanel();
       });
