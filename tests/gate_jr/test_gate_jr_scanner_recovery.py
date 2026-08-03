@@ -225,8 +225,10 @@ def test_healthy_tracking_suppresses_repeated_detect_init_and_limits_inflight():
     detect_start = html.index("async function detectOnceFromServer(triggeredByWatchdog)")
     detect_end = html.index("async function scanTick(token)", detect_start)
     detect_body = html[detect_start:detect_end]
+    assert "if (isHealthyLocalTracking())" in detect_body
+    assert "healthy_tracking_detect_start_blocked" in detect_body
     assert "if (sessionEnding || detectInFlight || !cvReady || cam.readyState < 2) {" in detect_body
-    assert "if (!sessionEnding) scheduleNextScan('after_attempt_not_started');" in detect_body
+    assert "if (!sessionEnding && !isHealthyLocalTracking()) scheduleNextScan('after_attempt_not_started');" in detect_body
     assert "return;" in detect_body
 
 

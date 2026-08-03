@@ -569,7 +569,7 @@ def _scan_tick_body(html):
     return html[start:end]
 
 
-def test_scan_request_is_always_rescheduled_after_any_outcome():
+def test_scan_request_is_rescheduled_after_non_tracking_outcomes():
     """A completed tick — success, rejected detection, or a thrown/fetch error inside
     detectOnceFromServer — must always schedule the next one. The reschedule call lives in
     a finally block wrapping the entire decision+request body, so it runs regardless of
@@ -580,7 +580,8 @@ def test_scan_request_is_always_rescheduled_after_any_outcome():
     finally_idx = body.index("} finally {")
     await_idx = body.index("await detectOnceFromServer();")
     assert try_idx < await_idx < finally_idx, "detectOnceFromServer() must be inside the try, before the finally"
-    assert "if (!requestAttemptStarted && !detectInFlight && !(activeDetectionAttempt && !activeDetectionAttempt.terminal)) {" in body[finally_idx:]
+    assert "let allowScanReschedule = true;" in body
+    assert "if (allowScanReschedule && !requestAttemptStarted && !detectInFlight && !(activeDetectionAttempt && !activeDetectionAttempt.terminal)) {" in body[finally_idx:]
     assert "scheduleNextScan('after_tick');" in body[finally_idx:]
     finalize_start = html.index("function finalizeDetectionAttempt(")
     finalize_end = html.index("function clearTrackingGeometry", finalize_start)
@@ -1005,6 +1006,19 @@ def test_watchdog_forces_a_request_after_four_seconds_of_silence():
     assert "if (elapsed > WATCHDOG_TIMEOUT_MS) {" in html
     assert "'watchdog_forced_detection'" in html
     assert "detectOnceFromServer(true); // forces a request through the SAME guarded path" in html
+
+
+def test_watchdog_observes_but_does_not_force_detection_while_tracking_is_healthy():
+    html = _scanner_html()
+    watchdog_start = html.index("function watchdogTick(token")
+    watchdog_end = html.index("function skipTick(reason, extra)")
+    body = html[watchdog_start:watchdog_end]
+    healthy_at = body.index("if (isHealthyLocalTracking())")
+    forced_at = body.index("detectOnceFromServer(true);")
+    assert healthy_at < forced_at
+    assert "diagState.lastWatchdogReason = 'healthy_tracking_observed';" in body
+    assert "skipReason: 'healthy_tracking'" in body
+    assert "scheduleWatchdog(token);" in body[healthy_at:forced_at]
 
 
 def test_watchdog_does_not_create_concurrent_requests():
@@ -2277,8 +2291,108 @@ def test_tracking_loss_summary_contains_real_device_fields():
         "coverage",
         "prevGray",
         "gray",
+        "scannerMode",
+        "capturePhase",
+        "activeAttemptSeq",
+        "encodeActive",
+        "fetchActive",
+        "lastScheduledBy",
+        "pendingScanTimer",
+        "pageVisibility",
+        "videoPaused",
+        "videoEnded",
+        "videoReadyState",
     ):
         assert field in drop_body
+
+
+def test_explicit_scanner_work_modes_gate_detection_cadence():
+    html = _scanner_html()
+    assert "let scannerWorkMode = 'SEARCHING';" in html
+    assert "function setScannerWorkMode(mode, reason)" in html
+    assert "function isHealthyLocalTracking()" in html
+    assert "scannerWorkMode === 'TRACKING'" in html
+    assert "setScannerWorkMode('RECOVERING', 'server_pose_accepted_bootstrap_pending')" in html
+    assert "setScannerWorkMode('TRACKING', 'fresh_live_tracker_ready')" in html
+    assert "setScannerWorkMode('RECOVERING', reason || 'tracking_lost')" in html
+
+
+def test_healthy_tracking_cancels_and_skips_normal_scan_timer():
+    html = _scanner_html()
+    cancel_start = html.index("function cancelPendingNormalScan(reason)")
+    cancel_body = html[cancel_start:html.index("function trackingWorkloadSnapshot", cancel_start)]
+    assert "clearTimeout(detectLoopTimer);" in cancel_body
+    assert "detectLoopTimer = null;" in cancel_body
+    assert "normal_scan_timer_cancelled" in cancel_body
+    mode_start = html.index("function setScannerWorkMode(mode, reason)")
+    mode_body = html[mode_start:html.index("function isHealthyLocalTracking", mode_start)]
+    assert "if (mode === 'TRACKING') cancelPendingNormalScan('entered_healthy_tracking');" in mode_body
+
+
+def test_schedule_next_scan_refuses_healthy_tracking_loop():
+    html = _scanner_html()
+    start = html.index("function scheduleNextScan(reason, delayMs)")
+    body = html[start:html.index("const WATCHDOG_TIMEOUT_MS", start)]
+    assert "if (isHealthyLocalTracking())" in body
+    healthy_at = body.index("if (isHealthyLocalTracking())")
+    set_timer_at = body.index("detectLoopTimer = setTimeout")
+    assert healthy_at < set_timer_at
+    assert "reason: 'healthy_tracking'" in body
+    assert "logTimingCheckpoint('[SCAN SCHEDULE SKIPPED]', 'healthy_tracking'" in body
+
+
+def test_scan_tick_stale_timer_cannot_capture_or_reschedule_while_tracking_healthy():
+    body = _scan_tick_body(_scanner_html())
+    healthy_at = body.index("if (isHealthyLocalTracking())")
+    capture_at = body.index("await detectOnceFromServer();")
+    finally_at = body.index("} finally {")
+    assert "allowScanReschedule = false;" in body[healthy_at:capture_at]
+    assert "healthy_tracking_no_capture" in body[healthy_at:capture_at]
+    assert healthy_at < capture_at < finally_at
+    assert "if (allowScanReschedule && !requestAttemptStarted" in body[finally_at:]
+
+
+def test_detect_once_from_server_blocks_direct_or_watchdog_capture_while_tracking_healthy():
+    body = _detect_once_body()
+    healthy_at = body.index("if (isHealthyLocalTracking())")
+    capture_at = body.index("captureCanvas.width = capW;")
+    assert healthy_at < capture_at
+    assert "healthy_tracking_detect_start_blocked" in body[healthy_at:capture_at]
+    assert "triggeredByWatchdog: Boolean(triggeredByWatchdog)" in body[healthy_at:capture_at]
+
+
+def test_attempt_finalizer_does_not_schedule_successor_while_tracking_healthy():
+    html = _scanner_html()
+    start = html.index("function scheduleAttemptSuccessor(")
+    body = html[start:html.index("function finalizeDetectionAttempt", start)]
+    healthy_at = body.index("if (isHealthyLocalTracking())")
+    schedule_at = body.index("scheduleNextScan(reason || 'after_attempt');")
+    assert healthy_at < schedule_at
+    assert "healthy_tracking_successor_suppressed" in body
+
+
+def test_tracking_loss_reenters_single_scheduler_for_reacquisition():
+    html = _scanner_html()
+    drop_start = html.index("function dropTracking(reason, extraMats")
+    drop_body = html[drop_start:html.index("function handleDetectionTimeout()", drop_start)]
+    assert "setScannerWorkMode('RECOVERING', reason || 'tracking_lost')" in drop_body
+    assert "scheduleNextScan('tracking_lost_reacquire', 0);" in drop_body
+    assert "setTimeout(" not in drop_body
+
+
+def test_capture_workload_counters_and_encode_thresholds_are_tracked():
+    html = _scanner_html()
+    body = _detect_once_body()
+    assert "capturesWhileSearching: 0" in html
+    assert "capturesWhileTracking: 0" in html
+    assert "capturesWhileRecovering: 0" in html
+    assert "encodeOver500Ms: 0" in html
+    assert "if (scannerWorkMode === 'TRACKING') diagState.capturesWhileTracking++;" in body
+    assert "else if (scannerWorkMode === 'RECOVERING') diagState.capturesWhileRecovering++;" in body
+    assert "else diagState.capturesWhileSearching++;" in body
+    assert "if (encodeDurationMs > 500) diagState.encodeOver500Ms++;" in body
+    assert "if (encodeDurationMs > 1500) diagState.encodeOver1500Ms++;" in body
+    assert "if (encodeDurationMs > 3000) diagState.encodeOver3000Ms++;" in body
 
 
 def test_one_active_attempt_maximum_is_structurally_enforced():
@@ -2586,7 +2700,7 @@ def test_pose_hold_keeps_video_playing_only_stop_overlay_pauses_it():
 # scan-scheduling/session-end-request-guards — none of that is touched here.
 # ---------------------------------------------------------------------------
 
-def test_frame_gap_guard_runs_before_matfromvideogray_and_optical_flow():
+def test_frame_gap_policy_uses_presented_video_frame_time_before_optical_flow():
     """Stream B item 10: a long gap since the last tracking tick (reused
     TRACKING_GRACE_MS threshold — the codebase's own existing wall-clock ceiling, not an
     invented value) invalidates correspondence and drops tracking BEFORE a new gray frame
@@ -2594,10 +2708,15 @@ def test_frame_gap_guard_runs_before_matfromvideogray_and_optical_flow():
     frame correspondence invalid."""
     body = _track_frame_body()
     gap_check_at = body.index("if (gapSinceLastTick > TRACKING_GRACE_MS) {")
-    drop_at = body.index("dropTracking('tracking_frame_gap_exceeded', [], { frameGapMs: gapSinceLastTick });")
+    presented_at = body.index("const gapIsFromPresentedFrames = presentedFrameGapMs == null || presentedFrameGapMs > TRACKING_GRACE_MS;", gap_check_at)
+    workload_at = body.index("const workloadActive = diagState.encodeInFlight || diagState.fetchInFlight || diagState.capturePhase !== 'idle';", gap_check_at)
+    suspend_at = body.index("clearTrackingGeometry('tracking_gap_suspended', { holdPose: true });", gap_check_at)
+    drop_at = body.index("dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({", gap_check_at)
     gray_at = body.index("gray = matFromVideoGray();")
     lk_at = body.index("cv.calcOpticalFlowPyrLK(")
-    assert gap_check_at < drop_at < gray_at < lk_at
+    assert gap_check_at < presented_at < workload_at < suspend_at < drop_at < gray_at < lk_at
+    assert "presentedFrameGapMs: presentedFrameGapMs != null ? Math.round(presentedFrameGapMs) : null" in body[drop_at:gray_at]
+    assert "scheduler_delay_without_new_presented_frame" in body[gap_check_at:drop_at]
 
 
 def test_epoch_supersede_guard_prevents_stale_epoch_callback_from_mutating_state():

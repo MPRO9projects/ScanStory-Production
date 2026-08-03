@@ -810,6 +810,7 @@
     // forged-but-rejected test token. Server-resolved only, same as the three above.
     const ENTRY_ROUTE_TYPE = {{ entry_route_type | tojson }};
     const ENTRY_AUTHORIZATION_RESULT = {{ entry_authorization_result | tojson }};
+    const SCANNER_WORK_MODE_SEARCHING = 'SEARCHING';
     const diagState = {
       consecutiveAccepted: 0,
       consecutiveRejected: 0,
@@ -879,10 +880,26 @@
       activeAttemptTerminal: false,
       encodeInFlight: false,
       fetchInFlight: false,
+      capturePhase: 'idle',
       successorScheduled: false,
       recoveryInProgress: false,
       trackingAgeMs: null,
       currentScanLoopToken: null,
+      scannerWorkMode: SCANNER_WORK_MODE_SEARCHING,
+      lastPresentedVideoFrameAt: 0,
+      currentVideoFrameMediaTime: null,
+      trackingCallbackIntervalMs: null,
+      trackingCallbackMaxIntervalMs: 0,
+      skippedDuplicateVideoFrames: 0,
+      largeGapDuringCaptureWork: false,
+      lastScheduledBy: null,
+      pendingScanTimer: false,
+      capturesWhileSearching: 0,
+      capturesWhileTracking: 0,
+      capturesWhileRecovering: 0,
+      encodeOver500Ms: 0,
+      encodeOver1500Ms: 0,
+      encodeOver3000Ms: 0,
       // Recovery / fallback (this pass).
       recoveryAttemptCount: 0,
       fallbackVisible: false,
@@ -1520,6 +1537,8 @@
     let firstLiveTrackingFrameAt = 0;
     let firstLkFrameGapMs = null;
     let activeTrackerCoverage = null;
+    let scannerWorkMode = 'SEARCHING';
+    let lastTrackingMediaTime = null;
 
     const TRANSITION_HISTORY_LIMIT = 20;
     const scannerTransitionHistory = []; // bounded — recent transitions for diagnostics only
@@ -1561,6 +1580,72 @@
 
     function activeTrackCount() {
       return cameraStream ? cameraStream.getTracks().filter(track => track.readyState === 'live').length : 0;
+    }
+
+    function setScannerWorkMode(mode, reason) {
+      if (scannerWorkMode === mode) return false;
+      const previous = scannerWorkMode;
+      scannerWorkMode = mode;
+      diagState.scannerWorkMode = mode;
+      scannerDiagnostics.push('scanner_work_mode_changed', {
+        from: previous,
+        to: mode,
+        reason: reason || null,
+        generation: scannerGeneration
+      });
+      if (mode === 'TRACKING') cancelPendingNormalScan('entered_healthy_tracking');
+      return true;
+    }
+
+    function isHealthyLocalTracking() {
+      return scannerWorkMode === 'TRACKING' &&
+        tracking &&
+        !trackerBootstrapPending &&
+        currCorners &&
+        prevGray &&
+        prevPts &&
+        trackingBadFrames === 0;
+    }
+
+    function cancelPendingNormalScan(reason) {
+      if (!detectLoopTimer) {
+        diagState.pendingScanTimer = false;
+        return false;
+      }
+      const timerId = detectLoopTimer;
+      clearTimeout(detectLoopTimer);
+      detectLoopTimer = null;
+      diagState.pendingScanTimer = false;
+      diagState.nextScanScheduledAt = null;
+      scannerDiagnostics.push('normal_scan_timer_cancelled', {
+        reason,
+        timerId,
+        scannerWorkMode,
+        generation: scannerGeneration
+      });
+      logTimingCheckpoint('[SCAN TIMER CANCELLED]', reason || 'cancelled', { timerId, scannerWorkMode });
+      return true;
+    }
+
+    function trackingWorkloadSnapshot(extra) {
+      return Object.assign({
+        scannerWorkMode,
+        capturePhase: diagState.capturePhase,
+        activeAttemptSeq: diagState.activeAttemptSeq,
+        encodeActive: diagState.encodeInFlight,
+        fetchActive: diagState.fetchInFlight,
+        lastScheduledBy: diagState.lastScheduledBy,
+        pendingScanTimer: Boolean(detectLoopTimer),
+        pageVisibility: document.visibilityState,
+        videoPaused: cam.paused,
+        videoEnded: cam.ended,
+        videoReadyState: cam.readyState,
+        lastPresentedVideoFrameAt: diagState.lastPresentedVideoFrameAt,
+        currentVideoFrameMediaTime: diagState.currentVideoFrameMediaTime,
+        trackingCallbackIntervalMs: diagState.trackingCallbackIntervalMs,
+        trackingCallbackMaxIntervalMs: diagState.trackingCallbackMaxIntervalMs,
+        skippedDuplicateVideoFrames: diagState.skippedDuplicateVideoFrames
+      }, extra || {});
     }
 
     function invalidateDetection() {
@@ -1653,6 +1738,15 @@
 
     function scheduleAttemptSuccessor(attempt, reason) {
       if (!attempt || attempt.successorScheduled || sessionEnding || attempt.scanLoopToken !== scanLoopToken) return false;
+      if (isHealthyLocalTracking()) {
+        scannerDiagnostics.push('scan_schedule_skipped', {
+          reason: 'healthy_tracking_successor_suppressed',
+          scheduledBy: reason || 'after_attempt',
+          scannerWorkMode,
+          activeRequestSequence: attempt.requestSequence
+        });
+        return false;
+      }
       attempt.successorScheduled = true;
       diagState.successorScheduled = true;
       scheduleNextScan(reason || 'after_attempt');
@@ -1672,12 +1766,14 @@
       diagState.activeAttemptTerminal = true;
       diagState.encodeInFlight = false;
       diagState.fetchInFlight = false;
+      diagState.capturePhase = 'idle';
       scannerDiagnostics.push('detection_attempt_finalized', {
         requestSequence: attempt.requestSequence,
         phase: attempt.phase,
         reason,
         generation: attempt.scannerGeneration,
-        token: attempt.scanLoopToken
+        token: attempt.scanLoopToken,
+        scannerWorkMode
       });
       if (scheduleSuccessor) scheduleAttemptSuccessor(attempt, 'after_attempt');
       if (activeDetectionAttempt === attempt) activeDetectionAttempt = null;
@@ -1688,6 +1784,7 @@
       tracking = false;
       trackerBootstrapPending = false;
       firstLkPending = false;
+      if (scannerWorkMode === 'TRACKING') setScannerWorkMode('RECOVERING', reason || 'tracking_geometry_cleared');
       currCorners = null;
       lastOrdered = null;
       smoothCorners = null;
@@ -2645,6 +2742,7 @@
         firstLiveTrackingFrameAt = now || performance.now();
         firstLkFrameGapMs = null;
         lastTrackFrameTs = firstLiveTrackingFrameAt;
+        setScannerWorkMode('TRACKING', 'fresh_live_tracker_ready');
         scannerDiagnostics.push('tracking_bootstrap_ready', {
           requestSequence: activeTrackerRequestSeq,
           trackingEpoch,
@@ -2666,6 +2764,7 @@
     }
 
     function dropTracking(reason, extraMats, details = {}) {
+      setScannerWorkMode('RECOVERING', reason || 'tracking_lost');
       recordRejection(reason);
       diagState.consecutiveRejected++;
       diagState.consecutiveAccepted = 0;
@@ -2676,6 +2775,18 @@
         badFrames: trackingBadFrames,
         requestSequence: activeTrackerRequestSeq || latestAcceptedRequestId || null,
         trackingEpoch,
+        scannerMode: scannerWorkMode,
+        scannerWorkMode,
+        capturePhase: diagState.capturePhase,
+        activeAttemptSeq: diagState.activeAttemptSeq,
+        encodeActive: diagState.encodeInFlight,
+        fetchActive: diagState.fetchInFlight,
+        lastScheduledBy: diagState.lastScheduledBy,
+        pendingScanTimer: Boolean(detectLoopTimer),
+        pageVisibility: document.visibilityState,
+        videoPaused: cam.paused,
+        videoEnded: cam.ended,
+        videoReadyState: cam.readyState,
         ageSinceServerResponseMs: activeTrackerInitializedAt ? Math.round(now - activeTrackerInitializedAt) : null,
         ageSinceUploadedCaptureMs: activeTrackerCaptureAt ? Math.round(now - activeTrackerCaptureAt) : null,
         prevGrayDimensions: matDims(prevGray),
@@ -2696,6 +2807,17 @@
         `[TRACKING LOST] reason=${reason}` +
         ` requestSeq=${lossDiagnostic.requestSequence || '-'}` +
         ` epoch=${trackingEpoch}` +
+        ` scannerMode=${scannerWorkMode}` +
+        ` capturePhase=${diagState.capturePhase}` +
+        ` activeAttemptSeq=${diagState.activeAttemptSeq || '-'}` +
+        ` encodeActive=${diagState.encodeInFlight}` +
+        ` fetchActive=${diagState.fetchInFlight}` +
+        ` lastScheduledBy=${diagState.lastScheduledBy || '-'}` +
+        ` pendingScanTimer=${Boolean(detectLoopTimer)}` +
+        ` pageVisibility=${document.visibilityState}` +
+        ` videoPaused=${cam.paused}` +
+        ` videoEnded=${cam.ended}` +
+        ` videoReadyState=${cam.readyState}` +
         ` trackerAgeMs=${lossDiagnostic.ageSinceServerResponseMs != null ? lossDiagnostic.ageSinceServerResponseMs : '-'}` +
         ` firstLkFrameGapMs=${firstLkFrameGapMs != null ? Math.round(firstLkFrameGapMs) : '-'}` +
         ` initialPoints=${lossDiagnostic.initialPointCount != null ? lossDiagnostic.initialPointCount : '-'}` +
@@ -2719,6 +2841,7 @@
       startScannerStatusCycle();
       statusDiv.textContent = "🎯 Scan AR marker";
       statusDiv.className = "status scan";
+      scheduleNextScan('tracking_lost_reacquire', 0);
       deleteMats(...(extraMats || []));
       graceEnteredAt = 0;
     }
@@ -2776,9 +2899,24 @@
       const frameKey = metadata && metadata.presentedFrames != null
         ? `vf:${metadata.presentedFrames}`
         : (metadata && metadata.mediaTime != null ? `mt:${metadata.mediaTime}` : null);
-      if (frameKey && frameKey === lastPresentedFrameKey) return;
+      if (frameKey && frameKey === lastPresentedFrameKey) {
+        diagState.skippedDuplicateVideoFrames++;
+        return;
+      }
       if (frameKey) lastPresentedFrameKey = frameKey;
       const now = typeof nowArg === 'number' ? nowArg : performance.now();
+      const mediaTime = metadata && typeof metadata.mediaTime === 'number' ? metadata.mediaTime : null;
+      const presentedFrameGapMs = mediaTime != null && lastTrackingMediaTime != null
+        ? (mediaTime - lastTrackingMediaTime) * 1000
+        : null;
+      const callbackIntervalMs = diagState.lastPresentedVideoFrameAt ? now - diagState.lastPresentedVideoFrameAt : null;
+      if (callbackIntervalMs != null) {
+        diagState.trackingCallbackIntervalMs = Math.round(callbackIntervalMs);
+        diagState.trackingCallbackMaxIntervalMs = Math.max(diagState.trackingCallbackMaxIntervalMs || 0, Math.round(callbackIntervalMs));
+      }
+      diagState.lastPresentedVideoFrameAt = now;
+      diagState.currentVideoFrameMediaTime = mediaTime;
+      if (mediaTime != null) lastTrackingMediaTime = mediaTime;
       if (now - lastTrackFrameTs < TRACK_FRAME_INTERVAL_MS) return;
       // Captured BEFORE lastTrackFrameTs is overwritten below — the gap between this tick
       // and the last one that actually ran. TRACKING_GRACE_MS (900ms) is reused rather than
@@ -2802,7 +2940,24 @@
         const epochAtTickStart = trackingEpoch;
 
         if (gapSinceLastTick > TRACKING_GRACE_MS) {
-          dropTracking('tracking_frame_gap_exceeded', [], { frameGapMs: gapSinceLastTick });
+          const gapIsFromPresentedFrames = presentedFrameGapMs == null || presentedFrameGapMs > TRACKING_GRACE_MS;
+          const workloadActive = diagState.encodeInFlight || diagState.fetchInFlight || diagState.capturePhase !== 'idle';
+          if (!gapIsFromPresentedFrames || document.hidden || workloadActive) {
+            setScannerWorkMode('RECOVERING', 'tracking_gap_suspended');
+            clearTrackingGeometry('tracking_gap_suspended', { holdPose: true });
+            startDetectLoop();
+            scannerDiagnostics.push('tracking_gap_suspended', trackingWorkloadSnapshot({
+              gapMs: Math.round(gapSinceLastTick),
+              presentedFrameGapMs: presentedFrameGapMs != null ? Math.round(presentedFrameGapMs) : null,
+              reason: document.hidden ? 'page_hidden' : (workloadActive ? 'capture_workload_active' : 'scheduler_delay_without_new_presented_frame')
+            }));
+            return;
+          }
+          dropTracking('tracking_frame_gap_exceeded', [], trackingWorkloadSnapshot({
+            frameGapMs: gapSinceLastTick,
+            gapMs: Math.round(gapSinceLastTick),
+            presentedFrameGapMs: presentedFrameGapMs != null ? Math.round(presentedFrameGapMs) : null
+          }));
           return;
         }
 
@@ -2987,6 +3142,7 @@
         prevPts.delete();
         prevPts = nextMat.clone();
         lastLockTs = performance.now();
+        setScannerWorkMode('TRACKING', 'local_tracking_update');
         statusDiv.textContent = `🎬 AR IS ON LIVE${currentPairId + 1}`;
         statusDiv.className = "status track";
         scannerDiagnostics.push('[TRACK UPDATE]', {
@@ -3020,12 +3176,21 @@
       // send (the guard on the next line returns otherwise), which is itself the useful
       // sanity check: if the server ever logs this true, the in-flight guard was bypassed.
       const detectInFlightBeforeStart = detectInFlight;
+      if (isHealthyLocalTracking()) {
+        scannerDiagnostics.push('scan_tick_skipped', {
+          reason: 'healthy_tracking_detect_start_blocked',
+          triggeredByWatchdog: Boolean(triggeredByWatchdog),
+          scannerWorkMode,
+          capturePhase: diagState.capturePhase
+        });
+        return;
+      }
       if (sessionEnding || detectInFlight || !cvReady || cam.readyState < 2) {
-        if (!sessionEnding) scheduleNextScan('after_attempt_not_started');
+        if (!sessionEnding && !isHealthyLocalTracking()) scheduleNextScan('after_attempt_not_started');
         return;
       }
       if (!detectionPolicy.canStart(performance.now(), !document.hidden, Boolean(cameraStream), tracking)) {
-        scheduleNextScan('after_attempt_not_started');
+        if (!isHealthyLocalTracking()) scheduleNextScan('after_attempt_not_started');
         return;
       }
       const requestId = detectionPolicy.start(performance.now());
@@ -3042,6 +3207,7 @@
       clientRequestSeq++;
       if (scannerState.state === 'ready_to_scan' || scannerState.state === 'recovering') safeTransition('detecting', 'server_request');
       loadingSpinner.style.display = "block";
+      diagState.capturePhase = 'sizing';
 
       // Cap capture to max 1200px (server's ORB_MAX_DIM) to avoid sending oversized images
       // and prevent frame_w/h mismatch after server-side resize
@@ -3056,6 +3222,9 @@
       }
       captureCanvas.width = capW;
       captureCanvas.height = capH;
+      if (scannerWorkMode === 'TRACKING') diagState.capturesWhileTracking++;
+      else if (scannerWorkMode === 'RECOVERING') diagState.capturesWhileRecovering++;
+      else diagState.capturesWhileSearching++;
 
       // Audit note: this capture step (drawImage + toBlob) runs BEFORE activeDetectionController
       // is assigned below — the watchdog cannot abort a stall here (nothing to call .abort()
@@ -3065,10 +3234,12 @@
       // callback-based JPEG encoding) together — split into 4 checkpoints so a follow-up
       // real-device run can attribute the delay to one stage specifically instead of both.
       logTimingCheckpoint('[FRAME CAPTURE START]', 'frame_capture');
+      diagState.capturePhase = 'draw_image';
       logTimingCheckpoint('[DRAW IMAGE START]', 'draw_image', { capW, capH, videoWidth: cam.videoWidth, videoHeight: cam.videoHeight });
       captureCtx.drawImage(cam, 0, 0, captureCanvas.width, captureCanvas.height);
       const uploadedCaptureAt = performance.now();
       logTimingCheckpoint('[DRAW IMAGE END]', 'draw_image', { capW, capH, videoWidth: cam.videoWidth, videoHeight: cam.videoHeight });
+      diagState.capturePhase = 'post_draw';
       if (!isCurrentDetectionAttempt(attempt)) {
         detectionPolicy.finish(requestId);
         finalizeDetectionAttempt(attempt, 'cancelled', 'stale_after_drawing');
@@ -3077,12 +3248,17 @@
       setDetectionAttemptPhase(attempt, 'encoding');
       attempt.encodeInFlight = true;
       diagState.encodeInFlight = true;
+      diagState.capturePhase = 'encoding';
       logTimingCheckpoint('[TOBLOB START]', 'to_blob', { capW, capH });
       const encodeStartedAt = performance.now();
       const blob = await new Promise(res => captureCanvas.toBlob(res, "image/jpeg", 0.85));
       const encodeDurationMs = Math.round(performance.now() - encodeStartedAt);
       attempt.encodeInFlight = false;
       diagState.encodeInFlight = false;
+      diagState.capturePhase = 'encoded';
+      if (encodeDurationMs > 500) diagState.encodeOver500Ms++;
+      if (encodeDurationMs > 1500) diagState.encodeOver1500Ms++;
+      if (encodeDurationMs > 3000) diagState.encodeOver3000Ms++;
       logTimingCheckpoint('[TOBLOB END]', 'to_blob', { capW, capH });
       logTimingCheckpoint('[ENCODE COMPLETE]', 'encode_complete', {
         requestSeq: requestId,
@@ -3167,6 +3343,7 @@
         attempt.controllerId = ++detectionControllerSeq;
         attempt.fetchInFlight = true;
         diagState.fetchInFlight = true;
+        diagState.capturePhase = 'fetching';
         activeDetectionController = controller;
         // Root-cause fix (proven — see watchdogTick): the watchdog's "abort a stuck
         // request" deadline used to be computed from diagState.lastRequestStartAt, which is
@@ -3190,6 +3367,7 @@
         attempt.phase = 'handling';
         diagState.activeAttemptPhase = 'handling';
         diagState.lastFetchStartAt = null;
+        diagState.capturePhase = 'response';
         if (activeDetectionController === controller && attempt.controller === controller) activeDetectionController = null;
         diagState.fetchInFlight = false;
         if (!setDetectionAttemptPhase(attempt, 'handling')) {
@@ -3377,6 +3555,7 @@
         firstLiveTrackingFrameAt = 0;
         firstLkFrameGapMs = null;
         firstLkPending = false;
+        setScannerWorkMode('RECOVERING', 'server_pose_accepted_bootstrap_pending');
         trackerBootstrapPending = true;
         trackerBootstrapStartedAt = performance.now();
         scannerDiagnostics.push('tracking_bootstrap_armed', {
@@ -3449,6 +3628,9 @@
         logTimingCheckpoint('[RESPONSE HANDLED]', 'response_handled', { requestId });
         attempt.responseHandled = true;
         diagState.lastRequestFinishAt = Date.now();
+        diagState.capturePhase = 'idle';
+        diagState.encodeInFlight = false;
+        diagState.fetchInFlight = false;
         finalizeDetectionAttempt(attempt, (attempt.cancelled || sessionEnding) ? 'cancelled' : 'complete', 'finally');
         loadingSpinner.style.display = "none";
       }
@@ -3484,7 +3666,14 @@
         generation: scannerGeneration,
         loopToken: scanLoopToken,
         tracking,
+        scannerWorkMode,
+        capturePhase: diagState.capturePhase,
         detectInFlight,
+        encodeActive: diagState.encodeInFlight,
+        fetchActive: diagState.fetchInFlight,
+        activeAttemptSeq: diagState.activeAttemptSeq,
+        lastScheduledBy: diagState.lastScheduledBy,
+        pendingScanTimer: Boolean(detectLoopTimer),
         pageVisible: !document.hidden,
         streamHealthy: !isStreamDead(),
         trackReadyState: track ? track.readyState : null,
@@ -3502,8 +3691,22 @@
     function scheduleNextScan(reason, delayMs) {
       const replacedTimerId = detectLoopTimer;
       if (detectLoopTimer) { clearTimeout(detectLoopTimer); detectLoopTimer = null; }
+      diagState.pendingScanTimer = false;
       if (sessionEnding) {
         scannerDiagnostics.push('scan_tick_skipped', { reason: 'session_ending' });
+        return;
+      }
+      if (isHealthyLocalTracking()) {
+        diagState.lastScheduledBy = reason || null;
+        scannerDiagnostics.push('scan_schedule_skipped', {
+          reason: 'healthy_tracking',
+          scheduledBy: reason,
+          scannerWorkMode,
+          replacedTimerId,
+          generation: scannerGeneration,
+          token: scanLoopToken
+        });
+        logTimingCheckpoint('[SCAN SCHEDULE SKIPPED]', 'healthy_tracking', { scheduledBy: reason, replacedTimerId });
         return;
       }
       if (activeDetectionAttempt && !activeDetectionAttempt.terminal) {
@@ -3525,6 +3728,7 @@
       diagState.lastExpectedRunAt = now + delay;
       diagState.selectedDelayMs = delay;
       diagState.selectedDelayReason = reason;
+      diagState.lastScheduledBy = reason || null;
       scanTimerGeneration++;
       scannerDiagnostics.push('next_scan_scheduled', {
         reason, delay, token, generation: scannerGeneration,
@@ -3532,6 +3736,7 @@
         replacedTimerId
       });
       detectLoopTimer = setTimeout(() => scanTick(token), delay);
+      diagState.pendingScanTimer = true;
       logTimingCheckpoint('[SCAN SCHEDULED]', reason, {
         delay, token,
         scanTimerGeneration, scheduledBy: reason,
@@ -3600,6 +3805,17 @@
       });
       if (document.hidden || recoverScannerPromise || diagState.cameraStartInProgress) {
         scheduleWatchdog(token); // never forces anything in these states — just keeps checking
+        return;
+      }
+      if (isHealthyLocalTracking()) {
+        diagState.lastWatchdogReason = 'healthy_tracking_observed';
+        logTimingCheckpoint('[WATCHDOG SKIP]', 'healthy_tracking', {
+          watchdogId,
+          abortAttempted: false,
+          abortExecuted: false,
+          skipReason: 'healthy_tracking'
+        });
+        scheduleWatchdog(token);
         return;
       }
       const baseline = detectInFlight
@@ -3698,7 +3914,9 @@
 
     async function scanTick(token) {
       detectLoopTimer = null;
+      diagState.pendingScanTimer = false;
       let requestAttemptStarted = false;
+      let allowScanReschedule = true;
       logTimingCheckpoint('[SCAN TIMER FIRED]', 'timer_fired', { token });
       const track = cameraStream ? cameraStream.getVideoTracks()[0] : null;
       const actualRunAt = Date.now();
@@ -3733,6 +3951,16 @@
       try {
         if (sessionEnding) { skipTick('session_ending'); return; }
         if (token !== scanLoopToken) { skipTick('stale_loop_token', { token, currentToken: scanLoopToken }); return; }
+        if (isHealthyLocalTracking()) {
+          allowScanReschedule = false;
+          skipTick('healthy_tracking_no_capture', {
+            scannerWorkMode,
+            lastScheduledBy: diagState.lastScheduledBy,
+            pendingScanTimer: Boolean(detectLoopTimer),
+            capturePhase: diagState.capturePhase
+          });
+          return;
+        }
         if (document.hidden) { skipTick('tab_hidden'); return; }
         if (!cvReady) { skipTick('opencv_not_ready'); return; }
         if (recoverScannerPromise) { skipTick('recovery_pending'); return; }
@@ -3772,7 +4000,7 @@
         // Always reschedule — a completed tick (whatever the outcome) must lead to the
         // next one unless the scanner was intentionally stopped (sessionEnding/stale token,
         // both checked again inside scheduleNextScan/the next scanTick invocation).
-        if (!requestAttemptStarted && !detectInFlight && !(activeDetectionAttempt && !activeDetectionAttempt.terminal)) {
+        if (allowScanReschedule && !requestAttemptStarted && !detectInFlight && !(activeDetectionAttempt && !activeDetectionAttempt.terminal)) {
           scheduleNextScan('after_tick');
         }
       }
@@ -3873,7 +4101,12 @@
           scanLoopStartCount: 0, scanLoopStopCount: 0,
           nextScanScheduledAt: null, lastRequestStartAt: null, lastRequestFinishAt: null,
           watchdogAbortCountSession: 0, lastWatchdogReason: null, lastWatchdogElapsedMs: null,
-          lastFetchStartAt: null
+          lastFetchStartAt: null,
+          capturePhase: 'idle',
+          capturesWhileSearching: 0, capturesWhileTracking: 0, capturesWhileRecovering: 0,
+          encodeOver500Ms: 0, encodeOver1500Ms: 0, encodeOver3000Ms: 0,
+          trackingCallbackIntervalMs: null, trackingCallbackMaxIntervalMs: 0,
+          skippedDuplicateVideoFrames: 0, largeGapDuringCaptureWork: false
         });
         renderDiagPanel();
       });
@@ -3981,6 +4214,10 @@
           `next scan scheduled: ${diagState.nextScanScheduledAt ? Math.round(diagState.nextScanScheduledAt - Date.now()) + 'ms' : '-'}`,
           `last request start/finish: ${diagState.lastRequestStartAt || '-'} / ${diagState.lastRequestFinishAt || '-'}`,
           `latency: ${diagState.lastDurationMs ?? '-'}ms   avg: ${diagState.avgDurationMs ?? '-'}ms`,
+          `work mode: ${scannerWorkMode}   capture phase: ${diagState.capturePhase}   pending scan timer: ${Boolean(detectLoopTimer)}`,
+          `captures by mode S/T/R: ${diagState.capturesWhileSearching}/${diagState.capturesWhileTracking}/${diagState.capturesWhileRecovering}`,
+          `encode slow >500/>1500/>3000: ${diagState.encodeOver500Ms}/${diagState.encodeOver1500Ms}/${diagState.encodeOver3000Ms}`,
+          `rVFC interval/max: ${diagState.trackingCallbackIntervalMs ?? '-'} / ${diagState.trackingCallbackMaxIntervalMs || '-'}ms   duplicate frames skipped: ${diagState.skippedDuplicateVideoFrames}`,
           `watchdog aborts — lifetime: ${diagState.watchdogAbortCount}   since reset: ${diagState.watchdogAbortCountSession}`,
           `last watchdog: ${diagState.lastWatchdogReason || '-'}   ${diagState.lastWatchdogElapsedMs != null ? diagState.lastWatchdogElapsedMs + 'ms' : '-'}`,
           '',
