@@ -286,8 +286,8 @@
                         </a>
                     </div>
                     <div class="col-md-3 col-sm-6 mb-3">
-                        <a href="{{ url_for('admin_my_projects') }}" class="btn btn-info w-100">
-                            <i class="fas fa-project-diagram me-2"></i>My Projects
+                        <a href="{{ url_for('admin_projects', owner_type='admin') }}" class="btn btn-info w-100">
+                            <i class="fas fa-project-diagram me-2"></i>Admin Projects
                         </a>
                     </div>
                     
@@ -325,8 +325,8 @@
                 <h6 class="m-0 font-weight-bold" style="color: #00d4ff !important;">
                     <i class="fas fa-project-diagram me-2"></i>Your Projects
                 </h6>
-                <!-- ✅ FIXED: Now links to admin_my_projects (admin's own projects) -->
-                <a href="{{ url_for('admin_my_projects') }}" class="btn btn-sm" style="background-color: rgba(0,212,255,0.1) !important; border: 1px solid rgba(0,212,255,0.3) !important; color: #00d4ff !important; border-radius: 20px; padding: 8px 18px;">
+                <!-- Canonical Admin Projects route (fix/admin-navigation-routing) -->
+                <a href="{{ url_for('admin_projects', owner_type='admin') }}" class="btn btn-sm" style="background-color: rgba(0,212,255,0.1) !important; border: 1px solid rgba(0,212,255,0.3) !important; color: #00d4ff !important; border-radius: 20px; padding: 8px 18px;">
                     <i class="fas fa-folder-open me-1"></i> View All Projects
                 </a>
             </div>
@@ -384,8 +384,8 @@
                 
                 {% if admin_projects|length > 6 %}
                 <div class="text-center mt-4">
-                    <!-- ✅ FIXED: Now links to admin_my_projects (admin's own projects) -->
-                    <a href="{{ url_for('admin_my_projects') }}" class="btn btn-sm" style="background-color: rgba(255,255,255,0.03) !important; border: 1px solid rgba(255,255,255,0.2) !important; color: white !important; border-radius: 30px; padding: 10px 30px;">
+                    <!-- Canonical Admin Projects route (fix/admin-navigation-routing) -->
+                    <a href="{{ url_for('admin_projects', owner_type='admin') }}" class="btn btn-sm" style="background-color: rgba(255,255,255,0.03) !important; border: 1px solid rgba(255,255,255,0.2) !important; color: white !important; border-radius: 30px; padding: 10px 30px;">
                         <i class="fas fa-arrow-right me-1"></i> View All Projects
                     </a>
                 </div>
