@@ -395,6 +395,7 @@
     </div>
 
     <form method="POST" enctype="multipart/form-data" action="{{ url_for('user_edit_project', project_id=project.id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       {% for pair in pairs %}
       <div class="panel pair-block">
         <div class="pair-label">

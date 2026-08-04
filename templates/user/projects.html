@@ -572,6 +572,7 @@
                         <form method="POST" action="{{ url_for('user_reprocess_project', project_id=project.id) }}"
                             onsubmit="return confirm('Fix this ScanStory? Your QR code will not change.');"
                             style="flex:1; min-width:60px;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" class="action-btn btn-reprocess" style="width:100%;">
                                 <i class="fas fa-rotate"></i> Fix
                             </button>
@@ -579,6 +580,7 @@
                         <form method="POST" action="{{ url_for('user_delete_project', project_id=project.id) }}"
                             onsubmit="return confirm('Delete \'{{ project.name }}\'? This cannot be undone.');"
                             style="flex:1; min-width:60px;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" class="action-btn btn-delete" style="width:100%;">
                                 <i class="fas fa-trash"></i> Delete
                             </button>

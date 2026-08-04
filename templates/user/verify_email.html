@@ -354,6 +354,7 @@
 
 
             <form method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="text" name="otp" class="otp-input glass" placeholder="000000" maxlength="6" required
                     autocomplete="one-time-code">
 

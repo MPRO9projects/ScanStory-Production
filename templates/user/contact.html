@@ -495,6 +495,7 @@
                     </div>
 
                     <form id="contactForm">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <!-- Hidden enquiry type -->
                         <input type="hidden" id="enquiryType" name="enquiry_type" value="support">
                         <!-- Google reCAPTCHA v3 Token -->
