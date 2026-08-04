@@ -223,23 +223,16 @@
                             </li>
                             
                             <!-- ============================================= -->
-                            <!-- ✅ UPDATED: SEPARATE PROJECT LINKS -->
+                            <!-- Canonical Admin Projects entry (single link -->
+                            <!-- for all admin project management; see -->
+                            <!-- fix/admin-navigation-routing). -->
                             <!-- ============================================= -->
-                            
-                            <!-- MY PROJECTS - Admin's own created projects -->
                             <li class="nav-item mb-2">
-                                <a class="nav-link {% if 'admin_my_projects' in request.endpoint or 'admin_view_project' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_my_projects') }}">
-                                    <i class="fas fa-project-diagram"></i> My Projects
+                                <a class="nav-link {% if request.endpoint in ('admin_projects', 'admin_view_project', 'admin_my_projects') %}active{% endif %}" href="{{ url_for('admin_projects') }}">
+                                    <i class="fas fa-project-diagram"></i> Admin Projects
                                 </a>
                             </li>
-                            
-                            <!-- USER PROJECTS - All users' projects (original) -->
-                            <li class="nav-item mb-2">
-                                <a class="nav-link {% if 'admin_projects' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_projects') }}">
-                                    <i class="fas fa-users"></i> User Projects
-                                </a>
-                            </li>
-                            
+
                             <li class="nav-item mb-2">
                                 <a class="nav-link {% if 'admin_plans' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_plans') }}">
                                     <i class="fas fa-list-alt"></i> Plans
