@@ -1126,6 +1126,7 @@
 
                 <!-- Form -->
                 <form method="POST" class="form-container" id="registerForm">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <!-- Email Field -->
                     <div class="input-group">
                         <label class="label-style">IDENTITY (EMAIL)</label>

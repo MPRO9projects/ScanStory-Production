@@ -15,6 +15,8 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
+from flask_wtf import CSRFProtect
+from flask_wtf.csrf import CSRFError
 from dotenv import load_dotenv
 import cv2
 import numpy as np
@@ -56,9 +58,12 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 logging.basicConfig(level=logging.DEBUG)
 app.logger.setLevel(logging.DEBUG)
 
-# ✅ ADD THESE 2 LINES TO DISABLE CSRF
-app.config['WTF_CSRF_ENABLED'] = False
-app.config['WTF_CSRF_CHECK_DEFAULT'] = False
+# CSRF protection is enabled globally (see P0B). Narrow, justified exemptions
+# are applied per-route below via @csrf.exempt - see the route inventory in
+# the P0B report for why each exemption exists.
+app.config['WTF_CSRF_ENABLED'] = True
+app.config['WTF_CSRF_CHECK_DEFAULT'] = True
+app.config['WTF_CSRF_HEADERS'] = ["X-CSRFToken", "X-CSRF-Token"]
 
 
 def _env_flag(name, default=False):
@@ -128,6 +133,38 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=SESSION_COOKIE_SECURE_ENABLED,
 )
+
+csrf = CSRFProtect(app)
+
+
+@app.errorhandler(CSRFError)
+def handle_csrf_error(error):
+    """Safe CSRF failure response - never leaks the internal reason string.
+
+    JSON for API/detection/AJAX-style paths, a plain HTML page otherwise.
+    Detailed reason is logged server-side only.
+    """
+    app.logger.warning(f"CSRF validation failed on {request.path}: {error.description}")
+    # Routes whose own JS always expects a JSON response, even though they
+    # aren't under /api or /detect and don't set an Accept/X-Requested-With
+    # header (fetch() doesn't add either by default).
+    _JSON_ONLY_PATHS = ("/create-razorpay-order", "/verify-payment", "/send-contact-email")
+    wants_json = (
+        request.path.startswith('/api') or request.path.startswith('/detect')
+        or request.path in _JSON_ONLY_PATHS
+        or request.accept_mimetypes.best == 'application/json'
+        or request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    )
+    if wants_json:
+        return jsonify({
+            "error": True,
+            "reason": "Your session has expired or the request could not be verified. Please refresh the page and try again.",
+        }), 400
+    return (
+        "<h1>Request could not be verified</h1>"
+        "<p>Your session may have expired. Please go back, refresh the page, and try again.</p>",
+        400,
+    )
 
 # ✅ Initialize SQLAlchemy ONLY ONCE
 db.init_app(app)
@@ -233,18 +270,77 @@ def log_outgoing_response(response):
     return response
 
 
+# HSTS only ever applies when explicitly enabled AND the request is
+# genuinely HTTPS (request.is_secure honors X-Forwarded-Proto via the
+# ProxyFix middleware above) - never sent over ordinary local HTTP.
+HSTS_ENABLED = _env_flag("SECURITY_HSTS_ENABLED", default=False)
+
+# CSP staged rollout: the policy below has NOT been manually verified in a
+# real browser against the scanner/OpenCV-WASM/Razorpay/reCAPTCHA/Bootstrap
+# /Chart.js/fonts/inline-script surface, so it defaults to report-only
+# (observe violations, block nothing) rather than enforcing mode.
+#   SECURITY_CSP_ENABLED=0        -> send neither CSP header at all
+#   SECURITY_CSP_ENABLED=1, ENFORCE=0 (default) -> Content-Security-Policy-Report-Only
+#   SECURITY_CSP_ENABLED=1, ENFORCE=1           -> Content-Security-Policy (enforcing)
+# Only flip SECURITY_CSP_ENFORCE=1 after browser + real-device QA confirms
+# the policy below doesn't block anything real.
+CSP_ENABLED = _env_flag("SECURITY_CSP_ENABLED", default=True)
+CSP_ENFORCE = _env_flag("SECURITY_CSP_ENFORCE", default=False)
+
+# Every external origin actually referenced by templates/static assets
+# (Tailwind CDN, AOS, Font Awesome, Bootstrap/Chart.js CDN, Razorpay
+# Checkout, reCAPTCHA, Google Fonts). OpenCV.js/its .wasm are self-hosted
+# under /static, covered by 'self'. No wildcards.
+_CSP_DIRECTIVES = {
+    "default-src": ["'self'"],
+    "script-src": [
+        "'self'", "'unsafe-inline'", "'wasm-unsafe-eval'",
+        "https://cdn.tailwindcss.com", "https://unpkg.com",
+        "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net",
+        "https://checkout.razorpay.com",
+        "https://www.google.com", "https://www.gstatic.com",
+    ],
+    "style-src": [
+        "'self'", "'unsafe-inline'",
+        "https://cdn.tailwindcss.com", "https://unpkg.com",
+        "https://cdnjs.cloudflare.com", "https://cdn.jsdelivr.net",
+        "https://fonts.googleapis.com",
+    ],
+    "font-src": ["'self'", "data:", "https://cdnjs.cloudflare.com", "https://fonts.gstatic.com"],
+    "img-src": ["'self'", "data:", "blob:"],
+    "media-src": ["'self'", "blob:"],
+    "connect-src": ["'self'", "https://api.razorpay.com", "https://lumberjack.razorpay.com", "https://www.google.com"],
+    "frame-src": ["https://api.razorpay.com", "https://checkout.razorpay.com", "https://www.google.com"],
+    "object-src": ["'none'"],
+    "base-uri": ["'self'"],
+    "form-action": ["'self'"],
+    "frame-ancestors": ["'self'"],
+}
+CONTENT_SECURITY_POLICY = "; ".join(f"{directive} {' '.join(sources)}" for directive, sources in _CSP_DIRECTIVES.items())
+
+
 def add_security_headers(response):
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["X-Frame-Options"] = "SAMEORIGIN"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    # Scanner needs its own camera; every other page gets no camera at all.
+    response.headers["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()"
 
-    if request.path.startswith("/scanner"):
-        response.headers["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()"
-    else:
-        response.headers["Permissions-Policy"] = "camera=(self), microphone=(), geolocation=()"
+    if CSP_ENABLED:
+        # Never send both - enforcing mode wins when explicitly opted into,
+        # otherwise the same policy is sent report-only.
+        if CSP_ENFORCE:
+            response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+        else:
+            response.headers["Content-Security-Policy-Report-Only"] = CONTENT_SECURITY_POLICY
 
-    return response    
+    if HSTS_ENABLED and request.is_secure:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+    return response
+
+
+app.after_request(add_security_headers)
 
 
 # --------------------------------------------------------------------------------------------
@@ -4465,6 +4561,7 @@ def scanner(project_id):
         entry_authorization_result=entry["entry_authorization_result"],
     )
 @app.route("/detect_init", methods=["POST"])
+@csrf.exempt  # Public, unauthenticated scanner endpoint - no browser session/cookie to bind a CSRF token to.
 def detect_init():
     """Public detection with multi-pair support"""
     try:
@@ -5006,6 +5103,7 @@ def detect_init():
         }), 500
 
 @app.route("/api/scanner/session/end", methods=["POST"])
+@csrf.exempt  # Public, unauthenticated scanner endpoint - no browser session/cookie to bind a CSRF token to.
 def scanner_session_end():
     """End scanner session - COUNT ONLY ONCE here"""
     try:
@@ -5130,6 +5228,7 @@ def scanner_session_end():
         db.session.rollback()
         return jsonify({"ok": False, "error": str(e)}), 500
 @app.route("/detect_track", methods=["POST"])
+@csrf.exempt  # Public, unauthenticated scanner endpoint - no browser session/cookie to bind a CSRF token to.
 def detect_track():
     """Tracking endpoint - with scan counting"""
     try:

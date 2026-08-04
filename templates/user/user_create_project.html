@@ -2916,6 +2916,7 @@
       const xhr = new XMLHttpRequest();
       activeUploadXhr = xhr;
       xhr.open('POST', this.action, true);
+      xhr.setRequestHeader('X-CSRFToken', '{{ csrf_token() }}');
       uploadClientLog('UPLOAD CLIENT REQUEST OPEN', uploadState, { current_phase: 'Uploading video' });
       xhr.upload.onloadstart = () => {
         enableUploadNavigationWarning();

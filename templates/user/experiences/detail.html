@@ -50,6 +50,7 @@
       <p role="status">QR asset prepared. Public publishing is not yet enabled.</p>
       <p class="meta">Permanent destination: {{ destination }}</p>
       <form method="post" action="{{ url_for('experience_creator.regenerate_qr', experience_id=experience.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <button type="submit">Regenerate QR Asset</button>
       </form>
     </section>
@@ -70,15 +71,16 @@
         {% endif %}
       {% endif %}
       <div class="actions">
-        <form class="inline" method="post" action="{{ url_for('experience_creator.create_draft_version', experience_id=experience.id) }}"><button type="submit">Create Draft Version</button></form>
+        <form class="inline" method="post" action="{{ url_for('experience_creator.create_draft_version', experience_id=experience.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Create Draft Version</button></form>
         <form class="inline" method="post" action="{{ url_for('experience_creator.publish_experience', experience_id=experience.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="idempotency_key" value="publish-{{ experience.id }}">
           <button type="submit">Publish Version</button>
         </form>
         {% if pause_enabled %}
-          <form class="inline" method="post" action="{{ url_for('experience_creator.pause_experience', experience_id=experience.id) }}"><button type="submit">Pause</button></form>
-          <form class="inline" method="post" action="{{ url_for('experience_creator.resume_experience', experience_id=experience.id) }}"><button type="submit">Resume</button></form>
-          <form class="inline" method="post" action="{{ url_for('experience_creator.archive_experience', experience_id=experience.id) }}"><button type="submit">Archive</button></form>
+          <form class="inline" method="post" action="{{ url_for('experience_creator.pause_experience', experience_id=experience.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Pause</button></form>
+          <form class="inline" method="post" action="{{ url_for('experience_creator.resume_experience', experience_id=experience.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Resume</button></form>
+          <form class="inline" method="post" action="{{ url_for('experience_creator.archive_experience', experience_id=experience.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Archive</button></form>
         {% endif %}
       </div>
     </section>
@@ -91,6 +93,7 @@
           {% if version.id == experience.current_published_version_id %}<strong>Current Published Version</strong>{% endif %}
           {% if rollback_enabled and version.is_immutable and version.id != experience.current_published_version_id %}
             <form class="inline" method="post" action="{{ url_for('experience_creator.rollback_experience', experience_id=experience.id, version_id=version.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="idempotency_key" value="rollback-{{ experience.id }}-{{ version.id }}">
               <button type="submit">Rollback</button>
             </form>
@@ -121,22 +124,24 @@
         <p class="meta">Last processed: {{ trigger.updated_at }}</p>
         {% if trigger_management %}
           <div class="actions" aria-label="Trigger actions for {{ trigger.name }}">
-            <form class="inline" method="post" action="{{ url_for('experience_creator.retry_trigger', experience_id=experience.id, trigger_id=trigger.id) }}"><button type="submit">Retry</button></form>
+            <form class="inline" method="post" action="{{ url_for('experience_creator.retry_trigger', experience_id=experience.id, trigger_id=trigger.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Retry</button></form>
             <form class="inline" method="post" enctype="multipart/form-data" action="{{ url_for('experience_creator.replace_image', experience_id=experience.id, trigger_id=trigger.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <label for="replacement-image-{{ trigger.id }}">Replace image</label>
               <input id="replacement-image-{{ trigger.id }}" name="replacement_image" type="file" accept="image/*">
               <button type="submit">Replace Image</button>
             </form>
             <form class="inline" method="post" enctype="multipart/form-data" action="{{ url_for('experience_creator.replace_video', experience_id=experience.id, trigger_id=trigger.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <label for="replacement-video-{{ trigger.id }}">Replace video</label>
               <input id="replacement-video-{{ trigger.id }}" name="replacement_video" type="file" accept="video/*">
               <button type="submit">Replace Video</button>
             </form>
-            <form class="inline" method="post" action="{{ url_for('experience_creator.regenerate_recognition', experience_id=experience.id, trigger_id=trigger.id) }}"><button type="submit">Regenerate Recognition</button></form>
+            <form class="inline" method="post" action="{{ url_for('experience_creator.regenerate_recognition', experience_id=experience.id, trigger_id=trigger.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Regenerate Recognition</button></form>
             {% if trigger.is_excluded %}
-              <form class="inline" method="post" action="{{ url_for('experience_creator.reactivate_trigger', experience_id=experience.id, trigger_id=trigger.id) }}"><button type="submit">Reactivate</button></form>
+              <form class="inline" method="post" action="{{ url_for('experience_creator.reactivate_trigger', experience_id=experience.id, trigger_id=trigger.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Reactivate</button></form>
             {% else %}
-              <form class="inline" method="post" action="{{ url_for('experience_creator.exclude_trigger', experience_id=experience.id, trigger_id=trigger.id) }}"><button type="submit">Exclude Trigger</button></form>
+              <form class="inline" method="post" action="{{ url_for('experience_creator.exclude_trigger', experience_id=experience.id, trigger_id=trigger.id) }}"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit">Exclude Trigger</button></form>
             {% endif %}
           </div>
         {% endif %}

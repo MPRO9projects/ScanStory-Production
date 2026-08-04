@@ -547,6 +547,7 @@
             </div>
             
             <form id="generalForm" method="POST" action="{{ url_for('admin_settings') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="form-row">
                     <div class="form-group">
                         <label for="site_name">Site Name</label>
@@ -610,6 +611,7 @@
             </div>
             
             <form id="trialForm" method="POST" action="{{ url_for('admin_settings') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="form-row">
                     <div class="form-group">
                         <label for="free_trial_projects">Free Trial Projects</label>
@@ -640,6 +642,7 @@
             </div>
             
             <form id="paymentForm" method="POST" action="{{ url_for('admin_settings') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="alert alert-warning">
                     ⚠️ Payment gateway settings. Configure carefully.
                 </div>
@@ -699,6 +702,7 @@
             </div>
             
             <form id="securityForm" method="POST" action="{{ url_for('admin_settings') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="alert alert-warning">
                     ⚠️ Security settings affect all users. Changes may impact user experience.
                 </div>

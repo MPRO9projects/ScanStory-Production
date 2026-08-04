@@ -538,16 +538,19 @@
                                     {% if admin_user.id != admin.id %}
                                         {% if admin_user.is_active %}
                                         <form action="/admin/admins/{{ admin_user.id }}/toggle-status" method="POST" style="display: inline;">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <button type="submit" class="btn btn-warning btn-sm" onclick="return confirm('Deactivate this admin?')">Deactivate</button>
                                         </form>
                                         {% else %}
                                         <form action="/admin/admins/{{ admin_user.id }}/toggle-status" method="POST" style="display: inline;">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <button type="submit" class="btn btn-success btn-sm">Activate</button>
                                         </form>
                                         {% endif %}
                                         
                                         {% if admin_user.role != 'superadmin' %}
                                         <form action="/admin/admins/{{ admin_user.id }}/delete" method="POST" style="display: inline;">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                             <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this admin? This cannot be undone.')">Delete</button>
                                         </form>
                                         {% endif %}

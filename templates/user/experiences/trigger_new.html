@@ -20,6 +20,7 @@
   <h1>Add Triggers</h1>
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="reference_images">Reference image files</label>
     <input id="reference_images" name="reference_images" type="file" accept="image/*" multiple required>
     <label for="videos">Video files</label>

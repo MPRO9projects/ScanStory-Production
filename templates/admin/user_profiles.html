@@ -680,12 +680,14 @@
 
                                     {% if not user.is_blocked %}
                                     <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <button type="submit" class="btn btn-warning btn-sm" onclick="return confirm('Block this user? They will not be able to login or scan.')">
                                             <i>&#128274;</i> Block
                                         </button>
                                     </form>
                                     {% else %}
                                     <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <button type="submit" class="btn btn-success btn-sm" onclick="return confirm('Unblock this user? They will be able to login and scan again.')">
                                             <i>&#128275;</i> Unblock
                                         </button>

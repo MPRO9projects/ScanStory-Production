@@ -20,6 +20,7 @@
   <h1>Create Experience</h1>
   {% if error %}<p id="name-error" class="error" role="alert">{{ error }}</p>{% endif %}
   <form method="post" novalidate>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label for="name">Experience name</label>
     <input id="name" name="name" value="{{ name }}" maxlength="255" required {% if error %}aria-describedby="name-error" autofocus{% endif %}>
     <label for="description">Description</label>

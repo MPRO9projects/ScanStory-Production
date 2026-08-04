@@ -4,8 +4,8 @@ import pytest
 pytestmark = pytest.mark.security
 
 
-@pytest.mark.xfail(reason="severity=Medium; flow=all HTTP responses; desired=security headers applied via after_request; actual=helper exists but is not registered; future_gate=security hardening")
 def test_security_headers_present(client):
+    """P0B: add_security_headers is now registered via app.after_request."""
     response = client.get("/")
     assert response.headers["X-Frame-Options"] == "SAMEORIGIN"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
@@ -36,9 +36,13 @@ def test_user_cannot_view_another_user_project(client, app_module, db_session, l
     assert response.status_code == 404
 
 
-@pytest.mark.xfail(reason="severity=High; flow=mutating form routes; desired=CSRF enabled/enforced; actual=WTF_CSRF_ENABLED is disabled globally; future_gate=security hardening")
-def test_csrf_should_be_enabled_for_mutating_routes(app):
-    assert app.config.get("WTF_CSRF_ENABLED") is True
+# P0B: CSRF is now enabled globally in app.py. The standard `app`/`client`
+# fixtures here intentionally set WTF_CSRF_ENABLED=False (see
+# tests/conftest.py:isolated_app) so the rest of this ordinary test suite
+# doesn't need to thread tokens through every form post - that's a
+# deliberate, standard Flask-WTF testing convention, not a regression.
+# Real enforcement (real app boot, real 400 on missing/invalid token, real
+# 200 on a valid one) is proven in tests/security/test_csrf_and_headers.py.
 
 
 @pytest.mark.xfail(reason="severity=High; flow=upload; desired=file signatures verified before save; actual=upload path does not enforce signature validation; future_gate=upload security")

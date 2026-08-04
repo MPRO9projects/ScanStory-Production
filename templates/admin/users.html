@@ -634,10 +634,12 @@
                                     <a href="/admin/users/{{ user.id }}" class="btn btn-primary btn-sm">View</a>
                                     {% if user.is_blocked %}
                                     <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <button type="submit" class="btn btn-success btn-sm">Unblock</button>
                                     </form>
                                     {% else %}
                                     <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                         <button type="submit" class="btn btn-danger btn-sm">Block</button>
                                     </form>
                                     {% endif %}

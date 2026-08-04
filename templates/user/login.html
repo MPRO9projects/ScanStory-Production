@@ -690,6 +690,7 @@
             </div>
 
             <form method="POST" class="relative z-10">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="input-group">
                     <label class="label-style">IDENTITY (EMAIL)</label>
                     <input type="email" name="email" placeholder="@gmail.com" class="input-gloss" required>
