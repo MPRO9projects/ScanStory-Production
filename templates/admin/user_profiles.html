@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Projects - Admin Panel</title>
+    <title>User Profiles - Admin Panel</title>
     <style>
         * {
             margin: 0;
@@ -11,12 +11,12 @@
             box-sizing: border-box;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
-        
+
         body {
             background-color: #f8fafc;
             color: #334155;
         }
-        
+
         .navbar {
             background: linear-gradient(to right, #4f46e5, #7c3aed);
             color: white;
@@ -32,7 +32,7 @@
             right: 0;
             z-index: 1000;
         }
-        
+
         .navbar-brand {
             font-size: 24px;
             font-weight: bold;
@@ -42,13 +42,13 @@
             align-items: center;
             gap: 10px;
         }
-        
+
         .navbar-menu {
             display: flex;
             align-items: center;
             gap: 20px;
         }
-        
+
         .nav-link {
             color: rgba(255, 255, 255, 0.9);
             text-decoration: none;
@@ -56,24 +56,24 @@
             border-radius: 8px;
             transition: all 0.3s;
         }
-        
+
         .nav-link:hover {
             background: rgba(255, 255, 255, 0.1);
             color: white;
         }
-        
+
         .nav-link.active {
             background: rgba(255, 255, 255, 0.15);
             color: white;
         }
-        
+
         .user-menu {
             display: flex;
             align-items: center;
             gap: 10px;
             position: relative;
         }
-        
+
         .user-avatar {
             width: 40px;
             height: 40px;
@@ -84,7 +84,7 @@
             justify-content: center;
             font-weight: bold;
         }
-        
+
         .dropdown-menu {
             position: absolute;
             top: 100%;
@@ -97,11 +97,11 @@
             overflow: hidden;
             z-index: 1001;
         }
-        
+
         .dropdown-menu.show {
             display: block;
         }
-        
+
         .dropdown-item {
             display: block;
             padding: 12px 20px;
@@ -109,11 +109,11 @@
             text-decoration: none;
             transition: all 0.3s;
         }
-        
+
         .dropdown-item:hover {
             background: #f1f5f9;
         }
-        
+
         .sidebar {
             position: fixed;
             left: 0;
@@ -126,11 +126,11 @@
             overflow-y: auto;
             z-index: 999;
         }
-        
+
         .sidebar-section {
             margin-bottom: 25px;
         }
-        
+
         .sidebar-title {
             color: #64748b;
             font-size: 12px;
@@ -140,7 +140,7 @@
             padding: 0 20px;
             margin-bottom: 10px;
         }
-        
+
         .sidebar-link {
             display: flex;
             align-items: center;
@@ -151,43 +151,43 @@
             transition: all 0.3s;
             border-left: 3px solid transparent;
         }
-        
+
         .sidebar-link:hover {
             background: #f1f5f9;
             color: #4f46e5;
         }
-        
+
         .sidebar-link.active {
             background: #e0e7ff;
             color: #4f46e5;
             border-left-color: #4f46e5;
         }
-        
+
         .sidebar-link i {
             width: 20px;
             text-align: center;
         }
-        
+
         .main-content {
             margin-left: 250px;
             margin-top: 70px;
             padding: 30px;
             min-height: calc(100vh - 70px);
         }
-        
+
         .page-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 30px;
         }
-        
+
         .page-title {
             font-size: 28px;
             font-weight: 600;
             color: #1e293b;
         }
-        
+
         .btn {
             display: inline-block;
             padding: 10px 20px;
@@ -199,66 +199,66 @@
             transition: all 0.3s;
             border: none;
         }
-        
+
         .btn-primary {
             background: #4f46e5;
             color: white;
         }
-        
+
         .btn-primary:hover {
             background: #4338ca;
         }
-        
+
         .btn-secondary {
             background: #6b7280;
             color: white;
         }
-        
+
         .btn-secondary:hover {
             background: #4b5563;
         }
-        
+
         .btn-sm {
             padding: 5px 10px;
             font-size: 12px;
         }
-        
+
         .btn-success {
             background: #10b981;
             color: white;
         }
-        
+
         .btn-success:hover {
             background: #059669;
         }
-        
+
         .btn-danger {
             background: #ef4444;
             color: white;
         }
-        
+
         .btn-danger:hover {
             background: #dc2626;
         }
-        
+
         .btn-warning {
             background: #f59e0b;
             color: white;
         }
-        
+
         .btn-warning:hover {
             background: #d97706;
         }
-        
+
         .btn-info {
             background: #0ea5e9;
             color: white;
         }
-        
+
         .btn-info:hover {
             background: #0284c7;
         }
-        
+
         .card {
             background: white;
             border-radius: 12px;
@@ -266,22 +266,22 @@
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
             margin-bottom: 30px;
         }
-        
+
         .filter-card {
             margin-bottom: 20px;
         }
-        
+
         .filter-form {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 15px;
             align-items: end;
         }
-        
+
         .form-group {
             margin-bottom: 0;
         }
-        
+
         .form-group label {
             display: block;
             margin-bottom: 8px;
@@ -289,7 +289,7 @@
             font-weight: 500;
             font-size: 14px;
         }
-        
+
         .form-control {
             width: 100%;
             padding: 10px;
@@ -298,22 +298,22 @@
             font-size: 14px;
             transition: all 0.3s;
         }
-        
+
         .form-control:focus {
             outline: none;
             border-color: #4f46e5;
             box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
         }
-        
+
         .table-container {
             overflow-x: auto;
         }
-        
+
         .table {
             width: 100%;
             border-collapse: collapse;
         }
-        
+
         .table th {
             background: #f8fafc;
             padding: 12px 15px;
@@ -325,17 +325,17 @@
             letter-spacing: 0.5px;
             border-bottom: 1px solid #e2e8f0;
         }
-        
+
         .table td {
             padding: 15px;
             border-bottom: 1px solid #e2e8f0;
             color: #475569;
         }
-        
+
         .table tbody tr:hover {
             background: #f8fafc;
         }
-        
+
         .badge {
             display: inline-block;
             padding: 4px 12px;
@@ -343,26 +343,26 @@
             font-size: 12px;
             font-weight: 600;
         }
-        
+
         .badge-success { background: #d1fae5; color: #065f46; }
         .badge-warning { background: #fef3c7; color: #92400e; }
         .badge-danger { background: #fee2e2; color: #991b1b; }
         .badge-info { background: #dbeafe; color: #1e40af; }
         .badge-secondary { background: #f3f4f6; color: #6b7280; }
-        
+
         .action-buttons {
             display: flex;
             gap: 5px;
             flex-wrap: wrap;
         }
-        
+
         .status-tabs {
             display: flex;
             gap: 10px;
             margin-bottom: 20px;
             flex-wrap: wrap;
         }
-        
+
         .status-tab {
             padding: 8px 20px;
             border-radius: 20px;
@@ -373,35 +373,35 @@
             font-weight: 500;
             transition: all 0.3s;
         }
-        
+
         .status-tab:hover {
             background: #e2e8f0;
         }
-        
+
         .status-tab.active {
             background: #4f46e5;
             color: white;
         }
-        
+
         .alert {
             padding: 15px;
             border-radius: 8px;
             margin-bottom: 20px;
             font-size: 14px;
         }
-        
+
         .alert-success {
             background-color: #d1fae5;
             color: #065f46;
             border: 1px solid #a7f3d0;
         }
-        
+
         .alert-error {
             background-color: #fee2e2;
             color: #991b1b;
             border: 1px solid #fecaca;
         }
-        
+
         .user-avatar-small {
             width: 36px;
             height: 36px;
@@ -414,7 +414,7 @@
             font-weight: bold;
             font-size: 14px;
         }
-        
+
         .admin-badge {
             background: #8b5cf6;
             color: white;
@@ -424,50 +424,50 @@
             font-weight: 600;
             margin-left: 5px;
         }
-        
+
         @media (max-width: 992px) {
             .sidebar {
                 width: 70px;
             }
-            
+
             .sidebar .sidebar-title,
             .sidebar .sidebar-link span {
                 display: none;
             }
-            
+
             .sidebar-link {
                 justify-content: center;
                 padding: 15px;
             }
-            
+
             .main-content {
                 margin-left: 70px;
             }
         }
-        
+
         @media (max-width: 768px) {
             .navbar-menu {
                 display: none;
             }
-            
+
             .main-content {
                 padding: 20px;
             }
-            
+
             .filter-form {
                 grid-template-columns: 1fr;
             }
-            
+
             .page-header {
                 flex-direction: column;
                 align-items: flex-start;
                 gap: 15px;
             }
-            
+
             .action-buttons {
                 flex-direction: column;
             }
-            
+
             .table td {
                 min-width: 120px;
             }
@@ -480,138 +480,232 @@
         <a href="/admin/dashboard" class="navbar-brand">
             <span>ScanStory Admin</span>
         </a>
+
         <div class="navbar-menu">
             <span class="nav-link">Welcome, {{ admin.name }}</span>
             <a href="/admin/projects/create" class="nav-link">+ Create Project</a>
         </div>
+
         <div class="user-menu">
-            <div class="user-avatar">{{ admin.name[0] if admin.name else 'A' }}</div>
+            <div class="user-avatar">
+                {{ admin.name[0] if admin.name else 'A' }}
+            </div>
             <div class="dropdown-menu" id="userDropdown">
                 <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
                 <a href="/admin/settings" class="dropdown-item">Settings</a>
                 <div class="dropdown-divider"></div>
                 <a href="/admin/logout" class="dropdown-item">Logout</a>
             </div>
-            <span onclick="toggleDropdown()" style="cursor: pointer;">?</span>
+            <span onclick="toggleDropdown()" style="cursor: pointer;">&#9662;</span>
         </div>
     </nav>
+
     <!-- Sidebar -->
     <div class="sidebar">
         <div class="sidebar-section">
             <div class="sidebar-title">Dashboard</div>
-            <a href="/admin/dashboard" class="sidebar-link"><i>&#128202;</i><span>Overview</span></a>
+            <a href="/admin/dashboard" class="sidebar-link">
+                <i>&#128202;</i>
+                <span>Overview</span>
+            </a>
         </div>
+
         <div class="sidebar-section">
             <div class="sidebar-title">User Management</div>
-            <a href="/admin/user-profiles" class="sidebar-link"><i>&#128101;</i><span>User Profiles</span></a>
+            <a href="/admin/user-profiles" class="sidebar-link active">
+                <i>&#128101;</i>
+                <span>User Profiles</span>
+            </a>
         </div>
+
         <div class="sidebar-section">
             <div class="sidebar-title">Content</div>
-            <a href="/admin/projects" class="sidebar-link active"><i>&#128193;</i><span>Admin Projects</span></a>
+            <a href="/admin/projects" class="sidebar-link">
+                <i>&#128193;</i>
+                <span>Admin Projects</span>
+            </a>
         </div>
+
         <div class="sidebar-section">
             <div class="sidebar-title">System</div>
-            <a href="/admin/plans" class="sidebar-link"><i>&#128203;</i><span>Plans</span></a>
-            <a href="/admin/payments" class="sidebar-link"><i>&#128179;</i><span>Payments</span></a>
+            <a href="/admin/plans" class="sidebar-link">
+                <i>&#128203;</i>
+                <span>Plans</span>
+            </a>
+            <a href="/admin/payments" class="sidebar-link">
+                <i>&#128179;</i>
+                <span>Payments</span>
+            </a>
             {% if admin.role == 'superadmin' %}
-            <a href="/admin/admins" class="sidebar-link"><i>&#128737;</i><span>Admins</span></a>
+            <a href="/admin/admins" class="sidebar-link">
+                <i>&#128737;</i>
+                <span>Admins</span>
+            </a>
             {% endif %}
-            <a href="/admin/settings" class="sidebar-link"><i>&#9881;</i><span>Settings</span></a>
+            <a href="/admin/settings" class="sidebar-link">
+                <i>&#9881;</i>
+                <span>Settings</span>
+            </a>
         </div>
     </div>
-    <!-- Main Content -->
+        <!-- Main Content -->
     <div class="main-content">
         <div class="page-header">
-            <h1 class="page-title">Admin Projects</h1>
-            <div>Total Projects: {{ pagination.total }}</div>
+            <h1 class="page-title">User Profiles</h1>
+            <div>
+                Total Users: {{ users|length }}
+                {% if status == 'active' %}
+                | Active: {{ users|selectattr('is_blocked', 'equalto', false)|list|length }}
+                {% elif status == 'blocked' %}
+                | Blocked: {{ users|selectattr('is_blocked', 'equalto', true)|list|length }}
+                {% endif %}
+            </div>
         </div>
+
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}">{{ message }}</div>
+                    <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}">
+                        {{ message }}
+                    </div>
                 {% endfor %}
             {% endif %}
         {% endwith %}
+
+        <!-- Status Tabs -->
+        <div class="status-tabs">
+            <a href="/admin/user-profiles" class="status-tab {% if status == 'all' %}active{% endif %}">All Users</a>
+            <a href="/admin/user-profiles?status=active" class="status-tab {% if status == 'active' %}active{% endif %}">Active</a>
+            <a href="/admin/user-profiles?status=blocked" class="status-tab {% if status == 'blocked' %}active{% endif %}">Blocked</a>
+            <a href="/admin/user-profiles?status=trial" class="status-tab {% if status == 'trial' %}active{% endif %}">Trial</a>
+            <a href="/admin/user-profiles?status=paid" class="status-tab {% if status == 'paid' %}active{% endif %}">Paid</a>
+        </div>
+
+        <!-- Filters -->
         <div class="card filter-card">
-            <form method="GET" action="/admin/projects" class="filter-form">
+            <form method="GET" action="/admin/user-profiles" class="filter-form">
                 <div class="form-group">
-                    <label for="search">Search Projects</label>
-                    <input type="text" id="search" name="search" class="form-control" placeholder="Project ID, project name, owner ID, owner name, owner email..." value="{{ search }}">
+                    <label for="search">Search Users</label>
+                    <input type="text" id="search" name="search" class="form-control" placeholder="Search by name or email..." value="{{ search }}">
                 </div>
+
                 <div class="form-group">
-                    <label for="owner_type">Owner</label>
-                    <select id="owner_type" name="owner_type" class="form-control">
-                        <option value="all" {% if owner_type == 'all' %}selected{% endif %}>All projects</option>
-                        <option value="user" {% if owner_type == 'user' %}selected{% endif %}>User-owned projects</option>
-                        <option value="admin" {% if owner_type == 'admin' %}selected{% endif %}>Admin-owned projects</option>
+                    <label for="plan_id">Subscription Plan</label>
+                    <select id="plan_id" name="plan_id" class="form-control">
+                        <option value="">All Plans</option>
+                        {% for plan in plans %}
+                        <option value="{{ plan.id }}" {% if selected_plan_id == plan.id %}selected{% endif %}>
+                            {{ plan.plan_name }}
+                        </option>
+                        {% endfor %}
                     </select>
                 </div>
-                <div class="form-group">
-                    <label for="readiness">Readiness</label>
-                    <select id="readiness" name="readiness" class="form-control">
-                        <option value="all" {% if readiness == 'all' %}selected{% endif %}>All statuses</option>
-                        <option value="ready" {% if readiness == 'ready' %}selected{% endif %}>Ready</option>
-                        <option value="processing" {% if readiness == 'processing' %}selected{% endif %}>Processing</option>
-                        <option value="failed" {% if readiness == 'failed' %}selected{% endif %}>Failed</option>
-                    </select>
-                </div>
+
                 <div class="form-group">
                     <button type="submit" class="btn btn-primary" style="height: 42px;">Apply Filters</button>
-                    <a href="/admin/projects" class="btn btn-secondary" style="height: 42px;">Clear</a>
+                    <a href="/admin/user-profiles" class="btn btn-secondary" style="height: 42px;">Clear</a>
                 </div>
             </form>
         </div>
+
+        <!-- Users Table -->
         <div class="card">
             <div class="table-container">
                 <table class="table">
                     <thead>
                         <tr>
-                            <th>Global Project ID</th>
-                            <th>Project</th>
-                            <th>Owner</th>
-                            <th>Created / Updated</th>
-                            <th>Pairs</th>
-                            <th>Processing / QR</th>
-                            <th>Scan Activity</th>
+                            <th>User</th>
+                            <th>Contact</th>
+                            <th>Joined</th>
+                            <th>Projects owned by displayed users</th>
+                            <th>Scans</th>
+                            <th>Plan</th>
+                            <th>Status</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {% for row in project_rows %}
+                        {% for user in users %}
                         <tr>
-                            <td><strong>{{ row.project.id }}</strong></td>
                             <td>
-                                <strong>{{ row.project.name }}</strong><br>
-                                <small style="color: #6b7280;">{{ 'Active' if row.project.is_active else 'Inactive' }}</small>
+                                <div style="display: flex; align-items: center; gap: 10px;">
+                                    <div class="user-avatar-small">
+                                        {{ user.first_name[0] if user.first_name else user.email[0]|upper }}
+                                    </div>
+                                    <div>
+                                        <strong>{{ user.full_name }}</strong><br>
+                                        <small style="color: #6b7280;">ID: {{ user.id }}</small>
+                                    </div>
+                                </div>
                             </td>
                             <td>
-                                {{ row.owner.type }} #{{ row.owner.id or '-' }}<br>
-                                <strong>{{ row.owner.name }}</strong><br>
-                                <small style="color: #6b7280;">{{ row.owner.email }}</small>
+                                {{ user.email }}<br>
+                                {% if user.phone %}
+                                <small style="color: #6b7280;">{{ user.phone }}</small>
+                                {% endif %}
                             </td>
                             <td>
-                                {{ row.project.created_at.strftime('%d %b %Y, %I:%M %p') if row.project.created_at else '-' }}<br>
-                                <small style="color: #6b7280;">Updated: {{ row.project.updated_at.strftime('%d %b %Y, %I:%M %p') if row.project.updated_at else '-' }}</small>
-                            </td>
-                            <td><strong>{{ row.pair_count }}</strong></td>
-                            <td>
-                                <span class="badge {% if row.readiness_summary == 'Ready' %}badge-success{% elif row.failed_pair_count %}badge-danger{% else %}badge-warning{% endif %}">{{ row.readiness_summary }}</span><br>
-                                <small style="color: #6b7280;">QR: {{ 'Present' if row.qr_ready else 'Missing' }}</small>
+                                {{ user.created_at.strftime('%d %b %Y') }}<br>
+                                <small style="color: #6b7280;">{{ user.created_at.strftime('%I:%M %p') }}</small>
                             </td>
                             <td>
-                                <strong>{{ row.scan_count }}</strong> total<br>
-                                <small style="color: #6b7280;">{{ row.successful_scan_count }} successful / {{ row.failed_scan_count }} failed</small>
+                                <span style="font-weight: bold;">{{ user.live_project_count }}</span> / {{ user.subscribed_project_limit }}
                             </td>
                             <td>
-                                <a href="/admin/projects/{{ row.project.id }}" class="btn btn-primary btn-sm">View Details</a>
+                                <span style="font-weight: bold;">{{ user.scans_used }}</span> / {{ user.subscribed_scan_limit }}
+                            </td>
+                            <td>
+                                {{ user.current_plan_name }}
+                            </td>
+                            <td>
+                                {% if user.is_blocked %}
+                                <span class="badge badge-danger">Blocked</span>
+                                {% elif user.subscription_status == 'active' %}
+                                <span class="badge badge-success">Active</span>
+                                {% elif user.subscription_status == 'trial' %}
+                                <span class="badge badge-warning">Trial</span>
+                                {% elif user.subscription_status == 'limit_reached' %}
+                                <span class="badge badge-warning">Limit Reached</span>
+                                {% elif user.subscription_status == 'expired' %}
+                                <span class="badge badge-secondary">Expired</span>
+                                {% else %}
+                                <span class="badge badge-secondary">{{ user.subscription_status }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="action-buttons">
+                                    <a href="/dashboard?user_id={{ user.id }}&admin_view=true" class="btn btn-primary btn-sm" title="View Dashboard">
+                                        <i>&#128202;</i> Dashboard
+                                    </a>
+
+                                    {% if not user.is_blocked %}
+                                    <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
+                                        <button type="submit" class="btn btn-warning btn-sm" onclick="return confirm('Block this user? They will not be able to login or scan.')">
+                                            <i>&#128274;</i> Block
+                                        </button>
+                                    </form>
+                                    {% else %}
+                                    <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
+                                        <button type="submit" class="btn btn-success btn-sm" onclick="return confirm('Unblock this user? They will be able to login and scan again.')">
+                                            <i>&#128275;</i> Unblock
+                                        </button>
+                                    </form>
+                                    {% endif %}
+                                </div>
                             </td>
                         </tr>
                         {% else %}
                         <tr>
                             <td colspan="8" style="text-align: center; padding: 40px;">
-                                <div style="font-size: 48px; margin-bottom: 20px; opacity: 0.3;">&#128193;</div>
-                                <h3 style="color: #64748b; margin-bottom: 10px;">No Projects Found</h3>
-                                <p style="color: #94a3b8;">No projects match your current filters.</p>
+                                <div style="font-size: 48px; margin-bottom: 20px; opacity: 0.3;">&#128101;</div>
+                                <h3 style="color: #64748b; margin-bottom: 10px;">No Users Found</h3>
+                                <p style="color: #94a3b8;">
+                                    {% if search or status != 'all' or selected_plan_id %}
+                                    No users match your current filters. <a href="/admin/user-profiles" style="color: #4f46e5;">Clear filters</a>
+                                    {% else %}
+                                    Users will appear here once they register on the platform.
+                                    {% endif %}
+                                </p>
                             </td>
                         </tr>
                         {% endfor %}
@@ -619,25 +713,60 @@
                 </table>
             </div>
         </div>
+
+        <!-- User Statistics -->
         <div class="card">
-            <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px; flex-wrap: wrap;">
-                <div style="color: #64748b;">Page {{ pagination.page }} of {{ pagination.pages or 1 }} ? {{ pagination.total }} matching projects</div>
-                <div class="action-buttons">
-                    {% if pagination.has_prev %}
-                    <a class="btn btn-secondary" href="{{ url_for('admin_projects', page=pagination.prev_num, search=search, owner_type=owner_type, readiness=readiness, per_page=per_page) }}">Previous</a>
-                    {% endif %}
-                    {% if pagination.has_next %}
-                    <a class="btn btn-secondary" href="{{ url_for('admin_projects', page=pagination.next_num, search=search, owner_type=owner_type, readiness=readiness, per_page=per_page) }}">Next</a>
-                    {% endif %}
+            <h3 style="margin-bottom: 20px;">User Statistics</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #4f46e5;">{{ users|length }}</div>
+                    <div style="color: #6b7280;">Total Users</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #10b981;">
+                        {{ users|selectattr('is_blocked', 'equalto', false)|list|length }}
+                    </div>
+                    <div style="color: #6b7280;">Active</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #ef4444;">
+                        {{ users|selectattr('is_blocked', 'equalto', true)|list|length }}
+                    </div>
+                    <div style="color: #6b7280;">Blocked</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #f59e0b;">
+                        {% set total_scans = 0 %}
+                        {% for user in users %}
+                            {% set total_scans = total_scans + user.scans_used %}
+                        {% endfor %}
+                        {{ total_scans }}
+                    </div>
+                    <div style="color: #6b7280;">Total Scans</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #8b5cf6;">
+                        {{ users|sum(attribute='live_project_count') }}
+                    </div>
+                    <div style="color: #6b7280;">Projects owned by displayed users</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #0ea5e9;">
+                        {{ users|selectattr('subscription_status', 'equalto', 'active')|list|length }}
+                    </div>
+                    <div style="color: #6b7280;">Paid Users</div>
                 </div>
             </div>
         </div>
     </div>
+
     <script>
         function toggleDropdown() {
             const dropdown = document.getElementById('userDropdown');
             dropdown.classList.toggle('show');
         }
+
+        // Close dropdown when clicking outside
         window.onclick = function(event) {
             if (!event.target.matches('.user-menu span')) {
                 const dropdowns = document.querySelectorAll('.dropdown-menu');
@@ -648,6 +777,8 @@
                 });
             }
         };
+
+        // Auto remove alerts after 5 seconds
         document.addEventListener('DOMContentLoaded', function() {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {
@@ -657,7 +788,20 @@
                     setTimeout(() => alert.remove(), 500);
                 }, 5000);
             });
+
+            // Confirm before blocking/unblocking user
+            const blockForms = document.querySelectorAll('form[action*="toggle-block"]');
+            blockForms.forEach(form => {
+                form.addEventListener('submit', function(e) {
+                    const button = this.querySelector('button');
+                    const action = button.textContent.includes('Block') ? 'block' : 'unblock';
+                    if (!confirm(`Are you sure you want to ${action} this user?`)) {
+                        e.preventDefault();
+                    }
+                });
+            });
         });
     </script>
 </body>
 </html>
+

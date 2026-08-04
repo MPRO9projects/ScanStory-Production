@@ -473,9 +473,9 @@
         
         <div class="sidebar-section">
             <div class="sidebar-title">User Management</div>
-            <a href="/admin/users" class="sidebar-link active">
+            <a href="/admin/user-profiles" class="sidebar-link active">
                 <i>👥</i>
-                <span>Users</span>
+                <span>User Profiles</span>
             </a>
         </div>
         
@@ -536,7 +536,7 @@
         
         <!-- Status Tabs -->
         <div class="status-tabs">
-            <a href="/admin/users" class="status-tab {% if status == 'all' %}active{% endif %}">All Users</a>
+            <a href="/admin/user-profiles" class="status-tab {% if status == 'all' %}active{% endif %}">All Users</a>
             <a href="/admin/users?status=active" class="status-tab {% if status == 'active' %}active{% endif %}">Active</a>
             <a href="/admin/users?status=blocked" class="status-tab {% if status == 'blocked' %}active{% endif %}">Blocked</a>
             <a href="/admin/users?status=unverified" class="status-tab {% if status == 'unverified' %}active{% endif %}">Unverified</a>
@@ -564,7 +564,7 @@
                 
                 <div class="form-group">
                     <button type="submit" class="btn btn-primary" style="height: 42px;">Apply Filters</button>
-                    <a href="/admin/users" class="btn btn-secondary" style="height: 42px;">Clear</a>
+                    <a href="/admin/user-profiles" class="btn btn-secondary" style="height: 42px;">Clear</a>
                 </div>
             </form>
         </div>
@@ -649,7 +649,7 @@
                             <td colspan="7" style="text-align: center; padding: 40px;">
                                 No users found
                                 {% if search or status != 'all' or selected_plan_id %}
-                                with current filters. <a href="/admin/users">Clear filters</a>
+                                with current filters. <a href="/admin/user-profiles">Clear filters</a>
                                 {% endif %}
                             </td>
                         </tr>
