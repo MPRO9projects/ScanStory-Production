@@ -13,10 +13,14 @@ BOOTSTRAP_ADMIN_ENABLED=1, with no default email/password. See
 _resolve_bootstrap_admin_credentials / _maybe_create_bootstrap_admin.
 """
 import importlib
+import re
 import sys
+from pathlib import Path
 
 import pytest
 from werkzeug.security import check_password_hash
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 pytestmark = pytest.mark.security
 
@@ -189,3 +193,37 @@ def test_secret_key_and_debug_hardening_still_enforced(app_module):
     assert app_module.app.config["DEBUG"] is False
     assert app_module.app.config["SESSION_COOKIE_HTTPONLY"] is True
     assert app_module.app.config["SESSION_COOKIE_SAMESITE"] == "Lax"
+
+
+# ---------------------------------------------------------------------------
+# README.md / .env.example variable names match what app.py actually reads
+# ---------------------------------------------------------------------------
+
+REQUIRED_BOOTSTRAP_ENV_VARS = [
+    "FLASK_SECRET_KEY",
+    "BOOTSTRAP_ADMIN_ENABLED",
+    "BOOTSTRAP_ADMIN_EMAIL",
+    "BOOTSTRAP_ADMIN_PASSWORD",
+]
+
+
+def test_env_example_documents_the_real_bootstrap_variables():
+    env_example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    for name in REQUIRED_BOOTSTRAP_ENV_VARS:
+        assert re.search(rf"^{name}=", env_example, re.MULTILINE), (
+            f"{name} missing from .env.example"
+        )
+
+
+def test_readme_documents_the_real_bootstrap_variables():
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    for name in REQUIRED_BOOTSTRAP_ENV_VARS:
+        assert name in readme, f"{name} missing from README.md"
+
+
+def test_documented_variables_are_the_ones_app_actually_reads():
+    app_source = (REPO_ROOT / "app.py").read_text(encoding="utf-8")
+    for name in REQUIRED_BOOTSTRAP_ENV_VARS:
+        assert f'os.environ.get("{name}"' in app_source or f'"{name}"' in app_source, (
+            f"{name} is documented but app.py does not appear to read it"
+        )

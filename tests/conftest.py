@@ -185,6 +185,14 @@ def admin(app_module):
 
 
 @pytest.fixture()
+def admin_password():
+    """The bootstrap admin's real password, from the same isolated test
+    configuration (isolated_app) that created it - never a hard-coded
+    literal, and never the removed "Admin@123" default."""
+    return os.environ["BOOTSTRAP_ADMIN_PASSWORD"]
+
+
+@pytest.fixture()
 def secondary_admin(app_module, db_session, admin):
     secondary = app_module.Admin(
         email="secondary-admin@example.com",

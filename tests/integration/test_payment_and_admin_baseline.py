@@ -75,13 +75,23 @@ def test_verify_payment_success_activates_subscription(client, app_module, norma
     assert order.status == "success"
 
 
-def test_admin_login_and_dashboard(client, admin):
-    response = client.post("/admin/login", data={"email": admin.email, "password": "Admin@123"})
+def test_admin_login_and_dashboard(client, admin, admin_password):
+    response = client.post("/admin/login", data={"email": admin.email, "password": admin_password})
     assert response.status_code == 302
     with client.session_transaction() as sess:
         assert sess["admin_id"] == admin.id
     dashboard = client.get("/admin/dashboard")
     assert dashboard.status_code == 200
+
+
+def test_admin_login_rejects_removed_default_password(client, admin):
+    """The old "Admin@123" default was removed from the application; the
+    real admin (created here with an explicit test password, see
+    admin_password/isolated_app) must not accept it."""
+    response = client.post("/admin/login", data={"email": admin.email, "password": "Admin@123"})
+    assert response.status_code == 200
+    with client.session_transaction() as sess:
+        assert "admin_id" not in sess
 
 
 def test_normal_user_denied_admin_dashboard(client, login_user):

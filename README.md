@@ -214,16 +214,98 @@ Typical values may include:
 
 ```text
 FLASK_ENV
-SECRET_KEY
+FLASK_SECRET_KEY
 DATABASE_URL
 SCANSTORY_DEV_TESTING
 UPLOAD_FOLDER
 MAX_CONTENT_LENGTH
+FLASK_DEBUG
+SESSION_COOKIE_SECURE
+BOOTSTRAP_ADMIN_ENABLED
+BOOTSTRAP_ADMIN_EMAIL
+BOOTSTRAP_ADMIN_PASSWORD
 ```
 
 Only use variables that are actually supported by the application.
 
 Do not copy production credentials into the tester environment.
+
+`FLASK_SECRET_KEY` is mandatory — the application refuses to start without it. There is no fallback secret key.
+
+---
+
+## First-Time Super Admin Setup
+
+**There is no default Super Admin account and no default password.** A brand-new database starts with zero administrators. The old credentials that used to be auto-created (`admin@scanstory.com` / `Admin@123`) have been removed from the application entirely and must not work.
+
+An administrator is only ever created when you explicitly opt in for a single first-start boot, using `BOOTSTRAP_ADMIN_ENABLED`, `BOOTSTRAP_ADMIN_EMAIL`, and `BOOTSTRAP_ADMIN_PASSWORD`.
+
+### Required behavior
+
+1. `BOOTSTRAP_ADMIN_ENABLED` defaults to `0` (off). This is the normal state for every boot after the first admin exists — including production.
+2. When `BOOTSTRAP_ADMIN_ENABLED` is `0`/unset:
+   - normal application startup continues;
+   - no administrator is created, and startup does not fail just because bootstrap credentials are absent.
+3. When `BOOTSTRAP_ADMIN_ENABLED=1` is explicitly set:
+   - `BOOTSTRAP_ADMIN_EMAIL` is required;
+   - `BOOTSTRAP_ADMIN_PASSWORD` is required and must meet the application's minimum length requirement;
+   - the password is never printed or logged;
+   - an existing administrator is never overwritten, and a duplicate administrator is never created.
+4. Bootstrap should only be enabled for the first startup on a fresh database. Leave it off otherwise.
+5. Immediately after the administrator is created, set `BOOTSTRAP_ADMIN_ENABLED=0` again for every subsequent boot.
+6. Never put a real email address or a reusable password into any file committed to Git. `.env.example` contains placeholders only:
+
+```text
+BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+BOOTSTRAP_ADMIN_PASSWORD=replace-with-a-strong-unique-password
+```
+
+### First startup (PowerShell)
+
+```powershell
+$env:FLASK_SECRET_KEY="replace-with-a-long-random-secret"
+$env:BOOTSTRAP_ADMIN_ENABLED="1"
+$env:BOOTSTRAP_ADMIN_EMAIL="admin@example.com"
+$env:BOOTSTRAP_ADMIN_PASSWORD="replace-with-a-strong-unique-password"
+python app.py
+```
+
+Then, for every boot after the administrator has been created:
+
+```powershell
+$env:BOOTSTRAP_ADMIN_ENABLED="0"
+```
+
+### Log in
+
+Open:
+
+```text
+http://localhost:5000/admin/login
+```
+
+Log in using the exact email and password you set in `BOOTSTRAP_ADMIN_EMAIL` / `BOOTSTRAP_ADMIN_PASSWORD` above — there is no other Super Admin account to log in with.
+
+### Optional: manual admin creation with `add_simple_admin.py`
+
+`add_simple_admin.py` creates one additional admin from operator-supplied values. It requires all three of the following and refuses to run if any are missing:
+
+- `ADMIN_EMAIL`
+- `ADMIN_PASSWORD`
+- `CONFIRM_ADMIN_CREATION=1`
+
+It never prints the password, and it refuses to run if an admin with that email already exists. Do not weaken or bypass these checks.
+
+```powershell
+$env:ADMIN_EMAIL="admin@example.com"
+$env:ADMIN_PASSWORD="replace-with-a-strong-unique-password"
+$env:CONFIRM_ADMIN_CREATION="1"
+python add_simple_admin.py
+```
+
+### Production reminder
+
+Production secrets (`FLASK_SECRET_KEY`, `BOOTSTRAP_ADMIN_PASSWORD`, database credentials, payment keys) must be supplied through the deployment environment (secret manager, platform environment variables, etc.), never committed to Git and never placed in `.env.example`.
 
 ---
 
