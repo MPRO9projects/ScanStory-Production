@@ -231,11 +231,15 @@ class User(db.Model):
     @property
     def remaining_projects(self):
         """Calculate remaining projects"""
+        if self.subscribed_project_limit in (None, 0):
+            return 999999999
         return max(0, self.subscribed_project_limit - self.projects_used)
 
     @property
     def remaining_scans(self):
         """Calculate remaining scans"""
+        if self.subscribed_scan_limit in (None, 0):
+            return 999999999
         return max(0, self.subscribed_scan_limit - self.scans_used)
 
     @property
@@ -668,6 +672,9 @@ class ProjectPair(db.Model):
 # ---------------------------------------------------------------------
 class ScanLog(db.Model):
     __tablename__ = "scan_logs"
+    __table_args__ = (
+        db.UniqueConstraint("user_id", "scan_session_id", name="uq_scan_logs_user_session"),
+    )
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
 
