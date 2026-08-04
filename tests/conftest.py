@@ -30,6 +30,12 @@ def isolated_app(tmp_path, monkeypatch):
     monkeypatch.setenv("SCANSTORY_ADMIN_DATA_DIR", str(admin_data_dir))
     monkeypatch.setenv("SCANSTORY_STATIC_UPLOADS_DIR", str(static_uploads_dir))
     monkeypatch.setenv("FLASK_SECRET_KEY", "gate-a-test-secret")
+    # Tests explicitly opt in to bootstrap admin creation (same identity the
+    # suite has always relied on) rather than getting it via a hard-coded
+    # production default.
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_ENABLED", "1")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_EMAIL", "admin@scanstory.com")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "gate-a-test-admin-pw")
     monkeypatch.delenv("RAZORPAY_KEY_ID", raising=False)
     monkeypatch.delenv("RAZORPAY_KEY_SECRET", raising=False)
     monkeypatch.delenv("DATABASE_URL", raising=False)

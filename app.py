@@ -59,8 +59,47 @@ app.logger.setLevel(logging.DEBUG)
 app.config['WTF_CSRF_ENABLED'] = False
 app.config['WTF_CSRF_CHECK_DEFAULT'] = False
 
-# Secret key (only set once)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "dev-secret-change-me")
+
+def _env_flag(name, default=False):
+    """Parse a boolean-ish environment variable. Missing/blank -> default."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _validate_required_runtime_config():
+    """Fail fast on missing required runtime-security configuration.
+
+    Centralized so future required settings can be added here. Does not
+    validate payment credentials or other unrelated production settings.
+    """
+    missing = []
+    if not os.environ.get("FLASK_SECRET_KEY"):
+        missing.append("FLASK_SECRET_KEY")
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variable(s): " + ", ".join(missing) +
+            ". Set them before starting the app (see .env.example)."
+        )
+
+
+_validate_required_runtime_config()
+
+# Mandatory Flask secret key. No insecure fallback: an unset key fails
+# startup loudly instead of silently signing sessions with a public,
+# guessable value. Automated tests set their own isolated test secret.
+app.secret_key = os.environ.get("FLASK_SECRET_KEY")
+
+# Debug/reloader are OFF by default and require an explicit opt-in via env.
+# Production deployments must run behind a real WSGI server (gunicorn,
+# waitress, etc.) and must never set FLASK_DEBUG=1.
+FLASK_DEBUG_ENABLED = False if SCANSTORY_TESTING else _env_flag("FLASK_DEBUG", default=False)
+
+# Session cookie baseline. SECURE defaults to False so local HTTP
+# development keeps working; set SESSION_COOKIE_SECURE=1 in production
+# (HTTPS) environments.
+SESSION_COOKIE_SECURE_ENABLED = _env_flag("SESSION_COOKIE_SECURE", default=False)
 
 # ✅ ADD DATABASE CONFIGURATION HERE
 database_uri = os.environ.get("TEST_DATABASE_URL") if SCANSTORY_TESTING else os.environ.get("DATABASE_URL", "")
@@ -80,10 +119,13 @@ if database_uri and not database_uri.startswith("sqlite"):
 
 app.config.update(
     TESTING=SCANSTORY_TESTING,
-    DEBUG=False if SCANSTORY_TESTING else app.debug,
+    DEBUG=FLASK_DEBUG_ENABLED,
     SQLALCHEMY_DATABASE_URI=database_uri,
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
-    SQLALCHEMY_ENGINE_OPTIONS=engine_options
+    SQLALCHEMY_ENGINE_OPTIONS=engine_options,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=SESSION_COOKIE_SECURE_ENABLED,
 )
 
 # ✅ Initialize SQLAlchemy ONLY ONCE
@@ -273,6 +315,63 @@ def ensure_marker_schema():
             db.session.execute(text(f"ALTER TABLE project_pairs ADD COLUMN {column_name} {ddl}"))
     db.session.commit()
 
+
+BOOTSTRAP_ADMIN_MIN_PASSWORD_LENGTH = 8
+
+
+def _resolve_bootstrap_admin_credentials():
+    """Return (email, password) for the bootstrap admin, or None if bootstrap
+    admin creation is not explicitly enabled.
+
+    No default email/password are ever used - BOOTSTRAP_ADMIN_ENABLED=1
+    must be set, and both BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD
+    must be provided. Raises RuntimeError on incomplete/invalid explicit
+    configuration. Never logs the password.
+    """
+    if not _env_flag("BOOTSTRAP_ADMIN_ENABLED", default=False):
+        return None
+
+    email = (os.environ.get("BOOTSTRAP_ADMIN_EMAIL") or "").strip()
+    password = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD") or ""
+
+    missing = []
+    if not email:
+        missing.append("BOOTSTRAP_ADMIN_EMAIL")
+    if not password:
+        missing.append("BOOTSTRAP_ADMIN_PASSWORD")
+    if missing:
+        raise RuntimeError(
+            "BOOTSTRAP_ADMIN_ENABLED=1 but missing required environment "
+            "variable(s): " + ", ".join(missing) + "."
+        )
+    if len(password) < BOOTSTRAP_ADMIN_MIN_PASSWORD_LENGTH:
+        raise RuntimeError(
+            "BOOTSTRAP_ADMIN_PASSWORD is too short - must be at least "
+            f"{BOOTSTRAP_ADMIN_MIN_PASSWORD_LENGTH} characters."
+        )
+    return email.lower(), password
+
+
+def _maybe_create_bootstrap_admin():
+    """Create the initial superadmin only when explicitly enabled via env,
+    and only when no admin exists yet. Never recreates or overwrites an
+    existing administrator. Does not fail startup when bootstrap is simply
+    not enabled - only when it's enabled with incomplete/invalid config.
+    """
+    credentials = _resolve_bootstrap_admin_credentials()
+    if credentials is None:
+        return
+    if Admin.query.count() > 0:
+        return
+    email, password = credentials
+    db.session.add(Admin(
+        email=email,
+        password_hash=generate_password_hash(password),
+        name="Super Admin",
+        role="superadmin",
+        is_active=True,
+    ))
+
 # --------------------------------------------------------------------------------------------
 # Bootstrap (tables + default plans + initial admin + system config)
 # --------------------------------------------------------------------------------------------
@@ -337,16 +436,9 @@ with app.app_context():
         )
         db.session.add(pro_plan)
     
-    # Create initial admin
-    if Admin.query.count() == 0:
-        admin_email = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "admin@scanstory.com")
-        admin_pass = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "Admin@123")
-        db.session.add(Admin(
-            email=admin_email.strip().lower(),
-            password_hash=generate_password_hash(admin_pass),
-            name="Super Admin",
-            role="superadmin"
-        ))
+    # Create initial admin - only when explicitly enabled via env, with no
+    # default credentials. See _maybe_create_bootstrap_admin.
+    _maybe_create_bootstrap_admin()
     
     # Create default system config
     if SystemConfig.query.count() == 0:
@@ -1221,18 +1313,9 @@ def bootstrap_database():
         )
         db.session.add(pro_plan)
     
-    # Create initial super admin
-    if Admin.query.count() == 0:
-        admin_email = os.environ.get("BOOTSTRAP_ADMIN_EMAIL", "admin@scanstory.com")
-        admin_pass = os.environ.get("BOOTSTRAP_ADMIN_PASSWORD", "Admin@123")
-        super_admin = Admin(
-            email=admin_email.strip().lower(),
-            password_hash=generate_password_hash(admin_pass),
-            name="Super Admin",
-            role="superadmin",
-            is_active=True
-        )
-        db.session.add(super_admin)
+    # Create initial super admin - only when explicitly enabled via env, with
+    # no default credentials. See _maybe_create_bootstrap_admin.
+    _maybe_create_bootstrap_admin()
     
     # Create default system config
     if SystemConfig.query.count() == 0:
@@ -7011,27 +7094,31 @@ def admin_delete_own_project(project_id):
 @app.errorhandler(500)
 @app.errorhandler(Exception)
 def handle_error(error):
-    """Ensure all errors return JSON for API endpoints"""
+    """Ensure all errors return JSON for API endpoints.
+
+    Detailed exception info (message, traceback) is logged server-side
+    only via app.logger.exception(); clients never receive str(error),
+    stack traces, SQL errors, or filesystem paths.
+    """
+    error_code = getattr(error, 'code', 500) or 500
+    app.logger.exception(error)
+
     # Check if the request is for an API/detection endpoint
     if request.path.startswith('/detect') or request.path.startswith('/api'):
-        error_code = 500
-        if hasattr(error, 'code'):
-            error_code = error.code
-        
-        print(f"❌ API Error at {request.path}: {str(error)}")
-        
+        generic_reason = "Not found" if error_code == 404 else "Server error"
         return jsonify({
             "detected": False,
-            "reason": f"Server error: {str(error)[:100]}",
+            "reason": generic_reason,
             "error": True,
             "path": request.path,
             "method": request.method
         }), error_code
-    
-    # For regular routes, return an HTTP response instead of the exception object
-    error_code = getattr(error, 'code', 500) or 500
-    app.logger.exception(error)
-    return f"<h1>Error {error_code}</h1><p>{str(error)}</p>", error_code
+
+    if error_code == 404:
+        return "<h1>404 Not Found</h1><p>The page you requested could not be found.</p>", 404
+
+    # For regular routes, return a generic HTTP response - never the raw exception
+    return "<h1>Something went wrong</h1><p>An unexpected error occurred. Please try again later.</p>", error_code
 # --------------------------------------------------------------------------------------------
 # SEO: sitemap.xml and robots.txt
 # --------------------------------------------------------------------------------------------
@@ -7089,5 +7176,9 @@ if __name__ == "__main__":
         # Then populate with default data
         bootstrap_database()
     
-    # Run the app
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=True)
+    # Run the app.
+    # NOTE: this is the Werkzeug development server. Production deployments
+    # must run behind a real WSGI server (gunicorn, waitress, etc.) - never
+    # via `python app.py`. debug/use_reloader only activate when FLASK_DEBUG=1
+    # is explicitly set (and are always off when SCANSTORY_TESTING=1).
+    app.run(host="0.0.0.0", port=5000, debug=FLASK_DEBUG_ENABLED, use_reloader=FLASK_DEBUG_ENABLED)
