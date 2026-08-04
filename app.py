@@ -757,6 +757,11 @@ def login_required(view):
     def wrapped(*args, **kwargs):
         u = current_user()
         if not u:
+            # An authenticated Admin/Super Admin has session["admin_id"], never
+            # session["user_id"] - route them to their own dashboard instead of
+            # the normal-user login page (see fix/admin-navigation-routing).
+            if current_admin():
+                return redirect(url_for("admin_dashboard"))
             return redirect(url_for("login"))
         if getattr(u, "is_blocked", False):
             logout_user()
@@ -3437,6 +3442,12 @@ def resend_otp():
 @app.route("/login/", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
+        # Already authenticated - don't show a login form. An Admin/Super
+        # Admin session must never be sent to the normal-user login page.
+        if current_admin():
+            return redirect(url_for("admin_dashboard"))
+        if current_user():
+            return redirect(url_for("dashboard"))
         return render_template("user/login.html")
 
     email = (request.form.get("email") or "").strip().lower()
@@ -5715,23 +5726,14 @@ def admin_dashboard():
 @app.route("/admin/my-projects", methods=["GET"])
 @admin_required
 def admin_my_projects():
-    """Show ALL the logged-in admin's own projects"""
-    admin = current_admin()
-    
-    # Get ALL projects - no limit
-    projects = Project.query.filter_by(
-        owner_admin_id=admin.id
-    ).order_by(Project.created_at.asc()).all()
-    
-    # Get pairs count and display number for each project
-    for idx, p in enumerate(projects, 1):
-        p.pairs_count = ProjectPair.query.filter_by(project_id=p.id).count()
-        p.scan_count = ScanLog.query.filter_by(project_id=p.id).count()
-        p.display_number = idx  # Add sequential number
-    
-    return render_template("admin/my_projects.html",
-                         admin=admin,
-                         projects=projects)
+    """Legacy route, kept for backward compatibility (bookmarks/links).
+
+    admin_projects (/admin/projects) is now the single canonical admin
+    project-management list - it's a strict superset of this narrower
+    "my own projects" view. Redirect directly rather than maintaining two
+    separate project-list implementations/templates.
+    """
+    return redirect(url_for("admin_projects", owner_type="admin"))
 @app.route("/admin/users", methods=["GET"])
 @admin_required
 def admin_users():
