@@ -65,6 +65,18 @@ def test_configured_secret_key_is_used(app_module):
 
 
 def test_missing_secret_key_fails_clearly(monkeypatch, tmp_path):
+    # app.py runs `from dotenv import load_dotenv; load_dotenv()` at import
+    # time. Without this, deleting FLASK_SECRET_KEY from os.environ isn't
+    # enough - the real repository .env (which has a real FLASK_SECRET_KEY)
+    # gets loaded right back in during the fresh import below, silently
+    # defeating the "missing key" condition this test exists to check.
+    # Patching dotenv.load_dotenv before importing app is what makes this
+    # work: app.py's `from dotenv import load_dotenv` re-binds the name from
+    # the dotenv module at (re-)import time, and we force a fresh import via
+    # the sys.modules removal below, so the patched no-op is what app.py
+    # actually calls.
+    import dotenv
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: False)
     monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
     monkeypatch.setenv("SCANSTORY_TESTING", "1")
     monkeypatch.setenv("TEST_DATABASE_URL", f"sqlite:///{(tmp_path / 'no-secret.db').as_posix()}")
