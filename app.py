@@ -34,6 +34,7 @@ import requests
 import click
 
 from sqlalchemy import or_, desc, func, and_, case, text, inspect
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased
 
 # ✅ Import models
@@ -411,6 +412,197 @@ def ensure_marker_schema():
         if column_name not in existing:
             db.session.execute(text(f"ALTER TABLE project_pairs ADD COLUMN {column_name} {ddl}"))
     db.session.commit()
+
+
+SCAN_LOG_SESSION_UNIQUE_INDEX_NAME = "uq_scan_logs_user_session"
+
+
+def _scan_log_session_uniqueness_exists(inspector):
+    indexes = inspector.get_indexes("scan_logs")
+    unique_constraints = inspector.get_unique_constraints("scan_logs")
+    return any(
+        item.get("name") == SCAN_LOG_SESSION_UNIQUE_INDEX_NAME
+        for item in [*indexes, *unique_constraints]
+    )
+
+
+def _scan_log_duplicate_report_for_rows(rows):
+    row_count = len(rows)
+    counted_rows = [row for row in rows if row.counted]
+    successful_rows = [row for row in rows if row.is_successful]
+    project_ids = {row.project_id for row in rows}
+    pair_ids = {row.pair_id for row in rows}
+    scan_types = {row.scan_type for row in rows}
+    conflicting = len(project_ids) > 1 or len(pair_ids) > 1 or len(scan_types) > 1
+    canonical = sorted(
+        rows,
+        key=lambda row: (
+            not bool(row.counted),
+            not bool(row.is_successful),
+            row.pair_id is None,
+            row.id,
+        ),
+    )[0]
+    return {
+        "user_id": rows[0].user_id,
+        "scan_session_id": rows[0].scan_session_id,
+        "count": row_count,
+        "affected_rows": row_count,
+        "redundant_rows": row_count - 1,
+        "counted_rows": len(counted_rows),
+        "multiple_counted": len(counted_rows) > 1,
+        "successful_rows": len(successful_rows),
+        "conflicting_scan_data": conflicting,
+        "canonical_id": canonical.id,
+        "redundant_ids": [row.id for row in rows if row.id != canonical.id],
+        "project_ids": sorted(project_ids),
+        "pair_ids": sorted(pair_id for pair_id in pair_ids if pair_id is not None),
+        "scan_types": sorted(scan_type for scan_type in scan_types if scan_type is not None),
+    }
+
+
+def _scan_log_duplicate_reports():
+    duplicate_keys = (
+        db.session.query(
+            ScanLog.user_id,
+            ScanLog.scan_session_id,
+            func.count(ScanLog.id).label("count"),
+        )
+        .group_by(ScanLog.user_id, ScanLog.scan_session_id)
+        .having(func.count(ScanLog.id) > 1)
+        .all()
+    )
+    reports = []
+    for user_id, scan_session_id, _count in duplicate_keys:
+        rows = (
+            ScanLog.query.filter_by(user_id=user_id, scan_session_id=scan_session_id)
+            .order_by(ScanLog.id.asc())
+            .all()
+        )
+        reports.append(_scan_log_duplicate_report_for_rows(rows))
+    return reports
+
+
+def scan_log_session_uniqueness_report():
+    inspector = inspect(db.engine)
+    if "scan_logs" not in inspector.get_table_names():
+        return {
+            "table_exists": False,
+            "constraint_exists": False,
+            "duplicate_groups": 0,
+            "affected_rows": 0,
+            "multiple_counted_groups": 0,
+            "conflicting_groups": 0,
+            "duplicates": [],
+        }
+
+    duplicates = _scan_log_duplicate_reports()
+    return {
+        "table_exists": True,
+        "constraint_exists": _scan_log_session_uniqueness_exists(inspector),
+        "duplicate_groups": len(duplicates),
+        "affected_rows": sum(item["affected_rows"] for item in duplicates),
+        "multiple_counted_groups": sum(1 for item in duplicates if item["multiple_counted"]),
+        "conflicting_groups": sum(1 for item in duplicates if item["conflicting_scan_data"]),
+        "duplicates": duplicates,
+    }
+
+
+def _consolidate_scan_log_duplicate(report):
+    rows = {
+        row.id: row
+        for row in ScanLog.query.filter(
+            ScanLog.id.in_([report["canonical_id"], *report["redundant_ids"]])
+        ).all()
+    }
+    canonical = rows[report["canonical_id"]]
+    duplicate_rows = [rows[row_id] for row_id in report["redundant_ids"]]
+    canonical.is_successful = any(row.is_successful for row in [canonical, *duplicate_rows])
+    canonical.counted = any(row.counted for row in [canonical, *duplicate_rows])
+    if canonical.pair_id is None:
+        pair_ids = [row.pair_id for row in duplicate_rows if row.pair_id is not None]
+        if pair_ids:
+            canonical.pair_id = pair_ids[0]
+    for duplicate in duplicate_rows:
+        db.session.delete(duplicate)
+    return {
+        "user_id": report["user_id"],
+        "scan_session_id": report["scan_session_id"],
+        "canonical_id": canonical.id,
+        "removed_ids": report["redundant_ids"],
+        "preserved_successful": bool(canonical.is_successful),
+        "preserved_counted": bool(canonical.counted),
+    }
+
+
+@app.cli.command("migrate-scanlog-session-uniqueness")
+@click.option("--apply", "apply_change", is_flag=True, help="Create the unique index. Default is dry-run.")
+def migrate_scanlog_session_uniqueness(apply_change):
+    """Add the per-owner scan-session uniqueness guard after duplicate review."""
+    report = scan_log_session_uniqueness_report()
+    dialect = _database_dialect_name()
+    click.echo("Mode: apply" if apply_change else "Mode: dry-run")
+    click.echo(f"Database dialect: {dialect}")
+    click.echo(f"Table exists: {report['table_exists']}")
+    click.echo(f"Constraint exists: {report['constraint_exists']}")
+    click.echo(f"Duplicate groups: {report['duplicate_groups']}")
+    click.echo(f"Affected rows: {report['affected_rows']}")
+    click.echo(f"Groups with multiple counted rows: {report['multiple_counted_groups']}")
+    click.echo(f"Groups with conflicting scan/project data: {report['conflicting_groups']}")
+
+    for duplicate in report["duplicates"]:
+        click.echo(
+            f"user_id={duplicate['user_id']} "
+            f"scan_session_id={duplicate['scan_session_id']} "
+            f"count={duplicate['count']} "
+            f"counted_rows={duplicate['counted_rows']} "
+            f"successful_rows={duplicate['successful_rows']} "
+            f"conflicting_scan_data={duplicate['conflicting_scan_data']} "
+            f"canonical_id={duplicate['canonical_id']} "
+            f"redundant_ids={duplicate['redundant_ids']}"
+        )
+
+    if not apply_change or not report["table_exists"]:
+        return
+    if report["constraint_exists"] and not report["duplicates"]:
+        click.echo("Unique index already present; no changes needed.")
+        return
+    if report["conflicting_groups"]:
+        raise click.ClickException(
+            "Refusing to consolidate conflicting scan log duplicates. "
+            "Review the reported user_id/scan_session_id groups and resolve history manually."
+        )
+
+    changes = []
+    try:
+        for duplicate in report["duplicates"]:
+            changes.append(_consolidate_scan_log_duplicate(duplicate))
+        db.session.flush()
+        if not report["constraint_exists"]:
+            db.session.execute(text(
+                f"CREATE UNIQUE INDEX {SCAN_LOG_SESSION_UNIQUE_INDEX_NAME} "
+                "ON scan_logs (user_id, scan_session_id)"
+            ))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+
+    for change in changes:
+        click.echo(
+            f"Consolidated user_id={change['user_id']} "
+            f"scan_session_id={change['scan_session_id']} "
+            f"canonical_id={change['canonical_id']} "
+            f"removed_ids={change['removed_ids']} "
+            f"preserved_successful={change['preserved_successful']} "
+            f"preserved_counted={change['preserved_counted']}"
+        )
+    if not report["constraint_exists"]:
+        click.echo(f"Created unique index {SCAN_LOG_SESSION_UNIQUE_INDEX_NAME}.")
+    click.echo(
+        "DDL transaction note: SQLite/PostgreSQL generally roll back this cleanup and CREATE INDEX together; "
+        "MySQL/MariaDB may auto-commit DDL, so the command refuses conflicting duplicates before cleanup."
+    )
 
 
 BOOTSTRAP_ADMIN_MIN_PASSWORD_LENGTH = 8
@@ -824,6 +1016,85 @@ def _limit_reached(limit_value, used_value):
     return int(used_value or 0) >= int(limit_value)
 
 
+def _database_dialect_name():
+    try:
+        return db.session.get_bind().dialect.name
+    except Exception:
+        return "unknown"
+
+
+def _supports_row_level_locking():
+    return _database_dialect_name() in {"postgresql", "mysql", "mariadb"}
+
+
+def _atomic_increment_user_counter(user_id, counter_column, limit_column):
+    """Atomically increment a user counter if its effective limit allows it.
+
+    NULL or 0 limits are treated as unlimited, matching _limit_reached().
+    Returns True when one user row was updated.
+    """
+    query = User.query.filter(User.id == user_id).filter(
+        or_(
+            limit_column.is_(None),
+            limit_column == 0,
+            func.coalesce(counter_column, 0) < limit_column,
+        )
+    )
+    updated = query.update(
+        {counter_column: func.coalesce(counter_column, 0) + 1},
+        synchronize_session=False,
+    )
+    return updated == 1
+
+
+def _reserve_project_quota_atomic(user):
+    if has_dev_test_entitlement(user):
+        return True
+    reserved = _atomic_increment_user_counter(
+        user.id,
+        User.projects_used,
+        User.subscribed_project_limit,
+    )
+    if not reserved:
+        user.subscription_status = "limit_reached"
+        db.session.flush()
+    return reserved
+
+
+def _consume_scan_quota_atomic(user):
+    if has_dev_test_entitlement(user):
+        return True
+    consumed = _atomic_increment_user_counter(
+        user.id,
+        User.scans_used,
+        User.subscribed_scan_limit,
+    )
+    if consumed and _limit_reached(user.subscribed_scan_limit, (user.scans_used or 0) + 1):
+        user.subscription_status = "limit_reached"
+        db.session.flush()
+    elif not consumed:
+        user.subscription_status = "limit_reached"
+        db.session.flush()
+    return consumed
+
+
+def _lock_project_for_pair_quota(project_id):
+    query = Project.query.filter(Project.id == project_id)
+    if _supports_row_level_locking():
+        query = query.with_for_update()
+    return query.one()
+
+
+def _reserve_pair_slots_for_project(project_id, requested_pairs, max_pairs):
+    if max_pairs is None:
+        return True, None
+    project = _lock_project_for_pair_quota(project_id)
+    existing_pairs = ProjectPair.query.filter_by(project_id=project.id).count()
+    if existing_pairs + requested_pairs > int(max_pairs):
+        return False, f"Your current plan allows maximum {max_pairs} pairs per project."
+    return True, None
+
+
 MARKER_MIN_PIXELS = int(os.environ.get("SCANSTORY_MARKER_MIN_PIXELS", "240"))
 VIDEO_UPLOAD_WARNINGS = {
     "recommended_size_bytes": int(os.environ.get("SCANSTORY_VIDEO_RECOMMENDED_SIZE_BYTES", str(15 * 1024 * 1024))),
@@ -1123,6 +1394,68 @@ def _delete_project_files_and_rows(project: Project):
     db.session.delete(project)
     db.session.commit()
     load_features.cache_clear()
+
+
+def _quota_counter_rows():
+    users = User.query.order_by(User.id.asc()).all()
+    rows = []
+    for user in users:
+        calculated_projects = Project.query.filter_by(owner_user_id=user.id).count()
+        calculated_scans = (
+            db.session.query(func.count(ScanLog.id))
+            .join(Project, ScanLog.project_id == Project.id)
+            .filter(
+                ScanLog.user_id == user.id,
+                ScanLog.counted == True,
+                Project.owner_admin_id.is_(None),
+            )
+            .scalar()
+            or 0
+        )
+        rows.append({
+            "user": user,
+            "stored_projects": int(user.projects_used or 0),
+            "calculated_projects": int(calculated_projects or 0),
+            "stored_scans": int(user.scans_used or 0),
+            "calculated_scans": int(calculated_scans or 0),
+        })
+    return rows
+
+
+@app.cli.command("reconcile-quota-counters")
+@click.option("--repair", is_flag=True, help="Persist calculated counter values. Default is dry-run.")
+def reconcile_quota_counters(repair):
+    """Report or repair user quota counter drift."""
+    rows = _quota_counter_rows()
+    drift_rows = [
+        row for row in rows
+        if row["stored_projects"] != row["calculated_projects"]
+        or row["stored_scans"] != row["calculated_scans"]
+    ]
+    click.echo("Mode: repair" if repair else "Mode: dry-run")
+    click.echo(f"Users checked: {len(rows)}")
+    click.echo(f"Users with drift: {len(drift_rows)}")
+
+    for row in drift_rows:
+        user = row["user"]
+        click.echo(
+            f"user_id={user.id} email={user.email} "
+            f"projects_used stored={row['stored_projects']} calculated={row['calculated_projects']} "
+            f"scans_used stored={row['stored_scans']} calculated={row['calculated_scans']}"
+        )
+        if repair:
+            user.projects_used = row["calculated_projects"]
+            user.scans_used = row["calculated_scans"]
+            app.logger.info(
+                f"Repaired quota counters for user_id={user.id}: "
+                f"projects {row['stored_projects']}->{row['calculated_projects']}, "
+                f"scans {row['stored_scans']}->{row['calculated_scans']}",
+            )
+
+    if repair and drift_rows:
+        db.session.commit()
+    elif repair:
+        click.echo("No repairs needed.")
 
 
 def _desired_dev_test_user_values(plan):
@@ -3751,119 +4084,131 @@ def handle_upload():
         flash(str(exc), "error")
         return redirect(url_for("user_create_project_page"))
 
-    # ✅ STEP 1: Create project record (FAST)
-    # Assign a per-user project index so each user sees projects numbered 1,2,3...
-    try:
-        # Use the maximum existing per-user index to avoid issues with deleted rows
-        max_index = db.session.query(func.max(Project.user_project_index)).filter(
-            Project.owner_user_id == user.id
-        ).scalar()
-        user_project_index = (int(max_index) if max_index and int(max_index) > 0 else 0) + 1
-    except Exception:
-        # Fallback to simple count if something goes wrong
-        try:
-            existing_count = Project.query.filter_by(owner_user_id=user.id).count()
-        except Exception:
-            existing_count = 0
-        user_project_index = int(existing_count or 0) + 1
-
-    project = Project(name=name, owner_user_id=user.id, user_project_index=user_project_index)
-    _upload_log("UPLOAD PERSIST START", upload_id, user_id=user.id, pair_count=len(images))
-    db.session.add(project)
-    db.session.commit()
-
-    # ✅ STEP 2: Save ALL files quickly with standardization
+    # STEP 1-3: reserve quota, create project/pairs, and commit as one unit.
+    # If DB insert or file save fails, rollback releases the reserved quota and saved files are removed.
+    saved_paths = []
     pairs_data = []
-    for i, (image_file, video_file) in enumerate(zip(images, videos)):
-        marker_meta = marker_metadata[i]
-        # Generate filenames
-        img_filename = f"{project.id}_{i}.jpg"
-        vid_ext = os.path.splitext(video_file.filename or "")[1].lower() or ".mp4"
-        vid_filename = f"{project.id}_{i}{vid_ext}"
-        
-        # Save files (FAST)
-        img_path = os.path.join(IMAGES_DIR, img_filename)
-        image_file.save(img_path)
-        
-        # ✅ FIX: Standardize image to 1200px (match ORB_MAX_DIM)
-        
-        vid_path = os.path.join(VIDEOS_DIR, vid_filename)
-        video_persist_start = time.time()
-        _upload_log(
-            "VIDEO SERVER PERSIST START",
-            upload_id,
-            **_video_log_fields(
-                video_file,
-                user_id=user.id,
+    project = None
+    try:
+        if not _reserve_project_quota_atomic(user):
+            db.session.rollback()
+            flash("Project limit reached. Please upgrade your plan.", "error")
+            return redirect(url_for("user_create_project_page"))
+
+        try:
+            max_index = db.session.query(func.max(Project.user_project_index)).filter(
+                Project.owner_user_id == user.id
+            ).scalar()
+            user_project_index = (int(max_index) if max_index and int(max_index) > 0 else 0) + 1
+        except Exception:
+            try:
+                existing_count = Project.query.filter_by(owner_user_id=user.id).count()
+            except Exception:
+                existing_count = 0
+            user_project_index = int(existing_count or 0) + 1
+
+        project = Project(name=name, owner_user_id=user.id, user_project_index=user_project_index)
+        _upload_log("UPLOAD PERSIST START", upload_id, user_id=user.id, pair_count=len(images))
+        db.session.add(project)
+        db.session.flush()
+
+        pair_slots_ok, pair_slots_error = _reserve_pair_slots_for_project(project.id, len(images), max_pairs)
+        if not pair_slots_ok:
+            raise ValueError(pair_slots_error)
+
+        for i, (image_file, video_file) in enumerate(zip(images, videos)):
+            marker_meta = marker_metadata[i]
+            img_filename = f"{project.id}_{i}.jpg"
+            vid_ext = os.path.splitext(video_file.filename or "")[1].lower() or ".mp4"
+            vid_filename = f"{project.id}_{i}{vid_ext}"
+
+            img_path = os.path.join(IMAGES_DIR, img_filename)
+            image_file.save(img_path)
+            saved_paths.append(img_path)
+
+            vid_path = os.path.join(VIDEOS_DIR, vid_filename)
+            video_persist_start = time.time()
+            _upload_log(
+                "VIDEO SERVER PERSIST START",
+                upload_id,
+                **_video_log_fields(
+                    video_file,
+                    user_id=user.id,
+                    project_id=project.id,
+                    pair_index=i,
+                    content_length=request.content_length,
+                ),
+            )
+            video_file.save(vid_path)
+            saved_paths.append(vid_path)
+            video_size = os.path.getsize(vid_path) if os.path.exists(vid_path) else video_file.content_length
+            _upload_log(
+                "VIDEO SERVER PERSIST DONE",
+                upload_id,
+                **_video_log_fields(
+                    video_file,
+                    user_id=user.id,
+                    project_id=project.id,
+                    pair_index=i,
+                    content_length=request.content_length,
+                    video_size=video_size,
+                    persistence_duration_ms=round((time.time() - video_persist_start) * 1000),
+                ),
+            )
+
+            pair = ProjectPair(
                 project_id=project.id,
                 pair_index=i,
-                content_length=request.content_length,
-            ),
-        )
-        video_file.save(vid_path)
-        video_size = os.path.getsize(vid_path) if os.path.exists(vid_path) else video_file.content_length
-        _upload_log(
-            "VIDEO SERVER PERSIST DONE",
-            upload_id,
-            **_video_log_fields(
-                video_file,
-                user_id=user.id,
-                project_id=project.id,
-                pair_index=i,
-                content_length=request.content_length,
+                image_filename=img_filename,
+                video_filename=vid_filename,
+                image_path=f"/image/{project.id}/{i}",
+                original_image_name=image_file.filename,
+                original_video_name=video_file.filename,
+                image_size=marker_meta["processed_size_bytes"] or image_file.content_length,
                 video_size=video_size,
-                persistence_duration_ms=round((time.time() - video_persist_start) * 1000),
-            ),
-        )
-        
-        # Create pair record (NOT processed)
-        pair = ProjectPair(
-            project_id=project.id,
-            pair_index=i,
-            image_filename=img_filename,
-            video_filename=vid_filename,
-            image_path=f"/image/{project.id}/{i}",
-            original_image_name=image_file.filename,
-            original_video_name=video_file.filename,
-            image_size=marker_meta["processed_size_bytes"] or image_file.content_length,
-            video_size=video_size,
-            marker_mode=marker_meta["mode"],
-            marker_crop_x=marker_meta["crop_x"],
-            marker_crop_y=marker_meta["crop_y"],
-            marker_crop_width=marker_meta["crop_width"],
-            marker_crop_height=marker_meta["crop_height"],
-            marker_rotation=marker_meta["rotation"],
-            marker_original_width=marker_meta["original_width"],
-            marker_original_height=marker_meta["original_height"],
-            marker_processed_width=marker_meta["processed_width"],
-            marker_processed_height=marker_meta["processed_height"],
-            marker_source_size_bytes=marker_meta["source_size_bytes"],
-            marker_processed_size_bytes=marker_meta["processed_size_bytes"],
-            marker_display_orientation=marker_meta["display_orientation"],
-            is_processed=False,
-            processing_status="uploaded",
-            feature_extraction_status="pending",
-            processing_error=None
-        )
-        db.session.add(pair)
-        
-        # Store data for background processing
-        pairs_data.append({
-            "pair_index": i,
-            "image_filename": img_filename,
-            "video_filename": vid_filename,
-            "video_size": video_size,
-            "original_video_name": video_file.filename,
-            "video_mime_type": video_file.mimetype,
-        })
+                marker_mode=marker_meta["mode"],
+                marker_crop_x=marker_meta["crop_x"],
+                marker_crop_y=marker_meta["crop_y"],
+                marker_crop_width=marker_meta["crop_width"],
+                marker_crop_height=marker_meta["crop_height"],
+                marker_rotation=marker_meta["rotation"],
+                marker_original_width=marker_meta["original_width"],
+                marker_original_height=marker_meta["original_height"],
+                marker_processed_width=marker_meta["processed_width"],
+                marker_processed_height=marker_meta["processed_height"],
+                marker_source_size_bytes=marker_meta["source_size_bytes"],
+                marker_processed_size_bytes=marker_meta["processed_size_bytes"],
+                marker_display_orientation=marker_meta["display_orientation"],
+                is_processed=False,
+                processing_status="uploaded",
+                feature_extraction_status="pending",
+                processing_error=None,
+            )
+            db.session.add(pair)
 
-    # ✅ STEP 3: Update user count
-    upload_timing["files_persisted_at"] = time.time()
-    _upload_log("UPLOAD PERSIST DONE", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), duration_ms=round((upload_timing["files_persisted_at"] - request_start) * 1000))
-    user.projects_used = int(user.projects_used or 0) + 1
-    db.session.commit()
-    _upload_log("UPLOAD DB COMMIT DONE", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data))
+            pairs_data.append({
+                "pair_index": i,
+                "image_filename": img_filename,
+                "video_filename": vid_filename,
+                "video_size": video_size,
+                "original_video_name": video_file.filename,
+                "video_mime_type": video_file.mimetype,
+            })
 
+        upload_timing["files_persisted_at"] = time.time()
+        _upload_log("UPLOAD PERSIST DONE", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), duration_ms=round((upload_timing["files_persisted_at"] - request_start) * 1000))
+        db.session.commit()
+        _upload_log("UPLOAD DB COMMIT DONE", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data))
+    except Exception as exc:
+        db.session.rollback()
+        for saved_path in saved_paths:
+            try:
+                if saved_path and os.path.exists(saved_path):
+                    os.remove(saved_path)
+            except Exception:
+                pass
+        flash(str(exc) if isinstance(exc, ValueError) else "Project upload failed. Please try again.", "error")
+        return redirect(url_for("user_create_project_page"))
     # ✅ STEP 4: Generate QR code (FAST)
     user_name = (user.first_name or user.email.split("@")[0]).strip()
     # Prefer a configured public host (useful for generating QR codes accessible from mobile)
@@ -4715,7 +5060,14 @@ def detect_init():
                         scan_type="admin" if is_admin_project else "user"
                     )
                     db.session.add(scan_log)
-                    db.session.commit()
+                    try:
+                        db.session.commit()
+                    except IntegrityError:
+                        db.session.rollback()
+                        scan_log = ScanLog.query.filter_by(
+                            user_id=scan_attribution_owner_id,
+                            scan_session_id=scan_session_id
+                        ).first()
                     print(f"✅ Created NEW scan log for session {scan_session_id}")
                 else:
                     scan_log = existing_log
@@ -5199,39 +5551,42 @@ def scanner_session_end():
             
             return jsonify({"ok": True, "counted": False, "reason": "No successful detection"})
         
-        # Check if already counted
-        if hasattr(successful_scan, 'counted') and successful_scan.counted:
-            print("⏭️ Session already counted, skipping")
+        claim_updated = ScanLog.query.filter(
+            ScanLog.id == successful_scan.id,
+            ScanLog.counted == False,
+        ).update({ScanLog.counted: True}, synchronize_session=False)
+
+        if claim_updated != 1:
+            db.session.rollback()
+            print("Session already counted, skipping")
             return jsonify({"ok": True, "counted": False, "reason": "Already counted"})
-        
+
         if has_dev_test_entitlement(user):
-            successful_scan.counted = True
             db.session.commit()
             print("[DEV TEST ENTITLEMENT] Scan count bypassed for local test user")
             return jsonify({"ok": True, "counted": False, "reason": "Development test entitlement"})
 
-        # COUNT THE SCAN
-        old_count = user.scans_used
-        user.scans_used = (user.scans_used or 0) + 1
-        
-        # Mark as counted
-        successful_scan.counted = True
-        
-        # Update status if limit reached
-        if _limit_reached(user.subscribed_scan_limit, user.scans_used):
-            user.subscription_status = "limit_reached"
-        
+        old_count = int(user.scans_used or 0)
+        if not _consume_scan_quota_atomic(user):
+            db.session.rollback()
+            return jsonify({
+                "ok": False,
+                "counted": False,
+                "error": "Scan limit reached. Please upgrade your plan.",
+                "reason": "Scan limit reached. Please upgrade your plan.",
+            }), 403
+
         db.session.commit()
-        
-        print(f"✅ COUNTED: {old_count} → {user.scans_used}")
+        db.session.refresh(user)
+
+        print(f"COUNTED: {old_count} -> {user.scans_used}")
         print("="*50 + "\n")
-        
+
         return jsonify({
             "ok": True,
             "counted": True,
             "user_total": user.scans_used
         })
-        
     except Exception as e:
         print(f"❌ ERROR: {str(e)}")
         import traceback
