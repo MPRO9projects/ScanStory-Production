@@ -32,6 +32,7 @@ import requests
 import click
 
 from sqlalchemy import or_, desc, func, and_, case, text, inspect
+from sqlalchemy.orm import aliased
 
 # ✅ Import models
 from models import (
@@ -6353,13 +6354,47 @@ def admin_view_payment(payment_id):
                          user=user,
                          plan=plan)
 
+def _safe_display_filename(value):
+    if not value:
+        return "Not stored"
+    return os.path.basename(str(value))
+
+def _owner_display(project, owner_user=None, owner_admin=None):
+    if project.owner_user_id:
+        return {
+            "type": "User",
+            "id": project.owner_user_id,
+            "name": owner_user.full_name if owner_user else "Missing user",
+            "email": owner_user.email if owner_user else "Owner record missing",
+        }
+    if project.owner_admin_id:
+        return {
+            "type": "Admin",
+            "id": project.owner_admin_id,
+            "name": owner_admin.name if owner_admin else "Missing admin",
+            "email": owner_admin.email if owner_admin else "Owner record missing",
+        }
+    return {"type": "Unknown", "id": None, "name": "No owner recorded", "email": "-"}
+
+def _project_readiness_summary(pair_count, ready_pairs, failed_pairs):
+    pair_count = int(pair_count or 0)
+    ready_pairs = int(ready_pairs or 0)
+    failed_pairs = int(failed_pairs or 0)
+    if pair_count == 0:
+        return "No pairs"
+    if failed_pairs:
+        return f"{failed_pairs} failed"
+    if ready_pairs == pair_count:
+        return "Ready"
+    return f"{ready_pairs}/{pair_count} ready"
+
 # --------------------------------------------------------------------------------------------
 # Admin Routes - Module 8: Project Monitoring
 # --------------------------------------------------------------------------------------------
-@app.route("/admin/projects", methods=["GET"])
+@app.route("/admin/user-profiles", methods=["GET"])
 @admin_required
-def admin_projects():
-    """Display all user profiles"""
+def admin_user_profiles():
+    """Display all user profiles."""
     admin = current_admin()
     
     # Get filter parameters
@@ -6395,12 +6430,21 @@ def admin_projects():
         )
     
     users = query.order_by(User.created_at.desc()).all()
+    if users:
+        project_counts = dict(
+            db.session.query(Project.owner_user_id, func.count(Project.id))
+            .filter(Project.owner_user_id.in_([user.id for user in users]))
+            .group_by(Project.owner_user_id)
+            .all()
+        )
+        for user in users:
+            user.live_project_count = int(project_counts.get(user.id, 0))
     
     # Get all plans for filter dropdown
     plans = SubscriptionPlan.query.filter_by(is_active=True).all()
     
     return render_template(
-        "admin/projects.html",
+        "admin/user_profiles.html",
         admin=admin,
         users=users,
         plans=plans,
@@ -6409,27 +6453,177 @@ def admin_projects():
         selected_plan_id=plan_id
     )
 
+@app.route("/admin/projects", methods=["GET"])
+@admin_required
+def admin_projects():
+    admin = current_admin()
+    search = request.args.get("search", "").strip()
+    owner_type = request.args.get("owner_type", "all")
+    readiness = request.args.get("readiness", "all")
+    page = max(request.args.get("page", 1, type=int), 1)
+    per_page = min(max(request.args.get("per_page", 25, type=int), 1), 100)
+    owner_admin = aliased(Admin)
+
+    pair_counts = (
+        db.session.query(
+            ProjectPair.project_id.label("project_id"),
+            func.count(ProjectPair.id).label("pair_count"),
+            func.sum(case((ProjectPair.is_processed == True, 1), else_=0)).label("ready_pair_count"),
+            func.sum(case((ProjectPair.processing_status == "failed", 1), else_=0)).label("failed_pair_count"),
+        )
+        .group_by(ProjectPair.project_id)
+        .subquery()
+    )
+    scan_counts = (
+        db.session.query(
+            ScanLog.project_id.label("project_id"),
+            func.count(ScanLog.id).label("scan_count"),
+            func.sum(case((ScanLog.is_successful == True, 1), else_=0)).label("successful_scan_count"),
+            func.sum(case((ScanLog.is_successful == False, 1), else_=0)).label("failed_scan_count"),
+        )
+        .group_by(ScanLog.project_id)
+        .subquery()
+    )
+
+    query = (
+        db.session.query(
+            Project,
+            User,
+            owner_admin,
+            pair_counts.c.pair_count,
+            pair_counts.c.ready_pair_count,
+            pair_counts.c.failed_pair_count,
+            scan_counts.c.scan_count,
+            scan_counts.c.successful_scan_count,
+            scan_counts.c.failed_scan_count,
+        )
+        .outerjoin(User, Project.owner_user_id == User.id)
+        .outerjoin(owner_admin, Project.owner_admin_id == owner_admin.id)
+        .outerjoin(pair_counts, Project.id == pair_counts.c.project_id)
+        .outerjoin(scan_counts, Project.id == scan_counts.c.project_id)
+    )
+
+    if owner_type == "user":
+        query = query.filter(Project.owner_user_id.isnot(None))
+    elif owner_type == "admin":
+        query = query.filter(Project.owner_admin_id.isnot(None))
+
+    if readiness == "ready":
+        query = query.filter(func.coalesce(pair_counts.c.pair_count, 0) > 0)
+        query = query.filter(func.coalesce(pair_counts.c.pair_count, 0) == func.coalesce(pair_counts.c.ready_pair_count, 0))
+    elif readiness == "processing":
+        query = query.filter(func.coalesce(pair_counts.c.pair_count, 0) > func.coalesce(pair_counts.c.ready_pair_count, 0))
+    elif readiness == "failed":
+        query = query.filter(func.coalesce(pair_counts.c.failed_pair_count, 0) > 0)
+
+    if search:
+        search_terms = []
+        search_id = int(search) if search.isdigit() else None
+        if search_id is not None and Project.query.filter(Project.id == search_id).first():
+            search_terms.append(Project.id == search_id)
+        else:
+            search_terms.extend([
+                Project.name.ilike(f"%{search}%"),
+                User.email.ilike(f"%{search}%"),
+                User.first_name.ilike(f"%{search}%"),
+                User.last_name.ilike(f"%{search}%"),
+                owner_admin.email.ilike(f"%{search}%"),
+                owner_admin.name.ilike(f"%{search}%"),
+            ])
+            if search_id is not None:
+                search_terms.extend([
+                    Project.id == search_id,
+                    Project.owner_user_id == search_id,
+                    Project.owner_admin_id == search_id,
+                ])
+        query = query.filter(or_(*search_terms))
+
+    pagination = query.order_by(Project.created_at.desc(), Project.id.desc()).paginate(
+        page=page,
+        per_page=per_page,
+        error_out=False,
+    )
+    project_rows = []
+    for project, owner_user, row_admin, pair_count, ready_pairs, failed_pairs, scan_count, success_scans, failed_scans in pagination.items:
+        owner = _owner_display(project, owner_user, row_admin)
+        project_rows.append({
+            "project": project,
+            "owner": owner,
+            "pair_count": int(pair_count or 0),
+            "ready_pair_count": int(ready_pairs or 0),
+            "failed_pair_count": int(failed_pairs or 0),
+            "readiness_summary": _project_readiness_summary(pair_count, ready_pairs, failed_pairs),
+            "qr_ready": bool(project.qr_code_path or project.qr_code_filename),
+            "scan_count": int(scan_count or 0),
+            "successful_scan_count": int(success_scans or 0),
+            "failed_scan_count": int(failed_scans or 0),
+        })
+
+    return render_template(
+        "admin/projects.html",
+        admin=admin,
+        project_rows=project_rows,
+        pagination=pagination,
+        search=search,
+        owner_type=owner_type,
+        readiness=readiness,
+        per_page=per_page,
+    )
+
 @app.route("/admin/projects/<int:project_id>", methods=["GET"])
 @admin_required
 def admin_view_project(project_id):
     admin = current_admin()
     project = Project.query.get_or_404(project_id)
-    
-    # Get project owner
-    owner = User.query.get(project.owner_user_id) if project.owner_user_id else None
-    
-    # Get project pairs
-    pairs = ProjectPair.query.filter_by(project_id=project_id).order_by(ProjectPair.pair_index).all()
-    
-    # Get scan history for this project
-    scan_history = ScanLog.query.filter_by(project_id=project_id).order_by(ScanLog.created_at.desc()).limit(50).all()
-    
+    owner_user = User.query.get(project.owner_user_id) if project.owner_user_id else None
+    owner_admin = Admin.query.get(project.owner_admin_id) if project.owner_admin_id else None
+    owner = _owner_display(project, owner_user, owner_admin)
+
+    pair_count = ProjectPair.query.filter_by(project_id=project_id).count()
+    pairs = (
+        ProjectPair.query
+        .filter_by(project_id=project_id)
+        .order_by(ProjectPair.pair_index.asc())
+        .limit(100)
+        .all()
+    )
+    for pair in pairs:
+        pair.safe_image_filename = _safe_display_filename(pair.image_filename)
+        pair.safe_video_filename = _safe_display_filename(pair.video_filename)
+        pair.recognition_ready = pair.feature_extraction_status == "extracted" or bool(pair.is_processed)
+
+    scan_summary = (
+        db.session.query(
+            func.count(ScanLog.id),
+            func.sum(case((ScanLog.is_successful == True, 1), else_=0)),
+            func.sum(case((ScanLog.is_successful == False, 1), else_=0)),
+        )
+        .filter(ScanLog.project_id == project_id)
+        .first()
+    )
+    total_scans = int(scan_summary[0] or 0)
+    successful_scans = int(scan_summary[1] or 0)
+    failed_scans = int(scan_summary[2] or 0)
+    scan_history = (
+        ScanLog.query
+        .filter_by(project_id=project_id)
+        .order_by(ScanLog.created_at.desc())
+        .limit(25)
+        .all()
+    )
+
     return render_template("admin/view_project.html",
                          admin=admin,
                          project=project,
                          owner=owner,
                          pairs=pairs,
-                         scan_history=scan_history)
+                         pair_count=pair_count,
+                         scan_history=scan_history,
+                         total_scans=total_scans,
+                         successful_scans=successful_scans,
+                         failed_scans=failed_scans,
+                         safe_qr_filename=_safe_display_filename(project.qr_code_filename or project.qr_code_path),
+                         qr_ready=bool(project.qr_code_path or project.qr_code_filename))
 
 @app.route("/admin/projects/<int:project_id>/toggle-status", methods=["POST"])
 @admin_required

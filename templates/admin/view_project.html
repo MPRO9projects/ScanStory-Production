@@ -517,572 +517,156 @@
 <body>
     <!-- Navbar -->
     <nav class="navbar">
-        <a href="/admin/dashboard" class="navbar-brand">
-            <span>ScanStory Admin</span>
-        </a>
-        
-        <div class="navbar-menu">
-            <span class="nav-link">Welcome, {{ admin.name }}</span>
-        </div>
-        
+        <a href="/admin/dashboard" class="navbar-brand"><span>ScanStory Admin</span></a>
+        <div class="navbar-menu"><span class="nav-link">Welcome, {{ admin.name }}</span></div>
         <div class="user-menu">
-            <div class="user-avatar">
-                {{ admin.name[0] if admin.name else 'A' }}
-            </div>
+            <div class="user-avatar">{{ admin.name[0] if admin.name else 'A' }}</div>
             <div class="dropdown-menu" id="userDropdown">
                 <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
                 <a href="/admin/settings" class="dropdown-item">Settings</a>
                 <div class="dropdown-divider"></div>
                 <a href="/admin/logout" class="dropdown-item">Logout</a>
             </div>
-            <span onclick="toggleDropdown()" style="cursor: pointer;">▼</span>
+            <span onclick="toggleDropdown()" style="cursor: pointer;">&#9662;</span>
         </div>
     </nav>
-    
+
     <!-- Sidebar -->
     <div class="sidebar">
         <div class="sidebar-section">
             <div class="sidebar-title">Dashboard</div>
-            <a href="/admin/dashboard" class="sidebar-link">
-                <i>📊</i>
-                <span>Overview</span>
-            </a>
+            <a href="/admin/dashboard" class="sidebar-link"><i>&#128202;</i><span>Overview</span></a>
         </div>
-        
         <div class="sidebar-section">
             <div class="sidebar-title">User Management</div>
-            <a href="/admin/users" class="sidebar-link">
-                <i>👥</i>
-                <span>Users</span>
-            </a>
+            <a href="/admin/user-profiles" class="sidebar-link"><i>&#128101;</i><span>User Profiles</span></a>
         </div>
-        
         <div class="sidebar-section">
             <div class="sidebar-title">Content</div>
-            <a href="/admin/projects" class="sidebar-link active">
-                <i>📁</i>
-                <span>Projects</span>
-            </a>
+            <a href="/admin/projects" class="sidebar-link active"><i>&#128193;</i><span>Admin Projects</span></a>
         </div>
-        
         <div class="sidebar-section">
             <div class="sidebar-title">System</div>
-            <a href="/admin/plans" class="sidebar-link">
-                <i>📋</i>
-                <span>Plans</span>
-            </a>
-            <a href="/admin/payments" class="sidebar-link">
-                <i>💳</i>
-                <span>Payments</span>
-            </a>
+            <a href="/admin/plans" class="sidebar-link"><i>&#128203;</i><span>Plans</span></a>
+            <a href="/admin/payments" class="sidebar-link"><i>&#128179;</i><span>Payments</span></a>
             {% if admin.role == 'superadmin' %}
-            <a href="/admin/admins" class="sidebar-link">
-                <i>🛡️</i>
-                <span>Admins</span>
-            </a>
+            <a href="/admin/admins" class="sidebar-link"><i>&#128737;</i><span>Admins</span></a>
             {% endif %}
-            <a href="/admin/settings" class="sidebar-link">
-                <i>⚙️</i>
-                <span>Settings</span>
-            </a>
+            <a href="/admin/settings" class="sidebar-link"><i>&#9881;</i><span>Settings</span></a>
         </div>
     </div>
-    
     <!-- Main Content -->
     <div class="main-content">
         <div class="page-header">
             <h1 class="page-title">Project Details</h1>
-            <div>
-                <a href="/admin/projects" class="btn btn-secondary">← Back to Projects</a>
-            </div>
+            <div><a href="/admin/projects" class="btn btn-secondary">&larr; Back to Admin Projects</a></div>
         </div>
-        
+
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}">
-                        {{ message }}
-                    </div>
+                    <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}">{{ message }}</div>
                 {% endfor %}
             {% endif %}
         {% endwith %}
-        
-        <!-- Project Header -->
+
         <div class="card">
             <div class="project-header">
                 <div>
                     <div class="project-title">{{ project.name }}</div>
-                    <div style="color: #64748b; margin-top: 5px;">
-                        ID: {{ project.id }} • Created: {{ project.created_at.strftime('%d %b %Y') }}
-                    </div>
+                    <div style="color: #64748b; margin-top: 5px;">Global Project ID: {{ project.id }} &bull; Created: {{ project.created_at.strftime('%d %b %Y') if project.created_at else '-' }}</div>
                 </div>
-                <div style="text-align: right;">
-                    <div class="project-status-badge status-{{ 'active' if project.is_active else 'inactive' }}">
-                        {{ 'Active' if project.is_active else 'Inactive' }}
-                    </div>
-                    <div style="margin-top: 10px; display: flex; gap: 10px;">
-                        {% if project.is_active %}
-                        <form action="/admin/projects/{{ project.id }}/toggle-status" method="POST" style="display: inline;">
-                            <button type="submit" class="btn btn-warning btn-sm">Deactivate</button>
-                        </form>
-                        {% else %}
-                        <form action="/admin/projects/{{ project.id }}/toggle-status" method="POST" style="display: inline;">
-                            <button type="submit" class="btn btn-success btn-sm">Activate</button>
-                        </form>
-                        {% endif %}
-                        <form action="/admin/projects/{{ project.id }}/delete" method="POST" style="display: inline;">
-                            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this project?')">Delete</button>
-                        </form>
-                    </div>
-                </div>
+                <div style="text-align: right;"><div class="project-status-badge status-{{ 'active' if project.is_active else 'inactive' }}">{{ 'Active' if project.is_active else 'Inactive' }}</div></div>
             </div>
-            
-            <!-- Project Information Grid -->
+
             <div class="info-grid">
-                <!-- Owner Information -->
                 <div class="info-section">
                     <h3>Owner Information</h3>
-                    {% if project.owner_user %}
-                    <div style="text-align: center; margin-bottom: 20px;">
-                        <div class="user-avatar-large avatar-user">
-                            {{ project.owner_user.first_name[0] if project.owner_user.first_name else project.owner_user.email[0]|upper }}
-                        </div>
-                        <div>
-                            <strong>{{ project.owner_user.full_name }}</strong>
-                            <div style="color: #64748b;">{{ project.owner_user.email }}</div>
-                        </div>
-                    </div>
-                    
-                    <div class="info-row">
-                        <span class="info-label">User ID</span>
-                        <span class="info-value">{{ project.owner_user.id }}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Account Status</span>
-                        <span class="info-value">
-                            {% if project.owner_user.is_active %}
-                            <span style="color: #10b981;">Active</span>
-                            {% else %}
-                            <span style="color: #ef4444;">Inactive</span>
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Created</span>
-                        <span class="info-value">{{ project.owner_user.created_at.strftime('%d %b %Y') }}</span>
-                    </div>
-                    
-                    {% elif project.owner_admin %}
-                    <div style="text-align: center; margin-bottom: 20px;">
-                        <div class="user-avatar-large avatar-admin">
-                            {{ project.owner_admin.name[0] if project.owner_admin.name else project.owner_admin.email[0]|upper }}
-                        </div>
-                        <div>
-                            <strong>{{ project.owner_admin.name }}</strong>
-                            <span class="admin-badge">Admin</span>
-                            <div style="color: #64748b;">{{ project.owner_admin.email }}</div>
-                        </div>
-                    </div>
-                    
-                    <div class="info-row">
-                        <span class="info-label">Admin ID</span>
-                        <span class="info-value">{{ project.owner_admin.id }}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Role</span>
-                        <span class="info-value">{{ project.owner_admin.role|title }}</span>
-                    </div>
-                    {% else %}
-                    <div style="text-align: center; padding: 20px; color: #64748b;">
-                        Owner account deleted or not found
-                    </div>
-                    {% endif %}
+                    <div class="info-row"><span class="info-label">Owner Type</span><span class="info-value">{{ owner.type }}</span></div>
+                    <div class="info-row"><span class="info-label">Owner ID</span><span class="info-value">{{ owner.id or '-' }}</span></div>
+                    <div class="info-row"><span class="info-label">Owner Name</span><span class="info-value">{{ owner.name }}</span></div>
+                    <div class="info-row"><span class="info-label">Owner Email</span><span class="info-value">{{ owner.email }}</span></div>
                 </div>
-                
-                <!-- Project Statistics -->
                 <div class="info-section">
-                    <h3>Project Statistics</h3>
-                    
-                    <div class="info-row">
-                        <span class="info-label">Total Pairs</span>
-                        <span class="info-value">{{ project.pairs|length }}</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Total Scans</span>
-                        <span class="info-value">{{ project.scan_logs|length }}</span>
-                    </div>
-                    
-                    {% if project.scan_logs %}
-                    <div class="info-row">
-                        <span class="info-label">Last Scan</span>
-                        <span class="info-value">
-                            {{ project.scan_logs|sort(attribute='created_at', reverse=true)|first.created_at.strftime('%d %b %Y') }}
-                        </span>
-                    </div>
-                    
-                    <div class="info-row">
-                        <span class="info-label">Successful Scans</span>
-                        <span class="info-value">
-                            {{ project.scan_logs|selectattr('status', 'equalto', 'success')|list|length }}
-                        </span>
-                    </div>
-                    {% endif %}
-                    
-                    <div class="info-row">
-                        <span class="info-label">Created At</span>
-                        <span class="info-value">{{ project.created_at.strftime('%d %b %Y, %I:%M %p') }}</span>
-                    </div>
-                    
-                    {% if project.updated_at and project.updated_at != project.created_at %}
-                    <div class="info-row">
-                        <span class="info-label">Last Updated</span>
-                        <span class="info-value">{{ project.updated_at.strftime('%d %b %Y, %I:%M %p') }}</span>
-                    </div>
-                    {% endif %}
+                    <h3>Project Information</h3>
+                    <div class="info-row"><span class="info-label">Project Name</span><span class="info-value">{{ project.name }}</span></div>
+                    <div class="info-row"><span class="info-label">Global Project ID</span><span class="info-value">{{ project.id }}</span></div>
+                    <div class="info-row"><span class="info-label">Created At</span><span class="info-value">{{ project.created_at.strftime('%d %b %Y, %I:%M %p') if project.created_at else '-' }}</span></div>
+                    <div class="info-row"><span class="info-label">Last Updated</span><span class="info-value">{{ project.updated_at.strftime('%d %b %Y, %I:%M %p') if project.updated_at else '-' }}</span></div>
                 </div>
-                
-                <!-- Subscription Information -->
                 <div class="info-section">
-                    <h3>Subscription Information</h3>
-                    
-                    {% if project.owner_user and project.owner_user.active_subscription %}
-                    {% set sub = project.owner_user.active_subscription %}
-                    <div class="info-row">
-                        <span class="info-label">Subscription</span>
-                        <span class="info-value">
-                            {{ sub.plan.plan_name if sub.plan else 'N/A' }}
-                        </span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Status</span>
-                        <span class="info-value">
-                            {% if sub.expiry_status == 'active' %}
-                            <span style="color: #10b981;">Active</span>
-                            {% else %}
-                            <span style="color: #ef4444;">Expired</span>
-                            {% endif %}
-                        </span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-label">Remaining Projects</span>
-                        <span class="info-value">{{ sub.remaining_projects }}/{{ sub.purchased_project_limit }}</span>
-                    </div>
-                    {% if sub.subscription_end %}
-                    <div class="info-row">
-                        <span class="info-label">Valid Until</span>
-                        <span class="info-value">{{ sub.subscription_end.strftime('%d %b %Y') }}</span>
-                    </div>
-                    {% endif %}
-                    {% else %}
-                    <div style="text-align: center; padding: 20px; color: #64748b;">
-                        No active subscription found
-                    </div>
-                    {% endif %}
+                    <h3>Support Information</h3>
+                    <div class="info-row"><span class="info-label">QR Asset</span><span class="info-value">{{ 'Present' if qr_ready else 'Missing' }}</span></div>
+                    <div class="info-row"><span class="info-label">QR Filename</span><span class="info-value">{{ safe_qr_filename }}</span></div>
+                    <div class="info-row"><span class="info-label">Scanner URL</span><span class="info-value">{{ project.scanner_url or url_for('scanner', project_id=project.id) }}</span></div>
+                    <div class="info-row"><span class="info-label">Pair Count</span><span class="info-value">{{ pair_count }}</span></div>
                 </div>
             </div>
         </div>
-        
-        <!-- Pairs List -->
+
         <div class="card">
-            <h3 style="margin-bottom: 15px;">Story Pairs ({{ project.pairs|length }})</h3>
-            
-            {% if project.pairs %}
-            <div class="pairs-container">
-                {% for pair in project.pairs %}
-                <div class="pair-item">
-                    <div class="pair-text">
-                        <div><strong>Story 1:</strong> {{ pair.story_1[:100] }}{% if pair.story_1|length > 100 %}...{% endif %}</div>
-                        <div style="margin-top: 5px;"><strong>Story 2:</strong> {{ pair.story_2[:100] }}{% if pair.story_2|length > 100 %}...{% endif %}</div>
-                        {% if pair.notes %}
-                        <div style="margin-top: 5px; color: #6b7280; font-size: 11px;">
-                            <strong>Notes:</strong> {{ pair.notes[:50] }}{% if pair.notes|length > 50 %}...{% endif %}
-                        </div>
-                        {% endif %}
-                    </div>
-                    <div class="pair-actions">
-                        <button class="btn btn-secondary btn-sm" onclick="viewPair({{ pair.id }})">View</button>
-                        <form action="/admin/projects/{{ project.id }}/pairs/{{ pair.id }}/delete" method="POST" style="display: inline;">
-                            <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this pair?')">Delete</button>
-                        </form>
-                    </div>
-                </div>
-                {% endfor %}
+            <h3 style="margin-bottom: 20px;">Scan Activity</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
+                <div style="text-align: center;"><div style="font-size: 32px; font-weight: bold; color: #4f46e5;">{{ total_scans }}</div><div style="color: #6b7280;">Total Scan Sessions</div></div>
+                <div style="text-align: center;"><div style="font-size: 32px; font-weight: bold; color: #10b981;">{{ successful_scans }}</div><div style="color: #6b7280;">Successful Scans</div></div>
+                <div style="text-align: center;"><div style="font-size: 32px; font-weight: bold; color: #ef4444;">{{ failed_scans }}</div><div style="color: #6b7280;">Failed Scans</div></div>
             </div>
-            
-            <div style="margin-top: 20px;">
-                <button class="btn btn-primary" onclick="addPair()">Add New Pair</button>
-                <button class="btn btn-secondary" onclick="exportPairs()">Export Pairs</button>
-            </div>
-            {% else %}
-            <div style="text-align: center; padding: 40px; color: #6b7280;">
-                No story pairs found in this project
-                <div style="margin-top: 15px;">
-                    <button class="btn btn-primary" onclick="addPair()">Add First Pair</button>
-                </div>
-            </div>
-            {% endif %}
         </div>
-        
-        <!-- Scan History -->
-        {% if project.scan_logs %}
+
         <div class="card">
-            <h3 style="margin-bottom: 15px;">Scan History ({{ project.scan_logs|length }})</h3>
-            
+            <h3 style="margin-bottom: 20px;">Pairs</h3>
+            {% if pair_count > pairs|length %}<p style="color: #64748b; margin-bottom: 15px;">Showing first {{ pairs|length }} pairs of {{ pair_count }} total.</p>{% endif %}
             <div class="table-container">
                 <table class="table">
-                    <thead>
-                        <tr>
-                            <th>Date & Time</th>
-                            <th>Type</th>
-                            <th>Pairs Scanned</th>
-                            <th>Detections</th>
-                            <th>Duration</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
+                    <thead><tr><th>Pair ID</th><th>Image</th><th>Video</th><th>Sizes</th><th>Processing</th><th>Created</th><th>Recognition</th></tr></thead>
                     <tbody>
-                        {% for scan in project.scan_logs|sort(attribute='created_at', reverse=true) %}
+                        {% for pair in pairs %}
                         <tr>
-                            <td>
-                                {{ scan.created_at.strftime('%d %b %Y') }}<br>
-                                <small style="color: #6b7280;">{{ scan.created_at.strftime('%I:%M %p') }}</small>
-                            </td>
-                            <td>
-                                {{ scan.scan_type|title }}
-                            </td>
-                            <td>
-                                {{ scan.scanned_pairs_count }}/{{ scan.total_pairs_count }}
-                            </td>
-                            <td>
-                                {{ scan.detections_count }}
-                            </td>
-                            <td>
-                                {{ scan.duration_minutes|round(1) }} min
-                            </td>
-                            <td>
-                                {% if scan.status == 'success' %}
-                                <span class="badge badge-success">Success</span>
-                                {% elif scan.status == 'failed' %}
-                                <span class="badge badge-danger">Failed</span>
-                                {% elif scan.status == 'partial' %}
-                                <span class="badge badge-warning">Partial</span>
-                                {% else %}
-                                <span class="badge badge-secondary">{{ scan.status|title }}</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                <div style="display: flex; gap: 5px;">
-                                    {% if scan.status == 'success' and scan.results_url %}
-                                    <a href="{{ scan.results_url }}" target="_blank" class="btn btn-primary btn-sm">View Results</a>
-                                    {% endif %}
-                                    <form action="/admin/scans/{{ scan.id }}/delete" method="POST" style="display: inline;">
-                                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this scan log?')">Delete</button>
-                                    </form>
-                                </div>
-                            </td>
+                            <td>{{ pair.id }}<br><small style="color: #6b7280;">Index {{ pair.pair_index }}</small></td>
+                            <td>{{ pair.safe_image_filename }}</td>
+                            <td>{{ pair.safe_video_filename }}</td>
+                            <td>Image: {{ pair.image_size if pair.image_size is not none else '-' }} bytes<br><small style="color: #6b7280;">Video: {{ pair.video_size if pair.video_size is not none else '-' }} bytes</small></td>
+                            <td>{{ pair.processing_status or '-' }}<br><small style="color: #6b7280;">Video: {{ pair.video_processing_status or '-' }} &bull; Features: {{ pair.feature_extraction_status or '-' }}</small></td>
+                            <td>{{ pair.created_at.strftime('%d %b %Y, %I:%M %p') if pair.created_at else '-' }}</td>
+                            <td><span class="badge {{ 'badge-success' if pair.recognition_ready else 'badge-warning' }}">{{ 'Ready' if pair.recognition_ready else 'Not ready' }}</span></td>
                         </tr>
+                        {% else %}
+                        <tr><td colspan="7" style="text-align: center; padding: 30px;">No pairs recorded for this project.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
         </div>
-        {% endif %}
-        
-        <!-- Admin Actions -->
+
         <div class="card">
-            <h3 style="margin-bottom: 15px;">Admin Actions</h3>
-            
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
-                <button class="btn btn-primary" onclick="runScan()">
-                    Run Scan on This Project
-                </button>
-                
-                {% if project.owner_user %}
-                <a href="/admin/users/{{ project.owner_user.id }}" class="btn btn-secondary">
-                    View Owner Profile
-                </a>
-                {% endif %}
-                
-                <button class="btn btn-warning" onclick="transferProject()">
-                    Transfer to Another User
-                </button>
-                
-                <button class="btn btn-danger" onclick="deleteAllScans()">
-                    Delete All Scan History
-                </button>
+            <h3 style="margin-bottom: 20px;">Recent Scan Records</h3>
+            <div class="table-container">
+                <table class="table">
+                    <thead><tr><th>Scan ID</th><th>Session</th><th>Pair ID</th><th>User ID</th><th>Status</th><th>Counted</th><th>Created</th></tr></thead>
+                    <tbody>
+                        {% for scan in scan_history %}
+                        <tr>
+                            <td>{{ scan.id }}</td>
+                            <td>{{ scan.scan_session_id }}</td>
+                            <td>{{ scan.pair_id or '-' }}</td>
+                            <td>{{ scan.user_id }}</td>
+                            <td><span class="badge {{ 'badge-success' if scan.is_successful else 'badge-danger' }}">{{ 'Successful' if scan.is_successful else 'Failed' }}</span></td>
+                            <td>{{ 'Yes' if scan.counted else 'No' }}</td>
+                            <td>{{ scan.created_at.strftime('%d %b %Y, %I:%M %p') if scan.created_at else '-' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="7" style="text-align: center; padding: 30px;">No scan records found.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
-        </div>
-    </div>
-    
-    <!-- Modals -->
-    <div id="pairModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 2000; align-items: center; justify-content: center;">
-        <div style="background: white; border-radius: 12px; padding: 30px; max-width: 800px; width: 90%; max-height: 90vh; overflow-y: auto;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                <h3 style="font-size: 20px; font-weight: 600; color: #1e293b;">Story Pair Details</h3>
-                <button onclick="closeModal('pairModal')" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #64748b;">&times;</button>
-            </div>
-            <div id="pairModalContent"></div>
-        </div>
-    </div>
-    
-    <div id="addPairModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); z-index: 2000; align-items: center; justify-content: center;">
-        <div style="background: white; border-radius: 12px; padding: 30px; max-width: 800px; width: 90%; max-height: 90vh; overflow-y: auto;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                <h3 style="font-size: 20px; font-weight: 600; color: #1e293b;">Add New Story Pair</h3>
-                <button onclick="closeModal('addPairModal')" style="background: none; border: none; font-size: 24px; cursor: pointer; color: #64748b;">&times;</button>
-            </div>
-            <form id="addPairForm" method="POST" action="/admin/projects/{{ project.id }}/pairs/add">
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; color: #555; font-weight: 500;">Story 1</label>
-                    <textarea name="story_1" style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; min-height: 100px;" required></textarea>
-                </div>
-                
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; color: #555; font-weight: 500;">Story 2</label>
-                    <textarea name="story_2" style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; min-height: 100px;" required></textarea>
-                </div>
-                
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; color: #555; font-weight: 500;">Notes (Optional)</label>
-                    <textarea name="notes" style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px; min-height: 60px;"></textarea>
-                </div>
-                
-                <button type="submit" class="btn btn-primary">Add Pair</button>
-                <button type="button" class="btn btn-secondary" onclick="closeModal('addPairModal')">Cancel</button>
-            </form>
         </div>
     </div>
 
     <script>
-        function toggleDropdown() {
-            const dropdown = document.getElementById('userDropdown');
-            dropdown.classList.toggle('show');
-        }
-        
-        // Close dropdown when clicking outside
-        window.onclick = function(event) {
-            if (!event.target.matches('.user-menu span')) {
-                const dropdowns = document.querySelectorAll('.dropdown-menu');
-                dropdowns.forEach(dropdown => {
-                    if (dropdown.classList.contains('show')) {
-                        dropdown.classList.remove('show');
-                    }
-                });
-            }
-        };
-        
-        // Modal functions
-        function viewPair(pairId) {
-            fetch(`/admin/projects/{{ project.id }}/pairs/${pairId}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        const pair = data.pair;
-                        const content = `
-                            <div style="margin-bottom: 20px;">
-                                <h4 style="margin-bottom: 10px; color: #64748b;">Story 1</h4>
-                                <div style="background: #f8fafc; padding: 15px; border-radius: 8px; white-space: pre-wrap;">${pair.story_1}</div>
-                            </div>
-                            
-                            <div style="margin-bottom: 20px;">
-                                <h4 style="margin-bottom: 10px; color: #64748b;">Story 2</h4>
-                                <div style="background: #f8fafc; padding: 15px; border-radius: 8px; white-space: pre-wrap;">${pair.story_2}</div>
-                            </div>
-                            
-                            ${pair.notes ? `
-                            <div style="margin-bottom: 20px;">
-                                <h4 style="margin-bottom: 10px; color: #64748b;">Notes</h4>
-                                <div style="background: #f8fafc; padding: 15px; border-radius: 8px;">${pair.notes}</div>
-                            </div>
-                            ` : ''}
-                            
-                            <div style="display: flex; gap: 10px; margin-top: 20px;">
-                                <button class="btn btn-primary" onclick="editPair(${pairId})">Edit</button>
-                                <button class="btn btn-secondary" onclick="copyPair(${pairId})">Copy JSON</button>
-                                <form action="/admin/projects/{{ project.id }}/pairs/${pairId}/delete" method="POST" style="display: inline;">
-                                    <button type="submit" class="btn btn-danger" onclick="return confirm('Delete this pair?')">Delete</button>
-                                </form>
-                            </div>
-                        `;
-                        document.getElementById('pairModalContent').innerHTML = content;
-                        document.getElementById('pairModal').style.display = 'flex';
-                    }
-                })
-                .catch(error => {
-                    alert('Error loading pair details');
-                });
-        }
-        
-        function addPair() {
-            document.getElementById('addPairModal').style.display = 'flex';
-        }
-        
-        function closeModal(modalId) {
-            document.getElementById(modalId).style.display = 'none';
-        }
-        
-        // Close modal when clicking outside
-        window.addEventListener('click', function(event) {
-            if (event.target.matches('#pairModal')) {
-                closeModal('pairModal');
-            }
-            if (event.target.matches('#addPairModal')) {
-                closeModal('addPairModal');
-            }
-        });
-        
-        // Copy pair as JSON
-        function copyPair(pairId) {
-            fetch(`/admin/projects/{{ project.id }}/pairs/${pairId}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.success) {
-                        const pairJson = JSON.stringify(data.pair, null, 2);
-                        navigator.clipboard.writeText(pairJson).then(() => {
-                            alert('Pair data copied to clipboard!');
-                        });
-                    }
-                });
-        }
-        
-        // Action functions
-        function runScan() {
-            if (confirm('Run a scan on this project?')) {
-                window.location.href = `/admin/projects/{{ project.id }}/scan`;
-            }
-        }
-        
-        function transferProject() {
-            const newOwner = prompt('Enter the email of the new owner:');
-            if (newOwner) {
-                if (confirm(`Transfer this project to ${newOwner}?`)) {
-                    window.location.href = `/admin/projects/{{ project.id }}/transfer?email=${encodeURIComponent(newOwner)}`;
-                }
-            }
-        }
-        
-        function deleteAllScans() {
-            if (confirm('Delete all scan history for this project? This cannot be undone.')) {
-                window.location.href = `/admin/projects/{{ project.id }}/delete-scans`;
-            }
-        }
-        
-        function exportPairs() {
-            window.location.href = `/admin/projects/{{ project.id }}/export`;
-        }
-        
-        // Auto remove alerts after 5 seconds
-        document.addEventListener('DOMContentLoaded', function() {
-            const alerts = document.querySelectorAll('.alert');
-            alerts.forEach(alert => {
-                setTimeout(() => {
-                    alert.style.transition = 'opacity 0.5s';
-                    alert.style.opacity = '0';
-                    setTimeout(() => alert.remove(), 500);
-                }, 5000);
-            });
-        });
+        function toggleDropdown() { const dropdown = document.getElementById('userDropdown'); dropdown.classList.toggle('show'); }
+        window.onclick = function(event) { if (!event.target.matches('.user-menu span')) { const dropdowns = document.querySelectorAll('.dropdown-menu'); dropdowns.forEach(dropdown => { if (dropdown.classList.contains('show')) { dropdown.classList.remove('show'); } }); } };
+        document.addEventListener('DOMContentLoaded', function() { const alerts = document.querySelectorAll('.alert'); alerts.forEach(alert => { setTimeout(() => { alert.style.transition = 'opacity 0.5s'; alert.style.opacity = '0'; setTimeout(() => alert.remove(), 500); }, 5000); }); });
     </script>
 </body>
 </html>
