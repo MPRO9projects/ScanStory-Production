@@ -753,32 +753,362 @@ with app.app_context():
 # Helper Functions
 # --------------------------------------------------------------------------------------------
 
+OTP_SCHEMA_COLUMNS = {
+    "code_hash": "VARCHAR(255)",
+    "challenge_id": "VARCHAR(64)",
+    "invalidated_at": "DATETIME",
+    "locked_until": "DATETIME",
+    "attempt_count": "INTEGER DEFAULT 0 NOT NULL",
+    "max_attempts": "INTEGER DEFAULT 5 NOT NULL",
+    "resend_count": "INTEGER DEFAULT 0 NOT NULL",
+    "first_sent_at": "DATETIME",
+    "last_sent_at": "DATETIME",
+}
+
+
+OTP_CONFIG_LIMITS = {
+    "SCANSTORY_OTP_EXPIRY_SECONDS": (60, 3600),
+    "SCANSTORY_OTP_MAX_VERIFY_ATTEMPTS": (1, 20),
+    "SCANSTORY_OTP_LOCK_SECONDS": (60, 86400),
+    "SCANSTORY_OTP_RESEND_MIN_INTERVAL_SECONDS": (0, 3600),
+    "SCANSTORY_OTP_MAX_RESENDS": (0, 20),
+    "SCANSTORY_OTP_RESEND_WINDOW_SECONDS": (60, 86400),
+    "SCANSTORY_OTP_IP_ATTEMPT_LIMIT": (1, 500),
+    "SCANSTORY_OTP_IP_RESEND_LIMIT": (1, 200),
+}
+
+
+def _otp_int_config(name, default):
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise RuntimeError(f"{name} must be an integer within the allowed OTP security range.")
+    minimum, maximum = OTP_CONFIG_LIMITS[name]
+    if value < minimum or value > maximum:
+        raise RuntimeError(f"{name} is outside the allowed OTP security range.")
+    return value
+
+
+OTP_EXPIRY_SECONDS = _otp_int_config("SCANSTORY_OTP_EXPIRY_SECONDS", 120)
+OTP_MAX_VERIFY_ATTEMPTS = _otp_int_config("SCANSTORY_OTP_MAX_VERIFY_ATTEMPTS", 5)
+OTP_LOCK_SECONDS = _otp_int_config("SCANSTORY_OTP_LOCK_SECONDS", 900)
+OTP_RESEND_MIN_INTERVAL_SECONDS = _otp_int_config("SCANSTORY_OTP_RESEND_MIN_INTERVAL_SECONDS", 60)
+OTP_MAX_RESENDS = _otp_int_config("SCANSTORY_OTP_MAX_RESENDS", 3)
+OTP_RESEND_WINDOW_SECONDS = _otp_int_config("SCANSTORY_OTP_RESEND_WINDOW_SECONDS", 900)
+OTP_IP_ATTEMPT_LIMIT = _otp_int_config("SCANSTORY_OTP_IP_ATTEMPT_LIMIT", 30)
+OTP_IP_RESEND_LIMIT = _otp_int_config("SCANSTORY_OTP_IP_RESEND_LIMIT", 10)
+
+
+def _otp_security_schema_report():
+    inspector = inspect(db.engine)
+    if "otp_codes" not in inspector.get_table_names():
+        return {
+            "table_exists": False,
+            "existing_columns": set(),
+            "missing_columns": set(OTP_SCHEMA_COLUMNS),
+            "challenge_index_exists": False,
+            "duplicate_challenge_groups": [],
+        }
+    existing = {column["name"] for column in inspector.get_columns("otp_codes")}
+    duplicate_challenges = []
+    if "challenge_id" in existing:
+        duplicate_challenges = [
+            {"challenge_id": challenge_id, "count": int(count)}
+            for challenge_id, count in db.session.query(
+                OTPCode.challenge_id,
+                func.count(OTPCode.id),
+            )
+            .filter(OTPCode.challenge_id.isnot(None))
+            .group_by(OTPCode.challenge_id)
+            .having(func.count(OTPCode.id) > 1)
+            .all()
+        ]
+    return {
+        "table_exists": True,
+        "existing_columns": existing,
+        "missing_columns": set(OTP_SCHEMA_COLUMNS) - existing,
+        "challenge_index_exists": scan_otp_challenge_index_exists(),
+        "duplicate_challenge_groups": duplicate_challenges,
+    }
+
+
+def ensure_otp_security_schema(apply_change=True):
+    report = _otp_security_schema_report()
+    if not report["table_exists"] or not apply_change:
+        return report
+    if report["duplicate_challenge_groups"]:
+        raise click.ClickException("Duplicate non-null OTP challenge_id values exist; resolve them before applying migration.")
+
+    existing = report["existing_columns"]
+    for column_name, ddl in OTP_SCHEMA_COLUMNS.items():
+        if column_name not in existing:
+            db.session.execute(text(f"ALTER TABLE otp_codes ADD COLUMN {column_name} {ddl}"))
+
+    refreshed = _otp_security_schema_report()
+    if "challenge_id" in refreshed["existing_columns"]:
+        if not refreshed["challenge_index_exists"]:
+            db.session.execute(text(
+                "CREATE UNIQUE INDEX uq_otp_codes_challenge_id "
+                "ON otp_codes (challenge_id)"
+            ))
+    db.session.commit()
+    return _otp_security_schema_report()
+
+
+@app.cli.command("migrate-otp-security-schema")
+@click.option("--apply", "apply_change", is_flag=True, help="Apply schema changes. Default is dry-run/inspection only.")
+def migrate_otp_security_schema(apply_change):
+    """Idempotently inspect or add OTP abuse-protection columns/indexes."""
+    report = ensure_otp_security_schema(apply_change=apply_change)
+    click.echo("Mode: apply" if apply_change else "Mode: dry-run")
+    click.echo(f"otp_codes table exists: {report['table_exists']}")
+    click.echo(f"columns present: {', '.join(sorted(report['existing_columns'].intersection(OTP_SCHEMA_COLUMNS)))}")
+    click.echo(f"columns to add: {', '.join(sorted(report['missing_columns']))}")
+    click.echo(f"unique challenge index present: {report['challenge_index_exists']}")
+    click.echo(f"duplicate non-null challenge_id groups: {len(report['duplicate_challenge_groups'])}")
+    for duplicate in report["duplicate_challenge_groups"]:
+        click.echo(f"challenge_id=<redacted> count={duplicate['count']}")
+    if apply_change:
+        click.echo(
+            "DDL note: SQLite and PostgreSQL generally roll back schema changes transactionally; "
+            "MySQL/MariaDB may auto-commit DDL, so duplicate non-null challenge_id values are refused before changes."
+        )
+
+
+def scan_otp_challenge_index_exists():
+    inspector = inspect(db.engine)
+    if "otp_codes" not in inspector.get_table_names():
+        return False
+    return any(
+        item.get("name") == "uq_otp_codes_challenge_id"
+        for item in [*inspector.get_indexes("otp_codes"), *inspector.get_unique_constraints("otp_codes")]
+    )
+
+
 def _generate_otp() -> str:
     return f"{secrets.randbelow(1000000):06d}"
 
-def _create_otp(email: str, purpose: str, minutes: int = 2) -> str:
-    OTPCode.query.filter_by(email=email, purpose=purpose).delete()
-    db.session.commit()
+def _hash_otp(code: str) -> str:
+    return generate_password_hash(code)
+
+
+def _otp_matches(rec: OTPCode, code: str) -> bool:
+    if rec.code_hash:
+        return check_password_hash(rec.code_hash, code)
+    return bool(rec.code and secrets.compare_digest(rec.code, code))
+
+
+def _client_ip():
+    return request.remote_addr or "unknown"
+
+
+def _otp_log(event, rec=None, email=None, purpose=None):
+    app.logger.info(
+        "[OTP SECURITY] %s email=%s purpose=%s user_id=%s challenge_id=%s",
+        event,
+        email or (rec.email if rec else None),
+        purpose or (rec.purpose if rec else None),
+        rec.user_id if rec else None,
+        rec.challenge_id if rec else None,
+    )
+
+
+def _latest_otp(email: str, purpose: str):
+    return (
+        OTPCode.query.filter_by(email=email, purpose=purpose)
+        .order_by(OTPCode.created_at.desc(), OTPCode.id.desc())
+        .first()
+    )
+
+
+def _active_otp(email: str, purpose: str, challenge_id: str = None):
+    query = OTPCode.query.filter_by(email=email, purpose=purpose, is_used=False)
+    query = query.filter(OTPCode.invalidated_at.is_(None))
+    if challenge_id:
+        query = query.filter_by(challenge_id=challenge_id)
+    else:
+        query = query.filter(OTPCode.challenge_id.is_(None), OTPCode.code_hash.is_(None))
+    return query.order_by(OTPCode.created_at.desc(), OTPCode.id.desc()).first()
+
+
+def _ip_otp_events_since(purpose: str, seconds: int):
+    cutoff = dt.utcnow() - timedelta(seconds=seconds)
+    return OTPCode.query.filter(
+        OTPCode.purpose == purpose,
+        OTPCode.ip_address == _client_ip(),
+        OTPCode.created_at >= cutoff,
+    ).count()
+
+
+def _create_otp(
+    email: str,
+    purpose: str,
+    minutes: int = None,
+    user_id: int = None,
+    challenge_id: str = None,
+    invalidate_existing: bool = True,
+) -> str:
+    expiry_seconds = OTP_EXPIRY_SECONDS if minutes is None else int(minutes * 60)
+    now = dt.utcnow()
+    if invalidate_existing:
+        OTPCode.query.filter_by(email=email, purpose=purpose, is_used=False).filter(
+            OTPCode.invalidated_at.is_(None)
+        ).update({OTPCode.invalidated_at: now}, synchronize_session=False)
     code = _generate_otp()
+    challenge_id = challenge_id or secrets.token_urlsafe(24)
     otp = OTPCode(
         email=email,
-        code=code,
+        code="",
+        code_hash=_hash_otp(code),
         purpose=purpose,
-        expires_at=dt.utcnow() + timedelta(minutes=minutes),
+        challenge_id=challenge_id,
+        expires_at=now + timedelta(seconds=expiry_seconds),
+        max_attempts=OTP_MAX_VERIFY_ATTEMPTS,
+        first_sent_at=now,
+        last_sent_at=now,
+        ip_address=_client_ip(),
+        user_agent=request.headers.get("User-Agent"),
+        user_id=user_id,
     )
     db.session.add(otp)
     db.session.commit()
+    _otp_log("issued", otp)
     return code
 
-def _verify_otp(email: str, purpose: str, code: str) -> bool:
-    rec = OTPCode.query.filter_by(email=email, purpose=purpose, code=code).first()
+def _verify_otp(email: str, purpose: str, code: str, challenge_id: str = None) -> bool:
+    rec = _active_otp(email, purpose, challenge_id=challenge_id)
     if not rec:
+        _otp_log("verification_missing", email=email, purpose=purpose)
         return False
-    if dt.utcnow() > rec.expires_at:
+
+    now = dt.utcnow()
+    if rec.locked_until and now < rec.locked_until:
+        _otp_log("verification_locked", rec)
         return False
-    db.session.delete(rec)
+
+    if now > rec.expires_at:
+        rec.invalidated_at = now
+        db.session.commit()
+        _otp_log("verification_expired", rec)
+        return False
+
+    if _ip_otp_events_since(purpose, OTP_RESEND_WINDOW_SECONDS) > OTP_IP_ATTEMPT_LIMIT:
+        _otp_log("verification_ip_throttled", rec)
+        return False
+
+    if not _otp_matches(rec, code):
+        OTPCode.query.filter(
+            OTPCode.id == rec.id,
+            OTPCode.is_used == False,
+            OTPCode.invalidated_at.is_(None),
+        ).update(
+            {OTPCode.attempt_count: func.coalesce(OTPCode.attempt_count, 0) + 1},
+            synchronize_session=False,
+        )
+        db.session.flush()
+        db.session.expire_all()
+        rec = OTPCode.query.get(rec.id)
+        if int(rec.attempt_count or 0) >= int(rec.max_attempts or OTP_MAX_VERIFY_ATTEMPTS):
+            rec.locked_until = now + timedelta(seconds=OTP_LOCK_SECONDS)
+            rec.invalidated_at = now
+            _otp_log("verification_locked", rec)
+        else:
+            _otp_log("verification_failed", rec)
+        db.session.commit()
+        return False
+
+    claimed = OTPCode.query.filter(
+        OTPCode.id == rec.id,
+        OTPCode.is_used == False,
+        OTPCode.invalidated_at.is_(None),
+    ).update(
+        {OTPCode.is_used: True, OTPCode.used_at: now, OTPCode.invalidated_at: now},
+        synchronize_session=False,
+    )
+    if claimed != 1:
+        db.session.rollback()
+        _otp_log("verification_race_lost", rec)
+        return False
+    if not rec.code_hash:
+        legacy_rec = OTPCode.query.get(rec.id)
+        if legacy_rec:
+            db.session.delete(legacy_rec)
     db.session.commit()
+    _otp_log("verification_success", rec)
     return True
+
+
+def _resend_otp(email: str, purpose: str, send_func, minutes: int = None, user_id: int = None):
+    now = dt.utcnow()
+    latest = _latest_otp(email, purpose)
+    claimed_source_id = None
+    source_last_sent_at = None
+    source_resend_count = None
+    if latest and latest.last_sent_at:
+        source_last_sent_at = latest.last_sent_at
+        source_resend_count = int(latest.resend_count or 0)
+        if now - latest.last_sent_at < timedelta(seconds=OTP_RESEND_MIN_INTERVAL_SECONDS):
+            _otp_log("resend_throttled", latest)
+            return False, "If a verification is available, a new code can be requested shortly."
+        window_start = now - timedelta(seconds=OTP_RESEND_WINDOW_SECONDS)
+        if latest.first_sent_at and latest.first_sent_at >= window_start:
+            if source_resend_count >= OTP_MAX_RESENDS:
+                _otp_log("resend_throttled", latest)
+                return False, "If a verification is available, a new code can be requested later."
+        if _ip_otp_events_since(purpose, OTP_RESEND_WINDOW_SECONDS) > OTP_IP_RESEND_LIMIT:
+            _otp_log("resend_ip_throttled", latest)
+            return False, "If a verification is available, a new code can be requested later."
+
+        claimed = OTPCode.query.filter(
+            OTPCode.id == latest.id,
+            OTPCode.is_used == False,
+            OTPCode.invalidated_at.is_(None),
+            OTPCode.last_sent_at == latest.last_sent_at,
+            func.coalesce(OTPCode.resend_count, 0) < OTP_MAX_RESENDS,
+        ).update(
+            {
+                OTPCode.resend_count: func.coalesce(OTPCode.resend_count, 0) + 1,
+                OTPCode.last_sent_at: now,
+            },
+            synchronize_session=False,
+        )
+        if claimed != 1:
+            db.session.rollback()
+            _otp_log("resend_throttled", latest)
+            return False, "If a verification is available, a new code can be requested later."
+        db.session.commit()
+        claimed_source_id = latest.id
+
+    code = _create_otp(email, purpose, minutes=minutes, user_id=user_id, invalidate_existing=False)
+    new_rec = _latest_otp(email, purpose)
+    new_rec.resend_count = (source_resend_count + 1) if latest else 0
+    if latest and latest.first_sent_at and now - latest.first_sent_at < timedelta(seconds=OTP_RESEND_WINDOW_SECONDS):
+        new_rec.first_sent_at = latest.first_sent_at
+    db.session.commit()
+
+    try:
+        send_func(email, code, minutes=minutes or max(1, OTP_EXPIRY_SECONDS // 60))
+        OTPCode.query.filter(
+            OTPCode.email == email,
+            OTPCode.purpose == purpose,
+            OTPCode.id != new_rec.id,
+            OTPCode.is_used == False,
+            OTPCode.invalidated_at.is_(None),
+        ).update({OTPCode.invalidated_at: dt.utcnow()}, synchronize_session=False)
+        db.session.commit()
+        _otp_log("resent", new_rec)
+        return True, "If a verification is available, a new code has been sent."
+    except Exception:
+        _otp_log("resend_delivery_failed", new_rec)
+        db.session.delete(new_rec)
+        if claimed_source_id:
+            source = OTPCode.query.get(claimed_source_id)
+            if source:
+                source.last_sent_at = source_last_sent_at
+                source.resend_count = source_resend_count
+        db.session.commit()
+        return False, "Could not send email. Please try again later."
 
 def get_system_config(key, default=None):
     """Get system configuration value"""
@@ -934,9 +1264,22 @@ def login_user(user: User):
     session["user_id"] = user.id
     session["user_email"] = user.email
 
+def _clear_otp_session_state():
+    for key in (
+        "pending_verify_email",
+        "pending_verify_challenge_id",
+        "pending_reset_email",
+        "pending_reset_challenge_id",
+        "pending_admin_reset_email",
+        "pending_admin_reset_challenge_id",
+    ):
+        session.pop(key, None)
+
+
 def logout_user():
     session.pop("user_id", None)
     session.pop("user_email", None)
+    _clear_otp_session_state()
 
 def current_user():
     uid = session.get("user_id")
@@ -971,6 +1314,7 @@ def admin_logout():
     session.pop("admin_id", None)
     session.pop("admin_email", None)
     session.pop("admin_role", None)
+    _clear_otp_session_state()
 
 def current_admin():
     aid = session.get("admin_id")
@@ -3706,14 +4050,22 @@ def register():
         db.session.commit()
 
         # Send verification OTP
-        code = _create_otp(email, "verify_email", minutes=2)
+        code = _create_otp(email, "verify_email", minutes=2, user_id=user.id)
+        otp_rec = _latest_otp(email, "verify_email")
+        email_sent = False
         try:
             send_email_verification_otp(email, code, minutes=2)
+            email_sent = True
             flash("OTP sent to your email. Please verify to continue.", "success")
         except Exception as e:
-            flash(f"OTP created but email sending failed: {str(e)}", "error")
+            if otp_rec:
+                otp_rec.invalidated_at = dt.utcnow()
+                db.session.commit()
+            flash("Could not send verification email. Please try again later.", "error")
 
         session["pending_verify_email"] = email
+        if otp_rec and email_sent:
+            session["pending_verify_challenge_id"] = otp_rec.challenge_id
         return redirect(url_for("verify_email"))
 
     except Exception as e:
@@ -3739,8 +4091,9 @@ def verify_email():
         return render_template("user/verify_email.html", email=email)
     
     otp = (request.form.get("otp") or "").strip()
-    if not _verify_otp(email, "verify_email", otp):
-        flash("Invalid or expired OTP. Please try again.", "error")
+    challenge_id = session.get("pending_verify_challenge_id")
+    if not _verify_otp(email, "verify_email", otp, challenge_id=challenge_id):
+        flash("Verification could not be completed. Please try again or request a new code.", "error")
         return render_template("user/verify_email.html", email=email)
     
     user = User.query.filter_by(email=email).first()
@@ -3753,6 +4106,7 @@ def verify_email():
     db.session.commit()
     
     session.pop("pending_verify_email", None)
+    session.pop("pending_verify_challenge_id", None)
     flash("Email verified successfully. You can now login.", "success")
     return redirect(url_for("login"))
 
@@ -3763,12 +4117,21 @@ def resend_otp():
         flash("No verification session found.", "error")
         return redirect(url_for("register"))
     
-    code = _create_otp(email, "verify_email", minutes=2)
-    try:
-        send_email_verification_otp(email, code, minutes=2)
-        flash("A new OTP has been sent to your email.", "success")
-    except Exception as e:
-        flash(f"Email sending failed: {str(e)}", "error")
+    user = User.query.filter_by(email=email).first()
+    sent, message = _resend_otp(
+        email,
+        "verify_email",
+        send_email_verification_otp,
+        minutes=2,
+        user_id=user.id if user else None,
+    )
+    if sent:
+        rec = _latest_otp(email, "verify_email")
+        if rec:
+            session["pending_verify_challenge_id"] = rec.challenge_id
+        flash("A new verification code has been sent if available.", "success")
+    else:
+        flash(message, "error")
     
     return redirect(url_for("verify_email"))
 
@@ -3925,13 +4288,19 @@ def forgot_password():
     
     if user:
         try:
-            code = _create_otp(email, "reset_password", minutes=2)
+            code = _create_otp(email, "reset_password", minutes=2, user_id=user.id)
+            otp_rec = _latest_otp(email, "reset_password")
             send_reset_password_otp(email, code, minutes=2)
-            flash("Password reset OTP has been sent to your email.", "success")
+            if otp_rec:
+                session["pending_reset_challenge_id"] = otp_rec.challenge_id
+            flash("If the email exists, an OTP has been sent.", "success")
         except Exception as e:
             print(f"❌ Forgot password email error: {e}")
-            flash("Could not send email. Please try again later or contact support.", "error")
-            return redirect(url_for("forgot_password"))
+            otp_rec = _latest_otp(email, "reset_password")
+            if otp_rec:
+                otp_rec.invalidated_at = dt.utcnow()
+                db.session.commit()
+            flash("If the email exists, an OTP has been sent.", "success")
     else:
         # For security, still show success message even if email doesn't exist
         flash("If the email exists, an OTP has been sent.", "success")
@@ -3961,16 +4330,20 @@ def reset_password():
         flash("Password must be at least 6 characters.", "error")
         return render_template("user/reset_password.html", email=email)
     
-    if not _verify_otp(email, "reset_password", otp):
-        flash("Invalid or expired OTP.", "error")
+    if not _verify_otp(email, "reset_password", otp, challenge_id=session.get("pending_reset_challenge_id")):
+        flash("Invalid or expired OTP. Password reset could not be completed.", "error")
         return render_template("user/reset_password.html", email=email)
     
     user = User.query.filter_by(email=email).first()
     if user:
         user.password_hash = generate_password_hash(new_password)
+        OTPCode.query.filter_by(email=email, purpose="reset_password", is_used=False).filter(
+            OTPCode.invalidated_at.is_(None)
+        ).update({OTPCode.invalidated_at: dt.utcnow()}, synchronize_session=False)
         db.session.commit()
     
     session.pop("pending_reset_email", None)
+    session.pop("pending_reset_challenge_id", None)
     flash("Password updated. Please login.", "success")
     return redirect(url_for("login"))
 
@@ -5790,9 +6163,15 @@ def admin_forgot_password():
     
     if admin:
         code = _create_otp(email, "admin_reset_password", minutes=10)
+        otp_rec = _latest_otp(email, "admin_reset_password")
         try:
             send_admin_password_reset_email(email, code, minutes=10)
+            if otp_rec:
+                session["pending_admin_reset_challenge_id"] = otp_rec.challenge_id
         except Exception as e:
+            if otp_rec:
+                otp_rec.invalidated_at = dt.utcnow()
+                db.session.commit()
             print(f"Email sending failed: {e}")
     
     # Always show success message for security
@@ -5822,19 +6201,23 @@ def admin_reset_password():
         flash("Password must be at least 8 characters.", "error")
         return render_template("admin/reset_password.html", email=email)
     
-    if not _verify_otp(email, "admin_reset_password", otp):
-        flash("Invalid or expired OTP.", "error")
+    if not _verify_otp(email, "admin_reset_password", otp, challenge_id=session.get("pending_admin_reset_challenge_id")):
+        flash("Invalid or expired OTP. Password reset could not be completed.", "error")
         return render_template("admin/reset_password.html", email=email)
     
     admin = Admin.query.filter_by(email=email).first()
     if admin:
         admin.password_hash = generate_password_hash(new_password)
+        OTPCode.query.filter_by(email=email, purpose="admin_reset_password", is_used=False).filter(
+            OTPCode.invalidated_at.is_(None)
+        ).update({OTPCode.invalidated_at: dt.utcnow()}, synchronize_session=False)
         db.session.commit()
         
         # Log activity
         log_admin_activity(admin.id, "password_reset", "Admin reset password via OTP")
     
     session.pop("pending_admin_reset_email", None)
+    session.pop("pending_admin_reset_challenge_id", None)
     flash("Password updated successfully. Please login.", "success")
     return redirect(url_for("admin_login_route"))
 
