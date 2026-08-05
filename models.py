@@ -335,8 +335,13 @@ class PaymentOrder(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     order_id = db.Column(db.String(100), unique=True, nullable=False, index=True)
-    razorpay_order_id = db.Column(db.String(255), nullable=True, index=True)
-    razorpay_payment_id = db.Column(db.String(255), nullable=True, index=True)
+    # unique=True: enforced at the DB level (see migrations/versions/
+    # *_razorpay_id_unique_constraints.py). NULL is not equal to NULL under
+    # standard unique-index semantics in SQLite, MySQL, and Postgres alike,
+    # so this still permits multiple NULL rows - no partial/conditional index
+    # is needed to allow "unique only when set".
+    razorpay_order_id = db.Column(db.String(255), unique=True, nullable=True, index=True)
+    razorpay_payment_id = db.Column(db.String(255), unique=True, nullable=True, index=True)
     razorpay_signature = db.Column(db.String(512), nullable=True)
 
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False)
@@ -370,6 +375,65 @@ class PaymentOrder(db.Model):
 
     def __repr__(self):
         return f"<PaymentOrder {self.order_id} - {self.status}>"
+
+
+# ---------------------------------------------------------------------
+# Paid-account capacity (V1 launch gate)
+# ---------------------------------------------------------------------
+class CapacityConfig(db.Model):
+    """Durable global paid-account capacity config, single row (id=1).
+
+    Invariant maintained by app.py's atomic reserve/release helpers:
+
+        consumed_count == count(PaymentReservation rows with
+                                 status in ('reserved', 'activated'))
+
+    consumed_count only increases via the atomic conditional UPDATE that
+    creates a new reservation (guarded by consumed_count < configured_limit),
+    and only decreases when a *reserved* (not yet activated) reservation is
+    released or expires. Once a reservation reaches 'activated' its slot is
+    never freed by capacity logic - so lowering configured_limit later can
+    never deactivate/evict an already-active customer.
+    """
+    __tablename__ = "capacity_config"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    configured_limit = db.Column(db.Integer, nullable=False, default=25)
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+    consumed_count = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class PaymentReservation(db.Model):
+    """One row per attempted paid-account capacity slot.
+
+    Lifecycle: reserved -> activated | released | expired
+      - reserved:  slot held, checkout in progress (payment_order_id may
+                   still be null for the brief window before the Razorpay
+                   order row is created in the same request).
+      - activated: payment verified, subscription is live; slot held for good.
+      - released:  checkout abandoned/failed before activation (e.g. Razorpay
+                   order creation itself failed); slot freed back.
+      - expired:   reservation TTL (expires_at) passed before activation;
+                   slot freed back.
+    """
+    __tablename__ = "payment_reservations"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    payment_order_id = db.Column(db.Integer, db.ForeignKey("payment_orders.id"), nullable=True, index=True)
+    status = db.Column(db.String(20), nullable=False, default="reserved", index=True)
+    reserved_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    user = db.relationship("User", backref="payment_reservations", lazy=True)
+    payment_order = db.relationship("PaymentOrder", backref="reservation", uselist=False, lazy=True)
+
+    def __repr__(self):
+        return f"<PaymentReservation user={self.user_id} status={self.status}>"
 
 
 # ---------------------------------------------------------------------

@@ -42,7 +42,7 @@ from sqlalchemy.orm import aliased
 from models import (
     db, User, Admin, SubscriptionPlan, TrialDetails, OTPCode,
     Project, ProjectPair, PaymentOrder, ScanLog, SystemConfig,
-    UserLoginActivity, AdminActivity
+    UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 
@@ -381,6 +381,18 @@ try:
 except Exception as e:
     razorpay_client = None
     print(f"❌ Razorpay initialization failed: {e}")
+
+# Pre-existing latent bug fixed in passing (discovered while implementing
+# Phase 2 area 5's order-creation-failure test): some installed
+# razorpay-python versions don't define razorpay.errors.AuthenticationError
+# at all. `except razorpay.errors.AuthenticationError:` then raises
+# AttributeError the moment Python tries to evaluate that except clause -
+# not "doesn't match", but a hard crash - for ANY exception raised out of
+# razorpay_client.order.create(), masking the real error. Fall back to a
+# class that can never actually be raised, so the except clause is just
+# skipped (falling through to the generic `except Exception` handler)
+# instead of crashing, on versions where the real class is missing.
+_RAZORPAY_AUTH_ERROR = getattr(razorpay.errors, "AuthenticationError", type("_RazorpayAuthErrorUnavailable", (Exception,), {}))
 
 # --------------------------------------------------------------------------------------------
 # Storage paths
@@ -1629,6 +1641,121 @@ def _reserve_pair_slots_for_project(project_id, requested_pairs, max_pairs):
     return True, None
 
 
+# ---------------------------------------------------------------------------
+# V1 paid-account capacity gate (Phase 2). See models.py CapacityConfig /
+# PaymentReservation docstrings for the counter invariant and lifecycle.
+# ---------------------------------------------------------------------------
+CAPACITY_DEFAULT_LIMIT = int(os.environ.get("SCANSTORY_INITIAL_CAPACITY_LIMIT", "25"))
+CAPACITY_RESERVATION_TTL_MINUTES = int(os.environ.get("SCANSTORY_CAPACITY_RESERVATION_TTL_MINUTES", "30"))
+
+
+def _get_or_create_capacity_config():
+    """Get the singleton capacity_config row (id=1), creating it with the
+    default limit/enabled state on first use. This is a data seed, not a
+    schema change - the table itself is created by an Alembic migration."""
+    config = CapacityConfig.query.get(1)
+    if config:
+        return config
+    config = CapacityConfig(id=1, configured_limit=CAPACITY_DEFAULT_LIMIT, enabled=True, consumed_count=0)
+    db.session.add(config)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        config = CapacityConfig.query.get(1)
+    return config
+
+
+def _reserve_capacity_slot_atomic(user):
+    """Atomically reserve one paid-account capacity slot for `user`.
+
+    Mirrors _atomic_increment_user_counter exactly: a single
+    `UPDATE capacity_config SET consumed_count = consumed_count + 1 WHERE
+    id=1 AND enabled=1 AND consumed_count < configured_limit` either updates
+    exactly one row (slot reserved) or zero rows (full/disabled). There is no
+    separate COUNT(*) read before the write, so two concurrent callers can
+    never both observe "room" and both proceed past the limit - the DB
+    engine's own atomic handling of a single UPDATE statement (row lock on
+    MySQL/Postgres, whole-database lock on SQLite) is what makes this safe,
+    exactly as it already does for _atomic_increment_user_counter (which also
+    never calls with_for_update()).
+
+    Returns the new PaymentReservation on success, or None if capacity is
+    full or paused. The reservation row is only ever created in the same
+    transaction as the successful counter increment, so the two can never
+    drift apart.
+    """
+    _get_or_create_capacity_config()
+
+    updated = CapacityConfig.query.filter(
+        CapacityConfig.id == 1,
+        CapacityConfig.enabled.is_(True),
+        CapacityConfig.consumed_count < CapacityConfig.configured_limit,
+    ).update(
+        {CapacityConfig.consumed_count: CapacityConfig.consumed_count + 1},
+        synchronize_session=False,
+    )
+    if updated != 1:
+        db.session.rollback()
+        return None
+
+    reservation = PaymentReservation(
+        user_id=user.id,
+        status="reserved",
+        expires_at=dt.utcnow() + timedelta(minutes=CAPACITY_RESERVATION_TTL_MINUTES),
+    )
+    db.session.add(reservation)
+    db.session.commit()
+    app.logger.info(f"capacity_reservation_created reservation_id={reservation.id} user_id={user.id}")
+    return reservation
+
+
+def _release_capacity_slot(reservation, new_status, reason):
+    """Atomically transition a `reserved` PaymentReservation to `released` or
+    `expired` and free its capacity slot back. Idempotent: if the reservation
+    is not currently `reserved` (already activated/released/expired by
+    another caller), this is a safe no-op returning False - never double
+    frees a slot.
+    """
+    updated = PaymentReservation.query.filter(
+        PaymentReservation.id == reservation.id,
+        PaymentReservation.status == "reserved",
+    ).update({PaymentReservation.status: new_status}, synchronize_session=False)
+    if updated != 1:
+        db.session.rollback()
+        return False
+
+    CapacityConfig.query.filter(
+        CapacityConfig.id == 1,
+        CapacityConfig.consumed_count > 0,
+    ).update(
+        {CapacityConfig.consumed_count: CapacityConfig.consumed_count - 1},
+        synchronize_session=False,
+    )
+    db.session.commit()
+    app.logger.info(f"capacity_reservation_{new_status} reservation_id={reservation.id} reason={reason}")
+    return True
+
+
+def _capacity_state_snapshot():
+    """Read-only view of current capacity state for CLI/ops use."""
+    config = _get_or_create_capacity_config()
+    reserved_count = PaymentReservation.query.filter(
+        PaymentReservation.status == "reserved",
+        PaymentReservation.expires_at > dt.utcnow(),
+    ).count()
+    activated_count = PaymentReservation.query.filter_by(status="activated").count()
+    active_user_count = User.query.filter_by(subscription_status="active").count()
+    return {
+        "configured_limit": config.configured_limit,
+        "enabled": config.enabled,
+        "consumed_count": config.consumed_count,
+        "reserved_count": reserved_count,
+        "activated_reservation_count": activated_count,
+        "active_user_count": active_user_count,
+    }
+
+
 MARKER_MIN_PIXELS = int(os.environ.get("SCANSTORY_MARKER_MIN_PIXELS", "240"))
 VIDEO_UPLOAD_WARNINGS = {
     "recommended_size_bytes": int(os.environ.get("SCANSTORY_VIDEO_RECOMMENDED_SIZE_BYTES", str(15 * 1024 * 1024))),
@@ -1990,6 +2117,81 @@ def reconcile_quota_counters(repair):
         db.session.commit()
     elif repair:
         click.echo("No repairs needed.")
+
+
+@app.cli.command("capacity-status")
+def capacity_status():
+    """Report current paid-account capacity state (read-only)."""
+    snapshot = _capacity_state_snapshot()
+    click.echo(f"Configured limit: {snapshot['configured_limit']}")
+    click.echo(f"Enabled: {snapshot['enabled']}")
+    click.echo(f"Consumed count (reserved+activated, gates new reservations): {snapshot['consumed_count']}")
+    click.echo(f"Live reserved (pending checkout, not expired): {snapshot['reserved_count']}")
+    click.echo(f"Activated reservations: {snapshot['activated_reservation_count']}")
+    click.echo(f"Active users (User.subscription_status='active'): {snapshot['active_user_count']}")
+
+
+@app.cli.command("expire-stale-reservations")
+@click.option("--apply", "apply_changes", is_flag=True, help="Persist expirations. Default is dry-run.")
+def expire_stale_reservations(apply_changes):
+    """Expire `reserved` PaymentReservation rows whose TTL has passed,
+    freeing their capacity slot. No background scheduler exists in this
+    phase - run this periodically as an operator/cron task."""
+    stale = PaymentReservation.query.filter(
+        PaymentReservation.status == "reserved",
+        PaymentReservation.expires_at < dt.utcnow(),
+    ).all()
+    click.echo("Mode: apply" if apply_changes else "Mode: dry-run")
+    click.echo(f"Stale reservations found: {len(stale)}")
+    expired_count = 0
+    for reservation in stale:
+        click.echo(f"reservation_id={reservation.id} user_id={reservation.user_id} expired_at={reservation.expires_at}")
+        if apply_changes:
+            if _release_capacity_slot(reservation, "expired", "cli-sweep"):
+                expired_count += 1
+    if apply_changes:
+        click.echo(f"Expired: {expired_count}")
+
+
+@app.cli.command("reconcile-capacity-reservations")
+@click.option("--apply", "apply_changes", is_flag=True, help="Persist the repaired counter. Default is dry-run.")
+def reconcile_capacity_reservations(apply_changes):
+    """Detect drift between capacity_config.consumed_count and the actual
+    row-state count it should equal, and drift between activated
+    reservations and real active users (a signal something upstream is
+    inconsistent - this command never touches User rows, only the
+    capacity_config counter)."""
+    config = _get_or_create_capacity_config()
+    live_reserved_or_activated = PaymentReservation.query.filter(
+        PaymentReservation.status.in_(("reserved", "activated"))
+    ).count()
+    activated_count = PaymentReservation.query.filter_by(status="activated").count()
+    active_user_count = User.query.filter_by(subscription_status="active").count()
+
+    click.echo("Mode: apply" if apply_changes else "Mode: dry-run")
+    click.echo(f"capacity_config.consumed_count stored={config.consumed_count} calculated={live_reserved_or_activated}")
+    click.echo(f"activated reservations={activated_count} vs active users={active_user_count}")
+    if activated_count != active_user_count:
+        click.echo(
+            "NOTE: activated-reservation count and active-user count differ - "
+            "expected for legacy orders that predate this phase's reservation "
+            "table, or if a User's subscription later lapsed/was changed by "
+            "other means. Investigate if unexpectedly large."
+        )
+
+    if config.consumed_count != live_reserved_or_activated:
+        click.echo(f"DRIFT: consumed_count stored={config.consumed_count} should be {live_reserved_or_activated}")
+        if apply_changes:
+            CapacityConfig.query.filter(CapacityConfig.id == config.id).update(
+                {CapacityConfig.consumed_count: live_reserved_or_activated}, synchronize_session=False
+            )
+            db.session.commit()
+            app.logger.info(
+                f"capacity_reconciliation_applied consumed_count {config.consumed_count}->{live_reserved_or_activated}"
+            )
+            click.echo("Repaired.")
+    else:
+        click.echo("No drift.")
 
 
 def _desired_dev_test_user_values(plan):
@@ -5085,6 +5287,118 @@ def subscribe_page():
                          get_system_config=get_system_config,
                          dev_test_entitled=has_dev_test_entitlement(user))
 
+def activate_payment(payment_order):
+    """Idempotently activate a subscription for a PaymentOrder whose Razorpay
+    signature has already been verified by the caller.
+
+    This is the ONE shared activation service (area 1 of the Phase 2 spec):
+    callable from the browser /verify-payment route, from a future Razorpay
+    webhook (not built this phase - just kept webhook-ready by taking a
+    plain PaymentOrder row and no request/session state), or from the
+    `reconcile-payment-activations` CLI command. It re-derives plan
+    price/limits from the stored PaymentOrder/SubscriptionPlan rows itself
+    and never trusts any caller-supplied amount/plan value.
+
+    Idempotency is DB-level, not a Python if-check after a plain SELECT: the
+    activation gate is a single conditional `UPDATE payment_orders SET
+    status='success', ... WHERE id=? AND status='pending'`. Exactly one
+    concurrent caller can ever see `updated == 1` for a given order row (same
+    guarantee as _atomic_increment_user_counter / _reserve_capacity_slot_atomic
+    above), so replaying the same callback - or two callers racing on the
+    same order - can never reset quotas / extend subscription_end / consume a
+    second capacity slot twice.
+
+    Returns {"success": True, "order_id":..., "plan_name":..., "replay": bool}
+    or {"success": False, "error": ..., "code": ...}.
+    """
+    plan = SubscriptionPlan.query.get(payment_order.plan_id)
+    if not plan:
+        return {"success": False, "error": "Plan not found", "code": "PLAN_NOT_FOUND"}
+
+    reservation = PaymentReservation.query.filter_by(payment_order_id=payment_order.id).first()
+
+    if reservation and reservation.user_id != payment_order.user_id:
+        # Defensive only - reservation and order are always created for the
+        # same user in the same request. Never activate on a mismatch.
+        app.logger.warning(f"payment_activation_reservation_owner_mismatch order_id={payment_order.id}")
+        return {"success": False, "error": "Reservation does not match this order", "code": "RESERVATION_MISMATCH"}
+
+    if reservation and reservation.status in ("released", "expired"):
+        # Permanent, not just "expired right now": once a reservation has
+        # been given up, a later retry of this same order must never sneak
+        # through and activate for free without holding a capacity slot.
+        return {
+            "success": False,
+            "error": "Your checkout session expired before payment was confirmed. Please start a new purchase.",
+            "code": "RESERVATION_EXPIRED",
+        }
+
+    if reservation and reservation.status == "reserved" and reservation.expires_at < dt.utcnow():
+        _release_capacity_slot(reservation, "expired", "expired-at-verification")
+        return {
+            "success": False,
+            "error": "Your checkout session expired before payment was confirmed. Please start a new purchase.",
+            "code": "RESERVATION_EXPIRED",
+        }
+
+    now = dt.utcnow()
+    if plan.duration_type == "time":
+        subscription_end = now + timedelta(days=plan.duration_value * 30)
+    else:
+        subscription_end = now + timedelta(days=365 * 10)  # count-based plans: far future date
+
+    updated = PaymentOrder.query.filter(
+        PaymentOrder.id == payment_order.id,
+        PaymentOrder.status == "pending",
+    ).update(
+        {
+            PaymentOrder.status: "success",
+            PaymentOrder.payment_at: now,
+            PaymentOrder.subscription_start: now,
+            PaymentOrder.subscription_end: subscription_end,
+        },
+        synchronize_session=False,
+    )
+
+    if updated != 1:
+        db.session.rollback()
+        fresh_order = PaymentOrder.query.get(payment_order.id)
+        if fresh_order and fresh_order.status == "success":
+            app.logger.info(f"payment_activation_duplicate_callback_ignored order_id={payment_order.id}")
+            return {"success": True, "order_id": fresh_order.order_id, "plan_name": plan.plan_name, "replay": True}
+        return {"success": False, "error": "Payment order is not pending", "code": "ORDER_NOT_PENDING"}
+
+    user = User.query.get(payment_order.user_id)
+    user.subscription_id = plan.id
+    user.subscription_taken_at = now
+    user.subscription_expires_at = subscription_end
+    user.subscription_status = "active"
+    user.subscribed_project_limit = plan.total_project_limit
+    user.subscribed_scan_limit = plan.total_scan_limit
+    user.projects_used = 0
+    user.scans_used = 0
+
+    trial = TrialDetails.query.filter_by(user_id=user.id).first()
+    if trial:
+        trial.trial_converted = True
+        trial.converted_at = now
+        trial.converted_plan_id = plan.id
+
+    if reservation:
+        # Single conditional UPDATE, same idempotent-no-op pattern as above:
+        # if it's already 'activated' (shouldn't happen given the order-status
+        # gate above already caught that case) this simply updates 0 rows.
+        PaymentReservation.query.filter(
+            PaymentReservation.id == reservation.id,
+            PaymentReservation.status == "reserved",
+        ).update({PaymentReservation.status: "activated"}, synchronize_session=False)
+
+    db.session.commit()
+    app.logger.info(f"payment_activated order_id={payment_order.id} user_id={user.id} plan_id={plan.id}")
+
+    return {"success": True, "order_id": payment_order.order_id, "plan_name": plan.plan_name, "replay": False}
+
+
 @app.route("/create-razorpay-order", methods=["POST"])
 @login_required
 def create_razorpay_order():
@@ -5097,29 +5411,43 @@ def create_razorpay_order():
         }), 403
 
     plan_id = request.form.get("plan_id", type=int)
-    
+
     if not plan_id:
         return jsonify({"success": False, "error": "Plan ID required"})
-    
+
     plan = SubscriptionPlan.query.get(plan_id)
     if not plan or not plan.is_active or plan.is_trial_plan:
         return jsonify({"success": False, "error": "Invalid plan"})
-    
+
     # Check if Razorpay is configured
     if not razorpay_client:
         return jsonify({
-            "success": False, 
+            "success": False,
             "error": "Payment gateway not configured. Please contact support."
         })
-    
+
+    # Capacity gate: reject BEFORE any payment collection begins (area 7) -
+    # no Razorpay order is created at all if the slot reservation fails.
+    reservation = _reserve_capacity_slot_atomic(user)
+    if reservation is None:
+        app.logger.info(f"capacity_full_rejection user_id={user.id}")
+        message = "ScanStory early-access capacity is currently full. Please check back soon."
+        return jsonify({
+            "success": False,
+            "code": "CAPACITY_FULL",
+            "message": message,
+            "error": message,
+        }), 503
+
     # Calculate amount in paise (Razorpay expects amount in smallest currency unit)
     try:
         amount_paise = int(plan.effective_price * 100)
         if amount_paise < 100:  # Minimum amount for Razorpay is 100 paise (₹1)
             amount_paise = 100
     except Exception as e:
+        _release_capacity_slot(reservation, "released", "invalid-amount")
         return jsonify({"success": False, "error": f"Invalid amount: {str(e)}"})
-    
+
     # Create Razorpay order
     try:
         order_data = {
@@ -5133,11 +5461,11 @@ def create_razorpay_order():
                 'user_email': user.email
             }
         }
-        
+
         print(f"📋 Creating Razorpay order: {order_data}")
-        
+
         razorpay_order = razorpay_client.order.create(data=order_data)
-        
+
         # Create payment order in database
         order_id = f"ORD_{user.id}_{int(time.time())}"
         payment_order = PaymentOrder(
@@ -5154,10 +5482,12 @@ def create_razorpay_order():
             purchased_scan_limit=plan.total_scan_limit
         )
         db.session.add(payment_order)
+        db.session.flush()
+        reservation.payment_order_id = payment_order.id
         db.session.commit()
-        
+
         print(f"✅ Order created: {razorpay_order['id']}")
-        
+
         return jsonify({
             "success": True,
             "order_id": razorpay_order['id'],
@@ -5175,102 +5505,99 @@ def create_razorpay_order():
                 "color": "#ff007a"
             }
         })
-        
+
     except razorpay.errors.BadRequestError as e:
+        db.session.rollback()
+        _release_capacity_slot(reservation, "released", "razorpay-bad-request")
         print(f"❌ Razorpay Bad Request: {e}")
         return jsonify({"success": False, "error": f"Invalid request to payment gateway: {str(e)}"})
-    except razorpay.errors.AuthenticationError as e:
+    except _RAZORPAY_AUTH_ERROR as e:
+        db.session.rollback()
+        _release_capacity_slot(reservation, "released", "razorpay-auth-error")
         print(f"❌ Razorpay Authentication Error: {e}")
         return jsonify({"success": False, "error": "Payment gateway authentication failed. Please check API keys."})
     except Exception as e:
+        db.session.rollback()
+        _release_capacity_slot(reservation, "released", "razorpay-order-create-failed")
         print(f"❌ Razorpay order creation failed: {e}")
         return jsonify({"success": False, "error": f"Payment gateway error: {str(e)}"})
 
 @app.route("/verify-payment", methods=["POST"])
 @login_required
 def verify_payment():
-    """Verify Razorpay payment and activate subscription"""
+    """Verify Razorpay payment and activate subscription (idempotent - see
+    activate_payment() above for the DB-level replay-safety guarantee)."""
     user = current_user()
-    
+
     razorpay_payment_id = request.form.get("razorpay_payment_id")
     razorpay_order_id = request.form.get("razorpay_order_id")
     razorpay_signature = request.form.get("razorpay_signature")
-    
+
     if not all([razorpay_payment_id, razorpay_order_id, razorpay_signature]):
         return jsonify({"success": False, "error": "Missing payment details"})
-    
+
     # Verify signature
     params_dict = {
         'razorpay_order_id': razorpay_order_id,
         'razorpay_payment_id': razorpay_payment_id,
         'razorpay_signature': razorpay_signature
     }
-    
+
     try:
-        # Verify payment signature
+        # Verify payment signature (unchanged - existing logic, kept, never weakened)
         razorpay_client.utility.verify_payment_signature(params_dict)
-        
-        # Get payment order from database
-        payment_order = PaymentOrder.query.filter_by(razorpay_order_id=razorpay_order_id).first()
-        if not payment_order or payment_order.user_id != user.id:
-            return jsonify({"success": False, "error": "Invalid payment order"})
-        
-        # Get plan details
-        plan = SubscriptionPlan.query.get(payment_order.plan_id)
-        if not plan:
-            return jsonify({"success": False, "error": "Plan not found"})
-        
-        # Update payment order
-        payment_order.razorpay_payment_id = razorpay_payment_id
-        payment_order.razorpay_signature = razorpay_signature
-        payment_order.status = "success"
-        payment_order.payment_at = dt.utcnow()
-        
-        # Set subscription period
-        payment_order.subscription_start = dt.utcnow()
-        if plan.duration_type == "time":
-            payment_order.subscription_end = dt.utcnow() + timedelta(days=plan.duration_value * 30)
-        else:
-            # For count-based plans, set far future date
-            payment_order.subscription_end = dt.utcnow() + timedelta(days=365 * 10)  # 10 years
-        
-        # Update user subscription
-        user.subscription_id = plan.id
-        user.subscription_taken_at = dt.utcnow()
-        user.subscription_expires_at = payment_order.subscription_end
-        user.subscription_status = "active"
-        user.subscribed_project_limit = plan.total_project_limit
-        user.subscribed_scan_limit = plan.total_scan_limit
-        user.projects_used = 0  # Reset for new subscription
-        user.scans_used = 0
-        
-        # Update trial details if exists
-        trial = TrialDetails.query.filter_by(user_id=user.id).first()
-        if trial:
-            trial.trial_converted = True
-            trial.converted_at = dt.utcnow()
-            trial.converted_plan_id = plan.id
-        
-        db.session.commit()
-        
-        # Send success email
-        try:
-            send_payment_success_email(user, plan, payment_order)
-        except Exception as e:
-            print(f"Failed to send payment success email: {e}")
-        
-        return jsonify({
-            "success": True,
-            "message": "Payment verified successfully",
-            "order_id": payment_order.order_id,
-            "plan_name": plan.plan_name
-        })
-        
     except razorpay.errors.SignatureVerificationError:
         return jsonify({"success": False, "error": "Invalid payment signature"})
     except Exception as e:
         print(f"Payment verification failed: {e}")
         return jsonify({"success": False, "error": str(e)})
+
+    # Get payment order from database - must belong to the session user.
+    payment_order = PaymentOrder.query.filter_by(razorpay_order_id=razorpay_order_id).first()
+    if not payment_order or payment_order.user_id != user.id:
+        return jsonify({"success": False, "error": "Invalid payment order"})
+
+    # Defensive checks (area 6): never trust a client-submitted plan/amount -
+    # these are OPTIONAL fields; if the caller sends them, they must match
+    # the server-side stored PaymentOrder row exactly.
+    claimed_plan_id = request.form.get("plan_id", type=int)
+    if claimed_plan_id is not None and claimed_plan_id != payment_order.plan_id:
+        app.logger.warning(f"payment_verification_plan_mismatch order_id={payment_order.id}")
+        return jsonify({"success": False, "error": "Plan does not match this order"})
+
+    claimed_amount = request.form.get("amount", type=float)
+    if claimed_amount is not None and abs(claimed_amount - payment_order.total_amount) > 0.01:
+        app.logger.warning(f"payment_verification_amount_mismatch order_id={payment_order.id}")
+        return jsonify({"success": False, "error": "Amount does not match this order"})
+
+    payment_order.razorpay_payment_id = razorpay_payment_id
+    payment_order.razorpay_signature = razorpay_signature
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # DB-enforced uniqueness on razorpay_payment_id (area 2): this
+        # payment id is already attached to a different order row.
+        db.session.rollback()
+        return jsonify({"success": False, "error": "This payment has already been used for another order."}), 409
+
+    result = activate_payment(payment_order)
+    if not result["success"]:
+        status_code = 409 if result.get("code") else 200
+        return jsonify(result), status_code
+
+    if not result.get("replay"):
+        try:
+            plan = SubscriptionPlan.query.get(payment_order.plan_id)
+            send_payment_success_email(user, plan, payment_order)
+        except Exception as e:
+            print(f"Failed to send payment success email: {e}")
+
+    return jsonify({
+        "success": True,
+        "message": "Payment verified successfully",
+        "order_id": result["order_id"],
+        "plan_name": result["plan_name"],
+    })
 
 @app.route("/payment-success")
 @login_required
