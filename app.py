@@ -1176,6 +1176,43 @@ def set_system_config(key, value, config_type="string", description=None):
 ADMIN_LOGIN_LOCKOUT_MAX_ATTEMPTS = 5
 ADMIN_LOGIN_LOCKOUT_MINUTES = 15
 ADMIN_LOGIN_ATTEMPT_PREFIX = "admin_login_attempts:"
+VALID_ADMIN_ROLES = {"admin", "superadmin"}
+ADMIN_ROLE_PERMISSIONS = {
+    "admin": {
+        "admin.dashboard.view",
+        "admin.users.view",
+        "admin.users.manage",
+        "admin.projects.view",
+        "admin.projects.suspend",
+        "admin.payments.view",
+        "admin.processing.view",
+    },
+    "superadmin": {
+        "admin.dashboard.view",
+        "admin.users.view",
+        "admin.users.manage",
+        "admin.projects.view",
+        "admin.projects.suspend",
+        "admin.payments.view",
+        "admin.processing.view",
+        "superadmin.admins.manage",
+        "superadmin.plans.manage",
+        "superadmin.settings.manage",
+        "superadmin.capacity.manage",
+        "superadmin.audit.view",
+        "superadmin.operations.view",
+        "superadmin.repair.execute",
+    },
+}
+HIGH_IMPACT_PERMISSIONS = {
+    "superadmin.admins.manage",
+    "superadmin.plans.manage",
+    "superadmin.settings.manage",
+    "superadmin.capacity.manage",
+    "superadmin.audit.view",
+    "superadmin.operations.view",
+    "superadmin.repair.execute",
+}
 
 
 def _admin_login_attempt_key(email):
@@ -1226,6 +1263,70 @@ def _project_unavailable_response():
 
 def _project_is_available(project):
     return bool(project and project.is_active)
+
+
+def _validate_admin_role(role):
+    role = (role or "").strip().lower()
+    if role not in VALID_ADMIN_ROLES:
+        raise ValueError("Invalid admin role.")
+    return role
+
+
+def _active_superadmin_count():
+    # with_for_update gives databases that support row locks a chance to serialize final
+    # Super Admin transitions; SQLite ignores it, so the invariant is still rechecked in
+    # the same transaction immediately before mutation.
+    return Admin.query.filter_by(role="superadmin", is_active=True).with_for_update().count()
+
+
+def _can_change_active_superadmin(target_admin, acting_admin, new_role=None, new_active=None, action="change"):
+    old_role = target_admin.role
+    old_active = bool(target_admin.is_active)
+    next_role = old_role if new_role is None else new_role
+    next_active = old_active if new_active is None else bool(new_active)
+    if target_admin.id == acting_admin.id and old_role == "superadmin" and old_active and (
+        next_role != "superadmin" or not next_active
+    ):
+        return False, f"You cannot {action} your own active super admin account."
+    if old_role == "superadmin" and old_active and (next_role != "superadmin" or not next_active):
+        if _active_superadmin_count() <= 1:
+            return False, f"Cannot {action} the final active super admin."
+    return True, None
+
+
+def admin_has_permission(admin, permission):
+    if not admin or not admin.is_active:
+        return False
+    role = (admin.role or "").strip().lower()
+    if role not in VALID_ADMIN_ROLES:
+        return False
+    return permission in ADMIN_ROLE_PERMISSIONS.get(role, set())
+
+
+def require_admin_permission(permission):
+    def decorator(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            admin = current_admin()
+            if not admin:
+                flash("Please login as admin to access this page.", "error")
+                return redirect(url_for("admin_login_route"))
+            if not admin_has_permission(admin, permission):
+                if permission in HIGH_IMPACT_PERMISSIONS:
+                    log_admin_activity(admin.id, "access_denied", f"Denied permission: {permission}")
+                flash("Access denied. Super admin privileges required.", "error")
+                return redirect(url_for("admin_dashboard"))
+            return view(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+@app.context_processor
+def inject_admin_permission_helpers():
+    return {
+        "admin_can": lambda permission: admin_has_permission(current_admin(), permission)
+    }
+
 
 def _project_from_qr_filename(filename, admin_project=False):
     try:
@@ -1400,6 +1501,7 @@ def login_required(view):
 def admin_login(admin: Admin):
     session["admin_id"] = admin.id
     session["admin_email"] = admin.email
+    # Informational only. Authorization always reloads the current Admin row from the DB.
     session["admin_role"] = admin.role
 
 def admin_logout():
@@ -1412,7 +1514,11 @@ def current_admin():
     aid = session.get("admin_id")
     if not aid:
         return None
-    return Admin.query.get(aid)
+    admin = Admin.query.get(aid)
+    if not admin or not admin.is_active or (admin.role or "").strip().lower() not in VALID_ADMIN_ROLES:
+        admin_logout()
+        return None
+    return admin
 
 def admin_required(view):
     @wraps(view)
@@ -1424,15 +1530,7 @@ def admin_required(view):
     return wrapped
 
 def super_admin_required(view):
-    @wraps(view)
-    @admin_required
-    def wrapped(*args, **kwargs):
-        admin = current_admin()
-        if admin.role != "superadmin":
-            flash("Access denied. Super admin privileges required.", "error")
-            return redirect(url_for("admin_dashboard"))
-        return view(*args, **kwargs)
-    return wrapped
+    return require_admin_permission("superadmin.admins.manage")(view)
 
 # --------------------------------------------------------------------------------------------
 # Subscription Enforcement Functions
@@ -6307,6 +6405,13 @@ def admin_login_route():
         _record_admin_login_failure(email, admin)
         flash(generic_error, "error")
         return render_template("admin/login.html")
+
+    try:
+        _validate_admin_role(admin.role)
+    except ValueError:
+        _record_admin_login_failure(email, admin)
+        flash(generic_error, "error")
+        return render_template("admin/login.html")
     
     _clear_admin_login_failures(email)
     admin_login(admin)
@@ -6401,18 +6506,14 @@ def admin_logout_route():
 # Admin Routes - Module 2: Manage Admins (Super Admin Only)
 # --------------------------------------------------------------------------------------------
 @app.route("/admin/admins", methods=["GET"])
-@admin_required
+@require_admin_permission("superadmin.admins.manage")
 def admin_manage_admins():
     admin = current_admin()
-    if admin.role != "superadmin":
-        flash("Access denied. Super admin privileges required.", "error")
-        return redirect(url_for("admin_dashboard"))
-    
     admins = Admin.query.order_by(Admin.created_at.desc()).all()
     return render_template("admin/manage_admins.html", admin=admin, admins=admins)
 
 @app.route("/admin/admins/add", methods=["GET", "POST"])
-@super_admin_required
+@require_admin_permission("superadmin.admins.manage")
 def admin_add_admin():
     admin = current_admin()
     
@@ -6423,7 +6524,11 @@ def admin_add_admin():
     email = (request.form.get("email") or "").strip().lower()
     name = (request.form.get("name") or "").strip()
     phone = (request.form.get("phone") or "").strip()
-    role = request.form.get("role", "admin")
+    try:
+        role = _validate_admin_role(request.form.get("role", "admin"))
+    except ValueError:
+        flash("Invalid admin role.", "error")
+        return render_template("admin/add_admin.html", admin=admin)
     password = request.form.get("password") or ""
     
     # Validation
@@ -6460,7 +6565,7 @@ def admin_add_admin():
     return redirect(url_for("admin_manage_admins"))
 
 @app.route("/admin/admins/<int:admin_id>/edit", methods=["GET", "POST"])
-@super_admin_required
+@require_admin_permission("superadmin.admins.manage")
 def admin_edit_admin(admin_id):
     admin = current_admin()
     target_admin = Admin.query.get_or_404(admin_id)
@@ -6471,7 +6576,11 @@ def admin_edit_admin(admin_id):
     # Get form data
     name = (request.form.get("name") or "").strip()
     phone = (request.form.get("phone") or "").strip()
-    role = request.form.get("role", "admin")
+    try:
+        role = _validate_admin_role(request.form.get("role", "admin"))
+    except ValueError:
+        flash("Invalid admin role.", "error")
+        return render_template("admin/edit_admin.html", admin=admin, target_admin=target_admin)
     is_active = request.form.get("is_active") == "on"
     
     # Validation
@@ -6479,6 +6588,20 @@ def admin_edit_admin(admin_id):
         flash("Name is required.", "error")
         return render_template("admin/edit_admin.html", admin=admin, target_admin=target_admin)
     
+    can_change, reason = _can_change_active_superadmin(
+        target_admin,
+        admin,
+        new_role=role,
+        new_active=is_active,
+        action="change",
+    )
+    if not can_change:
+        flash(reason, "error")
+        return render_template("admin/edit_admin.html", admin=admin, target_admin=target_admin)
+
+    old_role = target_admin.role
+    old_active = bool(target_admin.is_active)
+
     # Update admin
     target_admin.name = name
     target_admin.phone = phone
@@ -6494,12 +6617,17 @@ def admin_edit_admin(admin_id):
     
     # Log activity
     log_admin_activity(admin.id, "admin_edit", f"Edited admin: {target_admin.email}")
+    if old_role != role:
+        log_admin_activity(admin.id, "admin_role_change", f"Changed admin role for {target_admin.email}: {old_role} -> {role}")
+    if old_active != is_active:
+        status = "activated" if is_active else "deactivated"
+        log_admin_activity(admin.id, "admin_toggle", f"{status} admin: {target_admin.email}")
     
     flash("Admin updated successfully.", "success")
     return redirect(url_for("admin_manage_admins"))
 
 @app.route("/admin/admins/<int:admin_id>/delete", methods=["POST"])
-@super_admin_required
+@require_admin_permission("superadmin.admins.manage")
 def admin_delete_admin(admin_id):
     """Delete an admin account"""
     admin = current_admin()
@@ -6510,12 +6638,15 @@ def admin_delete_admin(admin_id):
         flash("You cannot delete your own account.", "error")
         return redirect(url_for("admin_manage_admins"))
     
-    # Prevent deleting the only super admin
-    if target_admin.role == "superadmin":
-        superadmin_count = Admin.query.filter_by(role="superadmin", is_active=True).count()
-        if superadmin_count <= 1:
-            flash("Cannot delete the only active super admin.", "error")
-            return redirect(url_for("admin_manage_admins"))
+    can_change, reason = _can_change_active_superadmin(
+        target_admin,
+        admin,
+        new_active=False,
+        action="delete",
+    )
+    if not can_change:
+        flash(reason, "error")
+        return redirect(url_for("admin_manage_admins"))
     
     # Log activity before deletion
     log_admin_activity(admin.id, "admin_delete", f"Deleted admin: {target_admin.email}")
@@ -6527,7 +6658,7 @@ def admin_delete_admin(admin_id):
     return redirect(url_for("admin_manage_admins"))
 
 @app.route("/admin/admins/<int:admin_id>/toggle-status", methods=["POST"])
-@super_admin_required
+@require_admin_permission("superadmin.admins.manage")
 def admin_toggle_admin_status(admin_id):
     admin = current_admin()
     target_admin = Admin.query.get_or_404(admin_id)
@@ -6537,12 +6668,15 @@ def admin_toggle_admin_status(admin_id):
         flash("You cannot deactivate your own account.", "error")
         return redirect(url_for("admin_manage_admins"))
     
-    # Prevent deactivating the only super admin
-    if target_admin.role == "superadmin" and target_admin.is_active:
-        superadmin_count = Admin.query.filter_by(role="superadmin", is_active=True).count()
-        if superadmin_count <= 1:
-            flash("Cannot deactivate the only active super admin.", "error")
-            return redirect(url_for("admin_manage_admins"))
+    can_change, reason = _can_change_active_superadmin(
+        target_admin,
+        admin,
+        new_active=not target_admin.is_active,
+        action="deactivate",
+    )
+    if not can_change:
+        flash(reason, "error")
+        return redirect(url_for("admin_manage_admins"))
     
     # Toggle status
     target_admin.is_active = not target_admin.is_active
@@ -6559,7 +6693,7 @@ def admin_toggle_admin_status(admin_id):
 # Admin Routes - Module 3: Admin Dashboard
 # --------------------------------------------------------------------------------------------
 @app.route("/admin/dashboard", methods=["GET"])
-@admin_required
+@require_admin_permission("admin.dashboard.view")
 def admin_dashboard():
     admin = current_admin()
     
@@ -6640,7 +6774,7 @@ def admin_my_projects():
     """
     return redirect(url_for("admin_projects", owner_type="admin"))
 @app.route("/admin/users", methods=["GET"])
-@admin_required
+@require_admin_permission("admin.users.view")
 def admin_users():
     admin = current_admin()
     
@@ -6692,7 +6826,7 @@ def admin_users():
                          search=search)
 
 @app.route("/admin/users/<int:user_id>", methods=["GET"])
-@admin_required
+@require_admin_permission("admin.users.view")
 def admin_view_user(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
@@ -6718,7 +6852,7 @@ def admin_view_user(user_id):
                          trial=trial)
 
 @app.route("/admin/users/<int:user_id>/toggle-block", methods=["POST"])
-@admin_required
+@require_admin_permission("admin.users.manage")
 def admin_toggle_block_user(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
@@ -6744,7 +6878,7 @@ def admin_toggle_block_user(user_id):
     return redirect(url_for("admin_view_user", user_id=user_id))
 
 @app.route("/admin/users/<int:user_id>/reset-password", methods=["POST"])
-@admin_required
+@require_admin_permission("admin.users.manage")
 def admin_reset_user_password(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
@@ -6765,7 +6899,7 @@ def admin_reset_user_password(user_id):
     return redirect(url_for("admin_view_user", user_id=user_id))
 
 @app.route("/admin/users/<int:user_id>/extend-trial", methods=["POST"])
-@admin_required
+@require_admin_permission("admin.users.manage")
 def admin_extend_user_trial(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
@@ -6797,7 +6931,7 @@ def admin_extend_user_trial(user_id):
     return redirect(url_for("admin_view_user", user_id=user_id))
 
 @app.route("/admin/users/<int:user_id>/add-scans", methods=["POST"])
-@admin_required
+@require_admin_permission("admin.users.manage")
 def admin_add_user_scans(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
@@ -6821,7 +6955,7 @@ def admin_add_user_scans(user_id):
 # Admin Routes - Module 5: Plan Management
 # --------------------------------------------------------------------------------------------
 @app.route("/admin/plans", methods=["GET"])
-@admin_required
+@require_admin_permission("superadmin.plans.manage")
 def admin_plans():
     admin = current_admin()
     plans = SubscriptionPlan.query.order_by(SubscriptionPlan.display_order.asc()).all()
@@ -6849,7 +6983,7 @@ def admin_project_preview(project_id):
                          pairs=pairs,
                          is_admin=True)
 @app.route("/admin/plans/add", methods=["GET", "POST"])
-@admin_required
+@require_admin_permission("superadmin.plans.manage")
 def admin_add_plan():
     admin = current_admin()
     
@@ -6973,7 +7107,7 @@ def admin_add_plan():
 
 
 @app.route("/admin/plans/<int:plan_id>/edit", methods=["GET", "POST"])
-@admin_required
+@require_admin_permission("superadmin.plans.manage")
 def admin_edit_plan(plan_id):
     try:
         admin = current_admin()
@@ -7099,7 +7233,7 @@ def admin_edit_plan(plan_id):
         return redirect(url_for("admin_plans"))
 
 @app.route("/admin/plans/<int:plan_id>/delete", methods=["POST"])
-@admin_required
+@require_admin_permission("superadmin.plans.manage")
 def admin_delete_plan(plan_id):
     try:
         print(f"🔍 DELETE ROUTE CALLED for plan_id: {plan_id}")
@@ -7129,7 +7263,7 @@ def admin_delete_plan(plan_id):
         return redirect(url_for("admin_plans"))
 
 @app.route("/admin/plans/<int:plan_id>/toggle-status", methods=["POST"])
-@admin_required
+@require_admin_permission("superadmin.plans.manage")
 def admin_toggle_plan_status(plan_id):
     admin = current_admin()
     plan = SubscriptionPlan.query.get_or_404(plan_id)
@@ -7148,7 +7282,7 @@ def admin_toggle_plan_status(plan_id):
 # Admin Routes - Module 6: Subscription Management
 # --------------------------------------------------------------------------------------------
 @app.route("/admin/subscriptions", methods=["GET"])
-@admin_required
+@require_admin_permission("superadmin.operations.view")
 def admin_subscriptions():
     admin = current_admin()
     
@@ -7205,7 +7339,7 @@ def admin_subscriptions():
                          search=search) 
 
 @app.route("/admin/subscriptions/<int:order_id>/extend", methods=["POST"])
-@admin_required
+@require_admin_permission("superadmin.settings.manage")
 def admin_extend_subscription(order_id):
     admin = current_admin()
     payment_order = PaymentOrder.query.get_or_404(order_id)
@@ -7238,7 +7372,7 @@ def admin_extend_subscription(order_id):
     return redirect(url_for("admin_subscriptions"))
 
 @app.route("/admin/subscriptions/<int:order_id>/increase-limits", methods=["POST"])
-@admin_required
+@require_admin_permission("superadmin.settings.manage")
 def admin_increase_subscription_limits(order_id):
     admin = current_admin()
     payment_order = PaymentOrder.query.get_or_404(order_id)
@@ -7278,7 +7412,7 @@ def admin_increase_subscription_limits(order_id):
     return redirect(url_for("admin_subscriptions"))
 
 @app.route("/admin/subscriptions/<int:order_id>/deactivate", methods=["POST"])
-@admin_required
+@require_admin_permission("superadmin.settings.manage")
 def admin_deactivate_subscription(order_id):
     admin = current_admin()
     payment_order = PaymentOrder.query.get_or_404(order_id)
@@ -7304,7 +7438,7 @@ def admin_deactivate_subscription(order_id):
 # Admin Routes - Module 7: Payment Management
 # --------------------------------------------------------------------------------------------
 @app.route("/admin/payments", methods=["GET"])
-@admin_required
+@require_admin_permission("admin.payments.view")
 def admin_payments():
     admin = current_admin()
     
@@ -7370,7 +7504,7 @@ def admin_payments():
                          success_count=success_count)
 
 @app.route("/admin/payments/<int:payment_id>", methods=["GET"])
-@admin_required
+@require_admin_permission("admin.payments.view")
 def admin_view_payment(payment_id):
     admin = current_admin()
     payment = PaymentOrder.query.get_or_404(payment_id)
@@ -7427,7 +7561,7 @@ def _project_readiness_summary(pair_count, ready_pairs, failed_pairs, processing
 # Admin Routes - Module 8: Project Monitoring
 # --------------------------------------------------------------------------------------------
 @app.route("/admin/user-profiles", methods=["GET"])
-@admin_required
+@require_admin_permission("admin.users.view")
 def admin_user_profiles():
     """Display all user profiles."""
     admin = current_admin()
@@ -7497,7 +7631,7 @@ def admin_user_profiles():
     )
 
 @app.route("/admin/projects", methods=["GET"])
-@admin_required
+@require_admin_permission("admin.projects.view")
 def admin_projects():
     admin = current_admin()
     search = request.args.get("search", "").strip()
@@ -7622,7 +7756,7 @@ def admin_projects():
     )
 
 @app.route("/admin/projects/<int:project_id>", methods=["GET"])
-@admin_required
+@require_admin_permission("admin.projects.view")
 def admin_view_project(project_id):
     admin = current_admin()
     project = Project.query.get_or_404(project_id)
@@ -7677,7 +7811,7 @@ def admin_view_project(project_id):
                          qr_ready=bool(project.qr_code_path or project.qr_code_filename))
 
 @app.route("/admin/projects/<int:project_id>/toggle-status", methods=["POST"])
-@admin_required
+@require_admin_permission("admin.projects.suspend")
 def admin_toggle_project_status(project_id):
     admin = current_admin()
     project = Project.query.get_or_404(project_id)
@@ -7693,7 +7827,7 @@ def admin_toggle_project_status(project_id):
     return redirect(url_for("admin_view_project", project_id=project_id))
 
 @app.route("/admin/projects/<int:project_id>/suspend", methods=["POST"])
-@admin_required
+@require_admin_permission("admin.projects.suspend")
 def admin_suspend_project(project_id):
     admin = current_admin()
     project = Project.query.get_or_404(project_id)
@@ -7707,7 +7841,7 @@ def admin_suspend_project(project_id):
     return redirect(url_for("admin_view_project", project_id=project_id))
 
 @app.route("/admin/projects/<int:project_id>/restore", methods=["POST"])
-@admin_required
+@require_admin_permission("admin.projects.suspend")
 def admin_restore_project(project_id):
     admin = current_admin()
     project = Project.query.get_or_404(project_id)
@@ -7721,7 +7855,7 @@ def admin_restore_project(project_id):
     return redirect(url_for("admin_view_project", project_id=project_id))
 
 @app.route("/admin/projects/<int:project_id>/delete", methods=["POST"])
-@admin_required
+@require_admin_permission("superadmin.repair.execute")
 def admin_delete_project(project_id):
     admin = current_admin()
     project = Project.query.get_or_404(project_id)
@@ -7748,7 +7882,7 @@ def admin_delete_project(project_id):
 # Admin Routes - Module 9: Scan Usage Control
 # --------------------------------------------------------------------------------------------
 @app.route("/admin/scans", methods=["GET"])
-@admin_required
+@require_admin_permission("admin.processing.view")
 def admin_scans():
     admin = current_admin()
     
@@ -7793,7 +7927,7 @@ def admin_scans():
                          end_date=end_date)
 
 @app.route("/admin/scans/user/<int:user_id>", methods=["GET"])
-@admin_required
+@require_admin_permission("admin.processing.view")
 def admin_user_scans(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
@@ -7820,7 +7954,7 @@ def admin_user_scans(user_id):
                          recent_scans=recent_scans)
 
 @app.route("/admin/scans/<int:user_id>/update-limit", methods=["POST"])
-@admin_required
+@require_admin_permission("admin.users.manage")
 def admin_update_scan_limit(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
@@ -7849,7 +7983,7 @@ def admin_update_scan_limit(user_id):
     return redirect(url_for("admin_user_scans", user_id=user_id))
 
 @app.route("/admin/scans/<int:user_id>/grant-extra", methods=["POST"])
-@admin_required
+@require_admin_permission("admin.users.manage")
 def admin_grant_extra_scans(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
@@ -7871,7 +8005,7 @@ def admin_grant_extra_scans(user_id):
     return redirect(url_for("admin_user_scans", user_id=user_id))
 
 @app.route("/admin/scans/<int:user_id>/lock-scanner", methods=["POST"])
-@admin_required
+@require_admin_permission("admin.users.manage")
 def admin_lock_user_scanner(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
@@ -7891,7 +8025,7 @@ def admin_lock_user_scanner(user_id):
 # Admin Routes - System Settings
 # --------------------------------------------------------------------------------------------
 @app.route("/admin/settings", methods=["GET", "POST"])
-@admin_required
+@require_admin_permission("superadmin.settings.manage")
 def admin_settings():
     admin = current_admin()
     
@@ -7952,7 +8086,7 @@ def admin_settings():
 # Admin Routes - Activity Logs
 # --------------------------------------------------------------------------------------------
 @app.route("/admin/activity-logs", methods=["GET"])
-@admin_required
+@require_admin_permission("superadmin.audit.view")
 def admin_activity_logs():
     admin = current_admin()
     

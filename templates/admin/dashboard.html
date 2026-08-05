@@ -280,11 +280,13 @@
                             <i class="fas fa-plus-circle me-2"></i>Create Project
                         </a>
                     </div>
+                    {% if admin_can('superadmin.plans.manage') %}
                     <div class="col-md-3 col-sm-6 mb-3">
                         <a href="{{ url_for('admin_add_plan') }}" class="btn btn-primary w-100">
                             <i class="fas fa-plus me-2"></i>Add New Plan
                         </a>
                     </div>
+                    {% endif %}
                     <div class="col-md-3 col-sm-6 mb-3">
                         <a href="{{ url_for('admin_projects', owner_type='admin') }}" class="btn btn-info w-100">
                             <i class="fas fa-project-diagram me-2"></i>Projects
@@ -292,7 +294,7 @@
                     </div>
                     
                     <!-- ✅ ADD ADMIN BUTTON - Only visible to Super Admin -->
-                    {% if admin.role == 'superadmin' %}
+                    {% if admin_can('superadmin.admins.manage') %}
                     <div class="col-md-3 col-sm-6 mb-3">
                         <a href="{{ url_for('admin_add_admin') }}" class="btn btn-danger w-100">
                             <i class="fas fa-user-plus me-2"></i>Add Admin
@@ -305,11 +307,13 @@
                             <i class="fas fa-search me-2"></i>Scan Reports
                         </a>
                     </div>
+                    {% if admin_can('superadmin.settings.manage') %}
                     <div class="col-md-3 col-sm-6 mb-3">
                         <a href="{{ url_for('admin_settings') }}" class="btn btn-secondary w-100">
                             <i class="fas fa-cog me-2"></i>System Settings
                         </a>
                     </div>
+                    {% endif %}
                 </div>
             </div>
         </div>

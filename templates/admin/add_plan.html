@@ -411,7 +411,7 @@
                 <i>💳</i>
                 <span>Payments</span>
             </a>
-            {% if admin.role == 'superadmin' %}
+            {% if admin_can('superadmin.admins.manage') %}
             <a href="/admin/admins" class="sidebar-link">
                 <i>🛡️</i>
                 <span>Admins</span>

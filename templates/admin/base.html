@@ -193,7 +193,9 @@
                             <ul class="dropdown-menu dropdown-menu-end">
                                 <li><span class="dropdown-item-text"><strong>Role:</strong> {{ admin.role|title }}</span></li>
                                 <li><hr class="dropdown-divider"></li>
-                                <li><a class="dropdown-item" href="{{ url_for('admin_settings') }}"><i class="fas fa-cog me-2"></i>Settings</a></li>
+                                {% if admin_can('superadmin.settings.manage') %}
+                                    <li><a class="dropdown-item" href="{{ url_for('admin_settings') }}"><i class="fas fa-cog me-2"></i>Settings</a></li>
+                                {% endif %}
                                 <li><a class="dropdown-item" href="{{ url_for('admin_logout_route') }}"><i class="fas fa-sign-out-alt me-2"></i>Logout</a></li>
                             </ul>
                         </li>
@@ -233,11 +235,13 @@
                                 </a>
                             </li>
 
-                            <li class="nav-item mb-2">
-                                <a class="nav-link {% if 'admin_plans' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_plans') }}">
-                                    <i class="fas fa-list-alt"></i> Plans
-                                </a>
-                            </li>
+                            {% if admin_can('superadmin.plans.manage') %}
+                                <li class="nav-item mb-2">
+                                    <a class="nav-link {% if 'admin_plans' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_plans') }}">
+                                        <i class="fas fa-list-alt"></i> Plans
+                                    </a>
+                                </li>
+                            {% endif %}
                             
                             
                             <li class="nav-item mb-2">
@@ -247,7 +251,7 @@
                             </li>
                             
                             
-                            {% if admin.role == 'superadmin' %}
+                            {% if admin_can('superadmin.admins.manage') %}
                                 <li class="nav-item mb-2">
                                     <a class="nav-link {% if 'admin_manage_admins' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_manage_admins') }}">
                                         <i class="fas fa-user-shield"></i> Admins
@@ -256,11 +260,13 @@
                             {% endif %}
                             
                             
-                            <li class="nav-item mb-2">
-                                <a class="nav-link {% if 'admin_settings' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_settings') }}">
-                                    <i class="fas fa-cog"></i> Settings
-                                </a>
-                            </li>
+                            {% if admin_can('superadmin.settings.manage') %}
+                                <li class="nav-item mb-2">
+                                    <a class="nav-link {% if 'admin_settings' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_settings') }}">
+                                        <i class="fas fa-cog"></i> Settings
+                                    </a>
+                                </li>
+                            {% endif %}
                         </ul>
                     </div>
                 </div>
