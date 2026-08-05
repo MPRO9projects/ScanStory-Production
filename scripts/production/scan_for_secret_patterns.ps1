@@ -9,6 +9,7 @@ $ErrorActionPreference = "Stop"
 $patterns = @(
     "(?i)(secret|password|token|api[_-]?key)\s*=\s*['""][^'""]{8,}['""]",
     "(?i)razorpay[_-]?key[_-]?secret\s*[:=]\s*['""][^'""]+['""]",
+    "(?i)razorpay[_-]?webhook[_-]?secret\s*[:=]\s*['""][^'""]+['""]",
     "(?i)database_url\s*[:=]\s*['""][^'""]+['""]",
     "(?i)smtp_password\s*[:=]\s*['""][^'""]+['""]",
     "rzp_(live|test)_[A-Za-z0-9]{8,}"

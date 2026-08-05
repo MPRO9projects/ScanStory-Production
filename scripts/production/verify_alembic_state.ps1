@@ -23,7 +23,19 @@ if (-not $env:FLASK_SECRET_KEY) {
 }
 
 Write-Host "Running read-only Alembic state checks. No migrations will be applied."
-python -m flask --app app db heads
+$headsOutput = python -m flask --app app db heads
+$headsOutput | ForEach-Object { Write-Host $_ }
 python -m flask --app app db history
 python -m flask --app app db current
+
+$expectedHead = "ebeab1cf4ec9"
+$headsText = ($headsOutput -join "`n")
+if ($headsText -notmatch $expectedHead) {
+    Fail "Expected migration head '$expectedHead' (razorpay webhook events) not found in 'flask db heads' output."
+}
+$headLines = $headsOutput | Where-Object { $_ -match "\(head\)" }
+if ($headLines.Count -gt 1) {
+    Fail "Multiple Alembic heads detected; expected exactly one head at '$expectedHead'."
+}
+Write-Host "Confirmed single head at expected revision '$expectedHead'."
 Write-Host "Alembic state verification completed."

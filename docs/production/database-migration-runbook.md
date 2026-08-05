@@ -3,8 +3,15 @@
 Known migration chain:
 
 ```text
-3914ece79b88 -> bc5642a86981 -> 54a108a17fa7
+3914ece79b88 -> bc5642a86981 -> 54a108a17fa7 -> ebeab1cf4ec9
 ```
+
+`ebeab1cf4ec9` (razorpay webhook events) is a pure ADD migration: it only
+creates the new `razorpay_webhook_events` table and its indexes, including a
+UNIQUE index on `idempotency_key` (the DB-backed replay-protection gate for
+`POST /webhooks/razorpay` — not an in-memory check). It does not alter any
+existing payment/capacity table, so its `downgrade()` only drops what it
+itself created and carries no destructive risk to prior data.
 
 ## Rules
 
@@ -17,6 +24,10 @@ Known migration chain:
 - Run duplicate Razorpay ID preflight before unique constraints.
 - Upgrade one controlled environment at a time.
 - Verify application behavior after migration.
+- After upgrading past `ebeab1cf4ec9`, confirm `RAZORPAY_WEBHOOK_SECRET` is
+  configured before relying on webhook reconciliation — the table existing
+  does not mean the webhook route is usable; the route itself fails closed
+  (rejects, processes nothing) whenever that secret is absent.
 
 ## Required Commands
 
@@ -40,6 +51,16 @@ python -m flask --app app expire-stale-reservations
 python -m flask --app app expire-stale-reservations --apply
 python -m flask --app app reconcile-capacity-reservations
 python -m flask --app app reconcile-capacity-reservations --apply
+```
+
+Read-only Razorpay webhook inspection CLIs (added by `ebeab1cf4ec9`; none of
+these mutate `razorpay_webhook_events`, `payment_orders`, or any other table):
+
+```powershell
+python -m flask --app app webhook-events-status
+python -m flask --app app webhook-events-status --limit 50
+python -m flask --app app reconcile-order-webhooks <order_id>
+python -m flask --app app webhook-replay-report
 ```
 
 Dry-run/report modes must be captured before any `--repair` or `--apply`.

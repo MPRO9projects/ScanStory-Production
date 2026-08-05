@@ -21,6 +21,7 @@ $required = @(
     "DATABASE_URL",
     "RAZORPAY_KEY_ID",
     "RAZORPAY_KEY_SECRET",
+    "RAZORPAY_WEBHOOK_SECRET",
     "SMTP_HOST",
     "SMTP_PORT",
     "SMTP_USER",
@@ -43,8 +44,7 @@ $optional = @(
     "LOG_LEVEL",
     "REDIS_URL",
     "RQ_QUEUE_NAME",
-    "RATE_LIMIT_REDIS_URL",
-    "RAZORPAY_WEBHOOK_SECRET"
+    "RATE_LIMIT_REDIS_URL"
 )
 
 $missing = @()
