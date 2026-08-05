@@ -20,6 +20,37 @@ from PIL import Image
 pytestmark = pytest.mark.security
 
 
+class _NoopThread:
+    """Same no-op-thread pattern already used in test_quota_characterization.py,
+    test_gate_jr_scanner_recovery.py, and test_marker_selection_upload.py."""
+
+    def __init__(self, target=None, args=(), kwargs=None, **_ignored):
+        self.target = target
+        self.args = args
+        self.kwargs = kwargs or {}
+
+    def start(self):
+        return None
+
+
+@pytest.fixture(autouse=True)
+def no_background_processing(app_module, monkeypatch):
+    """handle_upload()/admin_handle_upload() schedule pair processing on a
+    daemon thread (threading.Thread(...).start()) that outlives the request.
+    In tests it also outlives the disposable per-test SQLite database, which
+    is exactly what produced "no such table: project_pairs" errors from that
+    thread after teardown, plus a race where the thread sometimes flips
+    processing_status to "processing"/"completed" before a test's assertion
+    runs. None of the tests in this file assert on post-background state -
+    they only care about the synchronous request/response and the DB state
+    immediately after it - so the scheduling call itself is a no-op here.
+    Tests that genuinely need to observe background completion should
+    invoke the worker function synchronously instead of relying on this
+    fixture.
+    """
+    monkeypatch.setattr(app_module.threading, "Thread", _NoopThread)
+
+
 # ---------------------------------------------------------------------------
 # Fixture-generation helpers - no committed binaries, everything built here.
 # ---------------------------------------------------------------------------
