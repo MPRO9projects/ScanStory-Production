@@ -436,6 +436,51 @@ class PaymentReservation(db.Model):
         return f"<PaymentReservation user={self.user_id} status={self.status}>"
 
 
+class RazorpayWebhookEvent(db.Model):
+    """One row per Razorpay webhook delivery, keyed by a deterministic
+    idempotency key - the actual replay-safety gate for app.py's
+    /webhooks/razorpay route (a DB unique-index rejection, not an in-app
+    dict/set check - see the unique index in this table's migration).
+
+    Razorpay's webhook envelope (entity/account_id/event/contains/payload/
+    created_at) has no top-level unique event id, so `idempotency_key` is
+    derived from stable fields instead of trusting a supplied id:
+      - supported events (payment.captured): "{event_type}|{payment_id}|{order_id}"
+        - stable across Razorpay's own retries of the same logical event,
+          even if it re-sends with a different created_at/body byte layout.
+      - any other validly-signed event type (no reconciliation is performed,
+        see app.py SUPPORTED_WEBHOOK_EVENTS): "{event_type}|{payload_hash}"
+        as a best-effort fallback, since those payload shapes aren't
+        inspected/relied upon here.
+
+    `payload_hash` is a sha256 hex digest of the raw request body - a
+    non-sensitive fingerprint for observability/debugging, never the payload
+    itself (the raw body is deliberately never persisted).
+    """
+    __tablename__ = "razorpay_webhook_events"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    idempotency_key = db.Column(db.String(255), unique=True, nullable=False, index=True)
+    event_type = db.Column(db.String(100), nullable=False)
+    razorpay_payment_id = db.Column(db.String(255), nullable=True, index=True)
+    razorpay_order_id = db.Column(db.String(255), nullable=True, index=True)
+    payload_hash = db.Column(db.String(64), nullable=False)
+
+    # received -> processed | ignored | failed
+    processing_status = db.Column(db.String(20), nullable=False, default="received")
+    payment_order_id = db.Column(db.Integer, db.ForeignKey("payment_orders.id"), nullable=True, index=True)
+    failure_code = db.Column(db.String(50), nullable=True)
+    attempt_count = db.Column(db.Integer, nullable=False, default=1)
+
+    received_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    processed_at = db.Column(db.DateTime, nullable=True)
+
+    payment_order = db.relationship("PaymentOrder", lazy=True)
+
+    def __repr__(self):
+        return f"<RazorpayWebhookEvent {self.event_type} status={self.processing_status}>"
+
+
 # ---------------------------------------------------------------------
 # OTP codes
 # ---------------------------------------------------------------------
