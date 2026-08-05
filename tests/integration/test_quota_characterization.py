@@ -1,13 +1,44 @@
+import os
+import tempfile
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 from threading import Barrier
 
+import cv2
+import numpy as np
 import pytest
 from PIL import Image
 from sqlalchemy.exc import IntegrityError
 from werkzeug.datastructures import FileStorage
+
+
+def _generate_mp4_bytes():
+    """Smallest deterministic valid MP4 this test environment can produce.
+
+    cv2.VideoWriter's MP4 backend works without a system ffmpeg/ffprobe CLI
+    (neither is installed in this environment), unlike shelling out to a
+    real ffmpeg binary - see upload_validation.py's video check, which
+    relies on the same cv2 backend for exactly this reason.
+    """
+    fd, path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+    try:
+        writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 64))
+        for _ in range(5):
+            writer.write(np.zeros((64, 64, 3), dtype=np.uint8))
+        writer.release()
+        with open(path, "rb") as fh:
+            return fh.read()
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+_MP4_BYTES = _generate_mp4_bytes()
 
 
 class NoopThread:
@@ -43,7 +74,7 @@ def _upload_data(name="Quota Project", pair_count=1):
     data["videos"] = []
     for index in range(pair_count):
         data["images"].append((_jpeg_bytes(), f"marker-{index}.jpg"))
-        data["videos"].append((BytesIO(b"video"), f"clip-{index}.mp4"))
+        data["videos"].append((BytesIO(_MP4_BYTES), f"clip-{index}.mp4"))
         data[f"marker_{index}_mode"] = "crop"
         data[f"marker_{index}_crop_x"] = "0.1"
         data[f"marker_{index}_crop_y"] = "0.1"
@@ -361,14 +392,17 @@ def test_rollback_after_failed_pair_persistence_releases_quota_and_files(client,
     normal_user.subscribed_project_limit = 1
     db_session.commit()
     _login_user(client, normal_user)
-    original_save = FileStorage.save
+    # P0D: content is now validated to a temp path first, then moved into
+    # place with os.replace() - only that final move is the equivalent
+    # "persist to permanent location" step FileStorage.save() used to be.
+    original_replace = os.replace
 
-    def fail_video_save(self, dst, *args, **kwargs):
+    def fail_video_replace(src, dst, *args, **kwargs):
         if str(dst).endswith(".mp4"):
             raise OSError("simulated video persistence failure")
-        return original_save(self, dst, *args, **kwargs)
+        return original_replace(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(FileStorage, "save", fail_video_save)
+    monkeypatch.setattr(os, "replace", fail_video_replace)
 
     response = client.post("/upload", data=_upload_data(), content_type="multipart/form-data", follow_redirects=False)
 

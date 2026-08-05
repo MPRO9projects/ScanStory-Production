@@ -1,3 +1,5 @@
+import os
+import tempfile
 from io import BytesIO
 from pathlib import Path
 import re
@@ -26,6 +28,31 @@ def _jpeg_bytes(width=640, height=480, color=(160, 80, 40)):
     return out
 
 
+_MP4_BYTES = None
+
+
+def _mp4_bytes():
+    """Smallest deterministic valid MP4 this test environment can produce
+    (cv2's bundled MP4 backend works with no system ffmpeg/ffprobe CLI)."""
+    global _MP4_BYTES
+    if _MP4_BYTES is None:
+        fd, path = tempfile.mkstemp(suffix=".mp4")
+        os.close(fd)
+        try:
+            writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 64))
+            for _ in range(5):
+                writer.write(np.zeros((64, 64, 3), dtype=np.uint8))
+            writer.release()
+            with open(path, "rb") as fh:
+                _MP4_BYTES = fh.read()
+        finally:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+    return BytesIO(_MP4_BYTES)
+
+
 def _upload_data(name="Marker Project", modes=("crop",), widths=(640,)):
     data = {"name": name, "upload_id": f"upload-{name}"}
     images = []
@@ -33,7 +60,7 @@ def _upload_data(name="Marker Project", modes=("crop",), widths=(640,)):
     for index, mode in enumerate(modes):
         width = widths[index] if index < len(widths) else widths[-1]
         images.append((_jpeg_bytes(width, 480), f"marker-{index}.jpg"))
-        videos.append((BytesIO(b"video"), f"clip-{index}.mp4"))
+        videos.append((_mp4_bytes(), f"clip-{index}.mp4"))
         data[f"marker_{index}_mode"] = mode
         data[f"marker_{index}_crop_x"] = "0.1" if mode == "crop" else "0"
         data[f"marker_{index}_crop_y"] = "0.2" if mode == "crop" else "0"
@@ -628,7 +655,7 @@ def test_video_server_timing_logs_use_same_upload_id(client, app_module, login_u
     persist_done = next(fields for stage, _upload_id, fields in logs if stage == "VIDEO SERVER PERSIST DONE")
     assert body_ready["content_length"] is not None
     assert body_ready["body_duration_ms"] >= 0
-    assert persist_done["video_size"] == len(b"video")
+    assert persist_done["video_size"] == len(_MP4_BYTES)
     assert persist_done["persistence_duration_ms"] >= 0
     source = Path("app.py").read_text(encoding="utf-8", errors="ignore")
     assert "VIDEO BG START" in source
@@ -664,7 +691,7 @@ def test_legacy_upload_without_marker_metadata_behaves_as_full_image(client, app
         data={
             "name": "Legacy Upload",
             "images": [(_jpeg_bytes(), "legacy.jpg")],
-            "videos": [(BytesIO(b"video"), "legacy.mp4")],
+            "videos": [(_mp4_bytes(), "legacy.mp4")],
         },
         content_type="multipart/form-data",
         follow_redirects=False,

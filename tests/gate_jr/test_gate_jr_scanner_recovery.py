@@ -1,9 +1,37 @@
+import os
+import tempfile
 from io import BytesIO
 from pathlib import Path
 
 import cv2
 import numpy as np
 from PIL import Image
+
+
+def _jpeg_bytes(width=640, height=480):
+    out = BytesIO()
+    Image.new("RGB", (width, height), (120, 80, 40)).save(out, format="JPEG")
+    out.seek(0)
+    return out
+
+
+def _mp4_bytes():
+    """Smallest deterministic valid MP4 this test environment can produce
+    (cv2's bundled MP4 backend works with no system ffmpeg/ffprobe CLI)."""
+    fd, path = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+    try:
+        writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), 5.0, (64, 64))
+        for _ in range(5):
+            writer.write(np.zeros((64, 64, 3), dtype=np.uint8))
+        writer.release()
+        with open(path, "rb") as fh:
+            return BytesIO(fh.read())
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 class NoopThread:
@@ -87,8 +115,8 @@ def test_project_upload_does_not_standardize_before_http_response(client, app_mo
         "/upload",
         data={
             "name": "Gate JR Upload",
-            "images": [(BytesIO(b"image"), "target.jpg")],
-            "videos": [(BytesIO(b"video"), "clip.mp4")],
+            "images": [(_jpeg_bytes(), "target.jpg")],
+            "videos": [(_mp4_bytes(), "clip.mp4")],
         },
         content_type="multipart/form-data",
         follow_redirects=False,
