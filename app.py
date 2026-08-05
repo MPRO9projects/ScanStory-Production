@@ -45,6 +45,8 @@ from models import (
     UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
+from rate_limit import limiter as request_limiter
+request_limiter.clear()
 
 from flask import render_template, abort
 
@@ -198,6 +200,68 @@ RECAPTCHA_SITE_KEY = os.environ.get("RECAPTCHA_SITE_KEY", "")
 RECAPTCHA_SECRET_KEY = os.environ.get("RECAPTCHA_SECRET_KEY", "")
 RECAPTCHA_MIN_SCORE = float(os.environ.get("RECAPTCHA_MIN_SCORE", "0.5"))
 
+RATE_LIMITS = {
+    "scanner_init": (45, 60),
+    "scanner_track": (240, 60),
+    "scanner_session_end": (90, 60),
+    "upload": (8, 3600),
+    "login_ip": (80, 900),
+    "register_ip": (30, 3600),
+    "forgot_password_ip": (30, 3600),
+    "resend_otp_ip": (20, 3600),
+}
+
+
+def _client_ip():
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip()
+    return request.remote_addr or "0.0.0.0"
+
+
+def _rate_limit_key(scope, *parts):
+    clean = [scope, _client_ip()]
+    clean.extend(str(part or "-")[:120] for part in parts)
+    return ":".join(clean)
+
+
+def _check_rate_limit(scope, key):
+    limit, window = RATE_LIMITS[scope]
+    return request_limiter.check(key, limit, window)
+
+
+def _scanner_rate_limited_response(retry_after):
+    response = jsonify({
+        "error": True,
+        "code": "RATE_LIMITED",
+        "reason": "Too many scanner requests. Please wait briefly and try again.",
+        "retry_after_seconds": retry_after,
+    })
+    response.status_code = 429
+    response.headers["Retry-After"] = str(retry_after)
+    return response
+
+
+def _apply_public_immutable_cache(response):
+    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
+
+def _apply_short_public_cache(response):
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+def _log_scanner_latency(event, start_time, **fields):
+    safe = {
+        "event": event,
+        "duration_ms": round((time.time() - start_time) * 1000, 2),
+    }
+    for key, value in fields.items():
+        if key in {"project_id", "outcome", "stage", "pair_id", "scan_session_id"}:
+            safe[key] = value
+    app.logger.info("scanner_latency", extra={"scanner_latency": safe})
+
 @app.context_processor
 def inject_recaptcha_key():
     return {
@@ -325,7 +389,7 @@ _CSP_DIRECTIVES = {
         "https://fonts.googleapis.com",
     ],
     "font-src": ["'self'", "data:", "https://cdnjs.cloudflare.com", "https://fonts.gstatic.com"],
-    "img-src": ["'self'", "data:", "blob:"],
+    "img-src": ["'self'", "data:", "blob:", "https://images.pexels.com"],
     "media-src": ["'self'", "blob:"],
     "connect-src": ["'self'", "https://api.razorpay.com", "https://lumberjack.razorpay.com", "https://www.google.com"],
     "frame-src": ["https://api.razorpay.com", "https://checkout.razorpay.com", "https://www.google.com"],
@@ -357,11 +421,39 @@ def add_security_headers(response):
 
     if request.path == "/static/sw.js":
         response.headers["Service-Worker-Allowed"] = "/"
+        response.headers["Cache-Control"] = "no-cache"
+
+    if request.path in ("/static/js/opencv.js", "/static/js/opencv_js.wasm"):
+        _apply_public_immutable_cache(response)
 
     return response
 
 
 app.after_request(add_security_headers)
+
+
+@app.route("/healthz", methods=["GET"])
+def healthz():
+    return jsonify({"status": "ok"}), 200
+
+
+def _readiness_checks():
+    db.session.execute(text("SELECT 1"))
+    return {"database": "ok"}
+
+
+@app.route("/ready", methods=["GET"])
+def ready():
+    try:
+        checks = _readiness_checks()
+        return jsonify({"status": "ready", "checks": checks}), 200
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+        app.logger.warning("readiness_check_failed", exc_info=True)
+        return jsonify({"status": "not_ready", "checks": {"database": "unavailable"}}), 503
 
 
 # --------------------------------------------------------------------------------------------
@@ -3563,8 +3655,7 @@ def serve_landing_video(name):
     videos_path = os.path.join(app.root_path, "static", "videos")
     response = send_from_directory(videos_path, filename, mimetype="video/mp4")
     response.headers["Content-Disposition"] = "inline"
-    response.headers["Cache-Control"] = "no-store"
-    return response
+    return _apply_public_immutable_cache(response)
 
 
 
@@ -4391,6 +4482,11 @@ def register():
             selected_plan = SubscriptionPlan.query.get(plan_id)
         return render_template("user/register.html", selected_plan=selected_plan)
 
+    ok, retry_after = _check_rate_limit("register_ip", _rate_limit_key("register"))
+    if not ok:
+        flash("Too many registration attempts from this network. Please wait and try again.", "error")
+        return render_template("user/register.html"), 429
+
     try:
         email = (request.form.get("email") or "").strip().lower()
         first_name = (request.form.get("first_name") or "").strip()
@@ -4532,6 +4628,11 @@ def resend_otp():
     if not email:
         flash("No verification session found.", "error")
         return redirect(url_for("register"))
+
+    ok, retry_after = _check_rate_limit("resend_otp_ip", _rate_limit_key("resend_otp"))
+    if not ok:
+        flash("Too many code requests from this network. Please wait and try again.", "error")
+        return redirect(url_for("verify_email"))
     
     user = User.query.filter_by(email=email).first()
     sent, message = _resend_otp(
@@ -4564,6 +4665,11 @@ def login():
 
     email = (request.form.get("email") or "").strip().lower()
     password = request.form.get("password") or ""
+
+    ok, retry_after = _check_rate_limit("login_ip", _rate_limit_key("login"))
+    if not ok:
+        flash("Too many login attempts from this network. Please wait and try again.", "error")
+        return render_template("user/login.html"), 429
 
     user = User.query.filter_by(email=email).first()
 
@@ -4699,6 +4805,11 @@ def forgot_password():
     if request.method == "GET":
         return render_template("user/forgot_password.html")
     
+    ok, retry_after = _check_rate_limit("forgot_password_ip", _rate_limit_key("forgot_password"))
+    if not ok:
+        flash("If the email exists, an OTP has been sent.", "success")
+        return render_template("user/forgot_password.html"), 429
+
     email = (request.form.get("email") or "").strip().lower()
     user = User.query.filter_by(email=email).first()
     
@@ -4806,6 +4917,11 @@ def handle_upload():
     """Optimized project creation with background processing for MULTIPLE PAIRS"""
     user = current_user()
     dev_test_entitled = has_dev_test_entitlement(user)
+    ok, retry_after = _check_rate_limit("upload", _rate_limit_key("upload", user.id))
+    if not ok:
+        flash("Too many upload attempts. Please wait before starting another upload.", "error")
+        return redirect(url_for("user_create_project_page"))
+
     upload_id = (request.form.get("upload_id") or str(uuid.uuid4())).strip()[:80]
     request_start = time.time()
     _upload_log("UPLOAD REQUEST ENTER", upload_id, user_id=user.id, content_length=request.content_length)
@@ -5461,8 +5577,17 @@ def create_razorpay_order():
                 'user_email': user.email
             }
         }
-
-        print(f"📋 Creating Razorpay order: {order_data}")
+        app.logger.info(
+            "Creating Razorpay order",
+            extra={
+                "payment_order": {
+                    "user_id": user.id,
+                    "plan_id": plan.id,
+                    "amount": amount_paise,
+                    "currency": plan.currency,
+                }
+            },
+        )
 
         razorpay_order = razorpay_client.order.create(data=order_data)
 
@@ -5671,7 +5796,9 @@ def serve_video(project_id, image_id):
     if not pair:
         return "Pair not found"
     
-    return send_from_directory(VIDEOS_DIR, pair.video_filename)
+    response = send_from_directory(VIDEOS_DIR, pair.video_filename)
+    response.headers["Content-Disposition"] = "inline"
+    return _apply_short_public_cache(response)
 
 @app.route("/image/<int:project_id>/<int:image_id>")
 def serve_image(project_id, image_id):
@@ -5685,14 +5812,16 @@ def serve_image(project_id, image_id):
     if not pair:
         return "Pair not found"
     
-    return send_from_directory(IMAGES_DIR, pair.image_filename)
+    response = send_from_directory(IMAGES_DIR, pair.image_filename)
+    return _apply_short_public_cache(response)
 
 @app.route("/qr/<filename>")
 def serve_qr(filename):
     project = _project_from_qr_filename(filename, admin_project=False)
     if project and not _project_is_available(project):
         return _project_unavailable_response()
-    return send_from_directory(QR_DIR, filename)
+    response = send_from_directory(QR_DIR, filename)
+    return _apply_short_public_cache(response)
 
 SCANNER_TEST_TOKEN_MAX_AGE_SECONDS = 120
 
@@ -5875,6 +6004,15 @@ def detect_init():
         t_start = time.time()
         
         project_id = request.form.get("project_id", type=int)
+        scan_session_id = request.form.get("scan_session_id")
+        ok, retry_after = _check_rate_limit(
+            "scanner_init",
+            _rate_limit_key("detect_init", project_id, scan_session_id),
+        )
+        if not ok:
+            _log_scanner_latency("detect_init", t_start, project_id=project_id, outcome="rate_limited", stage="start", scan_session_id=scan_session_id)
+            return _scanner_rate_limited_response(retry_after)
+
         test_file = request.files.get("test_image")
         scanner_generation = request.form.get("scanner_generation")
         source_frame_width = request.form.get("source_frame_width", type=int)
@@ -6370,6 +6508,7 @@ def detect_init():
             matched_video_url = url_for("serve_video", project_id=project_id, image_id=best_match_id, _external=True,_scheme="https")
         
         print(f"✅ Detection successful! Returning response")
+        _log_scanner_latency("detect_init", t_start, project_id=project_id, outcome="accepted", stage="response", scan_session_id=scan_session_id)
         _log_frame_diag(
             "accepted",
             raw_keypoints=len(test_kp), quick_score_candidates=len(scored), good_matches=best_good,
@@ -6419,6 +6558,7 @@ def detect_init():
 def scanner_session_end():
     """End scanner session - COUNT ONLY ONCE here"""
     try:
+        t_start = time.time()
         print("\n" + "="*50)
         print("🔍 SESSION END CALLED")
         print("="*50)
@@ -6436,6 +6576,13 @@ def scanner_session_end():
         
         project_id = data.get("project_id")
         session_id = data.get("session_id")
+        ok, retry_after = _check_rate_limit(
+            "scanner_session_end",
+            _rate_limit_key("scanner_session_end", project_id, session_id),
+        )
+        if not ok:
+            _log_scanner_latency("scanner_session_end", t_start, project_id=project_id, outcome="rate_limited", stage="start", scan_session_id=session_id)
+            return _scanner_rate_limited_response(retry_after)
 
         project = Project.query.get(int(project_id)) if project_id else None
 
@@ -6531,6 +6678,7 @@ def scanner_session_end():
         print(f"COUNTED: {old_count} -> {user.scans_used}")
         print("="*50 + "\n")
 
+        _log_scanner_latency("scanner_session_end", t_start, project_id=project_id, outcome="counted", stage="response", scan_session_id=session_id)
         return jsonify({
             "ok": True,
             "counted": True,
@@ -6550,8 +6698,16 @@ def detect_track():
         t_start = time.time()
         project_id = request.form.get("project_id", type=int)
         pair_id = request.form.get("pair_id", type=int)
-        test_file = request.files.get("test_image")
         scan_session_id = request.form.get("scan_session_id", "")
+        ok, retry_after = _check_rate_limit(
+            "scanner_track",
+            _rate_limit_key("detect_track", project_id, scan_session_id, pair_id),
+        )
+        if not ok:
+            _log_scanner_latency("detect_track", t_start, project_id=project_id, pair_id=pair_id, outcome="rate_limited", stage="start", scan_session_id=scan_session_id)
+            return _scanner_rate_limited_response(retry_after)
+
+        test_file = request.files.get("test_image")
         
         if project_id is None or pair_id is None or test_file is None:
             return jsonify({"ok": False, "reason": "Missing project_id/pair_id/image"}), 400
@@ -6648,6 +6804,7 @@ def detect_track():
         
         corners_out = [{"x": c[0], "y": c[1]} for c in corners]
         
+        _log_scanner_latency("detect_track", t_start, project_id=project_id, pair_id=pair_id, outcome="accepted", stage="response", scan_session_id=scan_session_id)
         return jsonify({
             "ok": True,
             "corners": corners_out,
@@ -8751,7 +8908,8 @@ def serve_admin_image(project_id, image_id):
         print(f"❌ Admin image not found: {file_path}")
         abort(404)
     
-    return send_from_directory(ADMIN_IMAGES_DIR, pair.image_filename)
+    response = send_from_directory(ADMIN_IMAGES_DIR, pair.image_filename)
+    return _apply_short_public_cache(response)
 @app.route("/admin/video/<int:project_id>/<int:image_id>")
 def serve_admin_video(project_id, image_id):
     """Serve videos for ADMIN projects only"""
@@ -8765,7 +8923,9 @@ def serve_admin_video(project_id, image_id):
     if not pair:
         abort(404)
     
-    return send_from_directory(ADMIN_VIDEOS_DIR, pair.video_filename)
+    response = send_from_directory(ADMIN_VIDEOS_DIR, pair.video_filename)
+    response.headers["Content-Disposition"] = "inline"
+    return _apply_short_public_cache(response)
 
 @app.route("/admin/qr/<filename>")
 def serve_admin_qr(filename):
@@ -8782,7 +8942,8 @@ def serve_admin_qr(filename):
     if not _project_is_available(project):
         return _project_unavailable_response()
     
-    return send_from_directory(ADMIN_QR_DIR, filename)
+    response = send_from_directory(ADMIN_QR_DIR, filename)
+    return _apply_short_public_cache(response)
 
 @app.route("/admin/success/<int:project_id>", methods=["GET"])
 @admin_required
