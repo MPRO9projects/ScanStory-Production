@@ -7,13 +7,13 @@ time. Do not run commands against real/shared databases from a local shell.
 
 1. Freeze the release commit and record the full SHA.
 2. Confirm `git status --short` is clean.
-3. Create or verify the artifact/version record.
-4. Capture relational database backup.
-5. Capture upload/media backup.
-6. Confirm backup integrity and restore location.
+3. Capture relational database backup.
+4. Capture upload/media backup.
+5. Confirm backup integrity and restore location.
+6. Verify environment variables without printing values.
 7. Put release files in place.
 8. Install dependencies from the approved requirements file.
-9. Verify environment variables without printing values.
+9. Create or verify the artifact/version record.
 10. Verify writable paths for images, videos, feature artifacts, QR assets, and
     logs.
 11. Run `flask db heads`.
@@ -38,6 +38,10 @@ time. Do not run commands against real/shared databases from a local shell.
 29. Release traffic.
 30. Monitor health, readiness, error rate, payment activation, scanner latency,
     and storage utilization.
+
+The first production traffic release must not happen before health, readiness,
+login, admin, upload, scanner, media, suspension, and Razorpay test-mode staging
+evidence are recorded for the exact release commit.
 
 ## Deployment Stop Conditions
 

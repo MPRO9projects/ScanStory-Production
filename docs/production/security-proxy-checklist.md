@@ -1,7 +1,8 @@
 # Security and Reverse-Proxy Checklist
 
-ScanStory uses Flask `ProxyFix` with a trusted proxy count. The application
-must not be directly exposed to the internet behind spoofable forwarded headers.
+ScanStory currently uses Flask `ProxyFix(x_for=1, x_proto=1, x_host=1)`.
+The application must not be directly exposed to the internet behind spoofable
+forwarded headers.
 
 ## Requirements
 
@@ -17,6 +18,9 @@ must not be directly exposed to the internet behind spoofable forwarded headers.
 - Rate limiter uses `request.remote_addr`, after ProxyFix normalization.
 - Current limiter is process-local and is not shared between Gunicorn workers.
 - Redis/shared limiter is required before horizontal scale.
+- Because the limiter is process-local memory, counters are not shared across
+  Gunicorn workers and are lost on process restart. Treat it as an interim
+  single-process protection layer until the Redis/shared limiter is built.
 
 ## Sanitized Nginx-Style Requirements
 
@@ -42,3 +46,5 @@ Do not use a configuration that forwards untrusted client-supplied
   limits.
 - Confirm session cookies are secure in HTTPS production.
 - Confirm CSP is in the intended report-only or enforce mode for the release.
+- Confirm direct app-port requests cannot send their own `X-Forwarded-For` to
+  bypass per-IP login, upload, or scanner limits.

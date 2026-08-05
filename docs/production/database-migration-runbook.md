@@ -29,6 +29,23 @@ python -m flask --app app db history
 python -m flask --app app db current
 ```
 
+Current application-level maintenance CLIs that are relevant to the integrated
+quota/payment/capacity state:
+
+```powershell
+python -m flask --app app reconcile-quota-counters
+python -m flask --app app reconcile-quota-counters --repair
+python -m flask --app app capacity-status
+python -m flask --app app expire-stale-reservations
+python -m flask --app app expire-stale-reservations --apply
+python -m flask --app app reconcile-capacity-reservations
+python -m flask --app app reconcile-capacity-reservations --apply
+```
+
+Dry-run/report modes must be captured before any `--repair` or `--apply`.
+The verification scripts in this package do not run `flask db upgrade`,
+`--repair`, or `--apply`.
+
 Where supported, generate offline SQL for review before applying migration:
 
 ```powershell

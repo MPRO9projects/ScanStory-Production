@@ -9,8 +9,15 @@ timeline, evidence, owner, impact, and follow-up actions.
 2. Locate internal order/payment records without printing secrets.
 3. Check reservation state and capacity.
 4. Check signature validation logs.
-5. Do not manually activate until ownership and payment status are verified.
-6. If confirmed, apply the approved repair path and record evidence.
+5. Preserve evidence: order ID, payment ID, user ID, plan ID, reservation ID,
+   timestamps, and current row statuses. Do not record key secrets, signatures,
+   cookies, or full request bodies.
+6. Do not manually activate until ownership, payment status, plan, amount,
+   currency, and reservation state are verified.
+7. Use only an approved repair path. The current package provides capacity and
+   quota reconciliation CLIs, but no Razorpay webhook or automatic refund flow.
+8. Record whether capacity was reserved, released, expired, activated, or
+   inconsistent.
 
 ## Duplicate Callback or Verification
 

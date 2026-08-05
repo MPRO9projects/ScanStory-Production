@@ -11,15 +11,24 @@ production keys during staging certification.
 4. Confirm capacity reservation is created before checkout completion.
 5. Complete successful checkout.
 6. Validate payment signature.
-7. Confirm subscription activation.
+7. Confirm server-side stored plan, amount, currency, and capacity reservation
+   are authoritative; browser-provided plan/amount values must not activate a
+   different entitlement.
 8. Replay callback/verification and confirm idempotent behavior.
 9. Attempt wrong-user verification and confirm rejection.
-10. Fill capacity and confirm capacity-full rejection happens before order
+10. Attempt amount/plan mismatch and confirm rejection or no entitlement
+    escalation.
+11. Fill capacity and confirm capacity-full rejection happens before order
     creation.
-11. Pause capacity and confirm order creation is blocked.
-12. Expire reservation and confirm stale checkout cannot activate incorrectly.
-13. Run stale reservation reconciliation.
-14. Confirm logs contain no secrets, emails in payment payload logs, raw
+12. Pause capacity and confirm order creation is blocked.
+13. Lower configured capacity below current active/reserved count and confirm
+    existing active users are not deactivated or evicted.
+14. Expire reservation and confirm stale checkout cannot activate incorrectly.
+15. Replay successful verification and confirm it does not reset quotas, extend
+    subscription end again, or consume a second capacity slot.
+16. Run stale reservation reconciliation.
+17. Run capacity reconciliation in dry-run/report mode.
+18. Confirm logs contain no secrets, emails in payment payload logs, raw
     signatures, auth cookies, or credentials.
 
 ## Not Yet Certified
@@ -27,6 +36,9 @@ production keys during staging certification.
 Webhook behavior is not certified until the later webhook phase is implemented.
 Do not represent webhook handling as production-ready before that phase passes
 its own staging certification.
+
+There is no automatic refund flow in this package. Refunds remain an operator
+or later integration concern and must not be implied by the V1 checkout flow.
 
 ## Evidence to Record
 

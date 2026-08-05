@@ -55,9 +55,9 @@ Classifications:
 | Razorpay | `RAZORPAY_KEY_SECRET` | required for payments, secret, production-only/staging-only, no safe default | Never log. |
 | SMTP | `SMTP_HOST` | required for email, secret if private, no safe default | Approved mail provider host. |
 | SMTP | `SMTP_PORT` | required for email, no safe default | Use provider-approved TLS port. |
-| SMTP | `SMTP_USERNAME` | required for email, secret, no safe default | Secret-manager only. |
-| SMTP | `SMTP_PASSWORD` | required for email, secret, no safe default | Secret-manager only. |
-| SMTP | `SMTP_FROM_EMAIL` | required for email, no safe default | Public sender identity. |
+| SMTP | `SMTP_USER` | required for email, secret, no safe default | Secret-manager only. |
+| SMTP | `SMTP_PASS` | required for email, secret, no safe default | Secret-manager only. |
+| SMTP | `MAIL_FROM` | optional, no safe default | Defaults to `SMTP_USER` when unset. |
 | Proxy | `TRUSTED_PROXY_COUNT` | optional/future, production-only, no safe default | Code currently uses `ProxyFix(x_for=1)`; deployment must match one trusted proxy. |
 | Storage | `SCANSTORY_DATA_DIR` | required, production-only, no safe default | Uploaded user media and artifacts. |
 | Storage | `SCANSTORY_ADMIN_DATA_DIR` | required, production-only, no safe default | Admin-owned media and artifacts. |
@@ -68,11 +68,35 @@ Classifications:
 | Application mode | `FLASK_ENV` | required, no safe default | Use staging/production as applicable. |
 | Application mode | `FLASK_DEBUG` | optional, safe default off | Must not be enabled in production. |
 | Application mode | `SCANSTORY_TESTING` | optional, safe default off | Must not be enabled in production. |
-| Logging | `LOG_LEVEL` | optional, safe default | Must not cause secret/body logging. |
-| Logging | `STRUCTURED_LOGGING_ENABLED` | optional/future, safe default | Use when centralized logging is ready. |
+| Logging | `LOG_LEVEL` | future, not yet active | Do not rely on this until logging config reads it. |
+| Logging | `STRUCTURED_LOGGING_ENABLED` | future, not yet active | Use when centralized logging is ready. |
 | Future queue | `REDIS_URL` | future, secret, not yet active | Required before Redis/RQ rollout. |
 | Future queue | `RQ_QUEUE_NAME` | future, optional, not yet active | Queue monitoring is future until Redis/RQ exists. |
 | Future limiter | `RATE_LIMIT_REDIS_URL` | future, secret, not yet active | Required before horizontal scale/shared limiter. |
+| Future webhook | `RAZORPAY_WEBHOOK_SECRET` | future, secret, not yet active | Required only after the Razorpay webhook phase exists. |
+
+## Current Integrated Runtime Constants
+
+These values are from the current hardened integration branch and are included
+so staging checks do not certify the wrong behavior.
+
+| Area | Current value |
+| --- | --- |
+| Proxy trust | `ProxyFix(x_for=1, x_proto=1, x_host=1)`; deploy behind exactly one trusted proxy hop. |
+| Paid capacity default | `SCANSTORY_INITIAL_CAPACITY_LIMIT`, default `25`. |
+| Capacity reservation TTL | `SCANSTORY_CAPACITY_RESERVATION_TTL_MINUTES`, default `30`. |
+| Scanner init limit | `45` requests per `60` seconds per normalized client IP. |
+| Scanner tracking limit | `240` requests per `60` seconds per normalized client IP. |
+| Scanner session-end limit | `90` requests per `60` seconds per normalized client IP. |
+| Upload limit | `8` upload starts per `3600` seconds per normalized client IP. |
+| Login IP limit | `80` attempts per `900` seconds per normalized client IP. |
+| Register IP limit | `30` attempts per `3600` seconds per normalized client IP. |
+| Forgot-password IP limit | `30` attempts per `3600` seconds per normalized client IP. |
+| Resend-OTP IP limit | `20` attempts per `3600` seconds per normalized client IP. |
+| Public media cache | `public, max-age=3600`; suspended media may remain in a browser cache until expiry. |
+| OpenCV static cache | `public, max-age=31536000, immutable`; service worker only intercepts `/static/js/opencv*`. |
+| CSP image sources | self/data/blob plus `https://images.pexels.com`; no broad `https:` or `*` image source. |
+| Rate limiter | Process-local memory only; not shared across workers and reset on process restart. |
 
 ## Required Pre-Deployment Checklist
 
