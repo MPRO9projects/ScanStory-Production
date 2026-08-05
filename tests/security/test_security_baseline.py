@@ -1,3 +1,5 @@
+from io import BytesIO
+
 import pytest
 
 
@@ -45,9 +47,36 @@ def test_user_cannot_view_another_user_project(client, app_module, db_session, l
 # 200 on a valid one) is proven in tests/security/test_csrf_and_headers.py.
 
 
-@pytest.mark.xfail(reason="severity=High; flow=upload; desired=file signatures verified before save; actual=upload path does not enforce signature validation; future_gate=upload security")
-def test_upload_should_require_file_signature_validation():
-    raise AssertionError("File signature validation is not yet enforced")
+def test_upload_should_require_file_signature_validation(client, app_module, login_user):
+    """P0D: uploads are validated from real content, not extension/MIME.
+
+    Full scenario coverage lives in
+    tests/security/test_upload_validation.py; this proves the exact concern
+    the xfail used to document is now genuinely closed.
+    """
+    data = {
+        "name": "Signature Check Project",
+        "upload_id": "baseline-signature-check",
+        "images": [(BytesIO(b"MZ\x90\x00fake-executable-payload"), "marker.jpg")],
+        "videos": [(BytesIO(b"video"), "clip.mp4")],
+        "marker_0_mode": "crop",
+        "marker_0_crop_x": "0.1",
+        "marker_0_crop_y": "0.1",
+        "marker_0_crop_width": "0.6",
+        "marker_0_crop_height": "0.6",
+        "marker_0_rotation": "0",
+        "marker_0_original_width": "640",
+        "marker_0_original_height": "480",
+        "marker_0_processed_width": "520",
+        "marker_0_processed_height": "420",
+        "marker_0_source_size_bytes": "100000",
+        "marker_0_processed_size_bytes": "90000",
+        "marker_0_display_orientation": "landscape",
+    }
+    before_count = app_module.Project.query.count()
+    response = client.post("/upload", data=data, content_type="multipart/form-data", follow_redirects=True)
+    assert response.status_code == 200
+    assert app_module.Project.query.count() == before_count
 
 
 def test_otp_bruteforce_throttling_required(app_module, normal_user):

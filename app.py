@@ -43,6 +43,7 @@ from models import (
     Project, ProjectPair, PaymentOrder, ScanLog, SystemConfig,
     UserLoginActivity, AdminActivity
 )
+from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 
 from flask import render_template, abort
 
@@ -374,8 +375,12 @@ STATIC_UPLOADS_DIR = os.environ.get("SCANSTORY_STATIC_UPLOADS_DIR", os.path.join
 STATIC_JS_DIR = os.path.join("static", "js")
 LOGOS_DIR = os.path.join(STATIC_UPLOADS_DIR, "logos")
 ADMIN_UPLOADS_DIR = os.path.join(STATIC_UPLOADS_DIR, "admin")
+# Ephemeral staging area: uploads are validated here before being moved to
+# IMAGES_DIR/VIDEOS_DIR (see upload_validation.py) - never a permanent,
+# trusted-media location.
+TMP_UPLOADS_DIR = os.path.join(DATA_DIR, "tmp_uploads")
 
-for d in (DATA_DIR, IMAGES_DIR, VIDEOS_DIR, FEATURES_DIR, QR_DIR, STATIC_UPLOADS_DIR, STATIC_JS_DIR, LOGOS_DIR, ADMIN_UPLOADS_DIR):
+for d in (DATA_DIR, IMAGES_DIR, VIDEOS_DIR, FEATURES_DIR, QR_DIR, STATIC_UPLOADS_DIR, STATIC_JS_DIR, LOGOS_DIR, ADMIN_UPLOADS_DIR, TMP_UPLOADS_DIR):
     os.makedirs(d, exist_ok=True)
 
 ADMIN_DATA_DIR = os.environ.get("SCANSTORY_ADMIN_DATA_DIR", os.path.join(BASE_DIR, "data_admin"))
@@ -1954,8 +1959,22 @@ def delete_dev_test_users_command(dry_run, confirm):
 # --------------------------------------------------------------------------------------------
 # CV/QR functions (same as before)
 # --------------------------------------------------------------------------------------------
-MAX_IMAGE_SIZE = 50 * 1024 * 1024
-MAX_VIDEO_SIZE = 1 * 1024 * 1024 * 1024
+# Per-file upload limits (P0D) - env-overridable, same defaults as before.
+MAX_IMAGE_SIZE = int(os.environ.get("MAX_IMAGE_UPLOAD_BYTES", 50 * 1024 * 1024))
+MAX_VIDEO_SIZE = int(os.environ.get("MAX_VIDEO_UPLOAD_BYTES", 1 * 1024 * 1024 * 1024))
+MAX_IMAGE_DIMENSION_PX = int(os.environ.get("MAX_IMAGE_DIMENSION_PX", 8000))
+MAX_IMAGE_PIXELS = int(os.environ.get("MAX_IMAGE_PIXELS", 40_000_000))
+# Optional; unset/0 disables the duration check entirely.
+MAX_VIDEO_DURATION_SECONDS = int(os.environ.get("MAX_VIDEO_DURATION_SECONDS", "0") or "0") or None
+
+# Whole-request body cap. Left unset by default (Flask's existing, unchanged
+# behavior) since a single legitimate multi-pair upload can legitimately
+# approach MAX_VIDEO_SIZE * pairs-per-project; only apply a cap when an
+# operator explicitly opts in via env (see .env.example).
+_max_content_length_env = os.environ.get("MAX_CONTENT_LENGTH")
+if _max_content_length_env:
+    app.config["MAX_CONTENT_LENGTH"] = int(_max_content_length_env)
+
 MAX_WORKERS = min(8, (os.cpu_count() or 4))
 
 ORB_MAX_DIM = 1200
@@ -3821,11 +3840,16 @@ def user_edit_project(project_id):
         new_video = request.files.get(vid_key)
 
         if new_image and new_image.filename:
-            if _too_big(new_image, MAX_IMAGE_SIZE):
-                flash(f"Image for pair {pair.pair_index + 1} is too large.", "error")
+            try:
+                img_temp, _img_ext = validate_image(
+                    new_image, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+                )
+            except UploadValidationError as exc:
+                app.logger.warning(f"Replacement image rejected (pair {pair.pair_index}): {exc.detail}")
+                flash(f"Image for pair {pair.pair_index + 1}: {exc.safe_message}", "error")
                 return redirect(url_for("user_edit_project_page", project_id=project_id))
             img_path = os.path.join(IMAGES_DIR, pair.image_filename)
-            new_image.save(img_path)
+            os.replace(img_temp, img_path)  # existing image only replaced after successful validation
             standardize_uploaded_image(img_path, target_size=1200)
             pair.is_processed = False
             pair.processing_status = "uploaded"
@@ -3834,11 +3858,16 @@ def user_edit_project(project_id):
             updated += 1
 
         if new_video and new_video.filename:
-            if _too_big(new_video, MAX_VIDEO_SIZE):
-                flash(f"Video for pair {pair.pair_index + 1} is too large.", "error")
+            try:
+                vid_temp, _vid_ext = validate_video(
+                    new_video, TMP_UPLOADS_DIR, MAX_VIDEO_SIZE, MAX_VIDEO_DURATION_SECONDS
+                )
+            except UploadValidationError as exc:
+                app.logger.warning(f"Replacement video rejected (pair {pair.pair_index}): {exc.detail}")
+                flash(f"Video for pair {pair.pair_index + 1}: {exc.safe_message}", "error")
                 return redirect(url_for("user_edit_project_page", project_id=project_id))
             vid_path = os.path.join(VIDEOS_DIR, pair.video_filename)
-            new_video.save(vid_path)
+            os.replace(vid_temp, vid_path)  # existing video only replaced after successful validation
             updated += 1
 
     db.session.commit()
@@ -4440,21 +4469,40 @@ def handle_upload():
         flash(f"Your current plan allows maximum {max_pairs} pairs per project.", "error")
         return redirect(url_for("user_create_project_page"))
 
-    # Quick file size check (FAST - doesn't read entire file)
-    for image_file in images:
-        if image_file.content_length and image_file.content_length > MAX_IMAGE_SIZE:
-            flash("Image file exceeds allowed size limit.", "error")
-            return redirect(url_for("user_create_project_page"))
-
-    for video_file in videos:
-        if video_file.content_length and video_file.content_length > MAX_VIDEO_SIZE:
-            flash("Video file exceeds allowed size limit.", "error")
-            return redirect(url_for("user_create_project_page"))
-
     try:
         marker_metadata = [_parse_marker_meta(i) for i in range(len(images))]
     except ValueError as exc:
         flash(str(exc), "error")
+        return redirect(url_for("user_create_project_page"))
+
+    # Validate every file from its actual content BEFORE any quota
+    # reservation or DB row is created (P0D) - a rejected upload must never
+    # consume project/pair quota. All-or-nothing: every pair in the request
+    # must validate before any of them are persisted.
+    validated_media = []
+    try:
+        for i, (image_file, video_file) in enumerate(zip(images, videos)):
+            try:
+                img_temp, img_ext = validate_image(
+                    image_file, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+                )
+            except UploadValidationError as exc:
+                app.logger.warning(f"Upload rejected (image, pair {i}, upload_id={upload_id}): {exc.detail}")
+                raise
+            try:
+                vid_temp, vid_ext = validate_video(
+                    video_file, TMP_UPLOADS_DIR, MAX_VIDEO_SIZE, MAX_VIDEO_DURATION_SECONDS
+                )
+            except UploadValidationError as exc:
+                _safe_remove(img_temp)
+                app.logger.warning(f"Upload rejected (video, pair {i}, upload_id={upload_id}): {exc.detail}")
+                raise
+            validated_media.append({"image_temp": img_temp, "image_ext": img_ext, "video_temp": vid_temp, "video_ext": vid_ext})
+    except UploadValidationError as exc:
+        for item in validated_media:
+            _safe_remove(item["image_temp"])
+            _safe_remove(item["video_temp"])
+        flash(exc.safe_message, "error")
         return redirect(url_for("user_create_project_page"))
 
     # STEP 1-3: reserve quota, create project/pairs, and commit as one unit.
@@ -4491,12 +4539,12 @@ def handle_upload():
 
         for i, (image_file, video_file) in enumerate(zip(images, videos)):
             marker_meta = marker_metadata[i]
+            media = validated_media[i]
             img_filename = f"{project.id}_{i}.jpg"
-            vid_ext = os.path.splitext(video_file.filename or "")[1].lower() or ".mp4"
-            vid_filename = f"{project.id}_{i}{vid_ext}"
+            vid_filename = f"{project.id}_{i}{media['video_ext']}"
 
             img_path = os.path.join(IMAGES_DIR, img_filename)
-            image_file.save(img_path)
+            os.replace(media["image_temp"], img_path)  # atomic move: already-validated content only
             saved_paths.append(img_path)
 
             vid_path = os.path.join(VIDEOS_DIR, vid_filename)
@@ -4512,9 +4560,9 @@ def handle_upload():
                     content_length=request.content_length,
                 ),
             )
-            video_file.save(vid_path)
+            os.replace(media["video_temp"], vid_path)  # atomic move: already-validated content only
             saved_paths.append(vid_path)
-            video_size = os.path.getsize(vid_path) if os.path.exists(vid_path) else video_file.content_length
+            video_size = os.path.getsize(vid_path)
             _upload_log(
                 "VIDEO SERVER PERSIST DONE",
                 upload_id,
@@ -4580,6 +4628,11 @@ def handle_upload():
                     os.remove(saved_path)
             except Exception:
                 pass
+        # Any pairs not yet reached in the loop above still have their
+        # validated temp files sitting in TMP_UPLOADS_DIR - clean those up too.
+        for media in validated_media:
+            _safe_remove(media.get("image_temp"))
+            _safe_remove(media.get("video_temp"))
         flash(str(exc) if isinstance(exc, ValueError) else "Project upload failed. Please try again.", "error")
         return redirect(url_for("user_create_project_page"))
     # ✅ STEP 4: Generate QR code (FAST)
@@ -7801,17 +7854,34 @@ def admin_handle_upload():
     
     
     
-    # Quick file size check
-    for image_file in images:
-        if image_file.content_length and image_file.content_length > MAX_IMAGE_SIZE:
-            flash("Image file exceeds allowed size limit.", "error")
-            return redirect(url_for("admin_create_project_page"))
-    
-    for video_file in videos:
-        if video_file.content_length and video_file.content_length > MAX_VIDEO_SIZE:
-            flash("Video file exceeds allowed size limit.", "error")
-            return redirect(url_for("admin_create_project_page"))
-    
+    # Validate every file from its actual content BEFORE the project row or
+    # any pair is created (P0D) - matches the user-upload path. All-or-nothing.
+    validated_media = []
+    try:
+        for i, (image_file, video_file) in enumerate(zip(images, videos)):
+            try:
+                img_temp, img_ext = validate_image(
+                    image_file, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+                )
+            except UploadValidationError as exc:
+                app.logger.warning(f"Admin upload rejected (image, pair {i}): {exc.detail}")
+                raise
+            try:
+                vid_temp, vid_ext = validate_video(
+                    video_file, TMP_UPLOADS_DIR, MAX_VIDEO_SIZE, MAX_VIDEO_DURATION_SECONDS
+                )
+            except UploadValidationError as exc:
+                _safe_remove(img_temp)
+                app.logger.warning(f"Admin upload rejected (video, pair {i}): {exc.detail}")
+                raise
+            validated_media.append({"image_temp": img_temp, "image_ext": img_ext, "video_temp": vid_temp, "video_ext": vid_ext})
+    except UploadValidationError as exc:
+        for item in validated_media:
+            _safe_remove(item["image_temp"])
+            _safe_remove(item["video_temp"])
+        flash(exc.safe_message, "error")
+        return redirect(url_for("admin_create_project_page"))
+
     # Create project
     # Assign a per-admin project index (persisted) so admin projects also have stable numbers
     try:
@@ -7831,20 +7901,20 @@ def admin_handle_upload():
     db.session.add(project)
     db.session.commit()
     
-    # Save ALL files quickly
+    # Move ALL already-validated files into place
     pairs_data = []
     for i, (image_file, video_file) in enumerate(zip(images, videos)):
+        media = validated_media[i]
         # Generate filenames
         img_filename = f"{project.id}_{i}.jpg"
-        vid_ext = os.path.splitext(video_file.filename or "")[1].lower() or ".mp4"
-        vid_filename = f"{project.id}_{i}{vid_ext}"
-        
+        vid_filename = f"{project.id}_{i}{media['video_ext']}"
+
         # ✅ CHANGE 1: Save to ADMIN folders
         img_path = os.path.join(ADMIN_IMAGES_DIR, img_filename)  # ← CHANGED
-        image_file.save(img_path)
-        
+        os.replace(media["image_temp"], img_path)
+
         vid_path = os.path.join(ADMIN_VIDEOS_DIR, vid_filename)  # ← CHANGED
-        video_file.save(vid_path)
+        os.replace(media["video_temp"], vid_path)
         
         # ✅ CHANGE 2: Use admin image URL
         pair = ProjectPair(
