@@ -38,6 +38,38 @@ location / {
 Do not use a configuration that forwards untrusted client-supplied
 `X-Forwarded-For` values unchanged.
 
+## Razorpay Webhook Signature Handling
+
+`POST /webhooks/razorpay` is authenticated by header-based HMAC signature
+verification instead of a session/cookie, so its proxy and secret-handling
+requirements differ from browser routes:
+
+- The reverse proxy must pass the `X-Razorpay-Signature` request header
+  through unmodified — it is the sole authenticity check for this route.
+- The reverse proxy/app must not transform, decompress-then-recompress, or
+  otherwise mutate the raw request body before it reaches the handler; the
+  signature is computed over the exact raw bytes Razorpay sent, and any
+  body modification (including a proxy that pretty-prints/re-serializes
+  JSON) would break verification for every legitimate delivery.
+- `@csrf.exempt` on this specific route is intentional and safe: CSRF
+  protection exists to stop a browser from being tricked into submitting an
+  authenticated *cookie-bearing* request. This route accepts no session
+  cookie and performs no cookie-based auth at all, so there is no CSRF
+  attack surface to protect against here — the HMAC-SHA256 signature check
+  against `RAZORPAY_WEBHOOK_SECRET` is the actual authenticity control, and
+  it is stronger than CSRF tokens for a server-to-server caller.
+- `RAZORPAY_WEBHOOK_SECRET` must be stored only in the approved secret
+  manager, the same as `RAZORPAY_KEY_SECRET`, `FLASK_SECRET_KEY`, and other
+  production secrets. It is a distinct value from `RAZORPAY_KEY_SECRET` with
+  no fallback between them — rotating one does not rotate the other, and a
+  leaked API key secret does not by itself allow forging webhook deliveries
+  (or vice versa).
+- The webhook route is deliberately not covered by `request_limiter`
+  (per-IP) rate limiting, because Razorpay's own retries can legitimately
+  arrive from shared/rotating source IPs. Do not add IP-based rate limiting
+  to this route as a "fix" — signature verification plus the database
+  unique-index idempotency gate are the intended controls.
+
 ## Verification
 
 - Confirm direct public access to application port is impossible.
@@ -48,3 +80,8 @@ Do not use a configuration that forwards untrusted client-supplied
 - Confirm CSP is in the intended report-only or enforce mode for the release.
 - Confirm direct app-port requests cannot send their own `X-Forwarded-For` to
   bypass per-IP login, upload, or scanner limits.
+- Confirm the reverse proxy passes `X-Razorpay-Signature` through unmodified
+  and does not alter the raw request body on the path to
+  `POST /webhooks/razorpay`.
+- Confirm `RAZORPAY_WEBHOOK_SECRET` is present only in the secret manager,
+  is distinct from `RAZORPAY_KEY_SECRET`, and is never logged.

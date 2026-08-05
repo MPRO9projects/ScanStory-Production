@@ -73,7 +73,7 @@ Classifications:
 | Future queue | `REDIS_URL` | future, secret, not yet active | Required before Redis/RQ rollout. |
 | Future queue | `RQ_QUEUE_NAME` | future, optional, not yet active | Queue monitoring is future until Redis/RQ exists. |
 | Future limiter | `RATE_LIMIT_REDIS_URL` | future, secret, not yet active | Required before horizontal scale/shared limiter. |
-| Future webhook | `RAZORPAY_WEBHOOK_SECRET` | future, secret, not yet active | Required only after the Razorpay webhook phase exists. |
+| Razorpay | `RAZORPAY_WEBHOOK_SECRET` | required for webhook reconciliation, secret, production-only, no safe default | Dedicated Razorpay webhook secret, separate from `RAZORPAY_KEY_SECRET` with no fallback between them. `POST /webhooks/razorpay` fails closed (rejects, processes nothing) when this is absent/empty. |
 
 ## Current Integrated Runtime Constants
 
@@ -97,6 +97,8 @@ so staging checks do not certify the wrong behavior.
 | OpenCV static cache | `public, max-age=31536000, immutable`; service worker only intercepts `/static/js/opencv*`. |
 | CSP image sources | self/data/blob plus `https://images.pexels.com`; no broad `https:` or `*` image source. |
 | Rate limiter | Process-local memory only; not shared across workers and reset on process restart. |
+| Razorpay webhook route | `POST /webhooks/razorpay`; unauthenticated/no-session, `@csrf.exempt`, not covered by `request_limiter`; authenticity is `X-Razorpay-Signature` HMAC-SHA256 verification against `RAZORPAY_WEBHOOK_SECRET` only. |
+| Razorpay webhook supported events | `payment.captured` only; every other validly-signed event type is acknowledged with zero mutation. |
 
 ## Required Pre-Deployment Checklist
 
@@ -117,6 +119,12 @@ so staging checks do not certify the wrong behavior.
 - The rate limiter is process-local and not shared between Gunicorn workers.
   Redis/shared limiting is required before horizontal scale.
 - Queue monitoring is future until Redis/RQ exists.
-- Razorpay webhook certification is not complete until the later webhook phase
-  is implemented.
+- Razorpay webhook reconciliation (`POST /webhooks/razorpay`, migration
+  `ebeab1cf4ec9`) is merged and covered by mocked/simulated automated tests,
+  but is not yet staging-certified: real Razorpay test-mode webhook delivery
+  against a real public HTTPS staging endpoint has not been exercised. See
+  `razorpay-certification.md`'s Webhook Staging Checks before treating it as
+  production-ready.
+- There is no automatic refund flow, and no refund/chargeback/settlement/
+  subscription-renewal webhook event support — out of scope entirely.
 - Public media has a one-hour browser-cache limitation after suspension.
