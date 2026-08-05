@@ -11,7 +11,7 @@ from functools import lru_cache, wraps
 from datetime import datetime as dt, timedelta
 from flask import (
     Flask, request, redirect, url_for, session,
-    jsonify, flash, send_from_directory, render_template, abort
+    jsonify, flash, send_from_directory, render_template, abort, has_request_context
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -42,10 +42,21 @@ from sqlalchemy.orm import aliased
 from models import (
     db, User, Admin, SubscriptionPlan, TrialDetails, OTPCode,
     Project, ProjectPair, PaymentOrder, ScanLog, SystemConfig,
-    UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation, RazorpayWebhookEvent
+    UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation,
+    RazorpayWebhookEvent, ProcessingJob
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
+from processing_queue import (
+    QueueUnavailable,
+    active_project_job,
+    enqueue_project_pair_processing,
+    processing_job_status_payload,
+    queue_required,
+    redis_ready_check,
+    retry_failed_job,
+    safe_error_summary,
+)
 request_limiter.clear()
 
 from flask import render_template, abort
@@ -439,13 +450,22 @@ def healthz():
 
 def _readiness_checks():
     db.session.execute(text("SELECT 1"))
-    return {"database": "ok"}
+    checks = {"database": "ok"}
+    if queue_required():
+        if not redis_ready_check():
+            return {"database": "ok", "queue": "unavailable"}
+        checks["queue"] = "ok"
+    return checks
 
 
 @app.route("/ready", methods=["GET"])
 def ready():
     try:
         checks = _readiness_checks()
+        if checks.get("queue") == "unavailable":
+            response = jsonify({"status": "not_ready", "checks": checks})
+            response.headers["Cache-Control"] = "no-store"
+            return response, 503
         response = jsonify({"status": "ready", "checks": checks})
         response.headers["Cache-Control"] = "no-store"
         return response, 200
@@ -1496,6 +1516,21 @@ def get_project_display_number(project):
         ).count()
         return count + 1
     return project.id
+
+
+def _schedule_project_pair_processing(project_id, failure_flash="Processing queue is unavailable. Please retry later."):
+    try:
+        job, created = enqueue_project_pair_processing(project_id)
+        if created:
+            app.logger.info(f"processing_job_enqueued job_id={job.id} project_id={project_id} type={job.job_type}")
+        else:
+            app.logger.info(f"processing_job_duplicate_ignored job_id={job.id} project_id={project_id} type={job.job_type}")
+        return job
+    except QueueUnavailable:
+        app.logger.error(f"processing_queue_unavailable project_id={project_id}")
+        if has_request_context():
+            flash(failure_flash, "error")
+        return None
 # Add this after the helper function
 @app.template_filter('project_display_number')
 def project_display_number_filter(project):
@@ -1652,6 +1687,26 @@ def admin_required(view):
 
 def super_admin_required(view):
     return require_admin_permission("superadmin.admins.manage")(view)
+
+
+@app.route("/api/processing/jobs/<int:job_id>", methods=["GET"])
+def processing_job_status(job_id):
+    job = ProcessingJob.query.get_or_404(job_id)
+    user = current_user()
+    admin = current_admin()
+    authorized = False
+    if user and job.owner_user_id == user.id:
+        authorized = True
+    if admin:
+        if admin_has_permission(admin, "superadmin.operations.view"):
+            authorized = True
+        elif job.owner_admin_id == admin.id:
+            authorized = True
+    if not authorized:
+        abort(404)
+    response = jsonify(processing_job_status_payload(job))
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 # --------------------------------------------------------------------------------------------
 # Subscription Enforcement Functions
@@ -2303,6 +2358,58 @@ def reconcile_capacity_reservations(apply_changes):
         click.echo("No drift.")
 
 
+@app.cli.command("recover-processing-jobs")
+@click.option("--older-than-minutes", default=30, show_default=True, type=int)
+@click.option("--job-id", type=int, default=None)
+@click.option("--project-id", type=int, default=None)
+@click.option("--apply", "apply_changes", is_flag=True, help="Persist stale-job recovery decisions. Default is dry-run.")
+def recover_processing_jobs(older_than_minutes, job_id, project_id, apply_changes):
+    """Inspect or recover stale durable processing jobs. CLI-only."""
+    cutoff = dt.utcnow() - timedelta(minutes=max(1, older_than_minutes))
+    query = ProcessingJob.query.filter(
+        ProcessingJob.job_type == "process_project_pairs",
+        ProcessingJob.status.in_(["queued", "processing", "retrying", "ready", "claimed", "running", "retry_scheduled"]),
+    )
+    if job_id:
+        query = query.filter(ProcessingJob.id == job_id)
+    if project_id:
+        query = query.filter(ProcessingJob.project_id == project_id)
+    stale_jobs = query.filter(
+        or_(
+            ProcessingJob.last_heartbeat_at.is_(None),
+            ProcessingJob.last_heartbeat_at < cutoff,
+        )
+    ).order_by(ProcessingJob.created_at.asc()).all()
+
+    click.echo("Mode: apply" if apply_changes else "Mode: dry-run")
+    click.echo(f"Stale jobs found: {len(stale_jobs)}")
+    for job in stale_jobs:
+        retryable = int(job.attempt_count or 0) < int(job.max_attempts or 1)
+        action = "retrying" if retryable else "failed"
+        click.echo(
+            f"job_id={job.id} project_id={job.project_id} status={job.status} "
+            f"attempts={job.attempt_count}/{job.max_attempts} action={action}"
+        )
+        if not apply_changes:
+            continue
+        if retryable:
+            job.status = "retrying"
+            job.available_at = dt.utcnow()
+            job.safe_error_code = "STALE_JOB_RETRY"
+            job.safe_error_summary = "Stale processing job marked eligible for retry."
+        else:
+            job.status = "failed"
+            job.failed_at = dt.utcnow()
+            job.completed_at = dt.utcnow()
+            job.safe_error_code = "STALE_JOB_FAILED"
+            job.safe_error_summary = "Stale processing job exceeded retry budget."
+        job.error_code = job.safe_error_code
+        job.error_message = job.safe_error_summary
+        job.last_heartbeat_at = dt.utcnow()
+    if apply_changes:
+        db.session.commit()
+
+
 def _desired_dev_test_user_values(plan):
     now = dt.utcnow()
     return {
@@ -2943,7 +3050,7 @@ def _empty_features():
     return payload
 
 @lru_cache(maxsize=2048)
-def load_features(project_id: int, pair_index: int = 0):
+def _load_features_cached(project_id: int, pair_index: int = 0, mtime_ns=None, file_size=None):
     try:
         project = None
         try:
@@ -2986,6 +3093,25 @@ def load_features(project_id: int, pair_index: int = 0):
     except Exception as e:
         print(f"❌ load_features error for project={project_id}, pair={pair_index}: {e}")
         return _empty_features()
+
+def load_features(project_id: int, pair_index: int = 0):
+    try:
+        project = Project.query.get(project_id)
+        if project and project.owner_admin_id:
+            npz = os.path.join(ADMIN_FEATURES_DIR, f"{project_id}_{pair_index}.npz")
+        else:
+            npz = os.path.join(FEATURES_DIR, f"{project_id}_{pair_index}.npz")
+        stat = os.stat(npz)
+    except FileNotFoundError:
+        return _empty_features()
+    except Exception as e:
+        print(f"âŒ load_features stat error for project={project_id}, pair={pair_index}: {e}")
+        return _empty_features()
+    return _load_features_cached(project_id, pair_index, stat.st_mtime_ns, stat.st_size)
+
+
+load_features.cache_clear = _load_features_cached.cache_clear
+
 
 def _filter_mutual_unique_matches(matches):
     """Enforce unique query/train correspondence (mutual-nearest-match filtering).
@@ -4410,16 +4536,9 @@ def user_edit_project(project_id):
             load_features.cache_clear()
 
     if pairs_to_process:
-        pairs_data = [
-            {
-                "pair_index": p.pair_index,
-                "image_filename": p.image_filename,
-                "video_filename": p.video_filename,
-            }
-            for p in pairs_to_process
-        ]
-        t = threading.Thread(target=_reprocess_user_bg, args=(project_id, pairs_data), daemon=True)
-        t.start()
+        job = _schedule_project_pair_processing(project_id)
+        if not job:
+            return redirect(url_for("user_edit_project_page", project_id=project_id))
 
     flash("Changes saved. Your ScanStory will be ready in about a minute.", "success")
     return redirect(url_for("projects_page"))
@@ -4444,46 +4563,9 @@ def user_reprocess_project(project_id):
         pair.processing_error = None
     db.session.commit()
 
-    pairs_data = [{"pair_index": p.pair_index, "image_filename": p.image_filename} for p in pairs_to_reprocess]
-
-    def _user_reprocess_bg(project_id, pairs_data):
-        with app.app_context():
-            for pd in pairs_data:
-                pair_index = pd["pair_index"]
-                img_path = os.path.join(IMAGES_DIR, pd["image_filename"])
-                work_img_path = os.path.join(IMAGES_DIR, f"{project_id}_{pair_index}_work.jpg")
-                npz_path = os.path.join(FEATURES_DIR, f"{project_id}_{pair_index}.npz")
-                success = False
-                error_msg = None
-                try:
-                    make_feature_working_jpeg(img_path, work_img_path, max_dim=ORB_MAX_DIM, jpeg_quality=85)
-                    extract_features_multi(work_img_path, npz_path, max_dim=ORB_MAX_DIM)
-                    success = True
-                except Exception as e:
-                    error_msg = str(e)
-                finally:
-                    try:
-                        if os.path.exists(work_img_path):
-                            os.remove(work_img_path)
-                    except Exception:
-                        pass
-
-                try:
-                    db.engine.dispose()
-                    pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=pair_index).first()
-                    if pair:
-                        pair.is_processed = success
-                        pair.processing_status = "completed" if success else "failed"
-                        pair.feature_extraction_status = "extracted" if success else "failed"
-                        pair.processing_error = None if success else error_msg
-                        db.session.commit()
-                except Exception as db_err:
-                    print(f"[USER REPROCESS DB ERROR] {db_err}")
-
-            load_features.cache_clear()
-
-    t = threading.Thread(target=_user_reprocess_bg, args=(project_id, pairs_data), daemon=True)
-    t.start()
+    job = _schedule_project_pair_processing(project_id)
+    if not job:
+        return redirect(url_for("projects_page"))
 
     flash("Reprocessing started. Your QR code stays the same - refresh in a minute to check.", "success")
     return redirect(url_for("projects_page"))
@@ -5347,17 +5429,20 @@ def handle_upload():
                     import traceback
                     traceback.print_exc()
         
-        # Start background processing
-        thread = threading.Thread(
-            target=background_processing_all_pairs,
-            args=(project.id, pairs_data, upload_id),
-            daemon=True
-        )
-        thread.start()
+        job = _schedule_project_pair_processing(project.id)
+        if not job:
+            project_pairs = ProjectPair.query.filter_by(project_id=project.id).all()
+            for pair in project_pairs:
+                pair.processing_status = "failed"
+                pair.feature_extraction_status = "failed"
+                pair.processing_error = "Processing queue unavailable"
+            db.session.commit()
+            flash("Project was saved, but processing could not start. Please retry processing later.", "error")
+            return redirect(url_for("projects_page"))
         upload_timing["jobs_scheduled_at"] = time.time()
-        _upload_log("UPLOAD BG SCHEDULED", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data))
+        _upload_log("UPLOAD BG SCHEDULED", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), job_id=job.id)
         
-        print(f"[UPLOAD] Started background processing for {len(pairs_data)} pairs")
+        print(f"[UPLOAD] Queued background processing for {len(pairs_data)} pairs")
         
     except Exception as e:
         print(f"Failed to start background processing: {e}")
@@ -9196,16 +9281,17 @@ def admin_handle_upload():
                 except Exception as e:
                     print(f"[ADMIN BG FATAL ERROR] {e}")
         
-        # Start thread
-        thread = threading.Thread(
-            target=background_processing_admin,
-            args=(project.id, pairs_data),
-            daemon=True
-        )
-        thread.start()
+        job = _schedule_project_pair_processing(project.id)
+        if not job:
+            for pair in ProjectPair.query.filter_by(project_id=project.id).all():
+                pair.processing_status = "failed"
+                pair.feature_extraction_status = "failed"
+                pair.processing_error = "Processing queue unavailable"
+            db.session.commit()
+            return redirect(url_for("admin_success_page", project_id=project.id))
         
     except Exception as e:
-        print(f"Admin background thread failed: {e}")
+        print(f"Admin background queue failed: {e}")
     
     print(f"[ADMIN UPLOAD] Project {project.id} created in {time.time() - t0:.2f}s with {len(pairs_data)} pairs")
     
