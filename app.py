@@ -42,7 +42,7 @@ from sqlalchemy.orm import aliased
 from models import (
     db, User, Admin, SubscriptionPlan, TrialDetails, OTPCode,
     Project, ProjectPair, PaymentOrder, ScanLog, SystemConfig,
-    UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation
+    UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation, RazorpayWebhookEvent
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
@@ -465,6 +465,16 @@ def ready():
 # --------------------------------------------------------------------------------------------
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+
+# Dedicated webhook secret - deliberately NOT RAZORPAY_KEY_SECRET. Razorpay
+# issues a separate secret per configured webhook (dashboard > Webhooks),
+# unrelated to the API key pair used to call razorpay_client.order.create().
+# No fallback to the API secret: that would let anyone who somehow learned
+# the API secret (a different trust boundary - server-to-Razorpay auth, not
+# Razorpay-to-server auth) forge webhook deliveries. Missing/empty here means
+# the webhook route fails closed (see razorpay_webhook() below) rather than
+# silently skipping verification.
+RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
 
 # Initialize Razorpay client with proper error handling
 try:
@@ -5730,6 +5740,314 @@ def verify_payment():
         "order_id": result["order_id"],
         "plan_name": result["plan_name"],
     })
+
+
+# ---------------------------------------------------------------------------
+# Razorpay webhook (server-to-server reconciliation, no browser session).
+# ---------------------------------------------------------------------------
+# Minimal supported event set: payment.captured alone is sufficient. Its
+# payload.payment.entity carries both razorpay_order_id and the payment's
+# own id/status/amount/currency - exactly what verify_payment() already uses
+# to look up the stored PaymentOrder and call activate_payment(). order.paid
+# would just be a second, redundant path to the same order for the same
+# underlying capture (one order = one payment in this flow) - so it, like
+# every other event type, is acknowledged with zero mutation instead of
+# handled. Refund/chargeback/settlement/subscription-renewal events are out
+# of scope entirely - the current model has no support for any of them.
+SUPPORTED_WEBHOOK_EVENTS = {"payment.captured"}
+
+
+def _razorpay_webhook_signature_valid(raw_body, signature, secret):
+    """HMAC-SHA256 verification via the installed SDK's own utility
+    (razorpay.Utility.verify_webhook_signature), which internally uses
+    hmac.compare_digest - not hand-rolled - per Razorpay's documented webhook
+    verification (HMAC-SHA256 of the raw request body, keyed by the webhook
+    secret). A fresh Utility() instance is used: verify_webhook_signature
+    never touches self.client, so this works even when razorpay_client is
+    None (API keys unset) as long as RAZORPAY_WEBHOOK_SECRET is configured -
+    the API key pair and the webhook secret are independent trust boundaries.
+    """
+    try:
+        body_str = raw_body.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    try:
+        razorpay.Utility().verify_webhook_signature(body_str, signature, secret)
+        return True
+    except razorpay.errors.SignatureVerificationError:
+        return False
+
+
+def _webhook_payload_hash(raw_body):
+    return hashlib.sha256(raw_body).hexdigest()
+
+
+def _record_webhook_event(idempotency_key, event_type, payment_id, order_id, payload_hash):
+    """Insert-first DB idempotency gate. Returns (event_row, is_replay).
+
+    The UNIQUE index on razorpay_webhook_events.idempotency_key is the real
+    replay-safety mechanism - a genuine duplicate delivery fails this INSERT
+    with IntegrityError, never an in-app dict/set check. On that path this
+    bumps the existing row's attempt_count and returns is_replay=True so the
+    caller never calls activate_payment() again for a repeat delivery.
+    """
+    event = RazorpayWebhookEvent(
+        idempotency_key=idempotency_key,
+        event_type=event_type,
+        razorpay_payment_id=payment_id,
+        razorpay_order_id=order_id,
+        payload_hash=payload_hash,
+        processing_status="received",
+    )
+    db.session.add(event)
+    try:
+        db.session.commit()
+        return event, False
+    except IntegrityError:
+        db.session.rollback()
+        existing = RazorpayWebhookEvent.query.filter_by(idempotency_key=idempotency_key).first()
+        if existing:
+            RazorpayWebhookEvent.query.filter(RazorpayWebhookEvent.id == existing.id).update(
+                {RazorpayWebhookEvent.attempt_count: RazorpayWebhookEvent.attempt_count + 1},
+                synchronize_session=False,
+            )
+            db.session.commit()
+            db.session.refresh(existing)
+        return existing, True
+
+
+def _finalize_webhook_event(event, status, failure_code=None, payment_order_id=None):
+    updates = {
+        RazorpayWebhookEvent.processing_status: status,
+        RazorpayWebhookEvent.processed_at: dt.utcnow(),
+    }
+    if failure_code is not None:
+        updates[RazorpayWebhookEvent.failure_code] = failure_code
+    if payment_order_id is not None:
+        updates[RazorpayWebhookEvent.payment_order_id] = payment_order_id
+    RazorpayWebhookEvent.query.filter(RazorpayWebhookEvent.id == event.id).update(
+        updates, synchronize_session=False
+    )
+    db.session.commit()
+
+
+@app.route("/webhooks/razorpay", methods=["POST"])
+@csrf.exempt  # Provider server-to-server webhook, no browser session/cookie to bind a CSRF token to - authenticity is enforced by HMAC-SHA256 signature verification (RAZORPAY_WEBHOOK_SECRET) below instead.
+def razorpay_webhook():
+    """Razorpay payment webhook. Session-independent (no current_user() /
+    login helper anywhere in this function) and routes every successful
+    reconciliation through the SAME activate_payment() service /verify-payment
+    uses - it never reimplements activation.
+
+    Deliberately NOT rate-limited by request_limiter: Razorpay legitimately
+    retries from shared/rotating IPs, and signature verification + the DB
+    unique-index idempotency gate (not an in-process lock, which would be
+    useless across Gunicorn workers) are the real controls here.
+    """
+    t_start = time.time()
+    raw_body = request.get_data()  # RAW bytes - verified before any JSON parsing, never re-serialized.
+    signature = request.headers.get("X-Razorpay-Signature")
+
+    if not RAZORPAY_WEBHOOK_SECRET:
+        # Fail closed: an unconfigured secret means "process nothing", never
+        # "skip verification".
+        app.logger.warning("razorpay_webhook_rejected reason=secret_not_configured")
+        return jsonify({"error": "webhook_not_configured"}), 400
+
+    if not signature:
+        app.logger.warning("razorpay_webhook_rejected reason=missing_signature")
+        return jsonify({"error": "missing_signature"}), 400
+
+    if not _razorpay_webhook_signature_valid(raw_body, signature, RAZORPAY_WEBHOOK_SECRET):
+        app.logger.warning("razorpay_webhook_rejected reason=invalid_signature")
+        return jsonify({"error": "invalid_signature"}), 400
+
+    # Only now, after verified authenticity, is the body treated as JSON.
+    try:
+        payload = json.loads(raw_body)
+        if not isinstance(payload, dict):
+            raise ValueError("payload is not a JSON object")
+    except ValueError:
+        app.logger.warning("razorpay_webhook_rejected reason=malformed_json")
+        return jsonify({"error": "invalid_payload"}), 400
+
+    event_type = payload.get("event")
+    payload_hash = _webhook_payload_hash(raw_body)
+
+    payment_id = None
+    order_id = None
+    entity = None
+    if event_type in SUPPORTED_WEBHOOK_EVENTS:
+        try:
+            entity = payload["payload"]["payment"]["entity"]
+            payment_id = entity.get("id")
+            order_id = entity.get("order_id")
+        except (KeyError, TypeError, AttributeError):
+            entity = None
+
+    if event_type in SUPPORTED_WEBHOOK_EVENTS and payment_id and order_id:
+        # Stable across Razorpay's own retries of the same logical event,
+        # even if the retry re-sends a byte-different body (e.g. different
+        # created_at) - see models.py's RazorpayWebhookEvent docstring.
+        idempotency_key = f"{event_type}|{payment_id}|{order_id}"
+    else:
+        # No reconciliation is performed for any other event type, so a
+        # payload-hash-derived fallback key is sufficient here.
+        idempotency_key = f"{event_type}|{payload_hash}"
+
+    event, is_replay = _record_webhook_event(idempotency_key, event_type, payment_id, order_id, payload_hash)
+
+    if is_replay:
+        app.logger.info(
+            f"razorpay_webhook_replay event_id={event.id if event else None} event_type={event_type} "
+            f"attempt_count={event.attempt_count if event else None}"
+        )
+        return jsonify({"status": "ok", "replay": True}), 200
+
+    if event_type not in SUPPORTED_WEBHOOK_EVENTS:
+        _finalize_webhook_event(event, "ignored", failure_code="unsupported_event_type")
+        app.logger.info(f"razorpay_webhook_ignored event_id={event.id} event_type={event_type} reason=unsupported")
+        return jsonify({"status": "ok"}), 200
+
+    if entity is None:
+        _finalize_webhook_event(event, "failed", failure_code="malformed_entity")
+        app.logger.warning(f"razorpay_webhook_failed event_id={event.id} event_type={event_type} reason=malformed_entity")
+        return jsonify({"status": "ok"}), 200
+
+    if entity.get("status") != "captured":
+        _finalize_webhook_event(event, "ignored", failure_code="not_captured")
+        app.logger.info(f"razorpay_webhook_ignored event_id={event.id} event_type={event_type} reason=not_captured")
+        return jsonify({"status": "ok"}), 200
+
+    payment_order = PaymentOrder.query.filter_by(razorpay_order_id=order_id).first()
+    if not payment_order:
+        # Never create an entitlement/order from an unknown external order.
+        _finalize_webhook_event(event, "failed", failure_code="unknown_order")
+        app.logger.warning(f"razorpay_webhook_failed event_id={event.id} reason=unknown_order")
+        return jsonify({"status": "ok"}), 200
+
+    plan = SubscriptionPlan.query.get(payment_order.plan_id)
+    if not plan:
+        _finalize_webhook_event(event, "failed", failure_code="plan_not_found", payment_order_id=payment_order.id)
+        app.logger.warning(f"razorpay_webhook_failed event_id={event.id} order_id={payment_order.id} reason=plan_not_found")
+        return jsonify({"status": "ok"}), 200
+
+    # Never trust webhook-supplied amount/currency - the stored PaymentOrder
+    # row is authoritative (same principle as verify_payment()'s checks).
+    try:
+        expected_paise = round(payment_order.total_amount * 100)
+        actual_paise = int(entity.get("amount"))
+    except (TypeError, ValueError):
+        _finalize_webhook_event(event, "failed", failure_code="amount_unreadable", payment_order_id=payment_order.id)
+        app.logger.warning(f"razorpay_webhook_failed event_id={event.id} order_id={payment_order.id} reason=amount_unreadable")
+        return jsonify({"status": "ok"}), 200
+
+    if actual_paise != expected_paise:
+        _finalize_webhook_event(event, "failed", failure_code="amount_mismatch", payment_order_id=payment_order.id)
+        app.logger.warning(f"razorpay_webhook_failed event_id={event.id} order_id={payment_order.id} reason=amount_mismatch")
+        return jsonify({"status": "ok"}), 200
+
+    if (entity.get("currency") or "").upper() != (payment_order.currency or "").upper():
+        _finalize_webhook_event(event, "failed", failure_code="currency_mismatch", payment_order_id=payment_order.id)
+        app.logger.warning(f"razorpay_webhook_failed event_id={event.id} order_id={payment_order.id} reason=currency_mismatch")
+        return jsonify({"status": "ok"}), 200
+
+    # Persist razorpay_payment_id if the browser path hasn't already (DB
+    # unique constraint guards a genuine conflict, same as verify_payment()).
+    if not payment_order.razorpay_payment_id:
+        payment_order.razorpay_payment_id = payment_id
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            _finalize_webhook_event(event, "failed", failure_code="payment_id_conflict", payment_order_id=payment_order.id)
+            app.logger.warning(f"razorpay_webhook_failed event_id={event.id} order_id={payment_order.id} reason=payment_id_conflict")
+            return jsonify({"status": "ok"}), 200
+    elif payment_order.razorpay_payment_id != payment_id:
+        _finalize_webhook_event(event, "failed", failure_code="payment_id_conflict", payment_order_id=payment_order.id)
+        app.logger.warning(f"razorpay_webhook_failed event_id={event.id} order_id={payment_order.id} reason=payment_id_conflict")
+        return jsonify({"status": "ok"}), 200
+
+    # THE single shared activation service (area 1) - never reimplemented
+    # here. Its own atomic conditional UPDATE is what makes the
+    # browser-vs-webhook race safe, combined with this route's DB-unique
+    # idempotency gate above.
+    result = activate_payment(payment_order)
+
+    if not result["success"]:
+        _finalize_webhook_event(
+            event, "failed", failure_code=result.get("code", "activation_failed"), payment_order_id=payment_order.id
+        )
+        app.logger.warning(
+            f"razorpay_webhook_failed event_id={event.id} order_id={payment_order.id} reason={result.get('code')}"
+        )
+        return jsonify({"status": "ok"}), 200
+
+    if not result.get("replay"):
+        try:
+            user = User.query.get(payment_order.user_id)
+            send_payment_success_email(user, plan, payment_order)
+        except Exception:
+            app.logger.warning(f"razorpay_webhook_email_failed order_id={payment_order.id}")
+
+    _finalize_webhook_event(event, "processed", payment_order_id=payment_order.id)
+    latency_ms = int((time.time() - t_start) * 1000)
+    app.logger.info(
+        f"razorpay_webhook_processed event_id={event.id} event_type={event_type} order_id={payment_order.id} "
+        f"replay={result.get('replay')} latency_ms={latency_ms}"
+    )
+    return jsonify({"status": "ok"}), 200
+
+
+@app.cli.command("webhook-events-status")
+@click.option("--limit", default=20, show_default=True, help="Max rows to show.")
+def webhook_events_status(limit):
+    """Report recent failed/unprocessed Razorpay webhook events (read-only)."""
+    rows = (
+        RazorpayWebhookEvent.query
+        .filter(RazorpayWebhookEvent.processing_status.in_(("received", "failed")))
+        .order_by(RazorpayWebhookEvent.received_at.desc())
+        .limit(limit)
+        .all()
+    )
+    click.echo(f"Events shown (received/failed, most recent first): {len(rows)}")
+    for row in rows:
+        click.echo(
+            f"event_id={row.id} type={row.event_type} status={row.processing_status} "
+            f"failure_code={row.failure_code} payment_order_id={row.payment_order_id} "
+            f"attempts={row.attempt_count} received_at={row.received_at}"
+        )
+
+
+@app.cli.command("reconcile-order-webhooks")
+@click.argument("order_id")
+def reconcile_order_webhooks(order_id):
+    """Report the webhook event history for one stored PaymentOrder.order_id (read-only)."""
+    order = PaymentOrder.query.filter_by(order_id=order_id).first()
+    if not order:
+        raise click.ClickException(f"No PaymentOrder found with order_id={order_id}")
+    events = (
+        RazorpayWebhookEvent.query.filter_by(payment_order_id=order.id)
+        .order_by(RazorpayWebhookEvent.received_at.asc())
+        .all()
+    )
+    click.echo(f"PaymentOrder id={order.id} order_id={order.order_id} status={order.status}")
+    click.echo(f"Webhook events linked: {len(events)}")
+    for row in events:
+        click.echo(
+            f"event_id={row.id} type={row.event_type} status={row.processing_status} "
+            f"failure_code={row.failure_code} attempts={row.attempt_count}"
+        )
+
+
+@app.cli.command("webhook-replay-report")
+def webhook_replay_report():
+    """Report total replay/duplicate webhook deliveries observed (read-only)."""
+    rows = RazorpayWebhookEvent.query.all()
+    total_replays = sum(max(0, (row.attempt_count or 1) - 1) for row in rows)
+    click.echo(f"Distinct webhook events recorded: {len(rows)}")
+    click.echo(f"Total replay/duplicate deliveries observed: {total_replays}")
+
 
 @app.route("/payment-success")
 @login_required
