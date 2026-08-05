@@ -1,5 +1,7 @@
 from io import BytesIO
 
+from tests.security.test_upload_validation import _jpeg_bytes, _mp4_bytes
+
 
 class NoopThread:
     def __init__(self, *args, **kwargs):
@@ -16,7 +18,11 @@ def _patch_upload_side_effects(app_module, monkeypatch):
     monkeypatch.setattr(app_module.threading, "Thread", NoopThread)
 
 
-def _upload(client, image_name, video_name, image_bytes=b"x", video_bytes=b"y"):
+def _upload(client, image_name, video_name, image_bytes=None, video_bytes=None):
+    if image_bytes is None:
+        image_bytes = _jpeg_bytes()
+    if video_bytes is None:
+        video_bytes = _mp4_bytes()
     return client.post(
         "/upload",
         data={
@@ -37,12 +43,13 @@ def test_uppercase_extensions_currently_accepted(client, app_module, login_user,
     assert pair.video_filename.endswith(".mp4")
 
 
-def test_double_extension_video_preserves_last_extension(client, app_module, login_user, monkeypatch):
+def test_double_extension_video_stores_validated_mp4_name(client, app_module, login_user, monkeypatch):
     _patch_upload_side_effects(app_module, monkeypatch)
     response = _upload(client, "target.jpg", "clip.mp4.exe")
     assert response.status_code == 302
     pair = app_module.ProjectPair.query.first()
-    assert pair.video_filename.endswith(".exe")
+    assert pair.video_filename.endswith(".mp4")
+    assert ".exe" not in pair.video_filename
 
 
 def test_missing_video_extension_defaults_to_mp4(client, app_module, login_user, monkeypatch):
@@ -62,11 +69,11 @@ def test_path_traversal_filename_not_used_for_storage(client, app_module, login_
     assert ".." not in pair.video_filename
 
 
-def test_empty_files_currently_create_project_baseline(client, app_module, login_user, monkeypatch):
+def test_empty_files_are_rejected_by_upload_validation(client, app_module, login_user, monkeypatch):
     _patch_upload_side_effects(app_module, monkeypatch)
     response = _upload(client, "empty.jpg", "empty.mp4", b"", b"")
     assert response.status_code == 302
-    assert app_module.Project.query.count() == 1
+    assert app_module.Project.query.count() == 0
 
 
 def test_mismatched_multiple_upload_counts_rejected(client, login_user):

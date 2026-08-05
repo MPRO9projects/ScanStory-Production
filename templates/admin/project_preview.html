@@ -151,7 +151,7 @@
                     <!-- CHANGE 3: Image URL - Admin route -->
                     <img src="{{ url_for('serve_admin_image', project_id=project.id, image_id=pair.pair_index) }}" 
                          class="w-full h-full object-cover"
-                         onerror="this.src='https://via.placeholder.com/400x300/1e293b/94a3b8?text=No+Image'">
+                         onerror="this.style.display='none'">
                     <div class="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-3">
                         <!-- CHANGE 5: Download Image - Admin route -->
                         <a href="{{ url_for('serve_admin_image', project_id=project.id, image_id=pair.pair_index) }}" download
@@ -246,7 +246,7 @@
         // Simple image fallback
         document.querySelectorAll('img').forEach(img => {
             img.addEventListener('error', function() {
-                this.src = 'https://via.placeholder.com/400x300/1e293b/94a3b8?text=No+Image';
+                this.style.display = 'none';
             });
         });
     </script>
