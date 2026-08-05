@@ -24,6 +24,10 @@ def _scanner_html():
     return Path("templates/user/scanner.html").read_text(encoding="utf-8", errors="ignore")
 
 
+def _scanner_runtime_js():
+    return Path("static/js/scanner-runtime.js").read_text(encoding="utf-8", errors="ignore")
+
+
 def _app_py():
     return Path("app.py").read_text(encoding="utf-8", errors="ignore")
 
@@ -796,12 +800,40 @@ def test_fallback_available_never_appears_without_visible_action():
     assert "showFallbackPanel(code, safe);" in html  # called from enterFallback — every fallback entry shows the panel
 
 
+def test_prior_failure_reload_routes_through_canonical_fallback_panel():
+    html = _scanner_html()
+    assert "const scannerPriorFailure = sessionStorage.getItem('scanstoryScannerPriorFailure') === '1';" in html
+    assert "return 'SCANNER_PRIOR_FAILURE';" in html
+    fallback_start = html.index("if (scannerMode === 'fallback') {", html.index("fallbackRetryBtn.addEventListener"))
+    fallback_body = html[fallback_start:fallback_start + 240]
+    assert "enterFallback(scannerFallbackReason());" in fallback_body
+
+
 def test_retry_camera_invokes_guarded_recovery_and_avoids_concurrent_starts():
     html = _scanner_html()
     assert "async function retryCameraFromFallback()" in html
     assert "if (fallbackRetryInProgress || diagState.cameraStartInProgress) return;" in html
     assert "fallbackRetryBtn.addEventListener('click', retryCameraFromFallback);" in html
+    assert "stopDetectLoop('fallback_retry');" in html
+    assert "stopTrackingLoop();" in html
     assert "await setupCamera();" in html
+
+
+def test_retry_camera_after_opencv_failure_reloads_opencv_once_before_camera_restart():
+    html = _scanner_html()
+    retry_start = html.index("async function retryCameraFromFallback()")
+    retry_end = html.index("fallbackRetryBtn.addEventListener('click', retryCameraFromFallback);")
+    body = html[retry_start:retry_end]
+    assert "if (!cvReady) {" in body
+    assert "opencvLoadAttempts = 0;" in body
+    assert "await loadOpenCV({ forceRetry: true });" in body
+    assert body.index("await loadOpenCV({ forceRetry: true });") < body.index("await setupCamera();")
+    loader_start = html.index("function loadOpenCV(options)")
+    loader_end = html.index("if (scannerMode !== 'fallback')", loader_start)
+    loader = html[loader_start:loader_end]
+    assert "if (opencvLoadPromise && !options.forceRetry) return opencvLoadPromise;" in loader
+    assert "script.id = 'opencvScript';" in loader
+    assert "removeOpenCVScriptForRetry();" in loader
 
 
 def test_successful_retry_hides_fallback_panel():
@@ -813,6 +845,27 @@ def test_successful_retry_hides_fallback_panel():
     body = html[retry_start:retry_end]
     assert "if (!isStreamDead()) {" in body
     assert "hideFallbackPanel('retry_succeeded');" in body
+
+
+def test_missing_published_media_has_specific_user_facing_error():
+    runtime_js = _scanner_runtime_js()
+    assert 'if (!payload.video_url) return { ok: false, code: "PUBLISHED_MEDIA_MISSING" };' in runtime_js
+    assert "PUBLISHED_MEDIA_MISSING:" in runtime_js
+    assert "UNSUPPORTED_DEVICE" in runtime_js
+
+
+def test_scanner_registers_service_worker_non_blocking_with_safe_cache_scope():
+    html = _scanner_html()
+    app_src = _app_py()
+    sw_src = Path("static/sw.js").read_text(encoding="utf-8", errors="ignore")
+    assert "function registerScannerServiceWorker()" in html
+    assert "navigator.serviceWorker.register('/static/sw.js', { scope: '/' })" in html
+    assert ".catch(function (err) {" in html
+    assert "registerScannerServiceWorker();" in html
+    assert 'request.path == "/static/sw.js"' in app_src
+    assert 'response.headers["Service-Worker-Allowed"] = "/"' in app_src
+    assert "Only intercept OpenCV static files" in sw_src
+    assert "if (!url.pathname.startsWith('/static/js/opencv')) return;" in sw_src
 
 
 def test_back_button_does_not_call_logout_and_preserves_authentication():
