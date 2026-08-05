@@ -513,7 +513,7 @@
             <div class="sidebar-title">System</div>
             <a href="/admin/plans" class="sidebar-link"><i>&#128203;</i><span>Plans</span></a>
             <a href="/admin/payments" class="sidebar-link"><i>&#128179;</i><span>Payments</span></a>
-            {% if admin.role == 'superadmin' %}
+            {% if admin_can('superadmin.admins.manage') %}
             <a href="/admin/admins" class="sidebar-link"><i>&#128737;</i><span>Admins</span></a>
             {% endif %}
             <a href="/admin/settings" class="sidebar-link"><i>&#9881;</i><span>Settings</span></a>
