@@ -679,14 +679,14 @@
                     {% endif %}
                     
                     {% if payment.status == 'success' and payment.razorpay_payment_id %}
-                    <button class="btn btn-danger" onclick="confirmRefund()">
-                        Process Refund
+                    <button class="btn btn-secondary" type="button" disabled title="Refund processing is not available in this admin package.">
+                        Refund unavailable
                     </button>
                     {% endif %}
                     
-                    <a href="/admin/payments/{{ payment.id }}/resend-receipt" class="btn btn-primary">
-                        Resend Receipt
-                    </a>
+                    <button class="btn btn-secondary" type="button" disabled title="Receipt resend is not available in this admin package.">
+                        Receipt resend unavailable
+                    </button>
                     
                     <a href="/admin/subscriptions?search={{ payment.user.email if payment.user else '' }}" class="btn btn-success">
                         View User's Subscriptions
@@ -821,13 +821,6 @@
             }).catch(err => {
                 console.error('Failed to copy: ', err);
             });
-        }
-        
-        // Confirm refund
-        function confirmRefund() {
-            if (confirm('Are you sure you want to refund this payment? This action cannot be undone.')) {
-                window.location.href = '/admin/payments/{{ payment.id }}/refund';
-            }
         }
         
         // Auto remove alerts after 5 seconds

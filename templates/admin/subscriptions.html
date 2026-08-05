@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subscriptions - Admin Panel</title>
+    <style>
+        body { margin: 0; background: #f8fafc; color: #334155; font-family: Segoe UI, Tahoma, sans-serif; }
+        .navbar { height: 70px; background: linear-gradient(to right, #4f46e5, #7c3aed); color: #fff; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; position: fixed; inset: 0 0 auto 0; z-index: 1000; }
+        .navbar a { color: #fff; text-decoration: none; font-weight: 700; }
+        .sidebar { position: fixed; top: 70px; bottom: 0; left: 0; width: 250px; background: #fff; border-right: 1px solid #e2e8f0; padding: 20px 0; }
+        .sidebar-link { display: block; padding: 12px 20px; color: #475569; text-decoration: none; border-left: 3px solid transparent; }
+        .sidebar-link.active { background: #e0e7ff; color: #4f46e5; border-left-color: #4f46e5; }
+        .main-content { margin-left: 250px; margin-top: 70px; padding: 30px; }
+        .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
+        .page-title { font-size: 28px; color: #1e293b; margin: 0; }
+        .card { background: #fff; border-radius: 12px; padding: 22px; box-shadow: 0 4px 6px rgba(0,0,0,.08); margin-bottom: 24px; }
+        .filter-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; align-items: end; }
+        label { display: block; font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 6px; }
+        .form-control { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
+        .btn { display: inline-block; border: 0; border-radius: 8px; padding: 9px 14px; text-decoration: none; cursor: pointer; font-weight: 600; font-size: 13px; }
+        .btn-primary { background: #4f46e5; color: #fff; }
+        .btn-secondary { background: #64748b; color: #fff; }
+        .btn-warning { background: #f59e0b; color: #fff; }
+        .btn-danger { background: #ef4444; color: #fff; }
+        .btn-sm { padding: 6px 9px; font-size: 12px; }
+        .table-container { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
+        th { background: #f8fafc; color: #64748b; font-size: 12px; text-transform: uppercase; }
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+        .badge-success { background: #d1fae5; color: #065f46; }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .actions form { display: inline-flex; gap: 6px; align-items: center; }
+        .alert { padding: 12px; border-radius: 8px; margin-bottom: 18px; }
+        .alert-success { background: #d1fae5; color: #065f46; }
+        .alert-error { background: #fee2e2; color: #991b1b; }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/admin/dashboard">ScanStory Admin</a>
+        <div>Welcome, {{ admin.name }}</div>
+    </nav>
+    <aside class="sidebar">
+        <a class="sidebar-link" href="/admin/dashboard">Dashboard</a>
+        <a class="sidebar-link" href="/admin/user-profiles">User Profiles</a>
+        <a class="sidebar-link" href="/admin/projects">Projects</a>
+        <a class="sidebar-link" href="/admin/plans">Plans</a>
+        <a class="sidebar-link active" href="/admin/subscriptions">Subscriptions</a>
+        <a class="sidebar-link" href="/admin/payments">Payments</a>
+        <a class="sidebar-link" href="/admin/activity-logs">Activity Logs</a>
+    </aside>
+    <main class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">Subscriptions</h1>
+            <div>{{ pagination.total }} matching subscriptions</div>
+        </div>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}
+                <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}">{{ message }}</div>
+            {% endfor %}
+        {% endwith %}
+        <section class="card">
+            <form class="filter-form" method="GET" action="/admin/subscriptions">
+                <div>
+                    <label for="search">Search</label>
+                    <input class="form-control" id="search" name="search" value="{{ search }}" placeholder="Owner name or email">
+                </div>
+                <div>
+                    <label for="status">Status</label>
+                    <select class="form-control" id="status" name="status">
+                        <option value="all" {% if status == 'all' %}selected{% endif %}>All</option>
+                        <option value="active" {% if status == 'active' %}selected{% endif %}>Active</option>
+                        <option value="expired" {% if status == 'expired' %}selected{% endif %}>Expired</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="plan_id">Plan</label>
+                    <select class="form-control" id="plan_id" name="plan_id">
+                        <option value="">All plans</option>
+                        {% for plan in plans %}
+                        <option value="{{ plan.id }}" {% if selected_plan_id == plan.id %}selected{% endif %}>{{ plan.plan_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="per_page">Page size</label>
+                    <input class="form-control" id="per_page" name="per_page" type="number" min="1" max="100" value="{{ per_page }}">
+                </div>
+                <div>
+                    <button class="btn btn-primary" type="submit">Apply</button>
+                    <a class="btn btn-secondary" href="/admin/subscriptions">Clear</a>
+                </div>
+            </form>
+        </section>
+        <section class="card table-container">
+            <table>
+                <thead>
+                    <tr><th>Order</th><th>User</th><th>Plan</th><th>Period</th><th>Remaining</th><th>Status</th><th>Actions</th></tr>
+                </thead>
+                <tbody>
+                    {% for sub in subscriptions %}
+                    <tr>
+                        <td><strong>{{ sub.order_id }}</strong><br><small>#{{ sub.id }}</small></td>
+                        <td>{{ sub.user.full_name if sub.user else 'Missing user' }}<br><small>{{ sub.user.email if sub.user else '-' }}</small></td>
+                        <td>{{ sub.plan.plan_name if sub.plan else 'N/A' }}</td>
+                        <td>{{ sub.subscription_start.strftime('%d %b %Y') if sub.subscription_start else '-' }}<br>{{ sub.subscription_end.strftime('%d %b %Y') if sub.subscription_end else '-' }}</td>
+                        <td>{{ sub.remaining_projects }} projects<br>{{ sub.remaining_scans }} scans</td>
+                        <td><span class="badge {{ 'badge-success' if sub.expiry_status == 'active' else 'badge-danger' }}">{{ sub.expiry_status|title }}</span></td>
+                        <td>
+                            <div class="actions">
+                                <form method="POST" action="{{ url_for('admin_extend_subscription', order_id=sub.id) }}" onsubmit="return confirm('Extend this subscription?');">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <input class="form-control" style="width:70px" name="extension_months" type="number" min="1" value="1">
+                                    <button class="btn btn-primary btn-sm" type="submit">Extend</button>
+                                </form>
+                                <form method="POST" action="{{ url_for('admin_deactivate_subscription', order_id=sub.id) }}" onsubmit="return confirm('Deactivate this subscription?');">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button class="btn btn-danger btn-sm" type="submit">Deactivate</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="7">No subscriptions found.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+        <section class="card">
+            Page {{ pagination.page }} of {{ pagination.pages or 1 }}
+            {% if pagination.has_prev %}<a class="btn btn-secondary btn-sm" href="{{ url_for('admin_subscriptions', page=pagination.prev_num, status=status, plan_id=selected_plan_id, search=search, per_page=per_page) }}">Previous</a>{% endif %}
+            {% if pagination.has_next %}<a class="btn btn-secondary btn-sm" href="{{ url_for('admin_subscriptions', page=pagination.next_num, status=status, plan_id=selected_plan_id, search=search, per_page=per_page) }}">Next</a>{% endif %}
+        </section>
+    </main>
+</body>
+</html>

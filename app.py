@@ -1173,6 +1173,74 @@ def set_system_config(key, value, config_type="string", description=None):
         db.session.add(config)
     db.session.commit()
 
+ADMIN_LOGIN_LOCKOUT_MAX_ATTEMPTS = 5
+ADMIN_LOGIN_LOCKOUT_MINUTES = 15
+ADMIN_LOGIN_ATTEMPT_PREFIX = "admin_login_attempts:"
+
+
+def _admin_login_attempt_key(email):
+    return ADMIN_LOGIN_ATTEMPT_PREFIX + (email or "").strip().lower()
+
+
+def _admin_login_attempt_state(email):
+    state = get_system_config(_admin_login_attempt_key(email), {}) or {}
+    if not isinstance(state, dict):
+        return {"count": 0, "locked_until": None}
+    return state
+
+
+def _admin_login_locked(email, now=None):
+    now = now or dt.utcnow()
+    locked_until = _admin_login_attempt_state(email).get("locked_until")
+    if not locked_until:
+        return False
+    try:
+        return dt.fromisoformat(locked_until) > now
+    except Exception:
+        return False
+
+
+def _record_admin_login_failure(email, admin=None):
+    normalized = (email or "").strip().lower()
+    if admin:
+        log_admin_activity(admin.id, "login_failed", "Failed admin login attempt")
+    state = _admin_login_attempt_state(normalized)
+    count = int(state.get("count") or 0) + 1
+    next_state = {"count": count, "locked_until": state.get("locked_until")}
+    if count >= ADMIN_LOGIN_LOCKOUT_MAX_ATTEMPTS:
+        next_state["locked_until"] = (dt.utcnow() + timedelta(minutes=ADMIN_LOGIN_LOCKOUT_MINUTES)).isoformat()
+    set_system_config(_admin_login_attempt_key(normalized), json.dumps(next_state), "json", "Admin login lockout state")
+
+
+def _clear_admin_login_failures(email):
+    set_system_config(_admin_login_attempt_key(email), json.dumps({"count": 0, "locked_until": None}), "json", "Admin login lockout state")
+
+
+def admin_page_size(default=25, max_size=100):
+    return min(max(request.args.get("per_page", default, type=int), 1), max_size)
+
+
+def _project_unavailable_response():
+    return ("This project is currently suspended or unavailable.", 404)
+
+
+def _project_is_available(project):
+    return bool(project and project.is_active)
+
+def _project_from_qr_filename(filename, admin_project=False):
+    try:
+        project_id = int(str(filename).split("_")[1])
+    except Exception:
+        return None
+    project = Project.query.get(project_id)
+    if not project:
+        return None
+    if admin_project and not project.owner_admin_id:
+        return None
+    if not admin_project and project.owner_admin_id:
+        return None
+    return project
+
 def log_admin_activity(admin_id, activity_type, description):
     """Log admin activity"""
     activity = AdminActivity(
@@ -5171,6 +5239,8 @@ def serve_video(project_id, image_id):
     project = Project.query.get(project_id)
     if not project:
         return "Project not found"
+    if not _project_is_available(project):
+        return _project_unavailable_response()
     
     pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
     if not pair:
@@ -5183,6 +5253,8 @@ def serve_image(project_id, image_id):
     project = Project.query.get(project_id)
     if not project:
         return "Project not found"
+    if not _project_is_available(project):
+        return _project_unavailable_response()
     
     pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
     if not pair:
@@ -5192,6 +5264,9 @@ def serve_image(project_id, image_id):
 
 @app.route("/qr/<filename>")
 def serve_qr(filename):
+    project = _project_from_qr_filename(filename, admin_project=False)
+    if project and not _project_is_available(project):
+        return _project_unavailable_response()
     return send_from_directory(QR_DIR, filename)
 
 SCANNER_TEST_TOKEN_MAX_AGE_SECONDS = 120
@@ -5331,6 +5406,8 @@ def scanner(project_id):
 
     if not project:
         return "Project not found"
+    if not _project_is_available(project):
+        return _project_unavailable_response()
 
     # Entry context is resolved purely server-side (signed token + real session ownership
     # check) — the session is never mutated by this route at all, for any project.
@@ -5420,6 +5497,8 @@ def detect_init():
             print(f"❌ Project not found: {project_id}")
             sys.stdout.flush()
             return jsonify({"detected": False, "reason": "Project not found"}), 404
+        if not _project_is_available(project):
+            return jsonify({"detected": False, "reason": "Project is suspended or unavailable"}), 404
         
         # ✅ CRITICAL FIX: Check if this is an ADMIN project
         is_admin_project = project.owner_admin_id is not None
@@ -6052,6 +6131,12 @@ def detect_track():
         if project_id is None or pair_id is None or test_file is None:
             return jsonify({"ok": False, "reason": "Missing project_id/pair_id/image"}), 400
 
+        project = Project.query.get(project_id)
+        if not project:
+            return jsonify({"ok": False, "reason": "Project not found"}), 404
+        if not _project_is_available(project):
+            return jsonify({"ok": False, "reason": "Project is suspended or unavailable"}), 404
+
         pair_record = ProjectPair.query.filter_by(project_id=project_id, pair_index=pair_id).first()
         
         feats = load_features(project_id, pair_id)
@@ -6205,15 +6290,25 @@ def admin_login_route():
     email = (request.form.get("email") or "").strip().lower()
     password = request.form.get("password") or ""
     admin = Admin.query.filter_by(email=email).first()
+    generic_error = "Invalid email or password."
+
+    if _admin_login_locked(email):
+        if admin:
+            log_admin_activity(admin.id, "login_locked", "Blocked admin login attempt during lockout")
+        flash(generic_error, "error")
+        return render_template("admin/login.html"), 429
     
     if not admin or not check_password_hash(admin.password_hash, password):
-        flash("Invalid email or password.", "error")
+        _record_admin_login_failure(email, admin)
+        flash(generic_error, "error")
         return render_template("admin/login.html")
     
     if not admin.is_active:
-        flash("Your account is deactivated. Please contact super admin.", "error")
+        _record_admin_login_failure(email, admin)
+        flash(generic_error, "error")
         return render_template("admin/login.html")
     
+    _clear_admin_login_failures(email)
     admin_login(admin)
     admin.last_login_at = dt.utcnow()
     admin.login_count = (admin.login_count or 0) + 1
@@ -6577,13 +6672,21 @@ def admin_users():
             )
         )
     
-    users = query.order_by(User.created_at.desc()).all()
+    per_page = admin_page_size()
+    pagination = query.order_by(User.created_at.desc()).paginate(
+        page=max(request.args.get("page", 1, type=int), 1),
+        per_page=per_page,
+        error_out=False,
+    )
+    users = pagination.items
     plans = SubscriptionPlan.query.filter_by(is_active=True).all()
     
     return render_template("admin/users.html", 
                          admin=admin, 
                          users=users, 
                          plans=plans,
+                         pagination=pagination,
+                         per_page=per_page,
                          status=status,
                          selected_plan_id=plan_id,
                          search=search)
@@ -7058,9 +7161,9 @@ def admin_subscriptions():
     query = PaymentOrder.query.filter_by(status="success")
     
     if status == "active":
-        query = query.filter(PaymentOrder.subscription_end > dt.utcnow)
+        query = query.filter(PaymentOrder.subscription_end > dt.utcnow())
     elif status == "expired":
-        query = query.filter(PaymentOrder.subscription_end <= dt.utcnow)
+        query = query.filter(PaymentOrder.subscription_end <= dt.utcnow())
     
     if plan_id:
         query = query.filter_by(plan_id=plan_id)
@@ -7074,7 +7177,13 @@ def admin_subscriptions():
             )
         )
     
-    subscriptions = query.order_by(PaymentOrder.created_at.desc()).all()
+    per_page = admin_page_size()
+    pagination = query.order_by(PaymentOrder.created_at.desc()).paginate(
+        page=max(request.args.get("page", 1, type=int), 1),
+        per_page=per_page,
+        error_out=False,
+    )
+    subscriptions = pagination.items
     plans = SubscriptionPlan.query.filter_by(is_active=True).all()
     
     # Calculate remaining projects and scans for each subscription
@@ -7091,6 +7200,8 @@ def admin_subscriptions():
                          plans=plans,
                          status=status,
                          selected_plan_id=plan_id,
+                         pagination=pagination,
+                         per_page=per_page,
                          search=search) 
 
 @app.route("/admin/subscriptions/<int:order_id>/extend", methods=["POST"])
@@ -7233,7 +7344,13 @@ def admin_payments():
             )
         )
     
-    payments = query.order_by(PaymentOrder.created_at.desc()).all()
+    per_page = admin_page_size()
+    pagination = query.order_by(PaymentOrder.created_at.desc()).paginate(
+        page=max(request.args.get("page", 1, type=int), 1),
+        per_page=per_page,
+        error_out=False,
+    )
+    payments = pagination.items
     
     # Calculate totals
     total_amount = sum(p.total_amount for p in payments)
@@ -7247,6 +7364,8 @@ def admin_payments():
                          start_date=start_date,
                          end_date=end_date,
                          search=search,
+                         pagination=pagination,
+                         per_page=per_page,
                          total_amount=total_amount,
                          success_count=success_count)
 
@@ -7287,16 +7406,21 @@ def _owner_display(project, owner_user=None, owner_admin=None):
         }
     return {"type": "Unknown", "id": None, "name": "No owner recorded", "email": "-"}
 
-def _project_readiness_summary(pair_count, ready_pairs, failed_pairs):
+def _project_readiness_summary(pair_count, ready_pairs, failed_pairs, processing_pairs=0):
     pair_count = int(pair_count or 0)
     ready_pairs = int(ready_pairs or 0)
     failed_pairs = int(failed_pairs or 0)
+    processing_pairs = int(processing_pairs or 0)
     if pair_count == 0:
         return "No pairs"
     if failed_pairs:
         return f"{failed_pairs} failed"
     if ready_pairs == pair_count:
         return "Ready"
+    if processing_pairs:
+        return f"{processing_pairs} processing"
+    if ready_pairs == 0:
+        return "Pending"
     return f"{ready_pairs}/{pair_count} ready"
 
 # --------------------------------------------------------------------------------------------
@@ -7340,7 +7464,13 @@ def admin_user_profiles():
             )
         )
     
-    users = query.order_by(User.created_at.desc()).all()
+    per_page = admin_page_size()
+    pagination = query.order_by(User.created_at.desc()).paginate(
+        page=max(request.args.get("page", 1, type=int), 1),
+        per_page=per_page,
+        error_out=False,
+    )
+    users = pagination.items
     if users:
         project_counts = dict(
             db.session.query(Project.owner_user_id, func.count(Project.id))
@@ -7361,7 +7491,9 @@ def admin_user_profiles():
         plans=plans,
         status=status,
         search=search,
-        selected_plan_id=plan_id
+        selected_plan_id=plan_id,
+        pagination=pagination,
+        per_page=per_page
     )
 
 @app.route("/admin/projects", methods=["GET"])
@@ -7381,6 +7513,7 @@ def admin_projects():
             func.count(ProjectPair.id).label("pair_count"),
             func.sum(case((ProjectPair.is_processed == True, 1), else_=0)).label("ready_pair_count"),
             func.sum(case((ProjectPair.processing_status == "failed", 1), else_=0)).label("failed_pair_count"),
+            func.sum(case((ProjectPair.processing_status == "processing", 1), else_=0)).label("processing_pair_count"),
         )
         .group_by(ProjectPair.project_id)
         .subquery()
@@ -7404,6 +7537,7 @@ def admin_projects():
             pair_counts.c.pair_count,
             pair_counts.c.ready_pair_count,
             pair_counts.c.failed_pair_count,
+            pair_counts.c.processing_pair_count,
             scan_counts.c.scan_count,
             scan_counts.c.successful_scan_count,
             scan_counts.c.failed_scan_count,
@@ -7423,7 +7557,12 @@ def admin_projects():
         query = query.filter(func.coalesce(pair_counts.c.pair_count, 0) > 0)
         query = query.filter(func.coalesce(pair_counts.c.pair_count, 0) == func.coalesce(pair_counts.c.ready_pair_count, 0))
     elif readiness == "processing":
-        query = query.filter(func.coalesce(pair_counts.c.pair_count, 0) > func.coalesce(pair_counts.c.ready_pair_count, 0))
+        query = query.filter(func.coalesce(pair_counts.c.processing_pair_count, 0) > 0)
+    elif readiness == "pending":
+        query = query.filter(func.coalesce(pair_counts.c.pair_count, 0) > 0)
+        query = query.filter(func.coalesce(pair_counts.c.ready_pair_count, 0) == 0)
+        query = query.filter(func.coalesce(pair_counts.c.failed_pair_count, 0) == 0)
+        query = query.filter(func.coalesce(pair_counts.c.processing_pair_count, 0) == 0)
     elif readiness == "failed":
         query = query.filter(func.coalesce(pair_counts.c.failed_pair_count, 0) > 0)
 
@@ -7455,7 +7594,7 @@ def admin_projects():
         error_out=False,
     )
     project_rows = []
-    for project, owner_user, row_admin, pair_count, ready_pairs, failed_pairs, scan_count, success_scans, failed_scans in pagination.items:
+    for project, owner_user, row_admin, pair_count, ready_pairs, failed_pairs, processing_pairs, scan_count, success_scans, failed_scans in pagination.items:
         owner = _owner_display(project, owner_user, row_admin)
         project_rows.append({
             "project": project,
@@ -7463,7 +7602,8 @@ def admin_projects():
             "pair_count": int(pair_count or 0),
             "ready_pair_count": int(ready_pairs or 0),
             "failed_pair_count": int(failed_pairs or 0),
-            "readiness_summary": _project_readiness_summary(pair_count, ready_pairs, failed_pairs),
+            "processing_pair_count": int(processing_pairs or 0),
+            "readiness_summary": _project_readiness_summary(pair_count, ready_pairs, failed_pairs, processing_pairs),
             "qr_ready": bool(project.qr_code_path or project.qr_code_filename),
             "scan_count": int(scan_count or 0),
             "successful_scan_count": int(success_scans or 0),
@@ -7550,6 +7690,34 @@ def admin_toggle_project_status(project_id):
     log_admin_activity(admin.id, "project_toggle", f"{status} project: {project.name} (ID: {project.id})")
     
     flash(f"Project {status} successfully.", "success")
+    return redirect(url_for("admin_view_project", project_id=project_id))
+
+@app.route("/admin/projects/<int:project_id>/suspend", methods=["POST"])
+@admin_required
+def admin_suspend_project(project_id):
+    admin = current_admin()
+    project = Project.query.get_or_404(project_id)
+    if not project.is_active:
+        flash("Project is already suspended.", "info")
+        return redirect(url_for("admin_view_project", project_id=project_id))
+    project.is_active = False
+    db.session.commit()
+    log_admin_activity(admin.id, "project_suspend", f"Suspended project: {project.name} (ID: {project.id})")
+    flash("Project suspended. Public scanner and media access are blocked.", "success")
+    return redirect(url_for("admin_view_project", project_id=project_id))
+
+@app.route("/admin/projects/<int:project_id>/restore", methods=["POST"])
+@admin_required
+def admin_restore_project(project_id):
+    admin = current_admin()
+    project = Project.query.get_or_404(project_id)
+    if project.is_active:
+        flash("Project is already active.", "info")
+        return redirect(url_for("admin_view_project", project_id=project_id))
+    project.is_active = True
+    db.session.commit()
+    log_admin_activity(admin.id, "project_restore", f"Restored project: {project.name} (ID: {project.id})")
+    flash("Project restored. Normal scanner and media access are available again.", "success")
     return redirect(url_for("admin_view_project", project_id=project_id))
 
 @app.route("/admin/projects/<int:project_id>/delete", methods=["POST"])
@@ -7811,8 +7979,13 @@ def admin_activity_logs():
         end_dt = dt.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
         query = query.filter(AdminActivity.activity_at < end_dt)
     
-    # Get all activities (remove pagination)
-    activities = query.order_by(AdminActivity.activity_at.desc()).all()
+    per_page = admin_page_size()
+    pagination = query.order_by(AdminActivity.activity_at.desc()).paginate(
+        page=max(request.args.get("page", 1, type=int), 1),
+        per_page=per_page,
+        error_out=False,
+    )
+    activities = pagination.items
     
     # Get admins for filter dropdown
     admins = Admin.query.order_by(Admin.name).all()
@@ -7829,7 +8002,9 @@ def admin_activity_logs():
                          selected_activity_type=activity_type,
                          selected_admin_id=admin_id,
                          start_date=start_date,
-                         end_date=end_date)
+                         end_date=end_date,
+                         pagination=pagination,
+                         per_page=per_page)
 
 # --------------------------------------------------------------------------------------------
 # Admin Routes - Project Creation (Unlimited & Free for Admin)
@@ -8102,6 +8277,8 @@ def serve_admin_image(project_id, image_id):
     project = Project.query.get(project_id)
     if not project or not project.owner_admin_id:
         abort(404)
+    if not _project_is_available(project):
+        return _project_unavailable_response()
     
     pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
     if not pair:
@@ -8120,6 +8297,8 @@ def serve_admin_video(project_id, image_id):
     project = Project.query.get(project_id)
     if not project or not project.owner_admin_id:
         abort(404)
+    if not _project_is_available(project):
+        return _project_unavailable_response()
     
     pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
     if not pair:
@@ -8139,6 +8318,8 @@ def serve_admin_qr(filename):
     project = Project.query.get(project_id)
     if not project or not project.owner_admin_id:
         abort(404)
+    if not _project_is_available(project):
+        return _project_unavailable_response()
     
     return send_from_directory(ADMIN_QR_DIR, filename)
 
