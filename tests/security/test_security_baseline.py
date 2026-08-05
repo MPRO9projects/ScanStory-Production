@@ -79,6 +79,11 @@ def test_upload_should_require_file_signature_validation(client, app_module, log
     assert app_module.Project.query.count() == before_count
 
 
-@pytest.mark.xfail(reason="severity=High; flow=OTP verification; desired=rate limit failed OTP attempts; actual=no OTP brute-force throttling; future_gate=auth security")
-def test_otp_bruteforce_throttling_required():
-    raise AssertionError("OTP brute-force throttling not implemented")
+def test_otp_bruteforce_throttling_required(app_module, normal_user):
+    app_module.OTP_MAX_VERIFY_ATTEMPTS = 2
+    with app_module.app.test_request_context("/"):
+        code = app_module._create_otp(normal_user.email, "verify_email", user_id=normal_user.id)
+        rec = app_module._latest_otp(normal_user.email, "verify_email")
+        assert app_module._verify_otp(normal_user.email, "verify_email", "000000", challenge_id=rec.challenge_id) is False
+        assert app_module._verify_otp(normal_user.email, "verify_email", "111111", challenge_id=rec.challenge_id) is False
+        assert app_module._verify_otp(normal_user.email, "verify_email", code, challenge_id=rec.challenge_id) is False
