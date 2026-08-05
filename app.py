@@ -339,6 +339,9 @@ def add_security_headers(response):
     if HSTS_ENABLED and request.is_secure:
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
 
+    if request.path == "/static/sw.js":
+        response.headers["Service-Worker-Allowed"] = "/"
+
     return response
 
 

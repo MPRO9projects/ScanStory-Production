@@ -43,6 +43,8 @@
     DETECTION_TIMEOUT: "Recognition is taking too long. Move closer or use fallback.",
     INVALID_DETECTION_RESPONSE: "The scanner could not read this response safely.",
     TARGET_LOST_TIMEOUT: "The image marker was lost. Point the camera at the image again.",
+    PUBLISHED_MEDIA_MISSING: "This project is missing its published video. Ask the creator to republish it.",
+    SCANNER_PRIOR_FAILURE: "The scanner had trouble on the previous load. Retry the camera or use fallback playback.",
     VIDEO_LOAD_FAILED: "The video could not play on this browser. Try fallback playback.",
     UNSUPPORTED_DEVICE: "This device cannot run live tracking. Use fallback playback."
   };

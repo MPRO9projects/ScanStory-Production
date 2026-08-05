@@ -758,10 +758,31 @@
     scannerState.transition('checking_capabilities');
     const runtimeCapabilities = runtime.detectCapabilities();
     const runtimeOverride = new URLSearchParams(location.search).get('scanner_mode');
-    const scannerMode = runtime.selectRuntimeMode(runtimeCapabilities, runtimeOverride, sessionStorage.getItem('scanstoryScannerPriorFailure') === '1');
+    const scannerPriorFailure = sessionStorage.getItem('scanstoryScannerPriorFailure') === '1';
+    const scannerMode = runtime.selectRuntimeMode(runtimeCapabilities, runtimeOverride, scannerPriorFailure);
     const runtimeConfig = runtime.MODES[scannerMode];
     if (scannerMode === 'fallback') { scannerState.transition('fallback'); } else { scannerState.transition('requesting_camera'); }
     markStartupCheckpoint('scanner_state_initialized');
+
+    function scannerFallbackReason() {
+      if (scannerPriorFailure) return 'SCANNER_PRIOR_FAILURE';
+      if (!runtimeCapabilities.secureContext) return 'SECURE_CONTEXT_REQUIRED';
+      if (!runtimeCapabilities.cameraApi) return 'CAMERA_UNAVAILABLE';
+      if (!runtimeCapabilities.webassembly) return 'WASM_LOAD_FAILED';
+      return 'UNSUPPORTED_DEVICE';
+    }
+
+    function registerScannerServiceWorker() {
+      if (!('serviceWorker' in navigator)) return;
+      navigator.serviceWorker.register('/static/sw.js', { scope: '/' }).then(function (registration) {
+        try { registration.update(); } catch (_) {}
+        scannerDiagnostics.push('scanner_service_worker_registered', { scope: registration.scope });
+      }).catch(function (err) {
+        scannerDiagnostics.push('scanner_service_worker_registration_failed', {
+          message: err && err.message ? err.message : String(err || 'unknown')
+        });
+      });
+    }
 
     const deviceInfo = {
       isMobile: /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
@@ -822,6 +843,7 @@
     const scannerDiagnostics = runtime.createDiagnostics(diagnosticsEnabled, function (event) {
       console.debug('[scanner]', event);
     });
+    registerScannerServiceWorker();
     // Task F (Pass 12): three console.log verbosity tiers for logCallbackEvent — errors
     // (losses/exceptions/ownership corruption) < events (bootstrap/reseed/shape hold-
     // reject/recovery) < verbose (callback-by-callback and point-health, every tick).
@@ -1316,70 +1338,98 @@
     // ================================================
     let cvReady = false;
     let opencvLoadAttempts = 0;
+    let opencvLoadPromise = null;
+    let opencvLoadTimer = null;
+    let opencvLoadFailed = false;
     const MAX_LOAD_ATTEMPTS = 3;
 
-    function loadOpenCV() {
+    function clearOpenCVLoadTimer() {
+      if (opencvLoadTimer) {
+        clearTimeout(opencvLoadTimer);
+        opencvLoadTimer = null;
+      }
+    }
+
+    function removeOpenCVScriptForRetry() {
+      const oldScript = document.getElementById('opencvScript') || document.querySelector('script[src*="opencv"]');
+      if (oldScript) oldScript.remove();
+    }
+
+    function loadOpenCV(options) {
+      options = options || {};
+      if (cvReady) return Promise.resolve(true);
+      if (opencvLoadPromise && !options.forceRetry) return opencvLoadPromise;
+      if (options.forceRetry) {
+        clearOpenCVLoadTimer();
+        opencvLoadPromise = null;
+        opencvLoadFailed = false;
+        removeOpenCVScriptForRetry();
+      }
       opencvLoadAttempts++;
-      console.log(`📦 Loading OpenCV (attempt ${opencvLoadAttempts}/${MAX_LOAD_ATTEMPTS})...`);
+      console.log(`Loading OpenCV (attempt ${opencvLoadAttempts}/${MAX_LOAD_ATTEMPTS})...`);
 
       const statusDiv = document.getElementById('status');
-      statusDiv.textContent = deviceInfo.isLowEnd ? "Loading (may take a moment)…" : "Loading OpenCV…";
+      statusDiv.textContent = deviceInfo.isLowEnd ? "Loading (may take a moment)..." : "Loading OpenCV...";
       statusDiv.className = "status scan";
 
-      const loadTimeout = setTimeout(() => {
-        if (!cvReady && opencvLoadAttempts < MAX_LOAD_ATTEMPTS) {
-          console.warn('⚠️ OpenCV load timeout, retrying...');
-          const oldScript = document.querySelector('script[src*="opencv"]');
-          if (oldScript) oldScript.remove();
-          loadOpenCV();
-        } else if (!cvReady && opencvLoadAttempts >= MAX_LOAD_ATTEMPTS) {
-          console.error('❌ OpenCV failed to load');
-          enterFallback('OPENCV_LOAD_FAILED');
-          document.getElementById('loadingSpinner').style.display = 'none';
-        }
-      }, 15000);
-
-      window.Module = {
-        locateFile: function (path) {
-          if (path.endsWith('.wasm')) {
-            return "{{ url_for('static', filename='js/') }}" + path;
+      opencvLoadPromise = new Promise(function (resolve) {
+        function retryOrFallback(reason) {
+          clearOpenCVLoadTimer();
+          opencvLoadPromise = null;
+          removeOpenCVScriptForRetry();
+          if (cvReady) {
+            resolve(true);
+            return;
           }
-          return path;
-        },
-        onRuntimeInitialized: function () {
-          clearTimeout(loadTimeout);
-          cvReady = true;
-          console.log('✅ OpenCV initialized');
-          statusDiv.textContent = "🎯 Scan AR marker";
-          statusDiv.className = "status scan";
-          startDetectLoop();
-          startScannerStatusCycle();
-          startTrackingLoop();
-          document.getElementById('loadingSpinner').style.display = 'none';
-        },
-        onAbort: function (reason) {
-          clearTimeout(loadTimeout);
-          console.error('❌ OpenCV abort:', reason);
           if (opencvLoadAttempts < MAX_LOAD_ATTEMPTS) {
-            loadOpenCV();
+            console.warn('OpenCV load failed, retrying...', reason || '');
+            loadOpenCV().then(resolve);
           } else {
+            console.error('OpenCV failed to load');
+            opencvLoadFailed = true;
             enterFallback('OPENCV_LOAD_FAILED');
+            document.getElementById('loadingSpinner').style.display = 'none';
+            resolve(false);
           }
         }
-      };
 
-      const script = document.createElement('script');
-      script.src = "{{ url_for('static', filename='js/opencv.js') }}";
-      script.async = true;
-      script.onerror = function () {
-        clearTimeout(loadTimeout);
-        if (opencvLoadAttempts < MAX_LOAD_ATTEMPTS) {
-          loadOpenCV();
-        } else {
-          enterFallback('OPENCV_LOAD_FAILED');
-        }
-      };
-      document.head.appendChild(script);
+        opencvLoadTimer = setTimeout(() => retryOrFallback('timeout'), 15000);
+
+        window.Module = {
+          locateFile: function (path) {
+            if (path.endsWith('.wasm')) {
+              return "{{ url_for('static', filename='js/') }}" + path;
+            }
+            return path;
+          },
+          onRuntimeInitialized: function () {
+            clearOpenCVLoadTimer();
+            cvReady = true;
+            opencvLoadFailed = false;
+            opencvLoadPromise = null;
+            console.log('OpenCV initialized');
+            statusDiv.textContent = "Scan AR marker";
+            statusDiv.className = "status scan";
+            startDetectLoop();
+            startScannerStatusCycle();
+            startTrackingLoop();
+            document.getElementById('loadingSpinner').style.display = 'none';
+            resolve(true);
+          },
+          onAbort: function (reason) {
+            console.error('OpenCV abort:', reason);
+            retryOrFallback(reason);
+          }
+        };
+
+        const script = document.createElement('script');
+        script.id = 'opencvScript';
+        script.src = "{{ url_for('static', filename='js/opencv.js') }}";
+        script.async = true;
+        script.onerror = function () { retryOrFallback('script_error'); };
+        document.head.appendChild(script);
+      });
+      return opencvLoadPromise;
     }
 
     if (scannerMode !== 'fallback') {
@@ -1505,6 +1555,18 @@
         recoveryAttempt = 0;
         scannerGeneration++;
         if (scannerState.state === 'fallback') safeTransition('requesting_camera', 'fallback_retry');
+        stopDetectLoop('fallback_retry');
+        stopTrackingLoop();
+        if (!cvReady) {
+          opencvLoadAttempts = 0;
+          opencvLoadFailed = false;
+          const loaded = await loadOpenCV({ forceRetry: true });
+          if (!loaded || !cvReady) {
+            fallbackRetryBtn.disabled = false;
+            fallbackRetryBtn.textContent = 'Retry Camera';
+            return;
+          }
+        }
         await setupCamera();
         if (!isStreamDead()) {
           startDetectLoop();
@@ -1520,6 +1582,11 @@
     }
 
     fallbackRetryBtn.addEventListener('click', retryCameraFromFallback);
+
+    if (scannerMode === 'fallback') {
+      markStartupCheckpoint('fallback_recovery_panel_requested');
+      enterFallback(scannerFallbackReason());
+    }
 
     window.addEventListener('pagehide', function (event) {
       scannerDiagnostics.push('pagehide', { persisted: event.persisted, generation: scannerGeneration });
