@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Projects - Admin Panel</title>
+    <title>Projects - Admin Panel</title>
     <style>
         * {
             margin: 0;
@@ -507,7 +507,7 @@
         </div>
         <div class="sidebar-section">
             <div class="sidebar-title">Content</div>
-            <a href="/admin/projects" class="sidebar-link active"><i>&#128193;</i><span>Admin Projects</span></a>
+            <a href="/admin/projects" class="sidebar-link active"><i>&#128193;</i><span>Projects</span></a>
         </div>
         <div class="sidebar-section">
             <div class="sidebar-title">System</div>
@@ -522,7 +522,7 @@
     <!-- Main Content -->
     <div class="main-content">
         <div class="page-header">
-            <h1 class="page-title">Admin Projects</h1>
+            <h1 class="page-title">Projects</h1>
             <div>Total Projects: {{ pagination.total }}</div>
         </div>
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -551,6 +551,7 @@
                     <select id="readiness" name="readiness" class="form-control">
                         <option value="all" {% if readiness == 'all' %}selected{% endif %}>All statuses</option>
                         <option value="ready" {% if readiness == 'ready' %}selected{% endif %}>Ready</option>
+                        <option value="pending" {% if readiness == 'pending' %}selected{% endif %}>Pending</option>
                         <option value="processing" {% if readiness == 'processing' %}selected{% endif %}>Processing</option>
                         <option value="failed" {% if readiness == 'failed' %}selected{% endif %}>Failed</option>
                     </select>
@@ -582,7 +583,7 @@
                             <td><strong>{{ row.project.id }}</strong></td>
                             <td>
                                 <strong>{{ row.project.name }}</strong><br>
-                                <small style="color: #6b7280;">{{ 'Active' if row.project.is_active else 'Inactive' }}</small>
+                                <small style="color: #6b7280;">{{ 'Active' if row.project.is_active else 'Suspended' }}</small>
                             </td>
                             <td>
                                 {{ row.owner.type }} #{{ row.owner.id or '-' }}<br>

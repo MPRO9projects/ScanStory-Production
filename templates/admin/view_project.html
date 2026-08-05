@@ -543,7 +543,7 @@
         </div>
         <div class="sidebar-section">
             <div class="sidebar-title">Content</div>
-            <a href="/admin/projects" class="sidebar-link active"><i>&#128193;</i><span>Admin Projects</span></a>
+            <a href="/admin/projects" class="sidebar-link active"><i>&#128193;</i><span>Projects</span></a>
         </div>
         <div class="sidebar-section">
             <div class="sidebar-title">System</div>
@@ -559,7 +559,7 @@
     <div class="main-content">
         <div class="page-header">
             <h1 class="page-title">Project Details</h1>
-            <div><a href="/admin/projects" class="btn btn-secondary">&larr; Back to Admin Projects</a></div>
+            <div><a href="/admin/projects" class="btn btn-secondary">&larr; Back to Projects</a></div>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -576,7 +576,22 @@
                     <div class="project-title">{{ project.name }}</div>
                     <div style="color: #64748b; margin-top: 5px;">Global Project ID: {{ project.id }} &bull; Created: {{ project.created_at.strftime('%d %b %Y') if project.created_at else '-' }}</div>
                 </div>
-                <div style="text-align: right;"><div class="project-status-badge status-{{ 'active' if project.is_active else 'inactive' }}">{{ 'Active' if project.is_active else 'Inactive' }}</div></div>
+                <div style="text-align: right;"><div class="project-status-badge status-{{ 'active' if project.is_active else 'inactive' }}">{{ 'Active' if project.is_active else 'Suspended' }}</div></div>
+            </div>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;">
+                {% if project.is_active %}
+                <form method="POST" action="{{ url_for('admin_suspend_project', project_id=project.id) }}" style="display:inline;" onsubmit="return confirm('Suspend this project? Public scanner and media access will be blocked until restored.');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-warning">Suspend Project</button>
+                </form>
+                {% else %}
+                <form method="POST" action="{{ url_for('admin_restore_project', project_id=project.id) }}" style="display:inline;" onsubmit="return confirm('Restore this project and allow scanner/media access again?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-success">Restore Project</button>
+                </form>
+                {% endif %}
+                <a href="{{ url_for('admin_scanner_test_entry', project_id=project.id) }}" class="btn btn-primary">Open Scanner Test</a>
             </div>
 
             <div class="info-grid">

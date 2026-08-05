@@ -522,7 +522,7 @@
             <div class="sidebar-title">Content</div>
             <a href="/admin/projects" class="sidebar-link">
                 <i>&#128193;</i>
-                <span>Admin Projects</span>
+                <span>Projects</span>
             </a>
         </div>
 
@@ -715,6 +715,22 @@
                 </table>
             </div>
         </div>
+
+        {% if pagination %}
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px; flex-wrap: wrap;">
+                <div style="color: #64748b;">Page {{ pagination.page }} of {{ pagination.pages or 1 }} - {{ pagination.total }} matching user profiles</div>
+                <div class="action-buttons">
+                    {% if pagination.has_prev %}
+                    <a class="btn btn-secondary btn-sm" href="{{ url_for('admin_user_profiles', page=pagination.prev_num, status=status, plan_id=selected_plan_id, search=search, per_page=per_page) }}">Previous</a>
+                    {% endif %}
+                    {% if pagination.has_next %}
+                    <a class="btn btn-secondary btn-sm" href="{{ url_for('admin_user_profiles', page=pagination.next_num, status=status, plan_id=selected_plan_id, search=search, per_page=per_page) }}">Next</a>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
 
         <!-- User Statistics -->
         <div class="card">

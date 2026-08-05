@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Activity Logs - Admin Panel</title>
+    <style>
+        body { margin: 0; background: #f8fafc; color: #334155; font-family: Segoe UI, Tahoma, sans-serif; }
+        .navbar { height: 70px; background: linear-gradient(to right, #4f46e5, #7c3aed); color: #fff; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; position: fixed; inset: 0 0 auto 0; z-index: 1000; }
+        .navbar a { color: #fff; text-decoration: none; font-weight: 700; }
+        .sidebar { position: fixed; top: 70px; bottom: 0; left: 0; width: 250px; background: #fff; border-right: 1px solid #e2e8f0; padding: 20px 0; }
+        .sidebar-link { display: block; padding: 12px 20px; color: #475569; text-decoration: none; border-left: 3px solid transparent; }
+        .sidebar-link.active { background: #e0e7ff; color: #4f46e5; border-left-color: #4f46e5; }
+        .main-content { margin-left: 250px; margin-top: 70px; padding: 30px; }
+        .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
+        .page-title { font-size: 28px; color: #1e293b; margin: 0; }
+        .card { background: #fff; border-radius: 12px; padding: 22px; box-shadow: 0 4px 6px rgba(0,0,0,.08); margin-bottom: 24px; }
+        .filter-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; align-items: end; }
+        label { display: block; font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 6px; }
+        .form-control { width: 100%; padding: 10px; border: 1px solid #cbd5e1; border-radius: 8px; }
+        .btn { display: inline-block; border: 0; border-radius: 8px; padding: 9px 14px; text-decoration: none; cursor: pointer; font-weight: 600; font-size: 13px; }
+        .btn-primary { background: #4f46e5; color: #fff; }
+        .btn-secondary { background: #64748b; color: #fff; }
+        .btn-sm { padding: 6px 9px; font-size: 12px; }
+        .table-container { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px; border-bottom: 1px solid #e2e8f0; text-align: left; vertical-align: top; }
+        th { background: #f8fafc; color: #64748b; font-size: 12px; text-transform: uppercase; }
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #dbeafe; color: #1e40af; }
+    </style>
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/admin/dashboard">ScanStory Admin</a>
+        <div>Welcome, {{ admin.name }}</div>
+    </nav>
+    <aside class="sidebar">
+        <a class="sidebar-link" href="/admin/dashboard">Dashboard</a>
+        <a class="sidebar-link" href="/admin/user-profiles">User Profiles</a>
+        <a class="sidebar-link" href="/admin/projects">Projects</a>
+        <a class="sidebar-link" href="/admin/plans">Plans</a>
+        <a class="sidebar-link" href="/admin/subscriptions">Subscriptions</a>
+        <a class="sidebar-link" href="/admin/payments">Payments</a>
+        <a class="sidebar-link active" href="/admin/activity-logs">Activity Logs</a>
+    </aside>
+    <main class="main-content">
+        <div class="page-header">
+            <h1 class="page-title">Activity Logs</h1>
+            <div>{{ pagination.total }} matching records</div>
+        </div>
+        <section class="card">
+            <form class="filter-form" method="GET" action="/admin/activity-logs">
+                <div>
+                    <label for="activity_type">Activity Type</label>
+                    <select class="form-control" id="activity_type" name="activity_type">
+                        <option value="all" {% if selected_activity_type == 'all' %}selected{% endif %}>All types</option>
+                        {% for type_name in activity_types %}
+                        <option value="{{ type_name }}" {% if selected_activity_type == type_name %}selected{% endif %}>{{ type_name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="admin_id">Admin</label>
+                    <select class="form-control" id="admin_id" name="admin_id">
+                        <option value="">All admins</option>
+                        {% for row_admin in admins %}
+                        <option value="{{ row_admin.id }}" {% if selected_admin_id == row_admin.id %}selected{% endif %}>{{ row_admin.name or row_admin.email }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="start_date">Start Date</label>
+                    <input class="form-control" id="start_date" name="start_date" type="date" value="{{ start_date }}">
+                </div>
+                <div>
+                    <label for="end_date">End Date</label>
+                    <input class="form-control" id="end_date" name="end_date" type="date" value="{{ end_date }}">
+                </div>
+                <div>
+                    <label for="per_page">Page size</label>
+                    <input class="form-control" id="per_page" name="per_page" type="number" min="1" max="100" value="{{ per_page }}">
+                </div>
+                <div>
+                    <button class="btn btn-primary" type="submit">Apply</button>
+                    <a class="btn btn-secondary" href="/admin/activity-logs">Clear</a>
+                </div>
+            </form>
+        </section>
+        <section class="card table-container">
+            <table>
+                <thead><tr><th>Time</th><th>Admin</th><th>Type</th><th>Description</th></tr></thead>
+                <tbody>
+                    {% for activity in activities %}
+                    <tr>
+                        <td>{{ activity.activity_at.strftime('%d %b %Y, %I:%M %p') if activity.activity_at else '-' }}</td>
+                        <td>{{ activity.admin.name if activity.admin else 'Unknown admin' }}<br><small>#{{ activity.admin_id }}</small></td>
+                        <td><span class="badge">{{ activity.activity_type }}</span></td>
+                        <td>{{ activity.description }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="4">No activity records found.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+        <section class="card">
+            Page {{ pagination.page }} of {{ pagination.pages or 1 }}
+            {% if pagination.has_prev %}<a class="btn btn-secondary btn-sm" href="{{ url_for('admin_activity_logs', page=pagination.prev_num, activity_type=selected_activity_type, admin_id=selected_admin_id, start_date=start_date, end_date=end_date, per_page=per_page) }}">Previous</a>{% endif %}
+            {% if pagination.has_next %}<a class="btn btn-secondary btn-sm" href="{{ url_for('admin_activity_logs', page=pagination.next_num, activity_type=selected_activity_type, admin_id=selected_admin_id, start_date=start_date, end_date=end_date, per_page=per_page) }}">Next</a>{% endif %}
+        </section>
+    </main>
+</body>
+</html>
