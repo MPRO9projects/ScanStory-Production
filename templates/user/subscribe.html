@@ -1263,6 +1263,10 @@
             })
                 .then(response => response.json())
                 .then(data => {
+                    if (data.code === 'CAPACITY_FULL') {
+                        showPaymentError(data.message || 'ScanStory early-access capacity is currently full.');
+                        return;
+                    }
                     if (data.success) {
                         // Configure Razorpay options
                         const options = {

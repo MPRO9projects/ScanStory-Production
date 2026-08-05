@@ -31,6 +31,8 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from alembic.config import Config as AlembicConfig
+from alembic.script import ScriptDirectory
 from flask import Flask
 from flask_migrate import Migrate
 from flask_migrate import current as migrate_current
@@ -42,6 +44,22 @@ from models import db as shared_db
 
 MIGRATIONS_DIR = str(Path(__file__).resolve().parents[2] / "migrations")
 BASELINE_REVISION = "3914ece79b88"
+
+
+def _current_head_revision():
+    """The latest revision in migrations/versions/, whatever it is.
+
+    Phase 1 added the single BASELINE_REVISION; later phases (this one
+    included) layer further revisions on top of it. `flask db upgrade` with
+    no explicit target always upgrades to head, so any test asserting "what
+    does alembic_version read after a clean upgrade" must compare against
+    the *current* head, not a phase-1-only constant - otherwise this file
+    would fail every time a later phase adds a migration, which defeats the
+    purpose of a regression gate.
+    """
+    config = AlembicConfig()
+    config.set_main_option("script_location", MIGRATIONS_DIR)
+    return ScriptDirectory.from_config(config).get_current_head()
 
 
 @pytest.fixture()
@@ -110,7 +128,7 @@ def test_clean_database_upgrade_creates_full_schema(tmp_path, bare_migration_app
 
     with app.app_context():
         version_rows = shared_db.session.execute(text("select version_num from alembic_version")).fetchall()
-    assert [row[0] for row in version_rows] == [BASELINE_REVISION]
+    assert [row[0] for row in version_rows] == [_current_head_revision()]
 
 
 def test_upgrade_is_idempotent(tmp_path, bare_migration_app):
@@ -127,7 +145,7 @@ def test_upgrade_is_idempotent(tmp_path, bare_migration_app):
         version_rows = shared_db.session.execute(text("select version_num from alembic_version")).fetchall()
 
     assert tables_after_first == tables_after_second
-    assert [row[0] for row in version_rows] == [BASELINE_REVISION]
+    assert [row[0] for row in version_rows] == [_current_head_revision()]
 
 
 def test_baseline_stamp_preserves_existing_schema_and_data(app_module, db_session):
