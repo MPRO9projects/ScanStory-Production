@@ -17,6 +17,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import CSRFError
+from flask_migrate import Migrate
 from dotenv import load_dotenv
 import cv2
 import numpy as np
@@ -170,6 +171,21 @@ def handle_csrf_error(error):
 
 # ✅ Initialize SQLAlchemy ONLY ONCE
 db.init_app(app)
+
+# Flask-Migrate/Alembic wiring (Phase 1 migration foundation). This only
+# registers the `flask db ...` CLI commands against the existing db/app
+# objects - it does not run anything at import time and does not change
+# db.init_app's behavior or the bootstrap block below. ensure_marker_schema()
+# and ensure_otp_security_schema() keep running exactly as before; Alembic
+# does not own schema state yet in this phase (see migrations/README.md).
+migrate = Migrate(
+    app, db, directory=os.path.join(BASE_DIR, "migrations"),
+    # Declared default only; migrations/env.py re-derives this per-connection
+    # from the actual dialect name at run time (mirrors
+    # _supports_row_level_locking()'s dialect-name gating below).
+    render_as_batch=False,
+)
+
 from experience_creator import experience_creator_bp
 
 app.register_blueprint(experience_creator_bp)
