@@ -212,13 +212,6 @@ RATE_LIMITS = {
 }
 
 
-def _client_ip():
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        return forwarded.split(",", 1)[0].strip()
-    return request.remote_addr or "0.0.0.0"
-
-
 def _rate_limit_key(scope, *parts):
     clean = [scope, _client_ip()]
     clean.extend(str(part or "-")[:120] for part in parts)
@@ -249,6 +242,11 @@ def _apply_public_immutable_cache(response):
 
 def _apply_short_public_cache(response):
     response.headers["Cache-Control"] = "public, max-age=3600"
+    return response
+
+
+def _apply_short_private_cache(response):
+    response.headers["Cache-Control"] = "private, max-age=3600"
     return response
 
 
@@ -434,7 +432,9 @@ app.after_request(add_security_headers)
 
 @app.route("/healthz", methods=["GET"])
 def healthz():
-    return jsonify({"status": "ok"}), 200
+    response = jsonify({"status": "ok"})
+    response.headers["Cache-Control"] = "no-store"
+    return response, 200
 
 
 def _readiness_checks():
@@ -446,14 +446,18 @@ def _readiness_checks():
 def ready():
     try:
         checks = _readiness_checks()
-        return jsonify({"status": "ready", "checks": checks}), 200
+        response = jsonify({"status": "ready", "checks": checks})
+        response.headers["Cache-Control"] = "no-store"
+        return response, 200
     except Exception:
         try:
             db.session.rollback()
         except Exception:
             pass
         app.logger.warning("readiness_check_failed", exc_info=True)
-        return jsonify({"status": "not_ready", "checks": {"database": "unavailable"}}), 503
+        response = jsonify({"status": "not_ready", "checks": {"database": "unavailable"}})
+        response.headers["Cache-Control"] = "no-store"
+        return response, 503
 
 
 # --------------------------------------------------------------------------------------------
@@ -1028,6 +1032,9 @@ def _otp_matches(rec: OTPCode, code: str) -> bool:
 
 
 def _client_ip():
+    # request.remote_addr is already normalized by ProxyFix above. Do not
+    # read X-Forwarded-For directly here; only the trusted WSGI proxy layer
+    # may translate that header into remote_addr.
     return request.remote_addr or "unknown"
 
 
@@ -8909,7 +8916,7 @@ def serve_admin_image(project_id, image_id):
         abort(404)
     
     response = send_from_directory(ADMIN_IMAGES_DIR, pair.image_filename)
-    return _apply_short_public_cache(response)
+    return _apply_short_private_cache(response)
 @app.route("/admin/video/<int:project_id>/<int:image_id>")
 def serve_admin_video(project_id, image_id):
     """Serve videos for ADMIN projects only"""
@@ -8925,7 +8932,7 @@ def serve_admin_video(project_id, image_id):
     
     response = send_from_directory(ADMIN_VIDEOS_DIR, pair.video_filename)
     response.headers["Content-Disposition"] = "inline"
-    return _apply_short_public_cache(response)
+    return _apply_short_private_cache(response)
 
 @app.route("/admin/qr/<filename>")
 def serve_admin_qr(filename):
@@ -8943,7 +8950,7 @@ def serve_admin_qr(filename):
         return _project_unavailable_response()
     
     response = send_from_directory(ADMIN_QR_DIR, filename)
-    return _apply_short_public_cache(response)
+    return _apply_short_private_cache(response)
 
 @app.route("/admin/success/<int:project_id>", methods=["GET"])
 @admin_required

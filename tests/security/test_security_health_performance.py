@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 from werkzeug.security import generate_password_hash
 
+from rate_limit import InMemoryRateLimiter
+
 
 pytestmark = pytest.mark.security
 
@@ -19,10 +21,12 @@ def test_healthz_is_minimal_and_ready_checks_database(client):
     health = client.get("/healthz")
     assert health.status_code == 200
     assert health.get_json() == {"status": "ok"}
+    assert health.headers["Cache-Control"] == "no-store"
 
     ready = client.get("/ready")
     assert ready.status_code == 200
     assert ready.get_json() == {"status": "ready", "checks": {"database": "ok"}}
+    assert ready.headers["Cache-Control"] == "no-store"
 
 
 def test_ready_failure_is_generic(client, app_module, monkeypatch):
@@ -37,7 +41,22 @@ def test_ready_failure_is_generic(client, app_module, monkeypatch):
         "status": "not_ready",
         "checks": {"database": "unavailable"},
     }
+    assert response.headers["Cache-Control"] == "no-store"
     assert "secret database path" not in response.get_data(as_text=True)
+
+
+def test_process_local_limiter_prunes_stale_buckets_and_enforces_key_bound():
+    now = [100.0]
+    limiter = InMemoryRateLimiter(clock=lambda: now[0], max_keys=2)
+
+    assert limiter.check("one", 1, 10) == (True, 0)
+    assert limiter.check("two", 1, 10) == (True, 0)
+    assert limiter.check("three", 1, 10) == (True, 0)
+    assert len(limiter._events) == 2
+
+    now[0] = 111.0
+    assert limiter.check("fresh", 1, 10) == (True, 0)
+    assert list(limiter._events) == ["fresh"]
 
 
 def test_scanner_detect_init_is_rate_limited_without_blocking_distinct_sessions(
@@ -156,6 +175,45 @@ def test_media_cache_headers_preserve_range_and_suspension_blocks_access(
     suspended = client.get(f"/video/{project.id}/{pair.pair_index}")
     assert suspended.status_code == 404
     assert b"suspended or unavailable" in suspended.data
+
+
+def test_admin_media_uses_private_cache_not_public(client, app_module, db_session, admin):
+    project = app_module.Project(
+        name="Admin Cache Project",
+        owner_admin_id=admin.id,
+        qr_code_filename="project_1_admin.png",
+    )
+    db_session.add(project)
+    db_session.commit()
+
+    image_path = Path(app_module.ADMIN_IMAGES_DIR) / f"{project.id}_0.jpg"
+    video_path = Path(app_module.ADMIN_VIDEOS_DIR) / f"{project.id}_0.mp4"
+    qr_path = Path(app_module.ADMIN_QR_DIR) / "project_1_admin.png"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    video_path.parent.mkdir(parents=True, exist_ok=True)
+    qr_path.parent.mkdir(parents=True, exist_ok=True)
+    image_path.write_bytes(b"fake image")
+    video_path.write_bytes(b"fake video")
+    qr_path.write_bytes(b"fake qr")
+
+    pair = app_module.ProjectPair(
+        project_id=project.id,
+        pair_index=0,
+        image_filename=image_path.name,
+        video_filename=video_path.name,
+        is_processed=True,
+    )
+    db_session.add(pair)
+    db_session.commit()
+
+    for path in (
+        f"/admin/image/{project.id}/0",
+        f"/admin/video/{project.id}/0",
+        "/admin/qr/project_1_admin.png",
+    ):
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.headers["Cache-Control"] == "private, max-age=3600"
 
 
 def test_opencv_static_assets_are_long_cached_and_service_worker_is_narrow(client):
