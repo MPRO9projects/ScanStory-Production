@@ -382,11 +382,20 @@ class OTPCode(db.Model):
 
     email = db.Column(db.String(255), nullable=False, index=True)
     code = db.Column(db.String(6), nullable=False)
+    code_hash = db.Column(db.String(255), nullable=True)
     purpose = db.Column(db.String(50), nullable=False)
+    challenge_id = db.Column(db.String(64), nullable=True, unique=True, index=True)
     expires_at = db.Column(db.DateTime, nullable=False)
 
     is_used = db.Column(db.Boolean, default=False)
     used_at = db.Column(db.DateTime, nullable=True)
+    invalidated_at = db.Column(db.DateTime, nullable=True)
+    locked_until = db.Column(db.DateTime, nullable=True)
+    attempt_count = db.Column(db.Integer, default=0, nullable=False)
+    max_attempts = db.Column(db.Integer, default=5, nullable=False)
+    resend_count = db.Column(db.Integer, default=0, nullable=False)
+    first_sent_at = db.Column(db.DateTime, nullable=True)
+    last_sent_at = db.Column(db.DateTime, nullable=True)
     ip_address = db.Column(db.String(45), nullable=True)
     user_agent = db.Column(db.Text, nullable=True)
 
