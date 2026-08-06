@@ -189,7 +189,7 @@ def test_beforeunload_only_active_during_upload_and_removed_after_completion():
     assert "function disableUploadNavigationWarning()" in html
     assert "window.addEventListener('beforeunload', warnDuringUpload)" in html
     assert "window.removeEventListener('beforeunload', warnDuringUpload)" in html
-    assert "if (!uploadActive || !activeUploadXhr) return" in html
+    assert "if (!uploadActive || (!activeUploadXhr && !activeResumableUpload)) return" in html
     assert "enableUploadNavigationWarning();" in html
     assert "disableUploadNavigationWarning();" in html
 
@@ -258,6 +258,127 @@ def test_upload_client_diagnostics_use_safe_metrics_only():
         "current_phase",
     ):
         assert key in block
+
+
+def test_resumable_upload_frontend_uses_documented_routes_and_csrf():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    assert "createResumableSession(markerFile, videoFile, projectName, signal)" in html
+    assert "fetchUploadJson('/api/uploads/sessions'" in html
+    assert "`/api/uploads/sessions/${sessionId}/chunk`" in html
+    assert "`/api/uploads/sessions/${sessionId}`" in html
+    assert "`/api/uploads/sessions/${sessionId}/finalize`" in html
+    assert "`/api/uploads/sessions/${sessionId}/cancel`" in html
+    assert "'X-CSRFToken': csrfHeader()" in html
+    assert "'X-Chunk-Offset': String(offset)" in html
+
+
+def test_resumable_upload_is_single_pair_and_legacy_multipart_is_explicit_fallback():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    branch_start = html.index("if (readyPairs.length === 1)")
+    branch = html[branch_start:html.index("try {", branch_start)]
+    assert "await submitResumableSinglePair" in branch
+    assert "Using the legacy uploader for multi-pair projects." in html
+    assert "xhr.open('POST', this.action, true)" in html
+
+
+def test_resumable_upload_streams_marker_then_video_sequentially():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("function sequentialUploadSlice")
+    block = html[start:html.index("async function fetchUploadJson", start)]
+    assert "const markerEnd = markerFile.size" in block
+    assert "markerFile.slice(offset, end)" in block
+    assert "videoFile.slice(offset - markerEnd, end - markerEnd)" in block
+    assert "markerFile.slice(offset, markerEnd)" in block
+    assert "videoFile.slice(0, end - markerEnd)" in block
+    assert "RESUMABLE_UPLOAD_CHUNK_SIZE = 1024 * 1024" in html
+
+
+def test_resumable_upload_progress_bytes_percent_speed_eta_are_visible():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("async function uploadResumableStream")
+    block = html[start:html.index("async function finalizeResumableWithBoundedRetry", start)]
+    assert "`Uploading video — ${Math.round(percent)}%`" in block
+    assert "`${formatBytes(offset)} of ${formatBytes(expectedTotal)}`" in block
+    assert "`${formatRate(avgBytesPerSecond)} · ${etaText}`" in block
+    assert "setUploadProgress('Finalizing upload'" in html
+    assert "setUploadProgress('Processing queued'" in html
+    assert "setUploadProgress('Project ready'" in html
+
+
+def test_resumable_upload_resume_and_offset_mismatch_sync_to_server_offset():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("async function uploadResumableStream")
+    block = html[start:html.index("async function finalizeResumableWithBoundedRetry", start)]
+    assert "err.code === 'OFFSET_MISMATCH'" in block
+    assert "err.status === 0" in block
+    assert "getUploadSessionStatus(sessionId" in block
+    assert "offset = statusPayload.session.current_offset" in block
+    assert "RESUMABLE CLIENT RESUME" in block
+    assert "response.note === 'duplicate_chunk_ignored'" in block
+
+
+def test_resumable_upload_cancellation_aborts_and_calls_cancel_route():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("async function cancelActiveUpload")
+    block = html[start:html.index("async function uploadResumableStream", start)]
+    assert "activeResumableUpload.cancelled = true" in block
+    assert "activeResumableUpload.controller?.abort()" in block
+    assert "await cancelResumableSession(sessionId)" in block
+    assert "clearResumableUploadState()" in block
+    assert "id=\"cancelUploadBtn\"" in html
+
+
+def test_resumable_upload_finalize_once_and_handles_incomplete_queue_failures():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("async function finalizeResumableWithBoundedRetry")
+    block = html[start:html.index("async function submitResumableSinglePair", start)]
+    assert "if (activeResumableUpload.finalizeStarted)" in block
+    assert "activeResumableUpload.finalizeStarted = true" in block
+    assert "err.code === 'INCOMPLETE_UPLOAD'" in block
+    assert "err.code !== 'QUEUE_ENQUEUE_FAILED'" in block
+    assert "UPLOAD CLIENT FINALIZE RETRY" in block
+
+
+def test_resumable_upload_processing_status_polling_is_bounded_and_optional():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("async function pollProcessingJobIfAvailable")
+    block = html[start:html.index("async function cancelActiveUpload", start)]
+    assert "if (!jobId) return null" in block
+    assert "RESUMABLE_POLL_MAX_ATTEMPTS" in block
+    assert "`/api/processing/jobs/${jobId}`" in block
+    assert "status === 'completed' || status === 'failed'" in block
+
+
+def test_resumable_upload_refresh_recovery_stores_only_non_secret_metadata():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("function saveResumableUploadState")
+    block = html[start:html.index("function loadResumableUploadState", start)]
+    for key in ("sessionId", "projectName", "imageName", "imageSize", "videoName", "videoSize", "expectedTotalSize", "currentOffset"):
+        assert key in block
+    assert "localStorage.setItem(RESUMABLE_UPLOAD_STORAGE_KEY" in block
+    assert "fileBytes" not in block
+    assert "markerFile" not in block
+    assert "videoFile" not in block
+    assert "storedSessionMatchesFiles" in html
+
+
+def test_resumable_upload_error_messages_are_documented_safe_codes():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("function safeUploadErrorMessage")
+    block = html[start:html.index("function setCancelUploadVisible", start)]
+    for code in (
+        "OFFSET_MISMATCH",
+        "INCOMPLETE_UPLOAD",
+        "SESSION_EXPIRED",
+        "SESSION_CANCELLED",
+        "QUEUE_ENQUEUE_FAILED",
+        "IMAGE_VALIDATION_FAILED",
+        "VIDEO_VALIDATION_FAILED",
+        "PROJECT_LIMIT_REACHED",
+    ):
+        assert code in block
+    assert "stack" not in block.lower()
+    assert "traceback" not in block.lower()
     assert "user_agent" not in block
     assert "filename" not in block
     assert "email" not in block

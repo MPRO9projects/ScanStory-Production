@@ -1341,6 +1341,9 @@
             <button type="submit" class="action-btn upload-btn" id="submitBtn" disabled>
               <i class="fas fa-qrcode"></i> Get My Scan Code
             </button>
+            <button type="button" class="action-btn clear-btn" id="cancelUploadBtn" onclick="cancelActiveUpload()" style="display:none;">
+              <i class="fas fa-ban"></i> Cancel Upload
+            </button>
             <button type="button" class="action-btn clear-btn" onclick="clearAll()">
               <i class="fas fa-trash"></i> Clear All
             </button>
@@ -2721,6 +2724,8 @@
       uploadActive = false;
       activeUploadXhr = null;
       activeUploadId = null;
+      activeResumableUpload = null;
+      setCancelUploadVisible(false);
       disableUploadNavigationWarning();
       if (submitBtn) {
         submitBtn.disabled = false;
@@ -2742,7 +2747,7 @@
     }
 
     function warnDuringUpload(event) {
-      if (!uploadActive || !activeUploadXhr) return;
+      if (!uploadActive || (!activeUploadXhr && !activeResumableUpload)) return;
       event.preventDefault();
       event.returnValue = '';
       return '';
@@ -2786,6 +2791,403 @@
       fd.append(`marker_${index}_source_size_bytes`, String(pair.image?.size || 0));
       fd.append(`marker_${index}_processed_size_bytes`, String(pair.processedFile?.size || 0));
       fd.append(`marker_${index}_display_orientation`, (pair.originalWidth >= pair.originalHeight) ? 'landscape' : 'portrait');
+    }
+
+    const RESUMABLE_UPLOAD_CHUNK_SIZE = 1024 * 1024;
+    const RESUMABLE_UPLOAD_STORAGE_KEY = 'scanstory.resumableUpload.v1';
+    const RESUMABLE_POLL_MAX_ATTEMPTS = 8;
+    const RESUMABLE_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'expired']);
+    let activeResumableUpload = null;
+
+    class UploadApiError extends Error {
+      constructor(code, message, status, payload = null) {
+        super(message || code || 'Upload failed');
+        this.name = 'UploadApiError';
+        this.code = code || 'UPLOAD_FAILED';
+        this.status = status || 0;
+        this.payload = payload;
+      }
+    }
+
+    function csrfHeader() {
+      return '{{ csrf_token() }}';
+    }
+
+    function safeUploadErrorMessage(code) {
+      const messages = {
+        UNAUTHENTICATED: 'Please sign in again before uploading.',
+        INVALID_SIZE: 'The selected files could not be measured. Please choose them again.',
+        IMAGE_TOO_LARGE: 'The marker image is too large.',
+        VIDEO_TOO_LARGE: 'The video is too large.',
+        TOTAL_TOO_LARGE: 'The combined upload is too large.',
+        INVALID_CHECKSUM: 'The upload checksum is invalid.',
+        ACCOUNT_BLOCKED: 'This account cannot upload right now.',
+        PROJECT_LIMIT_REACHED: 'Your project limit has been reached.',
+        PLAN_NOT_CONFIGURED: 'Your plan is not configured for uploads.',
+        SUBSCRIPTION_LIMIT: 'Your current plan cannot create this project.',
+        SESSION_EXPIRED: 'This upload session expired. Please start again.',
+        SESSION_CANCELLED: 'This upload was cancelled.',
+        SESSION_FAILED: 'This upload session failed. Please start again.',
+        IMAGE_VALIDATION_FAILED: 'The marker image could not be validated.',
+        VIDEO_VALIDATION_FAILED: 'The video could not be validated.',
+        CHECKSUM_MISMATCH: 'The uploaded bytes did not match the expected checksum.',
+        PROJECT_CREATION_FAILED: 'The project could not be created. Please retry.',
+        QUEUE_ENQUEUE_FAILED: 'The project was saved, but processing could not be queued. Retry in a moment.',
+        INCOMPLETE_UPLOAD: 'The upload is incomplete. Resuming from the server offset.',
+        OFFSET_MISMATCH: 'The server and browser upload offsets differed. Resynchronizing.',
+        STORAGE_INCONSISTENT: 'Upload storage became inconsistent. Please cancel and retry.'
+      };
+      return messages[code] || 'Upload failed. Please try again.';
+    }
+
+    function setCancelUploadVisible(visible) {
+      const cancelBtn = document.getElementById('cancelUploadBtn');
+      if (cancelBtn) cancelBtn.style.display = visible ? 'inline-flex' : 'none';
+    }
+
+    function saveResumableUploadState(state) {
+      try {
+        localStorage.setItem(RESUMABLE_UPLOAD_STORAGE_KEY, JSON.stringify({
+          version: 1,
+          sessionId: state.sessionId,
+          projectName: state.projectName,
+          imageName: state.imageName,
+          imageSize: state.imageSize,
+          videoName: state.videoName,
+          videoSize: state.videoSize,
+          videoLastModified: state.videoLastModified || 0,
+          expectedTotalSize: state.expectedTotalSize,
+          currentOffset: state.currentOffset || 0,
+          updatedAt: Date.now()
+        }));
+      } catch (_err) {}
+    }
+
+    function loadResumableUploadState() {
+      try {
+        return JSON.parse(localStorage.getItem(RESUMABLE_UPLOAD_STORAGE_KEY) || 'null');
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    function clearResumableUploadState() {
+      try {
+        localStorage.removeItem(RESUMABLE_UPLOAD_STORAGE_KEY);
+      } catch (_err) {}
+    }
+
+    function storedSessionMatchesFiles(stored, markerFile, videoFile, projectName) {
+      return !!stored
+        && stored.version === 1
+        && stored.projectName === projectName
+        && stored.imageName === markerFile.name
+        && stored.imageSize === markerFile.size
+        && stored.videoName === videoFile.name
+        && stored.videoSize === videoFile.size
+        && stored.videoLastModified === (videoFile.lastModified || 0);
+    }
+
+    function sequentialUploadSlice(markerFile, videoFile, offset, length) {
+      const markerEnd = markerFile.size;
+      const end = Math.min(offset + length, markerFile.size + videoFile.size);
+      if (offset < markerEnd && end <= markerEnd) {
+        return markerFile.slice(offset, end);
+      }
+      if (offset >= markerEnd) {
+        return videoFile.slice(offset - markerEnd, end - markerEnd);
+      }
+      return new Blob([
+        markerFile.slice(offset, markerEnd),
+        videoFile.slice(0, end - markerEnd)
+      ], { type: 'application/octet-stream' });
+    }
+
+    async function fetchUploadJson(url, options = {}) {
+      const response = await fetch(url, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          'X-CSRFToken': csrfHeader()
+        }
+      });
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (_err) {}
+      if (!response.ok || payload?.success === false) {
+        throw new UploadApiError(payload?.code, safeUploadErrorMessage(payload?.code), response.status, payload);
+      }
+      return payload || {};
+    }
+
+    async function createResumableSession(markerFile, videoFile, projectName, signal) {
+      return fetchUploadJson('/api/uploads/sessions', {
+        method: 'POST',
+        signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          image_size: markerFile.size,
+          video_size: videoFile.size,
+          project_name: projectName,
+          original_image_name: markerFile.name,
+          original_video_name: videoFile.name,
+          image_content_type: markerFile.type || 'image/jpeg',
+          video_content_type: videoFile.type || 'video/mp4'
+        })
+      });
+    }
+
+    async function getUploadSessionStatus(sessionId, signal) {
+      return fetchUploadJson(`/api/uploads/sessions/${sessionId}`, { method: 'GET', signal });
+    }
+
+    async function uploadResumableChunk(sessionId, offset, chunk, signal) {
+      return fetchUploadJson(`/api/uploads/sessions/${sessionId}/chunk`, {
+        method: 'POST',
+        signal,
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'X-Chunk-Offset': String(offset)
+        },
+        body: chunk
+      });
+    }
+
+    async function finalizeResumableSession(sessionId, signal) {
+      return fetchUploadJson(`/api/uploads/sessions/${sessionId}/finalize`, { method: 'POST', signal });
+    }
+
+    async function cancelResumableSession(sessionId) {
+      return fetchUploadJson(`/api/uploads/sessions/${sessionId}/cancel`, { method: 'POST' });
+    }
+
+    async function pollProcessingJobIfAvailable(jobId, signal) {
+      if (!jobId) return null;
+      let delay = 1200;
+      for (let attempt = 0; attempt < RESUMABLE_POLL_MAX_ATTEMPTS; attempt++) {
+        const payload = await fetchUploadJson(`/api/processing/jobs/${jobId}`, { method: 'GET', signal });
+        const status = payload.status || payload.job?.status;
+        if (status === 'completed' || status === 'failed') return payload;
+        setUploadProgress('Processing queued', 99, 'Processing marker. This can continue in the background.');
+        await new Promise(resolve => setTimeout(resolve, delay));
+        delay = Math.min(delay * 1.6, 6000);
+      }
+      return null;
+    }
+
+    async function cancelActiveUpload() {
+      if (!uploadActive) return;
+      if (activeResumableUpload) {
+        activeResumableUpload.cancelled = true;
+        activeResumableUpload.controller?.abort();
+        const sessionId = activeResumableUpload.sessionId;
+        if (sessionId) {
+          try {
+            await cancelResumableSession(sessionId);
+          } catch (_err) {}
+        }
+        clearResumableUploadState();
+      }
+      if (activeUploadXhr) activeUploadXhr.abort();
+      setUploadProgress('Upload cancelled', 0, 'The upload was cancelled safely.');
+      resetUploadSubmit(document.getElementById('submitBtn'));
+    }
+
+    async function uploadResumableStream(session, markerFile, videoFile, uploadState) {
+      const sessionId = session.id;
+      const expectedTotal = session.expected_total_size;
+      let offset = session.current_offset || 0;
+      let resumeAttempts = 0;
+      const startedAt = performance.now();
+
+      while (offset < expectedTotal) {
+        if (activeResumableUpload?.cancelled) throw new UploadApiError('SESSION_CANCELLED', 'Upload cancelled', 0);
+        const chunk = sequentialUploadSlice(markerFile, videoFile, offset, RESUMABLE_UPLOAD_CHUNK_SIZE);
+        if (!chunk.size) throw new UploadApiError('EMPTY_CHUNK', 'Empty chunk', 400);
+        try {
+          const response = await uploadResumableChunk(sessionId, offset, chunk, activeResumableUpload.controller.signal);
+          offset = response.current_offset;
+          activeResumableUpload.currentOffset = offset;
+          saveResumableUploadState({ ...activeResumableUpload, currentOffset: offset, expectedTotalSize: expectedTotal });
+          const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.001);
+          const avgBytesPerSecond = offset / elapsedSeconds;
+          const percent = expectedTotal ? (offset / expectedTotal) * 100 : 0;
+          const etaSeconds = avgBytesPerSecond > 0 ? Math.max(expectedTotal - offset, 0) / avgBytesPerSecond : null;
+          const etaText = etaSeconds === null ? 'ETA calculating' : `About ${formatDuration(etaSeconds)} remaining`;
+          uploadState.lastLoaded = offset;
+          uploadClientLog('UPLOAD CLIENT PROGRESS', uploadState, {
+            bytes_uploaded: offset,
+            total_bytes: expectedTotal,
+            estimated_upload_speed: Math.round(avgBytesPerSecond),
+            estimated_remaining_time: etaSeconds === null ? null : Math.round(etaSeconds),
+            current_phase: 'Uploading video'
+          });
+          logClientStage('RESUMABLE CLIENT CHUNK ACCEPTED', {
+            upload_id: uploadState.uploadId,
+            session_id: sessionId,
+            offset,
+            expected_total_size: expectedTotal,
+            duplicate_chunk: response.note === 'duplicate_chunk_ignored'
+          });
+          setUploadProgress(
+            `Uploading video — ${Math.round(percent)}%`,
+            Math.min(90, 10 + percent * 0.8),
+            `${formatRate(avgBytesPerSecond)} · ${etaText}`,
+            `${formatBytes(offset)} of ${formatBytes(expectedTotal)}`
+          );
+          resumeAttempts = 0;
+        } catch (err) {
+          if (activeResumableUpload?.cancelled || err.name === 'AbortError') throw new UploadApiError('SESSION_CANCELLED', 'Upload cancelled', 0);
+          if (err.code === 'OFFSET_MISMATCH' || err.status === 0 || err.name === 'TypeError') {
+            resumeAttempts += 1;
+            if (resumeAttempts > 5) throw err;
+            const statusPayload = await getUploadSessionStatus(sessionId, activeResumableUpload.controller.signal);
+            offset = statusPayload.session.current_offset;
+            activeResumableUpload.currentOffset = offset;
+            saveResumableUploadState({ ...activeResumableUpload, currentOffset: offset, expectedTotalSize: expectedTotal });
+            setUploadProgress('Uploading video', Math.min(90, 10 + (offset / expectedTotal) * 80), 'Connection recovered. Resuming from the server offset.', `${formatBytes(offset)} of ${formatBytes(expectedTotal)}`);
+            logClientStage('RESUMABLE CLIENT RESUME', {
+              upload_id: uploadState.uploadId,
+              session_id: sessionId,
+              current_offset: offset,
+              reason: err.code || err.name || 'network'
+            });
+            continue;
+          }
+          throw err;
+        }
+      }
+      return offset;
+    }
+
+    async function finalizeResumableWithBoundedRetry(sessionId, uploadState) {
+      if (activeResumableUpload.finalizeStarted) {
+        throw new UploadApiError('FINALIZE_IN_PROGRESS', 'Finalize already started', 409);
+      }
+      activeResumableUpload.finalizeStarted = true;
+      let delay = 1200;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          return await finalizeResumableSession(sessionId, activeResumableUpload.controller.signal);
+        } catch (err) {
+          if (err.code === 'INCOMPLETE_UPLOAD') {
+            const statusPayload = await getUploadSessionStatus(sessionId, activeResumableUpload.controller.signal);
+            activeResumableUpload.currentOffset = statusPayload.session.current_offset;
+            activeResumableUpload.finalizeStarted = false;
+            saveResumableUploadState(activeResumableUpload);
+            return statusPayload;
+          }
+          if (err.code !== 'QUEUE_ENQUEUE_FAILED' || attempt === 2) throw err;
+          uploadClientLog('UPLOAD CLIENT FINALIZE RETRY', uploadState, { http_status: err.status, current_phase: 'Finalizing' });
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2;
+        }
+      }
+      throw new UploadApiError('QUEUE_ENQUEUE_FAILED', 'Queue unavailable', 502);
+    }
+
+    async function submitResumableSinglePair(context) {
+      const { projectName, readyPairs, uploadId, submitBtn, totalStart, videoBytes, originalBytes, uploadState } = context;
+      const item = readyPairs[0];
+      const pair = item.pair;
+      const controller = new AbortController();
+      activeResumableUpload = { controller, cancelled: false, sessionId: null, projectName };
+      setCancelUploadVisible(true);
+      enableUploadNavigationWarning();
+
+      try {
+        uploadState.phase = 'Preparing marker';
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing marker...';
+        setUploadProgress('Preparing marker', 8, 'Creating the scannable marker image.');
+        if (pair.markerMode === 'full_image') pair.crop = { x: 0, y: 0, width: 1, height: 1 };
+        const markerFile = await renderMarkerBlob(item.id, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
+        const resumableMarkerFile = new File([markerFile], markerFile.name || 'marker-0.jpg', { type: markerFile.type || 'image/jpeg' });
+        const totalBytes = resumableMarkerFile.size + pair.video.size;
+        uploadState.totalBytes = totalBytes;
+        uploadState.videoBytes = videoBytes;
+
+        let sessionPayload = null;
+        const stored = loadResumableUploadState();
+        if (storedSessionMatchesFiles(stored, resumableMarkerFile, pair.video, projectName)) {
+          try {
+            sessionPayload = await getUploadSessionStatus(stored.sessionId, controller.signal);
+            if (RESUMABLE_TERMINAL_STATUSES.has(sessionPayload.session.status)) {
+              clearResumableUploadState();
+              sessionPayload = null;
+            }
+          } catch (_err) {
+            clearResumableUploadState();
+          }
+        }
+
+        if (!sessionPayload) {
+          uploadState.phase = 'Preparing';
+          setUploadProgress('Preparing upload', 10, 'Creating a resumable upload session.', `0 B of ${formatBytes(totalBytes)}`);
+          sessionPayload = await createResumableSession(resumableMarkerFile, pair.video, projectName, controller.signal);
+        }
+
+        const session = sessionPayload.session;
+        activeResumableUpload = {
+          ...activeResumableUpload,
+          sessionId: session.id,
+          imageName: resumableMarkerFile.name,
+          imageSize: resumableMarkerFile.size,
+          videoName: pair.video.name,
+          videoSize: pair.video.size,
+          videoLastModified: pair.video.lastModified || 0,
+          expectedTotalSize: session.expected_total_size,
+          currentOffset: session.current_offset || 0,
+          finalizeStarted: false
+        };
+        saveResumableUploadState(activeResumableUpload);
+        uploadClientLog('UPLOAD CLIENT SESSION CREATED', uploadState, { current_phase: 'Preparing', total_bytes: totalBytes });
+
+        uploadState.phase = 'Uploading video';
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+        await uploadResumableStream(session, resumableMarkerFile, pair.video, uploadState);
+
+        uploadState.phase = 'Finalizing';
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finalizing...';
+        setUploadProgress('Finalizing upload', 94, 'Saving and validating your project.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
+        let finalized = await finalizeResumableWithBoundedRetry(session.id, uploadState);
+        if (finalized.session?.status === 'active') {
+          await uploadResumableStream(finalized.session, resumableMarkerFile, pair.video, uploadState);
+          activeResumableUpload.finalizeStarted = false;
+          finalized = await finalizeResumableWithBoundedRetry(session.id, uploadState);
+        }
+
+        const finalSession = finalized.session;
+        if (!finalSession || finalSession.status !== 'completed') {
+          throw new UploadApiError(finalSession?.failure_code || 'PROJECT_CREATION_FAILED', safeUploadErrorMessage(finalSession?.failure_code), 409, finalized);
+        }
+
+        uploadState.phase = 'Processing queued';
+        const jobId = finalized.processing_job?.id || finalized.job?.id || finalized.job_id || null;
+        setUploadProgress('Processing queued', 98, 'Your marker is queued for processing.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
+        await pollProcessingJobIfAvailable(jobId, controller.signal);
+        clearResumableUploadState();
+        uploadClientLog('UPLOAD CLIENT COMPLETE', uploadState, { current_phase: 'Project ready' });
+        setUploadProgress('Project ready', 100, 'Opening your project page.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
+        window.setTimeout(() => {
+          window.location.href = finalSession.project_id ? `/success/${finalSession.project_id}` : '/dashboard';
+        }, 250);
+      } catch (err) {
+        if (err.code === 'SESSION_CANCELLED') {
+          setUploadProgress('Upload cancelled', 0, 'The upload was cancelled safely.');
+        } else {
+          const message = safeUploadErrorMessage(err.code);
+          uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { http_status: err.status, current_phase: uploadState.phase });
+          setUploadProgress('Upload failed', 0, message);
+          if (['SESSION_EXPIRED', 'SESSION_FAILED', 'STORAGE_INCONSISTENT', 'IMAGE_VALIDATION_FAILED', 'VIDEO_VALIDATION_FAILED', 'CHECKSUM_MISMATCH', 'PROJECT_CREATION_FAILED'].includes(err.code)) {
+            clearResumableUploadState();
+          }
+          alert(message);
+        }
+        resetUploadSubmit(submitBtn);
+      }
     }
 
     let uploadActive = false;
@@ -2850,6 +3252,22 @@
         video_bytes: videoBytes,
         user_agent: navigator.userAgent
       });
+
+      if (readyPairs.length === 1) {
+        await submitResumableSinglePair({
+          projectName,
+          readyPairs,
+          uploadId,
+          submitBtn,
+          totalStart,
+          videoBytes,
+          originalBytes,
+          uploadState
+        });
+        return;
+      }
+
+      setUploadProgress('Preparing upload', 5, 'Using the legacy uploader for multi-pair projects.');
 
       try {
         for (let index = 0; index < readyPairs.length; index++) {
