@@ -231,6 +231,25 @@
         font-size: 9px;
         padding: 10px 14px;
       }
+
+      /* Density reduction (Wave 8 mobile creator hierarchy pass): the desktop panel
+         padding/gap is generous glass-panel chrome that eats too much of a phone's
+         limited width/height. Shrinking it here only (mobile-scoped) keeps desktop
+         untouched while giving content more room. */
+      .content-grid {
+        gap: 18px;
+      }
+
+      .panel {
+        padding: 20px;
+      }
+
+      /* Tap targets: bump the 38px delete-pair icon button up to the ~44px minimum
+         recommended touch target size on mobile only. */
+      .icon-btn {
+        width: 44px;
+        height: 44px;
+      }
     }
 
     /* Tablet (641-1024) */
@@ -1005,6 +1024,30 @@
     .video-metadata.error {
       border-color: rgba(248, 113, 113, .42);
       background: rgba(248, 113, 113, .10);
+    }
+
+    /* Secondary technical detail (filename/size/resolution) collapses behind a native,
+       keyboard- and screen-reader-accessible disclosure widget. Desktop keeps it expanded
+       by default (see updateVideoMetadataCard's isNarrowViewport() check); this only
+       affects sizing/spacing. */
+    .video-meta-details {
+      margin-top: 6px;
+    }
+
+    .video-meta-details summary {
+      cursor: pointer;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      color: rgba(255, 255, 255, .78);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .video-meta-details span {
+      display: block;
+      margin-top: 4px;
     }
 
     .upload-progress {
@@ -2216,6 +2259,10 @@
       return { label: 'Ready', warning: false, message: 'Video is ready for upload.' };
     }
 
+    function isNarrowViewport() {
+      return window.matchMedia('(max-width: 640px)').matches;
+    }
+
     function updateVideoMetadataCard(pairId) {
       const pair = currentFiles[pairId];
       const card = document.getElementById(`video-meta-${pairId}`);
@@ -2228,11 +2275,19 @@
         card.innerHTML = '<strong>Video status</strong><span>Select a video to inspect upload details.</span>';
         return;
       }
+      // Mobile density reduction: fold the technical detail lines behind a collapsed
+      // <details> disclosure. Desktop/tablet keep it expanded (matches prior behavior).
+      // A warning/error always stays expanded on every viewport - never hide a problem
+      // the creator needs to see behind a closed toggle.
+      const keepOpen = status.warning || status.error || !isNarrowViewport();
       card.innerHTML = `
         <strong>${status.label}</strong>
-        <span>${pair.video.name || 'video'} - ${formatBytes(pair.video.size)} - ${pair.video.type || 'unknown type'}</span><br>
-        <span>${meta?.width || '?'} x ${meta?.height || '?'} - ${meta?.resolutionClass || 'unknown resolution'} - ${meta?.orientation || 'unknown orientation'} - ${formatDuration(meta?.duration)}</span><br>
         <span>${status.message}</span>
+        <details class="video-meta-details"${keepOpen ? ' open' : ''}>
+          <summary>File details</summary>
+          <span>${pair.video.name || 'video'} - ${formatBytes(pair.video.size)} - ${pair.video.type || 'unknown type'}</span>
+          <span>${meta?.width || '?'} x ${meta?.height || '?'} - ${meta?.resolutionClass || 'unknown resolution'} - ${meta?.orientation || 'unknown orientation'} - ${formatDuration(meta?.duration)}</span>
+        </details>
       `;
     }
 
