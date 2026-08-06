@@ -1631,6 +1631,10 @@ def logout_user():
     session.pop("user_email", None)
     _clear_otp_session_state()
 
+def _clear_normal_user_auth_session():
+    session.pop("user_id", None)
+    session.pop("user_email", None)
+
 def current_user():
     uid = session.get("user_id")
     if not uid:
@@ -1652,6 +1656,12 @@ def login_required(view):
             logout_user()
             flash("Your account is blocked. Contact support.", "error")
             return redirect(url_for("login"))
+        if not getattr(u, "is_verified", False):
+            pending_email = u.email
+            _clear_normal_user_auth_session()
+            session["pending_verify_email"] = pending_email
+            flash("Please verify your email before continuing.", "warning")
+            return redirect(url_for("verify_email"))
         return view(*args, **kwargs)
     return wrapped
 
@@ -4819,6 +4829,12 @@ def login():
         return render_template("user/login.html")
 
     # ✅ TRIAL SAFETY + DYNAMIC PLAN SYNC
+    if not user.is_verified:
+        _clear_normal_user_auth_session()
+        session["pending_verify_email"] = user.email
+        flash("Please verify your email before logging in.", "warning")
+        return redirect(url_for("verify_email"))
+
     dev_test_entitled = has_dev_test_entitlement(user)
 
     if user.subscription_status == "trial" and not dev_test_entitled:
