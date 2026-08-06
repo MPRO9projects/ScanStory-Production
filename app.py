@@ -15,6 +15,7 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.datastructures import FileStorage
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import CSRFError
 from flask_migrate import Migrate
@@ -43,7 +44,7 @@ from models import (
     db, User, Admin, SubscriptionPlan, TrialDetails, OTPCode,
     Project, ProjectPair, PaymentOrder, ScanLog, SystemConfig,
     UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation,
-    RazorpayWebhookEvent, ProcessingJob
+    RazorpayWebhookEvent, ProcessingJob, UploadSession, get_utc_now
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
@@ -5456,6 +5457,753 @@ def handle_upload():
 
     flash("Project created successfully! Features are processing in the background.", "success")
     return redirect(url_for("success_page", project_id=project.id))
+
+
+# --------------------------------------------------------------------------------------------
+# Resumable upload API (V1 Wave 5)
+#
+# A chunked-upload producer into the SAME RQ processing pipeline the
+# non-resumable /upload route already uses (enqueue_project_pair_processing /
+# _schedule_project_pair_processing, both unmodified). Scope: one
+# UploadSession = one new single-pair Project (one image + one video sent as
+# a single sequential byte stream, split at `image_size`). See
+# models.py's UploadSession docstring for the full design rationale and
+# docs/development/resumable-upload-api-contract.md for the wire contract.
+# --------------------------------------------------------------------------------------------
+UPLOAD_SESSION_TTL_MINUTES = int(os.environ.get("SCANSTORY_UPLOAD_SESSION_TTL_MINUTES", "1440"))
+UPLOAD_SESSION_ABANDONED_STALE_MINUTES = int(os.environ.get("SCANSTORY_UPLOAD_SESSION_ABANDONED_STALE_MINUTES", "120"))
+UPLOAD_SESSION_CLEANUP_BATCH_LIMIT = int(os.environ.get("SCANSTORY_UPLOAD_CLEANUP_BATCH_LIMIT", "200"))
+
+
+class _ResumableQuotaLimitReached(Exception):
+    """Internal control-flow marker only - never serialized to a client."""
+    pass
+
+
+def _upload_identity():
+    """(user, admin) for the current session - exactly one non-None, or
+    both None if unauthenticated. Mirrors the same current_user()/
+    current_admin() pair the existing /api/processing/jobs/<id> route
+    already uses for dual user/admin ownership."""
+    user = current_user()
+    if user:
+        return user, None
+    admin = current_admin()
+    if admin:
+        return None, admin
+    return None, None
+
+
+def _upload_session_owned(session_row, user, admin):
+    if user and session_row.owner_user_id == user.id:
+        return True
+    if admin and session_row.owner_admin_id == admin.id:
+        return True
+    return False
+
+
+def _upload_api_error(code, message, http_status):
+    """Every resumable-upload error response: a safe generic message plus a
+    machine-readable code, never a raw path/stack trace/secret."""
+    response = jsonify({"success": False, "code": code, "error": message})
+    response.status_code = http_status
+    return response
+
+
+def _sanitize_display_text(value, max_len=255):
+    """For display-only metadata (project name, original filenames) -
+    never used to build a filesystem path. Storage paths are always built
+    from the server-generated storage_token instead (see
+    _upload_session_temp_path)."""
+    if value is None:
+        return None
+    text = str(value).replace("\x00", "").strip()
+    return text[:max_len] or None
+
+
+def _upload_session_temp_path(storage_token):
+    """The ONLY place a resumable-upload temp file path is built - always
+    from the server-generated UUID storage_token, never from any
+    client-supplied filename."""
+    return os.path.join(TMP_UPLOADS_DIR, f"resumable_{storage_token}.part")
+
+
+def _safe_delete_upload_temp(path):
+    """Delete a resumable-upload temp file only if it genuinely resolves
+    inside TMP_UPLOADS_DIR. Defense-in-depth alongside storage_token always
+    being server-generated: never delete based on an unverified path."""
+    if not path:
+        return
+    tmp_root = os.path.abspath(TMP_UPLOADS_DIR)
+    real_path = os.path.abspath(path)
+    if real_path != tmp_root and not real_path.startswith(tmp_root + os.sep):
+        app.logger.error("upload_session_temp_delete_blocked_outside_root")
+        return
+    _safe_remove(real_path)
+
+
+def _lock_upload_session(session_id):
+    """Row lock for the chunk-append critical section, mirroring
+    _lock_project_for_pair_quota exactly: with_for_update() on
+    Postgres/MySQL, relies on SQLite's whole-database write lock on SQLite
+    (same _supports_row_level_locking() gate already used elsewhere)."""
+    query = UploadSession.query.filter(UploadSession.id == session_id)
+    if _supports_row_level_locking():
+        query = query.with_for_update()
+    return query.first()
+
+
+def _upload_session_payload(session_row):
+    return {
+        "id": session_row.id,
+        "status": session_row.status,
+        "purpose": session_row.purpose,
+        "current_offset": session_row.current_offset,
+        "expected_total_size": session_row.expected_total_size,
+        "image_size": session_row.image_size,
+        "video_size": session_row.video_size,
+        "project_id": session_row.project_id,
+        "pair_id": session_row.pair_id,
+        "failure_code": session_row.failure_code,
+        "created_at": session_row.created_at.isoformat() if session_row.created_at else None,
+        "updated_at": session_row.updated_at.isoformat() if session_row.updated_at else None,
+        "expires_at": session_row.expires_at.isoformat() if session_row.expires_at else None,
+        "completed_at": session_row.completed_at.isoformat() if session_row.completed_at else None,
+    }
+
+
+_UPLOAD_SESSION_CONFLICT_CODES = {
+    "completed": "ALREADY_FINALIZED",
+    "assembled": "SESSION_ASSEMBLED_RETRY",
+    "finalizing": "FINALIZE_IN_PROGRESS",
+    "cancelled": "SESSION_CANCELLED",
+    "expired": "SESSION_EXPIRED",
+    "failed": "SESSION_FAILED",
+}
+
+
+def _finalize_conflict_response(session_row):
+    if session_row is None:
+        return _upload_api_error("NOT_FOUND", "Upload session not found.", 404)
+    if session_row.status == "active":
+        return _upload_api_error(
+            "INCOMPLETE_UPLOAD",
+            f"Upload is incomplete ({session_row.current_offset}/{session_row.expected_total_size} bytes).",
+            409,
+        )
+    code = _UPLOAD_SESSION_CONFLICT_CODES.get(session_row.status, "SESSION_NOT_ACTIVE")
+    return _upload_api_error(code, f"Upload session is not finalizable (status={session_row.status}).", 409)
+
+
+class _BoundedFileView:
+    """Read-only file-like view over [start, start+length) of an on-disk
+    file, so validate_image()/validate_video() (via upload_validation's
+    save_to_temp, which calls .stream.seek(0) then .save()) can validate a
+    resumable session's image/video slice without a redundant on-disk copy
+    of up to MAX_VIDEO_SIZE bytes."""
+
+    def __init__(self, path, start, length):
+        self._length = length
+        self._pos = 0
+        self._fh = open(path, "rb")
+        self._start = start
+        self._fh.seek(start)
+
+    def read(self, size=-1):
+        remaining = self._length - self._pos
+        if remaining <= 0:
+            return b""
+        if size is None or size < 0:
+            size = remaining
+        size = min(size, remaining)
+        data = self._fh.read(size)
+        self._pos += len(data)
+        return data
+
+    def seek(self, offset, whence=0):
+        if whence == 0:
+            target = offset
+        elif whence == 1:
+            target = self._pos + offset
+        elif whence == 2:
+            target = self._length + offset
+        else:
+            raise ValueError("invalid whence")
+        target = max(0, min(target, self._length))
+        self._pos = target
+        self._fh.seek(self._start + target)
+        return self._pos
+
+    def tell(self):
+        return self._pos
+
+    def close(self):
+        self._fh.close()
+
+
+def _finalize_enqueue_and_complete(session_row):
+    """Attempt the existing RQ enqueue EXACTLY ONCE for an
+    already-assembled/validated session's project, via the very same
+    _schedule_project_pair_processing() the non-resumable /upload route
+    calls - never a second/parallel enqueue mechanism.
+
+    Recovery semantics (documented, see Phase 3 finalize spec): if the
+    enqueue call itself fails/throws, this endpoint must NOT report a
+    successful finalization. Project/ProjectPair already exist and quota
+    is already consumed at this point (matching the non-resumable path's
+    own behavior when ITS enqueue attempt fails - it also keeps the
+    already-created Project/Pair rows and just marks pairs failed rather
+    than un-creating the project). The session is left in status
+    'assembled' rather than 'completed'; calling finalize again on this
+    same session id retries ONLY this enqueue step (see the 'assembled'
+    branch in finalize_upload_session) - that is the operator/client
+    recovery path, not a separate CLI.
+    """
+    job = _schedule_project_pair_processing(session_row.project_id)
+    if job:
+        session_row.status = "completed"
+        session_row.completed_at = get_utc_now()
+        session_row.failure_code = None
+        db.session.commit()
+        return True
+    session_row.status = "assembled"
+    session_row.failure_code = "QUEUE_ENQUEUE_FAILED"
+    db.session.commit()
+    return False
+
+
+@app.route("/api/uploads/sessions", methods=["POST"])
+def create_upload_session():
+    """1. Create upload session. Validates declared sizes against the
+    existing max-size config BEFORE allocating anything (no DB row, no
+    temp file) - see resumable-upload-api-contract.md."""
+    user, admin = _upload_identity()
+    if not user and not admin:
+        return _upload_api_error("UNAUTHENTICATED", "Login required.", 401)
+
+    payload = request.get_json(silent=True) or {}
+
+    try:
+        image_size = int(payload.get("image_size"))
+        video_size = int(payload.get("video_size"))
+    except (TypeError, ValueError):
+        return _upload_api_error("INVALID_SIZE", "image_size and video_size must be provided as integers.", 400)
+
+    if image_size <= 0 or video_size <= 0:
+        return _upload_api_error("INVALID_SIZE", "image_size and video_size must be positive.", 400)
+    if image_size > MAX_IMAGE_SIZE:
+        return _upload_api_error("IMAGE_TOO_LARGE", "Declared image size exceeds the allowed limit.", 400)
+    if video_size > MAX_VIDEO_SIZE:
+        return _upload_api_error("VIDEO_TOO_LARGE", "Declared video size exceeds the allowed limit.", 400)
+
+    expected_total_size = image_size + video_size
+    max_content_length = app.config.get("MAX_CONTENT_LENGTH")
+    if max_content_length and expected_total_size > max_content_length:
+        return _upload_api_error("TOTAL_TOO_LARGE", "Declared total upload size exceeds the allowed limit.", 400)
+
+    client_checksum = payload.get("client_checksum_sha256")
+    if client_checksum is not None:
+        client_checksum = str(client_checksum).strip().lower()
+        if len(client_checksum) != 64 or any(c not in "0123456789abcdef" for c in client_checksum):
+            return _upload_api_error(
+                "INVALID_CHECKSUM", "client_checksum_sha256 must be a 64-character hex sha256 digest.", 400
+            )
+
+    if user:
+        if user.is_blocked:
+            return _upload_api_error("ACCOUNT_BLOCKED", "Account is blocked.", 403)
+        dev_test_entitled = has_dev_test_entitlement(user)
+        if not user.can_create_project and not dev_test_entitled:
+            return _upload_api_error("PROJECT_LIMIT_REACHED", "Project limit reached. Please upgrade your plan.", 403)
+        max_pairs = get_plan_pairs_limit(user)
+        if max_pairs is None and not dev_test_entitled:
+            return _upload_api_error(
+                "PLAN_NOT_CONFIGURED",
+                "Pairs allowed per project is not configured for your current plan. Please contact admin.",
+                403,
+            )
+        ok, _redirect_url, message = check_user_limits(user)
+        if not ok:
+            return _upload_api_error("SUBSCRIPTION_LIMIT", message or "Subscription limit reached.", 403)
+
+    storage_token = str(uuid.uuid4())
+    now = get_utc_now()
+    session_row = UploadSession(
+        owner_user_id=user.id if user else None,
+        owner_admin_id=admin.id if admin else None,
+        purpose="project_pair",
+        project_name=_sanitize_display_text(payload.get("project_name")) or "Untitled Project",
+        original_image_name=_sanitize_display_text(payload.get("original_image_name")),
+        original_video_name=_sanitize_display_text(payload.get("original_video_name")),
+        image_content_type=_sanitize_display_text(payload.get("image_content_type"), max_len=100),
+        video_content_type=_sanitize_display_text(payload.get("video_content_type"), max_len=100),
+        image_size=image_size,
+        video_size=video_size,
+        expected_total_size=expected_total_size,
+        current_offset=0,
+        status="active",
+        storage_token=storage_token,
+        client_checksum_sha256=client_checksum,
+        expires_at=now + timedelta(minutes=UPLOAD_SESSION_TTL_MINUTES),
+    )
+    db.session.add(session_row)
+    db.session.commit()
+
+    # Create the empty backing temp file up front so the chunk route can
+    # always open-and-append without a first-chunk special case.
+    open(_upload_session_temp_path(storage_token), "wb").close()
+
+    response = jsonify({"success": True, "session": _upload_session_payload(session_row)})
+    response.status_code = 201
+    return response
+
+
+@app.route("/api/uploads/sessions/<int:session_id>/chunk", methods=["POST"])
+def upload_session_chunk(session_id):
+    """2. Upload next sequential chunk. Client always appends at the
+    session's current_offset (X-Chunk-Offset header + raw body). Resending
+    an already-accepted chunk (same claimed offset, offset < current
+    recorded offset) is a safe idempotent no-op - see
+    resumable-upload-api-contract.md."""
+    user, admin = _upload_identity()
+    if not user and not admin:
+        return _upload_api_error("UNAUTHENTICATED", "Login required.", 401)
+
+    offset_header = request.headers.get("X-Chunk-Offset")
+    try:
+        claimed_offset = int(offset_header)
+        if claimed_offset < 0:
+            raise ValueError("negative offset")
+    except (TypeError, ValueError):
+        return _upload_api_error("INVALID_OFFSET", "X-Chunk-Offset header must be a non-negative integer.", 400)
+
+    body = request.get_data(cache=False)
+    if not body:
+        return _upload_api_error("EMPTY_CHUNK", "Chunk body must not be empty.", 400)
+
+    session_row = _lock_upload_session(session_id)
+    if not session_row or not _upload_session_owned(session_row, user, admin):
+        db.session.rollback()
+        return _upload_api_error("NOT_FOUND", "Upload session not found.", 404)
+
+    now = get_utc_now()
+    if session_row.status == "active" and session_row.expires_at < now:
+        session_row.status = "expired"
+        session_row.failure_code = "SESSION_TTL_EXPIRED"
+        db.session.commit()
+        return _upload_api_error("SESSION_EXPIRED", "This upload session has expired.", 409)
+
+    if session_row.status != "active":
+        db.session.rollback()
+        code = _UPLOAD_SESSION_CONFLICT_CODES.get(session_row.status, "SESSION_NOT_ACTIVE")
+        return _upload_api_error(code, f"Upload session is not active (status={session_row.status}).", 409)
+
+    temp_path = _upload_session_temp_path(session_row.storage_token)
+
+    # Self-heal a prior crash between file-append and DB-commit: the file
+    # is only ever allowed to be ahead of current_offset transiently
+    # (append happens before the offset commit within this same lock).
+    actual_size = os.path.getsize(temp_path) if os.path.exists(temp_path) else 0
+    if actual_size > session_row.current_offset:
+        with open(temp_path, "r+b") as fh:
+            fh.truncate(session_row.current_offset)
+    elif actual_size < session_row.current_offset:
+        db.session.rollback()
+        app.logger.error(f"upload_session_file_behind_offset session_id={session_row.id}")
+        return _upload_api_error(
+            "STORAGE_INCONSISTENT", "Upload session storage is inconsistent. Please cancel and retry.", 500
+        )
+
+    if claimed_offset == session_row.current_offset:
+        new_offset = session_row.current_offset + len(body)
+        if new_offset > session_row.expected_total_size:
+            db.session.rollback()
+            return _upload_api_error(
+                "CHUNK_EXCEEDS_EXPECTED_SIZE", "This chunk would exceed the declared upload size.", 400
+            )
+        with open(temp_path, "ab") as fh:
+            fh.write(body)
+        session_row.current_offset = os.path.getsize(temp_path)
+        db.session.commit()
+        return jsonify({
+            "success": True,
+            "current_offset": session_row.current_offset,
+            "expected_total_size": session_row.expected_total_size,
+        })
+
+    if claimed_offset < session_row.current_offset and claimed_offset + len(body) <= session_row.current_offset:
+        db.session.rollback()
+        return jsonify({
+            "success": True,
+            "current_offset": session_row.current_offset,
+            "expected_total_size": session_row.expected_total_size,
+            "note": "duplicate_chunk_ignored",
+        })
+
+    db.session.rollback()
+    return _upload_api_error(
+        "OFFSET_MISMATCH",
+        f"Chunk offset does not match the session's current offset ({session_row.current_offset}).",
+        409,
+    )
+
+
+@app.route("/api/uploads/sessions/<int:session_id>", methods=["GET"])
+def upload_session_status(session_id):
+    """3. Query session status/offset. Never returns a raw filesystem path."""
+    user, admin = _upload_identity()
+    if not user and not admin:
+        return _upload_api_error("UNAUTHENTICATED", "Login required.", 401)
+    session_row = UploadSession.query.get(session_id)
+    if not session_row or not _upload_session_owned(session_row, user, admin):
+        return _upload_api_error("NOT_FOUND", "Upload session not found.", 404)
+    response = jsonify({"success": True, "session": _upload_session_payload(session_row)})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _finalize_assemble_and_validate(session_row, user, admin):
+    """The validate -> quota -> Project/ProjectPair -> QR -> enqueue
+    sequence, run exactly once per winning atomic 'active'->'finalizing'
+    transition. Mirrors handle_upload()/admin_handle_upload() step for
+    step: same validate_image()/validate_video() calls, same
+    _reserve_project_quota_atomic() authoritative point (skipped entirely
+    for admin owners, exactly like admin_handle_upload), same
+    os.replace() atomic-move convention, same QR helpers, same
+    _schedule_project_pair_processing() enqueue call."""
+    combined_path = _upload_session_temp_path(session_row.storage_token)
+
+    def fail(code, message, http_status=422):
+        _safe_delete_upload_temp(combined_path)
+        session_row.status = "failed"
+        session_row.failure_code = code
+        db.session.commit()
+        return _upload_api_error(code, message, http_status)
+
+    if not os.path.exists(combined_path) or os.path.getsize(combined_path) != session_row.expected_total_size:
+        return fail("STORAGE_INCONSISTENT", "Uploaded data is inconsistent with the declared size.", 500)
+
+    if session_row.client_checksum_sha256:
+        digest = hashlib.sha256()
+        with open(combined_path, "rb") as fh:
+            for block in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(block)
+        computed = digest.hexdigest()
+        session_row.computed_checksum_sha256 = computed
+        if computed != session_row.client_checksum_sha256:
+            return fail("CHECKSUM_MISMATCH", "Uploaded data failed checksum verification.")
+
+    image_view = _BoundedFileView(combined_path, 0, session_row.image_size)
+    video_view = _BoundedFileView(combined_path, session_row.image_size, session_row.video_size)
+    img_temp = vid_temp = img_ext = vid_ext = None
+    image_error = video_error = None
+    try:
+        image_storage = FileStorage(
+            stream=image_view,
+            filename=session_row.original_image_name or "upload.jpg",
+            content_type=session_row.image_content_type or "application/octet-stream",
+        )
+        try:
+            img_temp, img_ext = validate_image(
+                image_storage, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+            )
+        except UploadValidationError as exc:
+            image_error = exc
+
+        if image_error is None:
+            video_storage = FileStorage(
+                stream=video_view,
+                filename=session_row.original_video_name or "upload.mp4",
+                content_type=session_row.video_content_type or "application/octet-stream",
+            )
+            try:
+                vid_temp, vid_ext = validate_video(
+                    video_storage, TMP_UPLOADS_DIR, MAX_VIDEO_SIZE, MAX_VIDEO_DURATION_SECONDS
+                )
+            except UploadValidationError as exc:
+                video_error = exc
+    finally:
+        # Close both view handles BEFORE any attempt to delete combined_path
+        # below (via `fail()` or the success path) - on Windows, a file
+        # with an open handle cannot be deleted, so doing this any later
+        # would silently no-op the cleanup on failure.
+        image_view.close()
+        video_view.close()
+
+    if image_error is not None:
+        app.logger.warning(f"resumable_upload_rejected image session_id={session_row.id}: {image_error.detail}")
+        return fail("IMAGE_VALIDATION_FAILED", image_error.safe_message)
+    if video_error is not None:
+        _safe_remove(img_temp)
+        app.logger.warning(f"resumable_upload_rejected video session_id={session_row.id}: {video_error.detail}")
+        return fail("VIDEO_VALIDATION_FAILED", video_error.safe_message)
+
+    # Both files validated and copied out by validate_image/validate_video's
+    # own save_to_temp - the combined temp file is no longer needed.
+    _safe_delete_upload_temp(combined_path)
+
+    is_admin_owner = admin is not None
+    saved_paths = []
+    try:
+        if not is_admin_owner:
+            if not _reserve_project_quota_atomic(user):
+                raise _ResumableQuotaLimitReached()
+
+        images_dir = ADMIN_IMAGES_DIR if is_admin_owner else IMAGES_DIR
+        videos_dir = ADMIN_VIDEOS_DIR if is_admin_owner else VIDEOS_DIR
+
+        if is_admin_owner:
+            max_index = db.session.query(func.max(Project.user_project_index)).filter(
+                Project.owner_admin_id == admin.id
+            ).scalar()
+            project_index = (int(max_index) if max_index and int(max_index) > 0 else 0) + 1
+            project = Project(
+                name=session_row.project_name or "Untitled Project",
+                owner_admin_id=admin.id,
+                owner_user_id=None,
+                user_project_index=project_index,
+            )
+        else:
+            max_index = db.session.query(func.max(Project.user_project_index)).filter(
+                Project.owner_user_id == user.id
+            ).scalar()
+            project_index = (int(max_index) if max_index and int(max_index) > 0 else 0) + 1
+            project = Project(
+                name=session_row.project_name or "Untitled Project",
+                owner_user_id=user.id,
+                owner_admin_id=None,
+                user_project_index=project_index,
+            )
+        db.session.add(project)
+        db.session.flush()
+
+        if not is_admin_owner:
+            max_pairs = get_plan_pairs_limit(user)
+            pair_slots_ok, pair_slots_error = _reserve_pair_slots_for_project(project.id, 1, max_pairs)
+            if not pair_slots_ok:
+                raise ValueError(pair_slots_error)
+
+        img_filename = f"{project.id}_0.jpg"
+        vid_filename = f"{project.id}_0{vid_ext}"
+        img_path = os.path.join(images_dir, img_filename)
+        os.replace(img_temp, img_path)  # atomic move: already-validated content only
+        saved_paths.append(img_path)
+        vid_path = os.path.join(videos_dir, vid_filename)
+        os.replace(vid_temp, vid_path)  # atomic move: already-validated content only
+        saved_paths.append(vid_path)
+
+        image_path_url = f"/admin/image/{project.id}/0" if is_admin_owner else f"/image/{project.id}/0"
+        pair = ProjectPair(
+            project_id=project.id,
+            pair_index=0,
+            image_filename=img_filename,
+            video_filename=vid_filename,
+            image_path=image_path_url,
+            original_image_name=session_row.original_image_name,
+            original_video_name=session_row.original_video_name,
+            image_size=os.path.getsize(img_path),
+            video_size=os.path.getsize(vid_path),
+            is_processed=False,
+            processing_status="uploaded",
+            feature_extraction_status="pending",
+            processing_error=None,
+        )
+        db.session.add(pair)
+        db.session.flush()
+
+        session_row.project_id = project.id
+        session_row.pair_id = pair.id
+        db.session.commit()
+    except _ResumableQuotaLimitReached:
+        db.session.rollback()
+        _safe_remove(img_temp)
+        _safe_remove(vid_temp)
+        session_row.status = "failed"
+        session_row.failure_code = "PROJECT_LIMIT_REACHED"
+        db.session.commit()
+        return _upload_api_error("PROJECT_LIMIT_REACHED", "Project limit reached. Please upgrade your plan.", 403)
+    except Exception as exc:
+        db.session.rollback()
+        for saved_path in saved_paths:
+            try:
+                if saved_path and os.path.exists(saved_path):
+                    os.remove(saved_path)
+            except Exception:
+                pass
+        _safe_remove(img_temp)
+        _safe_remove(vid_temp)
+        session_row.status = "failed"
+        session_row.failure_code = "PROJECT_CREATION_FAILED"
+        db.session.commit()
+        app.logger.error(f"resumable_upload_project_creation_failed session_id={session_row.id}: {exc}")
+        return _upload_api_error("PROJECT_CREATION_FAILED", "Project creation failed. Please try again.", 500)
+
+    # QR code generation - same helpers/convention the non-resumable path
+    # uses, unmodified.
+    if is_admin_owner:
+        admin_name = admin.name or admin.email.split("@")[0]
+        scanner_url = url_for(
+            "scanner", project_id=project.id, admin_id=admin.id, admin_name=admin_name,
+            _external=True, _scheme="https",
+        )
+        qr_filename = f"project_{project.id}_admin.png"
+        qr_dir = ADMIN_QR_DIR
+    else:
+        user_name = (user.first_name or user.email.split("@")[0]).strip()
+        public_host = get_system_config('public_host')
+        if public_host:
+            base = public_host.rstrip('/')
+            scanner_path = url_for("scanner", project_id=project.id, user_id=user.id, user_name=user_name)
+            scanner_url = f"{base}{scanner_path}"
+        else:
+            scanner_url = url_for(
+                "scanner", project_id=project.id, user_id=user.id, user_name=user_name,
+                _external=True, _scheme="https",
+            )
+        qr_filename = f"project_{project.id}_main.png"
+        qr_dir = QR_DIR
+
+    qr_path = os.path.join(qr_dir, qr_filename)
+    ok = generate_custom_qr(scanner_url, qr_path, project_name=project.name)
+    if not ok or not os.path.exists(qr_path):
+        generate_basic_qr(scanner_url, "black", "white", qr_path, project_name=project.name)
+
+    project.scanner_url = scanner_url
+    project.qr_code_filename = qr_filename
+    project.qr_code_path = (f"/admin/qr/{qr_filename}" if is_admin_owner else f"/qr/{qr_filename}")
+    db.session.commit()
+
+    if _finalize_enqueue_and_complete(session_row):
+        return jsonify({"success": True, "session": _upload_session_payload(session_row)})
+    return _upload_api_error(
+        "QUEUE_ENQUEUE_FAILED",
+        "Upload was assembled and validated but could not be queued for processing. Retry finalize to try again.",
+        502,
+    )
+
+
+@app.route("/api/uploads/sessions/<int:session_id>/finalize", methods=["POST"])
+def finalize_upload_session(session_id):
+    """4. Finalize upload. Atomic conditional status transition guards
+    against double finalization (mirrors the payment-activation /
+    quota-reservation atomic-UPDATE pattern elsewhere in this codebase) -
+    see _finalize_conflict_response for every rejection code."""
+    user, admin = _upload_identity()
+    if not user and not admin:
+        return _upload_api_error("UNAUTHENTICATED", "Login required.", 401)
+
+    session_row = UploadSession.query.get(session_id)
+    if not session_row or not _upload_session_owned(session_row, user, admin):
+        return _upload_api_error("NOT_FOUND", "Upload session not found.", 404)
+
+    if session_row.status == "assembled":
+        updated = UploadSession.query.filter(
+            UploadSession.id == session_row.id, UploadSession.status == "assembled"
+        ).update({UploadSession.status: "finalizing"}, synchronize_session=False)
+        if updated != 1:
+            db.session.rollback()
+            return _finalize_conflict_response(UploadSession.query.get(session_row.id))
+        db.session.commit()
+        session_row = UploadSession.query.get(session_row.id)
+        if _finalize_enqueue_and_complete(session_row):
+            return jsonify({"success": True, "session": _upload_session_payload(session_row)})
+        return _upload_api_error(
+            "QUEUE_ENQUEUE_FAILED",
+            "Upload was assembled and validated but could not be queued for processing. Retry finalize to try again.",
+            502,
+        )
+
+    now = get_utc_now()
+    if session_row.status == "active" and session_row.expires_at < now:
+        session_row.status = "expired"
+        session_row.failure_code = "SESSION_TTL_EXPIRED"
+        db.session.commit()
+        return _upload_api_error("SESSION_EXPIRED", "This upload session has expired.", 409)
+
+    updated = UploadSession.query.filter(
+        UploadSession.id == session_row.id,
+        UploadSession.status == "active",
+        UploadSession.current_offset == UploadSession.expected_total_size,
+    ).update({UploadSession.status: "finalizing"}, synchronize_session=False)
+    if updated != 1:
+        db.session.rollback()
+        return _finalize_conflict_response(UploadSession.query.get(session_row.id))
+    db.session.commit()
+    session_row = UploadSession.query.get(session_row.id)
+
+    return _finalize_assemble_and_validate(session_row, user, admin)
+
+
+@app.route("/api/uploads/sessions/<int:session_id>/cancel", methods=["POST"])
+def cancel_upload_session(session_id):
+    """5. Cancel upload. Only valid from 'active' (documented choice: once
+    a session reaches 'assembled'/'finalizing' it has already consumed
+    quota and created a Project/Pair - the recovery path for those is
+    retrying finalize, not cancel). No quota release: quota is never
+    consumed for a non-finalized session."""
+    user, admin = _upload_identity()
+    if not user and not admin:
+        return _upload_api_error("UNAUTHENTICATED", "Login required.", 401)
+
+    session_row = UploadSession.query.get(session_id)
+    if not session_row or not _upload_session_owned(session_row, user, admin):
+        return _upload_api_error("NOT_FOUND", "Upload session not found.", 404)
+
+    updated = UploadSession.query.filter(
+        UploadSession.id == session_row.id, UploadSession.status == "active"
+    ).update({UploadSession.status: "cancelled"}, synchronize_session=False)
+    if updated != 1:
+        db.session.rollback()
+        fresh = UploadSession.query.get(session_row.id)
+        code = _UPLOAD_SESSION_CONFLICT_CODES.get(fresh.status if fresh else None, "SESSION_NOT_ACTIVE")
+        return _upload_api_error(code, "Upload session cannot be cancelled from its current state.", 409)
+
+    db.session.commit()
+    _safe_delete_upload_temp(_upload_session_temp_path(session_row.storage_token))
+    return jsonify({"success": True, "session": _upload_session_payload(UploadSession.query.get(session_row.id))})
+
+
+@app.cli.command("cleanup-upload-sessions")
+@click.option("--apply", "apply_changes", is_flag=True, help="Persist expirations and delete temp files. Default is dry-run.")
+@click.option(
+    "--limit", default=UPLOAD_SESSION_CLEANUP_BATCH_LIMIT, show_default=True, type=int,
+    help="Max sessions processed per invocation (bounded batch).",
+)
+def cleanup_upload_sessions(apply_changes, limit):
+    """Expire stale resumable UploadSession rows (TTL passed, or 'active'
+    but no chunk activity beyond the abandoned-staleness window) and clean
+    up their temp files. Only ever queries status='active' rows - NEVER
+    touches 'completed' sessions, blind or otherwise (see models.py's
+    UploadSession lifecycle docstring). Dry-run by default; --apply
+    persists. Bounded via --limit so this never runs an unbounded query."""
+    now = get_utc_now()
+    abandoned_cutoff = now - timedelta(minutes=UPLOAD_SESSION_ABANDONED_STALE_MINUTES)
+    candidates = UploadSession.query.filter(
+        UploadSession.status == "active",
+        or_(UploadSession.expires_at < now, UploadSession.updated_at < abandoned_cutoff),
+    ).order_by(UploadSession.id.asc()).limit(limit).all()
+
+    click.echo("Mode: apply" if apply_changes else "Mode: dry-run")
+    click.echo(f"Candidates found (bounded to limit={limit}): {len(candidates)}")
+    processed = 0
+    for sess in candidates:
+        reason = "SESSION_TTL_EXPIRED" if sess.expires_at < now else "SESSION_ABANDONED_STALE"
+        click.echo(
+            f"session_id={sess.id} owner_user_id={sess.owner_user_id} "
+            f"owner_admin_id={sess.owner_admin_id} reason={reason} "
+            f"expires_at={sess.expires_at} updated_at={sess.updated_at}"
+        )
+        if apply_changes:
+            updated = UploadSession.query.filter(
+                UploadSession.id == sess.id, UploadSession.status == "active"
+            ).update({UploadSession.status: "expired", UploadSession.failure_code: reason}, synchronize_session=False)
+            if updated == 1:
+                _safe_delete_upload_temp(_upload_session_temp_path(sess.storage_token))
+                processed += 1
+    if apply_changes:
+        db.session.commit()
+        click.echo(f"Expired: {processed}")
+
 
 @app.route("/project/<int:project_id>", methods=["GET"])
 @login_required

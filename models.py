@@ -1339,6 +1339,124 @@ class MigrationCheckpoint(db.Model):
         return _validate_value(value, MIGRATION_CHECKPOINT_STATUSES, key)
 
 
+# ---------------------------------------------------------------------
+# Resumable uploads (V1 Wave 5)
+# ---------------------------------------------------------------------
+UPLOAD_SESSION_PURPOSES = {"project_pair"}
+UPLOAD_SESSION_STATUSES = {
+    "active",       # accepting chunks
+    "finalizing",   # atomic transition target while finalize is assembling/validating
+    "assembled",    # file(s) validated, Project+ProjectPair created, quota consumed,
+                    # but the RQ enqueue call itself failed/threw - see enqueue_project_pair_processing
+                    # in app.py. Recoverable: calling finalize again on a session in this
+                    # state retries ONLY the enqueue step (no re-validation, no second
+                    # quota consumption, no duplicate Project/Pair).
+    "completed",    # fully done: validated, persisted, queued for processing
+    "cancelled",
+    "expired",
+    "failed",
+}
+
+
+class UploadSession(db.Model):
+    """One row per resumable upload attempt (V1 Wave 5).
+
+    Scope decision (documented, not an oversight): a single session covers
+    exactly ONE new single-pair Project - one image + one video, uploaded as
+    a single sequential byte stream (image bytes first, then video bytes;
+    the split point is `image_size`). This keeps the chunk/offset contract
+    dead simple (one monotonic offset over one server-side temp file) while
+    still letting `finalize` create a real Project+ProjectPair exactly like
+    the non-resumable /upload route does, and consume exactly the same one
+    project-quota unit at exactly the same point (_reserve_project_quota_atomic,
+    called once per project regardless of pair count - see app.py). Multi-pair
+    resumable projects and "attach a resumable pair to an existing project"
+    are out of scope for this wave.
+
+    owner_user_id / owner_admin_id mirror Project's mutually-exclusive
+    nullable ownership pair. `storage_token` is a server-generated UUID4
+    (models.py never trusts client input for anything that becomes part of
+    a filesystem path) used by app.py to build the isolated temp file path
+    under TMP_UPLOADS_DIR - never derived from original_image_name/
+    original_video_name, which are stored for display only.
+
+    Status lifecycle: active -> finalizing -> (assembled -> completed) |
+    (failed) | active -> cancelled | active -> expired. `finalizing` is only
+    ever observed mid-request (the atomic conditional UPDATE gate against
+    double finalization - see app.py finalize route); it is never a resting
+    state a client should see.
+
+    client_checksum_sha256 is an OPTIONAL client-declared sha256 of the full
+    assembled byte stream (image+video concatenated). If provided at session
+    creation, finalize recomputes the real digest of the assembled file and
+    rejects on mismatch before any validation/quota/Project work begins. If
+    omitted, no checksum comparison is performed - resumability's own
+    sequential-offset contract (server tracks current_offset, rejects
+    non-matching offsets) is the primary integrity guarantee; the checksum
+    is an optional extra guard against a corrupted-but-same-length transfer.
+    """
+    __tablename__ = "upload_sessions"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+
+    owner_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    owner_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True, index=True)
+
+    purpose = db.Column(db.String(30), nullable=False, default="project_pair")
+    project_name = db.Column(db.String(255), nullable=True)
+
+    original_image_name = db.Column(db.String(255), nullable=True)
+    original_video_name = db.Column(db.String(255), nullable=True)
+    image_content_type = db.Column(db.String(100), nullable=True)
+    video_content_type = db.Column(db.String(100), nullable=True)
+
+    image_size = db.Column(db.Integer, nullable=False)   # declared/expected image byte count
+    video_size = db.Column(db.Integer, nullable=False)   # declared/expected video byte count
+    expected_total_size = db.Column(db.Integer, nullable=False)  # image_size + video_size
+    current_offset = db.Column(db.Integer, nullable=False, default=0)
+
+    status = db.Column(db.String(20), nullable=False, default="active", index=True)
+
+    storage_token = db.Column(db.String(36), unique=True, nullable=False, index=True)
+
+    client_checksum_sha256 = db.Column(db.String(64), nullable=True)
+    computed_checksum_sha256 = db.Column(db.String(64), nullable=True)
+
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
+    pair_id = db.Column(db.Integer, db.ForeignKey("project_pairs.id"), nullable=True, index=True)
+
+    failure_code = db.Column(db.String(50), nullable=True)
+
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    project = db.relationship("Project", lazy=True)
+    pair = db.relationship("ProjectPair", lazy=True)
+
+    __table_args__ = (
+        db.CheckConstraint("current_offset >= 0", name="ck_upload_session_offset_non_negative"),
+        db.CheckConstraint("current_offset <= expected_total_size", name="ck_upload_session_offset_le_total"),
+        db.CheckConstraint("image_size >= 0 AND video_size >= 0", name="ck_upload_session_sizes_non_negative"),
+        db.Index("ix_upload_sessions_owner_user_status", "owner_user_id", "status"),
+        db.Index("ix_upload_sessions_owner_admin_status", "owner_admin_id", "status"),
+        db.Index("ix_upload_sessions_status_expires", "status", "expires_at"),
+    )
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value(value, UPLOAD_SESSION_STATUSES, key)
+
+    @validates("purpose")
+    def validate_purpose(self, key, value):
+        return _validate_value(value, UPLOAD_SESSION_PURPOSES, key)
+
+    def __repr__(self):
+        owner = f"user:{self.owner_user_id}" if self.owner_user_id else f"admin:{self.owner_admin_id}"
+        return f"<UploadSession id={self.id} ({owner}) status={self.status}>"
+
+
 for _public_model in (Organization, Workspace, Experience, Trigger, Asset, ProcessingJob):
     event.listen(_public_model, "before_update", _prevent_public_key_update)
 
