@@ -1233,8 +1233,8 @@
     // SCANNER SESSION COUNTING (FIXED)
     // ================================================
     const PROJECT_ID = {{ project_id }};
-    const PROJECT_FALLBACK_VIDEO_URL = {{ project_fallback_video_url | default('', true) | tojson }};
-    const FALLBACK_ANALYTICS_ENDPOINT = {{ fallback_analytics_endpoint | default('', true) | tojson }};
+    const FALLBACK_VIDEO_ROUTE = `/api/scanner/${encodeURIComponent(PROJECT_ID)}/fallback-video`;
+    const FALLBACK_EVENT_ROUTE = `/api/scanner/${encodeURIComponent(PROJECT_ID)}/fallback-event`;
     let scannerSessionId = null;
     let sessionActive = false;
     let sessionEnded = false;
@@ -1527,69 +1527,149 @@
     const fallbackVideoStatusEl = document.getElementById("fallbackVideoStatus");
     let fallbackCandidate = null;
     let fallbackWatchInProgress = false;
+    let fallbackDiscoveryInFlight = false;
+    let verifiedFallbackPairContext = null;
+    let activeFallbackViewKey = null;
+    const fallbackEventIds = new Map();
+    const FALLBACK_EVENT_TYPES = new Set([
+      'pair_fallback_view',
+      'project_fallback_view',
+      'recognition_timeout',
+      'camera_unavailable'
+    ]);
 
-    function setFallbackCandidate(kind, videoUrl, pairId, reason) {
-      if (!videoUrl) {
-        fallbackCandidate = null;
-      } else {
-        fallbackCandidate = {
-          kind: kind === 'pair' ? 'pair' : 'project',
-          videoUrl,
-          pairId: typeof pairId === 'number' ? pairId : null,
-          reason: reason || null
-        };
-      }
-      updateFallbackWatchControls(reason || 'candidate_changed');
-      return fallbackCandidate;
+    function fallbackUuid() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
     }
 
-    function resolveFallbackCandidate(reason) {
-      if (fallbackCandidate && fallbackCandidate.videoUrl) return fallbackCandidate;
-      if (PROJECT_FALLBACK_VIDEO_URL) {
-        fallbackCandidate = {
-          kind: 'project',
-          videoUrl: PROJECT_FALLBACK_VIDEO_URL,
-          pairId: null,
-          reason: reason || 'project_default'
-        };
-        return fallbackCandidate;
+    function fallbackClientEventId(logicalEventKey) {
+      if (!fallbackEventIds.has(logicalEventKey)) {
+        fallbackEventIds.set(logicalEventKey, fallbackUuid());
       }
-      return null;
+      return fallbackEventIds.get(logicalEventKey);
+    }
+
+    function setVerifiedFallbackPairContext(pairIndex, reason) {
+      if (Number.isInteger(pairIndex) && pairIndex >= 0) {
+        verifiedFallbackPairContext = { pairIndex, reason: reason || null, generation: scannerGeneration };
+      } else {
+        verifiedFallbackPairContext = null;
+      }
+      fallbackCandidate = null;
+      updateFallbackWatchControls(reason || 'pair_context_changed');
+      return verifiedFallbackPairContext;
+    }
+
+    function clearVerifiedFallbackPairContext(reason) {
+      verifiedFallbackPairContext = null;
+      fallbackCandidate = null;
+      activeFallbackViewKey = null;
+      updateFallbackWatchControls(reason || 'pair_context_cleared');
     }
 
     function updateFallbackWatchControls(reason) {
-      const candidate = resolveFallbackCandidate(reason);
-      const hasVideo = Boolean(candidate && candidate.videoUrl);
+      const hasVideo = Boolean(fallbackCandidate && fallbackCandidate.videoUrl);
+      const shouldShow = hasVideo || fallbackDiscoveryInFlight;
       [fallbackWatchBtn, recognitionWatchBtn].forEach(btn => {
         if (!btn) return;
-        btn.style.display = hasVideo ? 'inline-flex' : 'none';
-        btn.disabled = !hasVideo || fallbackWatchInProgress;
-        btn.setAttribute('aria-hidden', hasVideo ? 'false' : 'true');
+        btn.style.display = shouldShow ? 'inline-flex' : 'none';
+        btn.disabled = fallbackDiscoveryInFlight || !hasVideo || fallbackWatchInProgress;
+        btn.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
       });
-      if (!hasVideo && fallbackVideoStatusEl) {
+      if (fallbackDiscoveryInFlight && fallbackVideoStatusEl) {
+        fallbackVideoStatusEl.textContent = 'Checking fallback video availability...';
+      } else if (!hasVideo && fallbackVideoStatusEl) {
         fallbackVideoStatusEl.textContent = 'No fallback video is available for this project yet.';
       }
       return hasVideo;
     }
 
-    function submitFallbackAnalytics(eventName, extra) {
-      const payload = Object.assign({
-        event: eventName,
-        project_id: PROJECT_ID,
-        scanner_session_id: scannerSessionId,
-        scanner_generation: scannerGeneration,
-        ui_state: scannerUiState,
-        fallback_kind: fallbackCandidate ? fallbackCandidate.kind : null,
-        matched_pair_id: fallbackCandidate ? fallbackCandidate.pairId : null
-      }, extra || {});
+    async function discoverFallbackVideo(reason) {
+      const pairIndex = verifiedFallbackPairContext ? verifiedFallbackPairContext.pairIndex : null;
+      const url = new URL(FALLBACK_VIDEO_ROUTE, window.location.origin);
+      if (Number.isInteger(pairIndex)) url.searchParams.set('pair_index', String(pairIndex));
+      fallbackDiscoveryInFlight = true;
+      updateFallbackWatchControls(reason || 'discover_start');
+      try {
+        const response = await fetch(url.toString(), { method: 'GET', credentials: 'same-origin' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.available) {
+          fallbackCandidate = null;
+          const code = data && data.error ? data.error : (data && data.code ? data.code : null);
+          fallbackVideoStatusEl.textContent = code === 'PROJECT_UNAVAILABLE'
+            ? 'This project is unavailable.'
+            : 'No fallback video is available for this project yet.';
+          scannerDiagnostics.push('fallback_video_unavailable', {
+            reason, code, status: response.status, pairIndex
+          });
+          return null;
+        }
+        fallbackCandidate = {
+          kind: data.source === 'pair' ? 'pair' : 'project',
+          source: data.source,
+          videoUrl: data.video_url,
+          pairIndex: Number.isInteger(data.pair_index) ? data.pair_index : null,
+          reason: reason || null
+        };
+        scannerDiagnostics.push('fallback_video_resolved', {
+          reason,
+          source: fallbackCandidate.source,
+          pairIndex: fallbackCandidate.pairIndex
+        });
+        return fallbackCandidate;
+      } catch (err) {
+        fallbackCandidate = null;
+        fallbackVideoStatusEl.textContent = 'Fallback video could not be checked. Try again.';
+        scannerDiagnostics.push('fallback_video_discovery_failed', {
+          reason,
+          message: err && err.message ? err.message : String(err || 'unknown')
+        });
+        return null;
+      } finally {
+        fallbackDiscoveryInFlight = false;
+        updateFallbackWatchControls(reason || 'discover_finish');
+      }
+    }
+
+    function submitFallbackAnalytics(eventType, extra, logicalEventKey) {
+      if (!FALLBACK_EVENT_TYPES.has(eventType)) {
+        scannerDiagnostics.push('fallback_analytics_invalid_event_suppressed', { eventType });
+        return Promise.resolve(false);
+      }
+      const eventKey = logicalEventKey || `${eventType}:${scannerSessionId || 'no_session'}:${extra && Number.isInteger(extra.pair_index) ? extra.pair_index : 'none'}`;
+      const payload = {
+        event_type: eventType,
+        client_event_id: fallbackClientEventId(eventKey),
+        scan_session_id: scannerSessionId || undefined
+      };
+      if (extra && Number.isInteger(extra.pair_index)) payload.pair_index = extra.pair_index;
       scannerDiagnostics.push('fallback_analytics_queued', payload);
-      if (!FALLBACK_ANALYTICS_ENDPOINT) return Promise.resolve(false);
-      return fetch(FALLBACK_ANALYTICS_ENDPOINT, {
+      return fetch(FALLBACK_EVENT_ROUTE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'same-origin',
         body: JSON.stringify(payload)
-      }).then(() => true).catch(err => {
+      }).then(response => response.json().catch(() => ({})).then(data => {
+        if (response.ok && data && data.success) {
+          scannerDiagnostics.push('fallback_analytics_recorded', {
+            eventType,
+            clientEventId: payload.client_event_id,
+            duplicate: Boolean(data.duplicate)
+          });
+          return true;
+        }
+        scannerDiagnostics.push('fallback_analytics_rejected', {
+          eventType,
+          status: response.status,
+          code: data && data.code ? data.code : null
+        });
+        return false;
+      })).catch(err => {
         scannerDiagnostics.push('fallback_analytics_failed', {
           message: err && err.message ? err.message : String(err || 'unknown')
         });
@@ -1597,17 +1677,30 @@
       });
     }
 
-    function showFallbackVideoFromCandidate(source) {
-      const candidate = resolveFallbackCandidate(source || 'watch_clicked');
-      if (!candidate || !candidate.videoUrl) {
-        scannerDiagnostics.push('fallback_watch_unavailable', { source, generation: scannerGeneration });
-        updateFallbackWatchControls('watch_unavailable');
-        return;
-      }
+    function closeFallbackVideoPanel(reason) {
+      try { fallbackVideoEl.pause(); } catch (_) {}
+      fallbackVideoEl.removeAttribute('src');
+      try { fallbackVideoEl.load(); } catch (_) {}
+      fallbackVideoPanelEl.style.display = 'none';
+      fallbackVideoStatusEl.textContent = 'Use the player controls to watch the video.';
+      activeFallbackViewKey = null;
+      scannerDiagnostics.push('fallback_video_closed', { reason: reason || null, generation: scannerGeneration });
+    }
+
+    async function showFallbackVideoFromCandidate(source) {
       if (fallbackWatchInProgress) return;
       fallbackWatchInProgress = true;
       updateFallbackWatchControls('watch_start');
+      const candidate = fallbackCandidate || await discoverFallbackVideo(source || 'watch_clicked');
+      if (!candidate || !candidate.videoUrl) {
+        scannerDiagnostics.push('fallback_watch_unavailable', { source, generation: scannerGeneration });
+        updateFallbackWatchControls('watch_unavailable');
+        fallbackWatchInProgress = false;
+        return;
+      }
       try {
+        const eventType = candidate.kind === 'pair' ? 'pair_fallback_view' : 'project_fallback_view';
+        const viewKey = `${eventType}:${scannerSessionId || 'no_session'}:${candidate.pairIndex != null ? candidate.pairIndex : 'project'}`;
         setScannerUiState('fallback_playing', source || 'watch_clicked');
         fallbackVideoEl.src = candidate.videoUrl;
         fallbackVideoPanelEl.style.display = 'block';
@@ -1615,17 +1708,32 @@
           ? 'Showing the matched pair video fallback.'
           : 'Showing the project fallback video.';
         fallbackVideoEl.focus({ preventScroll: false });
-        submitFallbackAnalytics('fallback_watch_video_started', { source: source || 'watch_clicked' });
+        if (activeFallbackViewKey !== viewKey) {
+          activeFallbackViewKey = viewKey;
+          submitFallbackAnalytics(eventType, {
+            pair_index: candidate.kind === 'pair' && Number.isInteger(candidate.pairIndex) ? candidate.pairIndex : undefined
+          }, viewKey);
+        }
       } finally {
         fallbackWatchInProgress = false;
         updateFallbackWatchControls('watch_ready');
       }
     }
 
+    fallbackVideoEl.addEventListener('error', function () {
+      fallbackVideoStatusEl.textContent = 'Fallback video could not be loaded. It may be unavailable or restricted.';
+      scannerDiagnostics.push('fallback_video_load_failed', {
+        source: fallbackCandidate ? fallbackCandidate.source : null,
+        pairIndex: fallbackCandidate ? fallbackCandidate.pairIndex : null,
+        generation: scannerGeneration
+      });
+    });
+
     // Recognition timeout vs. camera failure (this pass) — these must never be
     // indistinguishable to the user. showRecognitionHelp() never touches the camera stream,
     // scan loop, or tracking loop; only showFallbackPanel()/enterFallback() do that.
     function showRecognitionHelp(reason) {
+      if (recognitionHelpPanelEl.style.display !== 'none') return;
       scannerDiagnostics.push('recognition_help_shown', { reason, generation: scannerGeneration });
       diagState.recognitionHelpVisible = true;
       diagState.recognitionHelpReason = reason;
@@ -1634,6 +1742,8 @@
       statusDiv.className = "status scan";
       recognitionHelpPanelEl.style.display = 'block';
       updateFallbackWatchControls('recognition_help');
+      discoverFallbackVideo('recognition_help');
+      submitFallbackAnalytics('recognition_timeout', {}, `recognition_timeout:${scannerSessionId || 'no_session'}:${scannerGeneration}:${reason || 'timeout'}`);
     }
 
     function hideRecognitionHelp(reason) {
@@ -1672,6 +1782,11 @@
       fallbackRetryBtn.textContent = 'Retry Camera';
       setScannerUiState(code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' ? 'camera_unavailable' : 'fallback_available', code);
       updateFallbackWatchControls(code);
+      if (code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' || code === 'SECURE_CONTEXT_REQUIRED') {
+        clearVerifiedFallbackPairContext(code);
+        submitFallbackAnalytics('camera_unavailable', {}, `camera_unavailable:${scannerSessionId || 'no_session'}:${scannerGeneration}:${code}`);
+      }
+      discoverFallbackVideo(code);
     }
 
     function hideFallbackPanel(reason) {
@@ -1735,6 +1850,8 @@
         if (!isStreamDead()) {
           startDetectLoop();
           startTrackingLoop();
+          closeFallbackVideoPanel('camera_retry_succeeded');
+          clearVerifiedFallbackPairContext('camera_retry_succeeded');
           hideFallbackPanel('retry_succeeded');
         } else {
           fallbackRetryBtn.disabled = false;
@@ -5641,7 +5758,6 @@
 
         const newVideoUrl = data.video_url;
         const newPairId = data.matched_pair_id || 0;
-        setFallbackCandidate('pair', newVideoUrl, newPairId, 'matched_detection');
         const wasTracking = tracking;
         const wasSameTarget = (currentVideoUrl === newVideoUrl && currentPairId === newPairId);
 
@@ -5765,6 +5881,8 @@
           smoothCorners = null;
         }
         recordAcceptance();
+        hideRecognitionHelp('match_accept');
+        setVerifiedFallbackPairContext(Number(newPairId), 'matched_detection');
         scannerDiagnostics.push('[SCAN MATCH ACCEPT]', { requestId, pairId: newPairId, wasTracking, sameTarget: isSameTarget });
         if (!wasTracking) scannerDiagnostics.push('[TRACK START]', { pairId: newPairId, generation: scannerGeneration });
         tracking = true;
