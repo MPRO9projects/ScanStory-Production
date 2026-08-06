@@ -10,6 +10,7 @@ processing_queue._queue_mode() into "fake" mode, so enqueue never touches
 real Redis/RQ without any extra mocking here.
 """
 import os
+import json
 import tempfile
 from datetime import timedelta
 from io import BytesIO
@@ -103,6 +104,27 @@ def _status(client, session_id):
     return client.get(f"/api/uploads/sessions/{session_id}")
 
 
+def _structured_records(caplog, attr):
+    return [getattr(record, attr) for record in caplog.records if getattr(record, attr, None)]
+
+
+def _assert_safe_timing_payload(payload):
+    raw = json.dumps(payload, sort_keys=True)
+    assert "@" not in raw
+    assert "password" not in raw.lower()
+    assert "secret" not in raw.lower()
+    assert "token" not in raw.lower()
+    assert "not uploaded content" not in raw
+    assert "F:\\" not in raw
+
+
+def _assert_non_negative_timing_fields(payload):
+    for key, value in payload.items():
+        if key.endswith("_ms"):
+            assert isinstance(value, (int, float))
+            assert value >= 0
+
+
 # ---------------------------------------------------------------------
 # 1. Create session
 # ---------------------------------------------------------------------
@@ -182,6 +204,63 @@ def test_duplicate_chunk_retry_is_idempotent(client, login_user):
     assert retry.status_code == 200
     assert retry.get_json()["current_offset"] == 6
     assert retry.get_json()["note"] == "duplicate_chunk_ignored"
+
+
+def test_upload_session_emits_structured_create_chunk_and_finalize_timings(
+    client, app_module, login_user, monkeypatch, caplog
+):
+    _patch_qr(app_module, monkeypatch)
+    with caplog.at_level("INFO"):
+        session_id = _create_and_upload(client)
+        final = _finalize(client, session_id)
+
+    assert final.status_code == 200
+    records = _structured_records(caplog, "upload_timing")
+    by_event = {payload["event"]: payload for payload in records}
+    assert {"upload_session_create", "upload_session_chunk", "upload_session_finalize"} <= set(by_event)
+
+    created = by_event["upload_session_create"]
+    assert created["upload_session_id"] == session_id
+    assert created["owner_type"] == "user"
+    assert created["pair_count"] == 1
+    assert created["total_bytes"] == created["image_bytes"] + created["video_bytes"]
+    assert created["status"] == "active"
+
+    chunk = by_event["upload_session_chunk"]
+    assert chunk["upload_session_id"] == session_id
+    assert chunk["duplicate_chunk"] is False
+    assert chunk["offset_mismatch"] is False
+    assert chunk["status"] == "accepted"
+
+    finalized = by_event["upload_session_finalize"]
+    assert finalized["upload_session_id"] == session_id
+    assert finalized["project_id"] == final.get_json()["session"]["project_id"]
+    assert finalized["pair_count"] == 1
+    assert finalized["status"] == "completed"
+    assert finalized["recovered_existing_completion"] is False
+
+    for payload in records:
+        _assert_non_negative_timing_fields(payload)
+        _assert_safe_timing_payload(payload)
+
+
+def test_chunk_duplicate_and_offset_mismatch_timings_are_structured(client, login_user, caplog):
+    with caplog.at_level("INFO"):
+        resp = _create_session(client, 10, 10)
+        session_id = resp.get_json()["session"]["id"]
+        first = _send_chunk(client, session_id, 0, b"a" * 6)
+        duplicate = _send_chunk(client, session_id, 0, b"a" * 6)
+        mismatch = _send_chunk(client, session_id, 12, b"b" * 2)
+
+    assert first.status_code == 200
+    assert duplicate.status_code == 200
+    assert mismatch.status_code == 409
+    chunks = [p for p in _structured_records(caplog, "upload_timing") if p["event"] == "upload_session_chunk"]
+    assert any(p["duplicate_chunk"] is True and p["status"] == "duplicate" for p in chunks)
+    assert any(p["offset_mismatch"] is True and p["safe_error_code"] == "OFFSET_MISMATCH" for p in chunks)
+    for payload in chunks:
+        _assert_non_negative_timing_fields(payload)
+        _assert_safe_timing_payload(payload)
 
 
 def test_empty_chunk_rejected(client, login_user):
@@ -304,6 +383,69 @@ def test_finalize_twice_rejected_not_double_processed(client, app_module, login_
     second = _finalize(client, session_id)
     assert second.status_code == 409
     assert second.get_json()["code"] == "ALREADY_FINALIZED"
+    assert app_module.Project.query.count() == 1
+    assert app_module.ProjectPair.query.count() == 1
+
+
+def test_lost_finalize_success_recovered_from_authoritative_status(
+    client, app_module, normal_user, login_user, monkeypatch, caplog
+):
+    _patch_qr(app_module, monkeypatch)
+    session_id = _create_and_upload(client)
+
+    with caplog.at_level("INFO"):
+        first = _finalize(client, session_id)
+        assert first.status_code == 200
+        project_id = first.get_json()["session"]["project_id"]
+
+        retry = _finalize(client, session_id)
+    assert retry.status_code == 409
+    assert retry.get_json()["code"] == "ALREADY_FINALIZED"
+
+    status = _status(client, session_id)
+    assert status.status_code == 200
+    session = status.get_json()["session"]
+    assert session["status"] == "completed"
+    assert session["project_id"] == project_id
+
+    assert app_module.UploadSession.query.count() == 1
+    assert app_module.Project.query.count() == 1
+    assert app_module.ProjectPair.query.count() == 1
+    assert app_module.ProcessingJob.query.filter_by(project_id=project_id).count() == 1
+    app_module.db.session.refresh(normal_user)
+    assert (normal_user.projects_used or 0) == 1
+    finalize_timings = [
+        payload for payload in _structured_records(caplog, "upload_timing")
+        if payload["event"] == "upload_session_finalize"
+    ]
+    assert any(payload.get("recovered_existing_completion") is True for payload in finalize_timings)
+    for payload in finalize_timings:
+        _assert_non_negative_timing_fields(payload)
+        _assert_safe_timing_payload(payload)
+
+
+def test_foreign_user_cannot_recover_completed_upload_session(
+    client, app_module, db_session, login_user, monkeypatch
+):
+    _patch_qr(app_module, monkeypatch)
+    session_id = _create_and_upload(client)
+    assert _finalize(client, session_id).status_code == 200
+
+    other = app_module.User(
+        email="foreign-recovery@example.com",
+        password_hash=generate_password_hash("password123"),
+        is_verified=True,
+        subscription_status="active",
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    with client.session_transaction() as sess:
+        sess["user_id"] = other.id
+
+    assert _status(client, session_id).status_code == 404
+    assert _finalize(client, session_id).status_code == 404
+    assert app_module.UploadSession.query.count() == 1
     assert app_module.Project.query.count() == 1
     assert app_module.ProjectPair.query.count() == 1
 

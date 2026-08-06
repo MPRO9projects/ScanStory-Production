@@ -2955,6 +2955,23 @@
       return fetchUploadJson(`/api/uploads/sessions/${sessionId}`, { method: 'GET', signal });
     }
 
+    function normalizedCompletedUploadPayload(statusPayload) {
+      const session = statusPayload?.session;
+      if (session?.status === 'completed' && session.project_id) {
+        return {
+          success: true,
+          session,
+          recovered_existing_completion: true
+        };
+      }
+      return null;
+    }
+
+    async function reconcileUploadSessionFromServer(sessionId, signal) {
+      const statusPayload = await getUploadSessionStatus(sessionId, signal);
+      return normalizedCompletedUploadPayload(statusPayload) || statusPayload;
+    }
+
     async function uploadResumableChunk(sessionId, offset, chunk, signal) {
       return fetchUploadJson(`/api/uploads/sessions/${sessionId}/chunk`, {
         method: 'POST',
@@ -3084,12 +3101,35 @@
         try {
           return await finalizeResumableSession(sessionId, activeResumableUpload.controller.signal);
         } catch (err) {
+          if (err.code === 'ALREADY_FINALIZED') {
+            const recovered = await reconcileUploadSessionFromServer(sessionId, activeResumableUpload.controller.signal);
+            const completed = normalizedCompletedUploadPayload(recovered);
+            if (completed) return completed;
+            throw err;
+          }
           if (err.code === 'INCOMPLETE_UPLOAD') {
             const statusPayload = await getUploadSessionStatus(sessionId, activeResumableUpload.controller.signal);
             activeResumableUpload.currentOffset = statusPayload.session.current_offset;
             activeResumableUpload.finalizeStarted = false;
             saveResumableUploadState(activeResumableUpload);
             return statusPayload;
+          }
+          if (err.status === 0 || err.name === 'TypeError') {
+            const recovered = await reconcileUploadSessionFromServer(sessionId, activeResumableUpload.controller.signal);
+            const completed = normalizedCompletedUploadPayload(recovered);
+            if (completed) return completed;
+            if (recovered.session?.status === 'active') {
+              activeResumableUpload.currentOffset = recovered.session.current_offset;
+              activeResumableUpload.finalizeStarted = false;
+              saveResumableUploadState(activeResumableUpload);
+              return recovered;
+            }
+            if (recovered.session?.status === 'assembled') {
+              activeResumableUpload.finalizeStarted = false;
+              saveResumableUploadState(activeResumableUpload);
+              continue;
+            }
+            throw err;
           }
           if (err.code !== 'QUEUE_ENQUEUE_FAILED' || attempt === 2) throw err;
           uploadClientLog('UPLOAD CLIENT FINALIZE RETRY', uploadState, { http_status: err.status, current_phase: 'Finalizing' });
@@ -3125,8 +3165,33 @@
         if (storedSessionMatchesFiles(stored, resumableMarkerFile, pair.video, projectName)) {
           try {
             sessionPayload = await getUploadSessionStatus(stored.sessionId, controller.signal);
-            if (RESUMABLE_TERMINAL_STATUSES.has(sessionPayload.session.status)) {
+            if (sessionPayload.session?.status === 'completed' && sessionPayload.session.project_id) {
               clearResumableUploadState();
+              uploadClientLog('UPLOAD CLIENT RECOVERED COMPLETED SESSION', uploadState, {
+                session_id: stored.sessionId,
+                current_phase: 'Project ready'
+              });
+              setUploadProgress('Project ready', 100, 'Recovered the completed upload. Opening your project page.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
+              window.setTimeout(() => {
+                markResumableUploadCompleteForRedirect();
+                window.location.href = `/success/${sessionPayload.session.project_id}`;
+              }, 250);
+              return;
+            }
+            if (sessionPayload.session?.status === 'assembled') {
+              uploadClientLog('UPLOAD CLIENT RECOVERED ASSEMBLED SESSION', uploadState, {
+                session_id: stored.sessionId,
+                current_phase: 'Finalizing'
+              });
+            } else if (sessionPayload.session?.status === 'active') {
+              uploadClientLog('UPLOAD CLIENT RECOVERED ACTIVE SESSION', uploadState, {
+                session_id: stored.sessionId,
+                current_offset: sessionPayload.session.current_offset,
+                current_phase: 'Uploading video'
+              });
+            } else if (RESUMABLE_TERMINAL_STATUSES.has(sessionPayload.session.status)) {
+              clearResumableUploadState();
+              setUploadProgress('Upload failed', 0, safeUploadErrorMessage(sessionPayload.session.failure_code || 'SESSION_FAILED'));
               sessionPayload = null;
             }
           } catch (_err) {
@@ -3158,7 +3223,11 @@
 
         uploadState.phase = 'Uploading video';
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
-        await uploadResumableStream(session, resumableMarkerFile, pair.video, uploadState);
+        if (session.status === 'assembled') {
+          setUploadProgress('Finalizing upload', 94, 'Upload bytes were already assembled. Retrying finalization.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
+        } else {
+          await uploadResumableStream(session, resumableMarkerFile, pair.video, uploadState);
+        }
 
         uploadState.phase = 'Finalizing';
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finalizing...';

@@ -1,4 +1,5 @@
 from datetime import timedelta
+import json
 from pathlib import Path
 
 from PIL import Image
@@ -33,6 +34,23 @@ def _make_project_pair(app_module, db_session, owner_user=None, owner_admin=None
     db_session.add(pair)
     db_session.commit()
     return project, pair
+
+
+def _structured_records(caplog, attr):
+    return [getattr(record, attr) for record in caplog.records if getattr(record, attr, None)]
+
+
+def _assert_timing_payload_is_safe(payload):
+    raw = json.dumps(payload, sort_keys=True)
+    assert "@" not in raw
+    assert "password" not in raw.lower()
+    assert "secret" not in raw.lower()
+    assert "token" not in raw.lower()
+    assert "F:\\" not in raw
+    for key, value in payload.items():
+        if key.endswith("_ms"):
+            assert isinstance(value, (int, float))
+            assert value >= 0
 
 
 def test_enqueue_creates_queued_record_and_fake_queue_id(app_module, db_session, normal_user):
@@ -74,16 +92,18 @@ def test_enqueue_failure_records_safe_failed_state(app_module, db_session, norma
     assert "REDIS_URL" not in (failed.safe_error_summary or "")
 
 
-def test_worker_processes_pair_and_completes_job(app_module, db_session, normal_user, monkeypatch):
+def test_worker_processes_pair_and_completes_job(app_module, db_session, normal_user, monkeypatch, caplog):
     project, pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
     monkeypatch.setattr(app_module, "standardize_uploaded_image", lambda *args, **kwargs: None)
     monkeypatch.setattr(app_module, "make_feature_working_jpeg", lambda *args, **kwargs: Path(args[1]).write_bytes(b"work"))
     monkeypatch.setattr(app_module, "extract_features_multi", lambda *args, **kwargs: Path(args[1]).write_bytes(b"npz"))
-    job, _ = app_module.enqueue_project_pair_processing(project.id)
+    with caplog.at_level("INFO"):
+        job = app_module._schedule_project_pair_processing(project.id)
+        assert job is not None
 
-    from processing_operations import run_processing_job
+        from processing_operations import run_processing_job
 
-    result = run_processing_job(job.id)
+        result = run_processing_job(job.id)
 
     db_session.expire_all()
     refreshed_job = app_module.ProcessingJob.query.get(job.id)
@@ -93,6 +113,23 @@ def test_worker_processes_pair_and_completes_job(app_module, db_session, normal_
     assert refreshed_job.attempt_count == 1
     assert refreshed_pair.is_processed is True
     assert refreshed_pair.feature_extraction_status == "extracted"
+    timings = _structured_records(caplog, "processing_timing")
+    assert any(payload["event"] == "processing_job_enqueue" for payload in timings)
+    pair_payload = next(payload for payload in timings if payload["event"] == "processing_pair")
+    job_payload = next(payload for payload in timings if payload["event"] == "processing_job_run")
+    assert pair_payload["job_id"] == job.id
+    assert pair_payload["project_id"] == project.id
+    assert pair_payload["pair_id"] == pair.id
+    assert pair_payload["pair_index"] == pair.pair_index
+    assert pair_payload["status"] == "completed"
+    assert job_payload["job_id"] == job.id
+    assert job_payload["project_id"] == project.id
+    assert job_payload["job_type"] == "process_project_pairs"
+    assert job_payload["pair_count"] == 1
+    assert job_payload["attempt_count"] == 1
+    assert job_payload["status"] == "completed"
+    for payload in timings:
+        _assert_timing_payload_is_safe(payload)
 
 
 def test_worker_replay_completed_job_is_safe(app_module, db_session, normal_user, monkeypatch):
