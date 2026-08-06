@@ -145,6 +145,12 @@ def viewer_error(code):
     return {"code": code, "message": message, "retry_allowed": retry, "fallback_allowed": fallback}
 
 
+# Wave 7 (429-vs-cadence fix, see docs/development/wave-7-detection-overlay-audit.md §7): every
+# RATE_LIMITS scope this policy actually serves (app.py) uses a 60s window, so the server's own
+# retry_after_seconds can never exceed that in real operation. This cap is defensive only.
+MAX_BACKOFF_MS = 60000
+
+
 class RecognitionRequestPolicy:
     def __init__(self, mode="standard"):
         cfg = mode_config(mode)
@@ -153,9 +159,12 @@ class RecognitionRequestPolicy:
         self.in_flight_id = None
         self.last_started_ms = -10**9
         self.latest_sequence = 0
+        self.backoff_until_ms = -10**9
 
     def can_start(self, now_ms, page_visible=True, camera_active=True, tracking=False):
         if not page_visible or not camera_active or self.in_flight_id:
+            return False
+        if now_ms < self.backoff_until_ms:
             return False
         interval = self.interval_ms * (2 if tracking else 1)
         return now_ms - self.last_started_ms >= interval
@@ -176,6 +185,53 @@ class RecognitionRequestPolicy:
 
     def timed_out(self, now_ms):
         return bool(self.in_flight_id and now_ms - self.last_started_ms >= self.timeout_ms)
+
+    def note_rate_limited(self, now_ms, retry_after_ms):
+        """Called when a response comes back 429/RATE_LIMITED. retry_after_ms is the server's
+        own advertised wait — never a client-guessed value. Only ever extends the deadline
+        forward, so an earlier/smaller retry-after can't shorten an already-set later one."""
+        bounded = max(0, min(retry_after_ms or 0, MAX_BACKOFF_MS))
+        self.backoff_until_ms = max(self.backoff_until_ms, now_ms + bounded)
+
+    def reset_backoff(self):
+        """Explicit clean-slate reset — called on Continue Scanning / Retry Camera so neither
+        carries over a stale backoff deadline from the attempt that led to that panel."""
+        self.backoff_until_ms = -10**9
+
+    def backoff_remaining_ms(self, now_ms):
+        return max(0, self.backoff_until_ms - now_ms)
+
+
+def is_rate_limited_response(status_code, payload):
+    """Must be checked BEFORE validate_detection_response ever sees the payload — the 429 body
+    shape ({error:true, code:"RATE_LIMITED", ...}, no "detected" key) would otherwise be reported
+    as (True, "NO_MATCH"), indistinguishable from a genuine no-marker-found response. That
+    misclassification is what let 429s silently inflate the client's failure streak and
+    manufacture a false "recognition timed out" prompt (see the Wave 7 audit, §7)."""
+    if status_code == 429:
+        return True
+    return bool(isinstance(payload, dict) and payload.get("code") == "RATE_LIMITED")
+
+
+def resolve_retry_after_ms(payload, header_value=None):
+    """Prefers the JSON body's retry_after_seconds (set from the same limiter state as the
+    Retry-After header, see app.py's _scanner_rate_limited_response) with the header as a
+    fallback. Returns milliseconds, never negative."""
+    body_seconds = None
+    if isinstance(payload, dict):
+        try:
+            candidate = float(payload.get("retry_after_seconds"))
+            if candidate >= 0:
+                body_seconds = candidate
+        except (TypeError, ValueError):
+            body_seconds = None
+    if body_seconds is None:
+        try:
+            header_seconds = float(header_value)
+            body_seconds = header_seconds if header_seconds >= 0 else 1.0
+        except (TypeError, ValueError):
+            body_seconds = 1.0
+    return max(0, round(body_seconds * 1000))
 
 
 def validate_detection_response(payload):

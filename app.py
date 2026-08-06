@@ -265,7 +265,15 @@ def _apply_short_private_cache(response):
     return response
 
 
-def _log_scanner_latency(event, start_time, **fields):
+def _log_scanner_latency(event, start_time, stage_timings=None, **fields):
+    """stage_timings (Wave 7): optional dict of per-substage seconds (e.g. "read", "prep",
+    "detect", "quick_score", "match", "homography"), the same breakdown this file has always
+    computed and printed to stdout (see the `print(f"⏱ ...")` lines in detect_init/detect_track)
+    but never folded into this structured log record — see
+    docs/development/wave-7-detection-overlay-audit.md §3/§12. Purely additive: does not
+    change duration_ms/outcome/stage or any accept/reject decision. Non-numeric/invalid entries
+    are silently dropped rather than raising, since this is best-effort observability, not a
+    correctness path."""
     safe = {
         "event": event,
         "duration_ms": round((time.time() - start_time) * 1000, 2),
@@ -273,6 +281,12 @@ def _log_scanner_latency(event, start_time, **fields):
     for key, value in fields.items():
         if key in {"project_id", "outcome", "stage", "pair_id", "scan_session_id"}:
             safe[key] = value
+    if stage_timings:
+        for key, value in stage_timings.items():
+            try:
+                safe[f"stage_{key}_ms"] = round(float(value) * 1000, 2)
+            except (TypeError, ValueError):
+                continue
     app.logger.info("scanner_latency", extra={"scanner_latency": safe})
 
 @app.context_processor
@@ -7632,6 +7646,16 @@ def detect_init():
         if not best_match or best_good < MIN_GOOD_MATCHES:
             print(f"❌ Detection failed: best_good={best_good}")
             _log_frame_diag("mobile_detection_failed", raw_keypoints=len(test_kp), quick_score_candidates=len(scored), best_good=best_good)
+            _log_scanner_latency(
+                "detect_init", t_start, project_id=project_id, outcome="no_match", stage="response", scan_session_id=scan_session_id,
+                stage_timings={
+                    "read": t_after_read - t_start,
+                    "prep": t_after_prep - t_after_read,
+                    "detect": t_after_detect - t_after_prep,
+                    "quick_score": t_after_quick - t_after_detect,
+                    "match": t_after_match - t_after_quick,
+                },
+            )
             if scan_log and not is_admin_project:
                 db.session.commit()
             return jsonify({
@@ -7814,7 +7838,17 @@ def detect_init():
             matched_video_url = url_for("serve_video", project_id=project_id, image_id=best_match_id, _external=True,_scheme="https")
         
         print(f"✅ Detection successful! Returning response")
-        _log_scanner_latency("detect_init", t_start, project_id=project_id, outcome="accepted", stage="response", scan_session_id=scan_session_id)
+        _log_scanner_latency(
+            "detect_init", t_start, project_id=project_id, outcome="accepted", stage="response", scan_session_id=scan_session_id,
+            stage_timings={
+                "read": t_after_read - t_start,
+                "prep": t_after_prep - t_after_read,
+                "detect": t_after_detect - t_after_prep,
+                "quick_score": t_after_quick - t_after_detect,
+                "match": t_after_match - t_after_quick,
+                "homography": t_after_homography - t_after_match,
+            },
+        )
         _log_frame_diag(
             "accepted",
             raw_keypoints=len(test_kp), quick_score_candidates=len(scored), good_matches=best_good,
@@ -8224,7 +8258,16 @@ def detect_track():
         
         corners_out = [{"x": c[0], "y": c[1]} for c in corners]
         
-        _log_scanner_latency("detect_track", t_start, project_id=project_id, pair_id=pair_id, outcome="accepted", stage="response", scan_session_id=scan_session_id)
+        _log_scanner_latency(
+            "detect_track", t_start, project_id=project_id, pair_id=pair_id, outcome="accepted", stage="response", scan_session_id=scan_session_id,
+            stage_timings={
+                "read": t_after_read - t_start,
+                "prep": t_after_prep - t_after_read,
+                "detect": t_after_detect - t_after_prep,
+                "match": t_after_match - t_after_detect,
+                "homography": t_after_homography - t_after_match,
+            },
+        )
         return jsonify({
             "ok": True,
             "corners": corners_out,

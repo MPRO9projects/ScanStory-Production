@@ -589,7 +589,7 @@ def test_scan_request_is_rescheduled_after_non_tracking_outcomes():
     assert "scheduleNextScan('after_tick');" in body[finally_idx:]
     finalize_start = html.index("function finalizeDetectionAttempt(")
     finalize_end = html.index("function clearTrackingGeometry", finalize_start)
-    assert "scheduleAttemptSuccessor(attempt, 'after_attempt');" in html[finalize_start:finalize_end]
+    assert "scheduleAttemptSuccessor(attempt, 'after_attempt', delayMs);" in html[finalize_start:finalize_end]
 
 
 def test_scan_in_flight_cleared_after_every_outcome():
@@ -2461,7 +2461,7 @@ def test_attempt_finalizer_does_not_schedule_successor_while_tracking_healthy():
     start = html.index("function scheduleAttemptSuccessor(")
     body = html[start:html.index("function finalizeDetectionAttempt", start)]
     healthy_at = body.index("if (isHealthyLocalTracking() || trackerBootstrapPending)")
-    schedule_at = body.index("scheduleNextScan(reason || 'after_attempt');")
+    schedule_at = body.index("scheduleNextScan(reason || 'after_attempt', delayMs);")
     assert healthy_at < schedule_at
     assert "healthy_tracking_successor_suppressed" in body
     assert "tracker_bootstrap_pending_successor_suppressed" in body
@@ -2519,11 +2519,11 @@ def test_one_successor_schedule_per_attempt():
     schedule_end = html.index("function finalizeDetectionAttempt", schedule_start)
     schedule_body = html[schedule_start:schedule_end]
     assert "attempt.successorScheduled" in schedule_body
-    assert "scheduleNextScan(reason || 'after_attempt');" in schedule_body
+    assert "scheduleNextScan(reason || 'after_attempt', delayMs);" in schedule_body
     finalize_start = html.index("function finalizeDetectionAttempt(")
     finalize_end = html.index("function clearTrackingGeometry", finalize_start)
     finalize_body = html[finalize_start:finalize_end]
-    assert "if (scheduleSuccessor) scheduleAttemptSuccessor(attempt, 'after_attempt');" in finalize_body
+    assert "if (scheduleSuccessor) scheduleAttemptSuccessor(attempt, 'after_attempt', delayMs);" in finalize_body
 
 
 def test_watchdog_never_aborts_drawing_encoding_or_handling_attempt_phases():

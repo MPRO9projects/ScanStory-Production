@@ -5,7 +5,9 @@ from scanner_runtime import (
     ScannerStateError,
     ScannerStateMachine,
     create_viewer_session_id,
+    is_rate_limited_response,
     mode_config,
+    resolve_retry_after_ms,
     select_runtime_mode,
     validate_detection_response,
     viewer_error,
@@ -90,6 +92,71 @@ def test_viewer_session_id_is_unpredictable_shape():
     second = create_viewer_session_id()
     assert len(first) == 32
     assert first != second
+
+
+def test_rate_limited_response_classification():
+    """A 429/RATE_LIMITED body has no `detected` key — must be classified as rate-limited
+    (never passed to validate_detection_response as a detection outcome), by status code
+    first and the body's own `code` field as defense-in-depth."""
+    rate_limited_body = {
+        "error": True,
+        "code": "RATE_LIMITED",
+        "reason": "Too many scanner requests. Please wait briefly and try again.",
+        "retry_after_seconds": 12,
+    }
+    assert is_rate_limited_response(429, rate_limited_body) is True
+    # Defense-in-depth: body code alone (e.g. status stripped by some proxy) still classifies.
+    assert is_rate_limited_response(200, rate_limited_body) is True
+    # An ordinary no-match response must NOT be classified as rate-limited.
+    assert is_rate_limited_response(200, {"detected": False, "reason": "Too few features (0)"}) is False
+    assert is_rate_limited_response(429, None) is True
+    assert is_rate_limited_response(200, None) is False
+
+
+def test_resolve_retry_after_prefers_body_then_header_then_default():
+    assert resolve_retry_after_ms({"retry_after_seconds": 12}, "99") == 12000
+    # Malformed body falls back to the header.
+    assert resolve_retry_after_ms({"retry_after_seconds": "not-a-number"}, "5") == 5000
+    # Neither present: safe 1s default, never zero (never an immediate-retry storm).
+    assert resolve_retry_after_ms({}, None) == 1000
+    assert resolve_retry_after_ms(None, None) == 1000
+
+
+def test_request_policy_backs_off_after_rate_limit_and_resets_cleanly():
+    policy = RecognitionRequestPolicy("full")
+    req = policy.start(0)
+    policy.finish(req)
+    # Server said "wait 5s" — a plain next-interval retry must NOT be allowed before that.
+    policy.note_rate_limited(0, 5000)
+    assert policy.can_start(250, page_visible=True, camera_active=True) is False
+    assert policy.can_start(4999, page_visible=True, camera_active=True) is False
+    assert policy.can_start(5000, page_visible=True, camera_active=True) is True
+    # A second, smaller retry-after must never SHORTEN an already-set later deadline.
+    policy.note_rate_limited(100, 10)
+    assert policy.can_start(200, page_visible=True, camera_active=True) is False
+    # Explicit reset (Continue Scanning / Retry Camera) clears it immediately — note this
+    # check also has to clear the plain interval-since-last-start gate (unrelated to backoff),
+    # hence 300ms rather than 200ms here.
+    policy.reset_backoff()
+    assert policy.can_start(300, page_visible=True, camera_active=True) is True
+
+
+def test_request_policy_never_forms_a_continuous_429_loop():
+    """Simulates repeated 429s (no successful requests ever get through) and asserts the
+    policy always defers the next allowed start to the server's advertised wait — it never
+    collapses back to the bare fixed interval while a backoff is outstanding."""
+    policy = RecognitionRequestPolicy("full")
+    now = 0
+    denied_before_deadline = 0
+    for _ in range(20):
+        req = policy.start(now)
+        policy.finish(req)
+        policy.note_rate_limited(now, 2000)
+        # Immediately after, and at the plain fixed interval, must still be denied.
+        if policy.can_start(now + policy.interval_ms, page_visible=True, camera_active=True):
+            denied_before_deadline += 1
+        now += 2000  # only advance to exactly the advertised deadline
+    assert denied_before_deadline == 0
 
 
 def test_scanner_template_loads_runtime_and_preserves_legacy_contract(client, project_with_pair):
