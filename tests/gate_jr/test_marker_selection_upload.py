@@ -187,11 +187,58 @@ def test_beforeunload_only_active_during_upload_and_removed_after_completion():
     html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
     assert "function enableUploadNavigationWarning()" in html
     assert "function disableUploadNavigationWarning()" in html
+    assert "function markResumableUploadCompleteForRedirect()" in html
     assert "window.addEventListener('beforeunload', warnDuringUpload)" in html
     assert "window.removeEventListener('beforeunload', warnDuringUpload)" in html
     assert "if (!uploadActive || (!activeUploadXhr && !activeResumableUpload)) return" in html
     assert "enableUploadNavigationWarning();" in html
     assert "disableUploadNavigationWarning();" in html
+
+
+def test_resumable_success_clears_beforeunload_state_before_redirect():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    helper_start = html.index("function markResumableUploadCompleteForRedirect()")
+    helper = html[helper_start:html.index("function formatRate", helper_start)]
+    assert "uploadActive = false" in helper
+    assert "activeResumableUpload = null" in helper
+    assert "activeUploadId = null" in helper
+    assert "setCancelUploadVisible(false)" in helper
+    assert "disableUploadNavigationWarning();" in helper
+
+    finalize_start = html.index("let finalized = await finalizeResumableWithBoundedRetry")
+    success_block = html[finalize_start:html.index("} catch (err)", finalize_start)]
+    redirect_index = success_block.index("window.location.href = finalSession.project_id")
+    cleanup_index = success_block.index("markResumableUploadCompleteForRedirect();")
+    assert cleanup_index < redirect_index
+    assert "clearResumableUploadState();" in success_block
+
+
+def test_resumable_active_upload_keeps_navigation_protection():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("async function submitResumableSinglePair")
+    block = html[start:html.index("let uploadActive = false", start)]
+    assert "activeResumableUpload = { controller, cancelled: false, sessionId: null, projectName }" in block
+    assert "setCancelUploadVisible(true)" in block
+    assert "enableUploadNavigationWarning();" in block
+    assert "if (!uploadActive || (!activeUploadXhr && !activeResumableUpload)) return" in html
+
+
+def test_cancel_and_clear_all_leave_navigation_warning_state_safe():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    cancel_start = html.index("async function cancelActiveUpload")
+    cancel_block = html[cancel_start:html.index("async function uploadResumableStream", cancel_start)]
+    assert "clearResumableUploadState()" in cancel_block
+    assert "resetUploadSubmit(document.getElementById('submitBtn'))" in cancel_block
+
+    reset_start = html.index("function resetUploadSubmit(submitBtn)")
+    reset_block = html[reset_start:html.index("function enableUploadNavigationWarning", reset_start)]
+    assert "activeResumableUpload = null" in reset_block
+    assert "disableUploadNavigationWarning();" in reset_block
+
+    clear_start = html.index("function clearAll()")
+    clear_block = html[clear_start:html.index("function logClientStage", clear_start)]
+    assert "if (!uploadActive)" in clear_block
+    assert "disableUploadNavigationWarning();" in clear_block
 
 
 def test_success_redirect_happens_once():

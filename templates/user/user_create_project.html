@@ -2619,6 +2619,9 @@
 
     function clearAll() {
       if (!confirm('Are you sure you want to clear all files and settings? This cannot be undone.')) return;
+      if (!uploadActive) {
+        disableUploadNavigationWarning();
+      }
 
       // Clear file inputs
       document.querySelectorAll('input[type="file"]').forEach(input => input.value = '');
@@ -2751,6 +2754,14 @@
       event.preventDefault();
       event.returnValue = '';
       return '';
+    }
+
+    function markResumableUploadCompleteForRedirect() {
+      uploadActive = false;
+      activeResumableUpload = null;
+      activeUploadId = null;
+      setCancelUploadVisible(false);
+      disableUploadNavigationWarning();
     }
 
     function formatRate(bytesPerSecond) {
@@ -3172,6 +3183,7 @@
         uploadClientLog('UPLOAD CLIENT COMPLETE', uploadState, { current_phase: 'Project ready' });
         setUploadProgress('Project ready', 100, 'Opening your project page.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
         window.setTimeout(() => {
+          markResumableUploadCompleteForRedirect();
           window.location.href = finalSession.project_id ? `/success/${finalSession.project_id}` : '/dashboard';
         }, 250);
       } catch (err) {
