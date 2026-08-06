@@ -53,6 +53,7 @@ from processing_queue import (
     QueueUnavailable,
     active_project_job,
     enqueue_project_pair_processing,
+    queue_config_summary,
     processing_job_status_payload,
     queue_required,
     redis_ready_check,
@@ -7827,6 +7828,21 @@ def detect_init():
             frame_diag.update(extra)
             print(f"📋 frame_diag[{stage}]: {frame_diag}")
 
+        def _scanner_guidance(**extra):
+            brightness = frame_diag.get("brightness_score")
+            payload = {
+                "blur_score": frame_diag.get("blur_score"),
+                "brightness_score": brightness,
+                "likely_blurry": bool(frame_diag.get("likely_blurry")),
+                "likely_glare_or_dark": bool(frame_diag.get("likely_glare_or_dark")),
+                "likely_dark": bool(brightness is not None and brightness < 25.0),
+                "likely_glare": bool(brightness is not None and brightness > 235.0),
+            }
+            for key in ("raw_keypoints", "quick_score_candidates", "good_matches", "inliers", "frame_visibility"):
+                if key in extra:
+                    payload[key] = extra[key]
+            return payload
+
         orb = _orb_detect()
         test_kp, test_desc = orb.detectAndCompute(gray_small, None)
         t_after_detect = time.time()
@@ -7845,6 +7861,7 @@ def detect_init():
                 "source_frame_width": source_frame_width,
                 "source_frame_height": source_frame_height,
                 "orientation_revision": orientation_revision,
+                "scanner_guidance": _scanner_guidance(raw_keypoints=len(test_kp) if test_kp else 0),
             }), 200
         
         print(f"🔍 Found {len(test_kp)} features")
@@ -7936,6 +7953,9 @@ def detect_init():
                 "source_frame_width": source_frame_width,
                 "source_frame_height": source_frame_height,
                 "orientation_revision": orientation_revision,
+                "scanner_guidance": _scanner_guidance(
+                    raw_keypoints=len(test_kp), quick_score_candidates=len(scored), good_matches=best_good
+                ),
             }), 200
 
         margin_ok, margin_code = resolve_candidate_margin(best_good, second_good)
@@ -7955,6 +7975,9 @@ def detect_init():
                 "source_frame_width": source_frame_width,
                 "source_frame_height": source_frame_height,
                 "orientation_revision": orientation_revision,
+                "scanner_guidance": _scanner_guidance(
+                    raw_keypoints=len(test_kp), quick_score_candidates=len(scored), good_matches=best_good
+                ),
             }), 200
 
         print(f"✅ Best match: pair {best_match_id} with {best_good} matches")
@@ -8048,6 +8071,13 @@ def detect_init():
                 "source_frame_height": source_frame_height,
                 "orientation_revision": orientation_revision,
                 "homography_quality": homography_quality,
+                "scanner_guidance": _scanner_guidance(
+                    raw_keypoints=len(test_kp),
+                    quick_score_candidates=len(scored),
+                    good_matches=best_good,
+                    inliers=inliers,
+                    frame_visibility="partial" if homography_quality.get("code") in {"quad_out_of_bounds", "visible_area_too_small"} else "unknown",
+                ),
             }), 200
 
         rect = np.array([[0, 0], [tw, 0], [tw, th], [0, th]], dtype=np.float32).reshape(-1, 1, 2)
@@ -8058,7 +8088,17 @@ def detect_init():
             print(f"❌ Bad corners")
             if scan_log and not is_admin_project:
                 db.session.commit()
-            return jsonify({"detected": False, "reason": "Bad corners"}), 200
+            return jsonify({
+                "detected": False,
+                "reason": "Bad corners",
+                "scanner_guidance": _scanner_guidance(
+                    raw_keypoints=len(test_kp),
+                    quick_score_candidates=len(scored),
+                    good_matches=best_good,
+                    inliers=inliers,
+                    frame_visibility="partial",
+                ),
+            }), 200
         
         # ✅ Mark scan as successful - ONLY count for USER projects
         # ✅ Mark scan as successful only.
@@ -8142,6 +8182,13 @@ def detect_init():
             "good_matches": best_good,
             "keypoints": len(test_kp),
             "homography_quality": homography_quality,
+            "scanner_guidance": _scanner_guidance(
+                raw_keypoints=len(test_kp),
+                quick_score_candidates=len(scored),
+                good_matches=best_good,
+                inliers=inliers,
+                frame_visibility="full",
+            ),
             "marker_mode": marker_mode,
             "top_checked": top_ids,
             "scan_session_id": scan_session_id if scan_attribution_owner_id else None,

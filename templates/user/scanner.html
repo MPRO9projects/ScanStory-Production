@@ -618,6 +618,14 @@
   <canvas id="captureCanvas" hidden></canvas>
 
   <div id="status" class="status scan">Loading OpenCV…</div>
+  <div id="scannerGuidance"
+       class="status scan"
+       role="status"
+       aria-live="polite"
+       aria-atomic="true"
+       style="margin-top:8px;font-size:clamp(14px,2.8vw,18px);opacity:.92;">
+    Looking for image…
+  </div>
 
   <!-- Real fallback UI (Part D): "Fallback available" must never appear without a visible
        action. This panel is the only thing shown when the scanner state machine reaches
@@ -799,6 +807,117 @@
         window.__scannerUiPendingDiagnostics.push(record);
       }
       return true;
+    }
+    const SCANNER_GUIDANCE = Object.freeze({
+      looking: 'Looking for image…',
+      closer: 'Move closer',
+      farther: 'Move farther away',
+      steady: 'Hold steady',
+      lighting: 'Improve lighting',
+      glare: 'Reduce glare',
+      visible: 'Keep the full image visible',
+      found: 'Image found',
+      tracking: 'Tracking image',
+      reacquiring: 'Reacquiring image',
+      backoff: 'Pausing briefly before retrying…',
+      camera_unavailable: 'Camera unavailable',
+      retry_camera: 'Tap to retry camera'
+    });
+    const GUIDANCE_PRIORITY = Object.freeze({
+      camera_unavailable: 100,
+      retry_camera: 95,
+      backoff: 90,
+      found: 80,
+      tracking: 75,
+      reacquiring: 70,
+      visible: 62,
+      lighting: 60,
+      glare: 60,
+      closer: 55,
+      farther: 55,
+      steady: 50,
+      looking: 10
+    });
+    const GUIDANCE_DEBOUNCE_MS = 900;
+    let scannerGuidanceState = 'looking';
+    let scannerGuidanceLastChangedAt = 0;
+    let scannerGuidanceCountdownTimer = null;
+
+    function guidanceTextForState(state, options) {
+      const base = SCANNER_GUIDANCE[state] || SCANNER_GUIDANCE.looking;
+      const seconds = options && Number.isFinite(options.retryAfterSeconds) ? Math.max(0, Math.ceil(options.retryAfterSeconds)) : null;
+      return state === 'backoff' && seconds !== null ? `${base} ${seconds}s` : base;
+    }
+
+    function updateGuidanceDom(state, text) {
+      const guidanceEl = document.getElementById('scannerGuidance');
+      if (!guidanceEl) return;
+      if (guidanceEl.textContent !== text) guidanceEl.textContent = text;
+      guidanceEl.dataset.guidanceState = state;
+    }
+
+    function setScannerGuidance(state, reason, options = {}) {
+      if (!SCANNER_GUIDANCE[state]) state = 'looking';
+      const now = performance.now();
+      const currentPriority = GUIDANCE_PRIORITY[scannerGuidanceState] || 0;
+      const nextPriority = GUIDANCE_PRIORITY[state] || 0;
+      if (
+        state !== scannerGuidanceState &&
+        nextPriority < currentPriority &&
+        now - scannerGuidanceLastChangedAt < GUIDANCE_DEBOUNCE_MS
+      ) {
+        scannerDiagnostics.push('scanner_guidance_debounced', {
+          from: scannerGuidanceState,
+          to: state,
+          reason,
+          generation: scannerGeneration
+        });
+        return false;
+      }
+      scannerGuidanceState = state;
+      scannerGuidanceLastChangedAt = now;
+      updateGuidanceDom(state, guidanceTextForState(state, options));
+      scannerDiagnostics.push('scanner_guidance_state', {
+        state,
+        reason: reason || null,
+        retryAfterSeconds: options.retryAfterSeconds || null,
+        generation: scannerGeneration
+      });
+      return true;
+    }
+
+    function clearGuidanceCountdown() {
+      if (scannerGuidanceCountdownTimer) {
+        clearInterval(scannerGuidanceCountdownTimer);
+        scannerGuidanceCountdownTimer = null;
+      }
+    }
+
+    function setBackoffGuidance(retryAfterMs, reason) {
+      clearGuidanceCountdown();
+      const startedAt = performance.now();
+      const totalMs = Math.max(0, Number(retryAfterMs) || 0);
+      function render() {
+        const remainingMs = Math.max(0, totalMs - (performance.now() - startedAt));
+        setScannerGuidance('backoff', reason || 'rate_limited', {
+          retryAfterSeconds: totalMs > 0 ? remainingMs / 1000 : null
+        });
+        if (remainingMs <= 0) clearGuidanceCountdown();
+      }
+      render();
+      if (totalMs > 0) scannerGuidanceCountdownTimer = setInterval(render, 1000);
+    }
+
+    function guidanceFromDetection(data) {
+      const guidance = data && data.scanner_guidance ? data.scanner_guidance : {};
+      if (data && data.detected) return 'found';
+      if (guidance.frame_visibility === 'partial') return 'visible';
+      if (guidance.likely_glare) return 'glare';
+      if (guidance.likely_dark || guidance.likely_glare_or_dark) return 'lighting';
+      if (guidance.likely_blurry) return 'steady';
+      if (typeof guidance.raw_keypoints === 'number' && guidance.raw_keypoints < 80) return 'closer';
+      if (typeof guidance.good_matches === 'number' && guidance.good_matches > 0) return 'steady';
+      return tracking ? 'reacquiring' : 'looking';
     }
     scannerState.transition('loading_shell');
     scannerState.transition('checking_capabilities');
@@ -1464,6 +1583,7 @@
             console.log('OpenCV initialized');
             statusDiv.textContent = "Scan AR marker";
             statusDiv.className = "status scan";
+            setScannerGuidance('looking', 'opencv_ready');
             startDetectLoop();
             startScannerStatusCycle();
             startTrackingLoop();
@@ -1740,6 +1860,7 @@
       setScannerUiState('recognition_timeout', reason);
       statusDiv.textContent = "Recognition is taking too long";
       statusDiv.className = "status scan";
+      setScannerGuidance('visible', reason || 'recognition_timeout');
       recognitionHelpPanelEl.style.display = 'block';
       updateFallbackWatchControls('recognition_help');
       discoverFallbackVideo('recognition_help');
@@ -1770,6 +1891,7 @@
       setScannerUiState('scanning', 'recognition_continue');
       statusDiv.textContent = "🎯 Scan AR marker";
       statusDiv.className = "status scan";
+      setScannerGuidance('looking', 'recognition_continue');
     }
 
     recognitionContinueBtn.addEventListener('click', continueScanningFromRecognitionHelp);
@@ -1786,6 +1908,10 @@
       fallbackRetryBtn.disabled = false;
       fallbackRetryBtn.textContent = 'Retry Camera';
       setScannerUiState(code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' ? 'camera_unavailable' : 'fallback_available', code);
+      setScannerGuidance(
+        code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' ? 'camera_unavailable' : 'retry_camera',
+        code
+      );
       updateFallbackWatchControls(code);
       if (code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' || code === 'SECURE_CONTEXT_REQUIRED') {
         clearVerifiedFallbackPairContext(code);
@@ -1841,6 +1967,7 @@
         scannerGeneration++;
         window.__scannerUiGeneration = scannerGeneration;
         setScannerUiState('camera_starting', 'fallback_retry');
+        setScannerGuidance('looking', 'fallback_retry');
         if (scannerState.state === 'fallback') safeTransition('requesting_camera', 'fallback_retry');
         stopDetectLoop('fallback_retry');
         stopTrackingLoop();
@@ -1858,6 +1985,7 @@
         if (!isStreamDead()) {
           startDetectLoop();
           startTrackingLoop();
+          setScannerGuidance('looking', 'camera_retry_succeeded');
           closeFallbackVideoPanel('camera_retry_succeeded');
           clearVerifiedFallbackPairContext('camera_retry_succeeded');
           hideFallbackPanel('retry_succeeded');
@@ -3370,6 +3498,7 @@
           safeTransition('initializing_scanner', 'camera_ready');
           safeTransition('ready_to_scan', 'camera_ready');
           setScannerUiState('scanning', 'camera_ready');
+          setScannerGuidance('looking', 'camera_ready');
         };
       } catch (err) {
         console.error('Camera error:', err);
@@ -4665,6 +4794,7 @@
       }
       clearTrackingGeometry(reason, { holdPose: true });
       setScannerUiState('tracking_lost', reason || 'tracking_lost');
+      setScannerGuidance('reacquiring', reason || 'tracking_lost');
       safeTransition('target_lost', reason);
       safeTransition('recovering', reason);
       startScannerStatusCycle();
@@ -5684,6 +5814,7 @@
         if (runtime.isRateLimitedResponse(r.status, data)) {
           const retryAfterMs = runtime.resolveRetryAfterMs(data, r.headers.get('Retry-After'));
           detectionPolicy.noteRateLimited(performance.now(), retryAfterMs);
+          setBackoffGuidance(retryAfterMs, 'rate_limited');
           scannerDiagnostics.push('[RATE_LIMITED]', {
             requestId, retryAfterMs, generation: requestGeneration, activeGeneration: scannerGeneration
           });
@@ -5765,6 +5896,7 @@
             statusDiv.textContent = "Scan AR marker";
             statusDiv.className = "status scan";
           }
+          setScannerGuidance(guidanceFromDetection(data), data.code || data.reason || 'not_detected');
           // Same fix as handleDetectionTimeout: 25 consecutive "no marker found" responses
           // is a recognition problem (nothing wrong with the camera/stream), not a camera
           // failure — must not show the same panel as a genuinely dead stream.
@@ -5774,6 +5906,8 @@
 
         // Reset fail count on successful detection
         detectionFailCount = 0;
+        clearGuidanceCountdown();
+        setScannerGuidance('found', 'detected_response');
         if (requestId <= latestAppliedSequence) {
           diagState.staleCount++;
           scannerDiagnostics.push('[STALE RESULT IGNORED]', {
@@ -5799,10 +5933,12 @@
         const newCornersRaw = data.corners.map(p => ({ x: Number(p.x), y: Number(p.y) }));
         const newCorners = normalizeCornerOrder(newCornersRaw, currCorners);
         if (!newCorners) {
+          setScannerGuidance('visible', 'corner_order_invalid');
           requestPoseHold('corner_order_invalid');
           return;
         }
         if (!isOverlayFrameQuadRenderable(newCorners, frameW, frameH)) {
+          setScannerGuidance('visible', 'invalid_detection_geometry');
           requestPoseHold('invalid_detection_geometry');
           return;
         }
@@ -5920,6 +6056,7 @@
         tracking = true;
         startTrackingLoop();
         setScannerUiState('matched', 'match_accept');
+        setScannerGuidance('tracking', 'match_accept');
         safeTransition('tracking', 'match_accept');
         trackingBadFrames = 0;
         graceEnteredAt = 0;
