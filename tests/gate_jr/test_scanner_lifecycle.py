@@ -65,6 +65,8 @@ def _render_jinja_stubs(script_body):
         "{{ back_destination_reason | tojson }}": '"public_viewer"',
         "{{ entry_route_type | tojson }}": '"public_scanner_route"',
         "{{ entry_authorization_result | tojson }}": '"n/a_public"',
+        "{{ project_fallback_video_url | default('', true) | tojson }}": '""',
+        "{{ fallback_analytics_endpoint | default('', true) | tojson }}": '""',
         "{{ url_for('static', filename='js/') }}": "/static/js/",
         "{{ url_for('static', filename='js/opencv.js') }}": "/static/js/opencv.js",
     }
@@ -6404,3 +6406,83 @@ def test_p15_40_pass14_inepoch_tier_reconfiguration_remains_correct():
     reset_at = fn_body.index("resetTrackingEpoch(frameW, frameH);")
     rearm_at = fn_body.index("ensureTrackingCallbackOwnership('tier_reconfig_success_rearm');")
     assert cancel_at < reset_at < rearm_at
+
+
+def test_wave6_fallback_watch_controls_are_visible_actions_when_available():
+    html = _scanner_html()
+    assert 'id="fallbackWatchBtn"' in html
+    assert 'id="recognitionWatchBtn"' in html
+    assert 'Watch video instead' in html
+    assert "updateFallbackWatchControls(code);" in html
+    assert "updateFallbackWatchControls('recognition_help');" in html
+
+
+def test_wave6_fallback_video_never_autoplays():
+    html = _scanner_html()
+    tag_start = html.index('<video id="fallbackVideo"')
+    tag = html[tag_start:html.index('>', tag_start)]
+    assert "controls" in tag
+    assert "playsinline" in tag
+    assert "autoplay" not in tag
+    fallback_body = html[html.index("function showFallbackVideoFromCandidate"):html.index("function showRecognitionHelp")]
+    assert ".play()" not in fallback_body
+
+
+def test_wave6_camera_unavailable_and_recognition_timeout_have_distinct_ui_states():
+    html = _scanner_html()
+    assert "'camera_unavailable'" in html
+    assert "'recognition_timeout'" in html
+    assert "setScannerUiState(code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' ? 'camera_unavailable' : 'fallback_available', code);" in html
+    assert "setScannerUiState('recognition_timeout', reason);" in html
+    assert "recognitionContinueBtn.addEventListener('click', continueScanningFromRecognitionHelp);" in html
+    assert "fallbackRetryBtn.addEventListener('click', retryCameraFromFallback);" in html
+
+
+def test_wave6_pair_fallback_and_project_fallback_are_separate_candidates():
+    html = _scanner_html()
+    assert "const PROJECT_FALLBACK_VIDEO_URL =" in html
+    assert "function setFallbackCandidate(kind, videoUrl, pairId, reason)" in html
+    assert "kind: kind === 'pair' ? 'pair' : 'project'," in html
+    assert "setFallbackCandidate('pair', newVideoUrl, newPairId, 'matched_detection');" in html
+    assert "kind: 'project'," in html
+    assert "reason || 'project_default'" in html
+
+
+def test_wave6_duplicate_taps_are_prevented_for_fallback_watch():
+    html = _scanner_html()
+    fallback_body = html[html.index("function showFallbackVideoFromCandidate"):html.index("function showRecognitionHelp")]
+    assert "let fallbackWatchInProgress = false;" in html
+    assert "if (fallbackWatchInProgress) return;" in fallback_body
+    assert "fallbackWatchInProgress = true;" in fallback_body
+    assert "fallbackWatchInProgress = false;" in fallback_body
+    assert "btn.disabled = !hasVideo || fallbackWatchInProgress;" in html
+
+
+def test_wave6_fallback_analytics_are_separate_from_session_end():
+    html = _scanner_html()
+    fn_start = html.index("function submitFallbackAnalytics(eventName, extra)")
+    fn_body = html[fn_start:html.index("function showFallbackVideoFromCandidate", fn_start)]
+    assert "const FALLBACK_ANALYTICS_ENDPOINT =" in html
+    assert "fallback_analytics_queued" in fn_body
+    assert "fetch(FALLBACK_ANALYTICS_ENDPOINT" in fn_body
+    assert "/api/scanner/session/end" not in fn_body
+    assert "submitFallbackAnalytics('fallback_watch_video_started'" in html
+
+
+def test_wave6_fallback_absent_state_hides_watch_controls():
+    html = _scanner_html()
+    fn_start = html.index("function updateFallbackWatchControls(reason)")
+    fn_body = html[fn_start:html.index("function submitFallbackAnalytics", fn_start)]
+    assert "const hasVideo = Boolean(candidate && candidate.videoUrl);" in fn_body
+    assert "btn.style.display = hasVideo ? 'inline-flex' : 'none';" in fn_body
+    assert "btn.setAttribute('aria-hidden', hasVideo ? 'false' : 'true');" in fn_body
+    assert "No fallback video is available for this project yet." in fn_body
+
+
+def test_wave6_return_routing_uses_existing_canonical_session_end_path():
+    html = _scanner_html()
+    assert 'id="fallbackReturnBtn" href="{{ resolved_back_destination }}"' in html
+    assert 'id="recognitionReturnBtn" href="{{ resolved_back_destination }}"' in html
+    assert "setScannerUiState('returning', reason || 'navigate');" in html
+    assert "finalizeScannerAndNavigate(this.href, 'fallback_return');" in html
+    assert "finalizeScannerAndNavigate(this.href, 'recognition_return');" in html

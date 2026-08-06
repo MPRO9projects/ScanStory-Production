@@ -625,9 +625,13 @@
        with multiple image/video pairs (there is no single "the" video to play), so this
        is a recovery-failed state with two real actions, not a fake claim of a fallback
        flow that isn't actually wired up. -->
-  <div id="fallbackPanel" style="display:none;margin:12px auto 0;max-width:520px;padding:16px 18px;border-radius:12px;background:rgba(255,60,60,0.08);border:1px solid rgba(255,90,90,0.35);text-align:center;">
+  <div id="fallbackPanel" role="region" aria-live="polite" aria-labelledby="fallbackMessage" style="display:none;margin:12px auto 0;max-width:520px;padding:16px 18px;border-radius:12px;background:rgba(255,60,60,0.08);border:1px solid rgba(255,90,90,0.35);text-align:center;">
     <div id="fallbackMessage" style="color:#ff9090;font-weight:700;margin-bottom:14px;font-size:14px;"></div>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+      <button type="button" id="fallbackWatchBtn" aria-label="Watch video instead"
+        style="display:none;min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(255,255,255,0.45);background:rgba(255,255,255,0.12);color:#fff;font-weight:800;cursor:pointer;">
+        Watch video instead
+      </button>
       <button type="button" id="fallbackRetryBtn"
         style="min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(0,212,255,0.5);background:rgba(0,212,255,0.12);color:#00d4ff;font-weight:700;cursor:pointer;">
         Retry Camera
@@ -645,11 +649,15 @@
        hasn't found a marker after repeated tries. Deliberately styled and worded
        differently from #fallbackPanel — "Continue Scanning" never touches the camera or
        loops, unlike "Retry Camera" above, which calls the guarded recovery path. -->
-  <div id="recognitionHelpPanel" style="display:none;margin:12px auto 0;max-width:520px;padding:16px 18px;border-radius:12px;background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.3);text-align:center;">
+  <div id="recognitionHelpPanel" role="region" aria-live="polite" aria-labelledby="recognitionHelpMessage" style="display:none;margin:12px auto 0;max-width:520px;padding:16px 18px;border-radius:12px;background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.3);text-align:center;">
     <div id="recognitionHelpMessage" style="color:#00d4ff;font-weight:700;margin-bottom:14px;font-size:14px;">
       Recognition is taking too long. Try moving closer or improving lighting.
     </div>
     <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+      <button type="button" id="recognitionWatchBtn" aria-label="Watch video instead"
+        style="display:none;min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(255,255,255,0.45);background:rgba(255,255,255,0.12);color:#fff;font-weight:800;cursor:pointer;">
+        Watch video instead
+      </button>
       <button type="button" id="recognitionContinueBtn"
         style="min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(0,212,255,0.5);background:rgba(0,212,255,0.12);color:#00d4ff;font-weight:700;cursor:pointer;">
         Continue Scanning
@@ -659,6 +667,12 @@
         Return
       </a>
     </div>
+  </div>
+
+  <div id="fallbackVideoPanel" role="region" aria-live="polite" aria-labelledby="fallbackVideoTitle" style="display:none;margin:12px auto 0;max-width:720px;padding:14px;border-radius:12px;background:rgba(0,0,0,0.78);border:1px solid rgba(255,255,255,0.18);text-align:center;">
+    <div id="fallbackVideoTitle" style="color:#fff;font-weight:800;margin-bottom:10px;font-size:14px;">Video fallback</div>
+    <video id="fallbackVideo" controls playsinline preload="metadata" aria-label="Fallback video" style="width:100%;max-height:60vh;background:#000;border-radius:8px;"></video>
+    <div id="fallbackVideoStatus" style="margin-top:10px;color:rgba(255,255,255,0.78);font-size:13px;">Use the player controls to watch the video.</div>
   </div>
 
   {% if scanner_diagnostics_enabled %}
@@ -754,6 +768,38 @@
       const stage = document.getElementById('arStageLabel');
       if (stage) stage.textContent = state.replaceAll('_', ' ');
     });
+    const SCANNER_UI_STATES = Object.freeze([
+      'camera_starting',
+      'camera_unavailable',
+      'scanning',
+      'recognition_timeout',
+      'matched',
+      'tracking_lost',
+      'fallback_available',
+      'fallback_playing',
+      'returning'
+    ]);
+    let scannerUiState = null;
+    function setScannerUiState(nextState, reason) {
+      if (!SCANNER_UI_STATES.includes(nextState)) return false;
+      if (scannerUiState === nextState) return false;
+      const previous = scannerUiState;
+      scannerUiState = nextState;
+      document.documentElement.dataset.scannerUiState = nextState;
+      const record = {
+        from: previous,
+        to: nextState,
+        reason: reason || null,
+        generation: window.__scannerUiGeneration || null
+      };
+      window.__scannerUiPendingDiagnostics = window.__scannerUiPendingDiagnostics || [];
+      if (typeof window.__scannerUiDiagnosticSink === 'function') {
+        window.__scannerUiDiagnosticSink(record);
+      } else {
+        window.__scannerUiPendingDiagnostics.push(record);
+      }
+      return true;
+    }
     scannerState.transition('loading_shell');
     scannerState.transition('checking_capabilities');
     const runtimeCapabilities = runtime.detectCapabilities();
@@ -761,7 +807,7 @@
     const scannerPriorFailure = sessionStorage.getItem('scanstoryScannerPriorFailure') === '1';
     const scannerMode = runtime.selectRuntimeMode(runtimeCapabilities, runtimeOverride, scannerPriorFailure);
     const runtimeConfig = runtime.MODES[scannerMode];
-    if (scannerMode === 'fallback') { scannerState.transition('fallback'); } else { scannerState.transition('requesting_camera'); }
+    if (scannerMode === 'fallback') { scannerState.transition('fallback'); } else { scannerState.transition('requesting_camera'); setScannerUiState('camera_starting', 'runtime_mode'); }
     markStartupCheckpoint('scanner_state_initialized');
 
     function scannerFallbackReason() {
@@ -843,6 +889,10 @@
     const scannerDiagnostics = runtime.createDiagnostics(diagnosticsEnabled, function (event) {
       console.debug('[scanner]', event);
     });
+    window.__scannerUiDiagnosticSink = function (record) {
+      scannerDiagnostics.push('scanner_ui_state_changed', record);
+    };
+    (window.__scannerUiPendingDiagnostics || []).splice(0).forEach(window.__scannerUiDiagnosticSink);
     registerScannerServiceWorker();
     // Task F (Pass 12): three console.log verbosity tiers for logCallbackEvent — errors
     // (losses/exceptions/ownership corruption) < events (bootstrap/reseed/shape hold-
@@ -1183,6 +1233,8 @@
     // SCANNER SESSION COUNTING (FIXED)
     // ================================================
     const PROJECT_ID = {{ project_id }};
+    const PROJECT_FALLBACK_VIDEO_URL = {{ project_fallback_video_url | default('', true) | tojson }};
+    const FALLBACK_ANALYTICS_ENDPOINT = {{ fallback_analytics_endpoint | default('', true) | tojson }};
     let scannerSessionId = null;
     let sessionActive = false;
     let sessionEnded = false;
@@ -1226,6 +1278,7 @@
       sessionEnded = true;
       // 2. invalidate/increment the scan-loop generation AND token
       scannerGeneration++;
+      window.__scannerUiGeneration = scannerGeneration;
       // 3. clear every scheduled scan/watchdog timer (stopDetectLoop bumps scanLoopToken,
       //    clears detectLoopTimer, and stops the watchdog chain together)
       stopDetectLoop('session_end');
@@ -1294,6 +1347,7 @@
     function finalizeScannerAndNavigate(href, reason) {
       diagState.navigationTriggeredAt = Date.now();
       diagState.navigationDestination = href;
+      setScannerUiState('returning', reason || 'navigate');
       scannerDiagnostics.push('scanner_navigation_triggered', { destination: href, reason, generation: scannerGeneration });
       const go = function () {
         scannerDiagnostics.push('scanner_navigated', { destination: href, reason });
@@ -1462,10 +1516,111 @@
     const progressInfo = document.getElementById("progressInfo");
     const fallbackPanelEl = document.getElementById("fallbackPanel");
     const fallbackMessageEl = document.getElementById("fallbackMessage");
+    const fallbackWatchBtn = document.getElementById("fallbackWatchBtn");
     const fallbackRetryBtn = document.getElementById("fallbackRetryBtn");
     let fallbackRetryInProgress = false;
     const recognitionHelpPanelEl = document.getElementById("recognitionHelpPanel");
+    const recognitionWatchBtn = document.getElementById("recognitionWatchBtn");
     const recognitionContinueBtn = document.getElementById("recognitionContinueBtn");
+    const fallbackVideoPanelEl = document.getElementById("fallbackVideoPanel");
+    const fallbackVideoEl = document.getElementById("fallbackVideo");
+    const fallbackVideoStatusEl = document.getElementById("fallbackVideoStatus");
+    let fallbackCandidate = null;
+    let fallbackWatchInProgress = false;
+
+    function setFallbackCandidate(kind, videoUrl, pairId, reason) {
+      if (!videoUrl) {
+        fallbackCandidate = null;
+      } else {
+        fallbackCandidate = {
+          kind: kind === 'pair' ? 'pair' : 'project',
+          videoUrl,
+          pairId: typeof pairId === 'number' ? pairId : null,
+          reason: reason || null
+        };
+      }
+      updateFallbackWatchControls(reason || 'candidate_changed');
+      return fallbackCandidate;
+    }
+
+    function resolveFallbackCandidate(reason) {
+      if (fallbackCandidate && fallbackCandidate.videoUrl) return fallbackCandidate;
+      if (PROJECT_FALLBACK_VIDEO_URL) {
+        fallbackCandidate = {
+          kind: 'project',
+          videoUrl: PROJECT_FALLBACK_VIDEO_URL,
+          pairId: null,
+          reason: reason || 'project_default'
+        };
+        return fallbackCandidate;
+      }
+      return null;
+    }
+
+    function updateFallbackWatchControls(reason) {
+      const candidate = resolveFallbackCandidate(reason);
+      const hasVideo = Boolean(candidate && candidate.videoUrl);
+      [fallbackWatchBtn, recognitionWatchBtn].forEach(btn => {
+        if (!btn) return;
+        btn.style.display = hasVideo ? 'inline-flex' : 'none';
+        btn.disabled = !hasVideo || fallbackWatchInProgress;
+        btn.setAttribute('aria-hidden', hasVideo ? 'false' : 'true');
+      });
+      if (!hasVideo && fallbackVideoStatusEl) {
+        fallbackVideoStatusEl.textContent = 'No fallback video is available for this project yet.';
+      }
+      return hasVideo;
+    }
+
+    function submitFallbackAnalytics(eventName, extra) {
+      const payload = Object.assign({
+        event: eventName,
+        project_id: PROJECT_ID,
+        scanner_session_id: scannerSessionId,
+        scanner_generation: scannerGeneration,
+        ui_state: scannerUiState,
+        fallback_kind: fallbackCandidate ? fallbackCandidate.kind : null,
+        matched_pair_id: fallbackCandidate ? fallbackCandidate.pairId : null
+      }, extra || {});
+      scannerDiagnostics.push('fallback_analytics_queued', payload);
+      if (!FALLBACK_ANALYTICS_ENDPOINT) return Promise.resolve(false);
+      return fetch(FALLBACK_ANALYTICS_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify(payload)
+      }).then(() => true).catch(err => {
+        scannerDiagnostics.push('fallback_analytics_failed', {
+          message: err && err.message ? err.message : String(err || 'unknown')
+        });
+        return false;
+      });
+    }
+
+    function showFallbackVideoFromCandidate(source) {
+      const candidate = resolveFallbackCandidate(source || 'watch_clicked');
+      if (!candidate || !candidate.videoUrl) {
+        scannerDiagnostics.push('fallback_watch_unavailable', { source, generation: scannerGeneration });
+        updateFallbackWatchControls('watch_unavailable');
+        return;
+      }
+      if (fallbackWatchInProgress) return;
+      fallbackWatchInProgress = true;
+      updateFallbackWatchControls('watch_start');
+      try {
+        setScannerUiState('fallback_playing', source || 'watch_clicked');
+        fallbackVideoEl.src = candidate.videoUrl;
+        fallbackVideoPanelEl.style.display = 'block';
+        fallbackVideoStatusEl.textContent = candidate.kind === 'pair'
+          ? 'Showing the matched pair video fallback.'
+          : 'Showing the project fallback video.';
+        fallbackVideoEl.focus({ preventScroll: false });
+        submitFallbackAnalytics('fallback_watch_video_started', { source: source || 'watch_clicked' });
+      } finally {
+        fallbackWatchInProgress = false;
+        updateFallbackWatchControls('watch_ready');
+      }
+    }
 
     // Recognition timeout vs. camera failure (this pass) — these must never be
     // indistinguishable to the user. showRecognitionHelp() never touches the camera stream,
@@ -1474,9 +1629,11 @@
       scannerDiagnostics.push('recognition_help_shown', { reason, generation: scannerGeneration });
       diagState.recognitionHelpVisible = true;
       diagState.recognitionHelpReason = reason;
+      setScannerUiState('recognition_timeout', reason);
       statusDiv.textContent = "Recognition is taking too long";
       statusDiv.className = "status scan";
       recognitionHelpPanelEl.style.display = 'block';
+      updateFallbackWatchControls('recognition_help');
     }
 
     function hideRecognitionHelp(reason) {
@@ -1495,11 +1652,14 @@
       // normal "scanning" status text.
       detectionFailCount = 0;
       hideRecognitionHelp('continue_clicked');
+      setScannerUiState('scanning', 'recognition_continue');
       statusDiv.textContent = "🎯 Scan AR marker";
       statusDiv.className = "status scan";
     }
 
     recognitionContinueBtn.addEventListener('click', continueScanningFromRecognitionHelp);
+    fallbackWatchBtn.addEventListener('click', () => showFallbackVideoFromCandidate('camera_fallback'));
+    recognitionWatchBtn.addEventListener('click', () => showFallbackVideoFromCandidate('recognition_timeout'));
     markStartupCheckpoint('scanner_dom_initialized');
 
     function showFallbackPanel(code, message) {
@@ -1510,6 +1670,8 @@
       fallbackPanelEl.style.display = 'block';
       fallbackRetryBtn.disabled = false;
       fallbackRetryBtn.textContent = 'Retry Camera';
+      setScannerUiState(code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' ? 'camera_unavailable' : 'fallback_available', code);
+      updateFallbackWatchControls(code);
     }
 
     function hideFallbackPanel(reason) {
@@ -1554,6 +1716,8 @@
         detectionFailCount = 0;
         recoveryAttempt = 0;
         scannerGeneration++;
+        window.__scannerUiGeneration = scannerGeneration;
+        setScannerUiState('camera_starting', 'fallback_retry');
         if (scannerState.state === 'fallback') safeTransition('requesting_camera', 'fallback_retry');
         stopDetectLoop('fallback_retry');
         stopTrackingLoop();
@@ -1795,6 +1959,7 @@
     let detectionFailCount = 0;
     let cameraStream = null;
     let scannerGeneration = 1;
+    window.__scannerUiGeneration = scannerGeneration;
     let animationFrameId = null;
     let activeDetectionController = null;
     let orientationRecoveryTimer = null;
@@ -2907,6 +3072,8 @@
         return;
       }
       scannerGeneration++;
+      window.__scannerUiGeneration = scannerGeneration;
+      setScannerUiState('camera_starting', reason || 'camera_restart');
       // Task C (Pass 13): a genuine camera restart is one of the two explicit reset
       // points for the performance tier — whatever measured overrun caused a prior
       // downgrade (or a prior session's downgraded state, if this is a resumed page)
@@ -3012,6 +3179,7 @@
 
     function setupCamera() {
       if (cameraStartPromise) return cameraStartPromise;
+      setScannerUiState('camera_starting', 'setup_camera');
       diagState.cameraStartInProgress = true;
       cameraStartPromise = setupCameraInner().finally(() => {
         cameraStartPromise = null;
@@ -3076,6 +3244,7 @@
           safeTransition('loading_wasm', 'camera_ready');
           safeTransition('initializing_scanner', 'camera_ready');
           safeTransition('ready_to_scan', 'camera_ready');
+          setScannerUiState('scanning', 'camera_ready');
         };
       } catch (err) {
         console.error('Camera error:', err);
@@ -4370,6 +4539,7 @@
         logVideoCheckpoint('[TRACKING LOST DURING PLAYBACK]', reason);
       }
       clearTrackingGeometry(reason, { holdPose: true });
+      setScannerUiState('tracking_lost', reason || 'tracking_lost');
       safeTransition('target_lost', reason);
       safeTransition('recovering', reason);
       startScannerStatusCycle();
@@ -5471,6 +5641,7 @@
 
         const newVideoUrl = data.video_url;
         const newPairId = data.matched_pair_id || 0;
+        setFallbackCandidate('pair', newVideoUrl, newPairId, 'matched_detection');
         const wasTracking = tracking;
         const wasSameTarget = (currentVideoUrl === newVideoUrl && currentPairId === newPairId);
 
@@ -5598,6 +5769,7 @@
         if (!wasTracking) scannerDiagnostics.push('[TRACK START]', { pairId: newPairId, generation: scannerGeneration });
         tracking = true;
         startTrackingLoop();
+        setScannerUiState('matched', 'match_accept');
         safeTransition('tracking', 'match_accept');
         trackingBadFrames = 0;
         graceEnteredAt = 0;
