@@ -1,0 +1,15 @@
+{
+  "name": "scanstory-frontend-assets",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local frontend build tooling for ScanStory creator pages (Tailwind CLI + vendored QR asset). No server code lives here.",
+  "scripts": {
+    "build:qr": "esbuild node_modules/qrcode/lib/browser.js --bundle --minify --format=iife --global-name=QRCode --outfile=static/vendor/qrcode/qrcode.min.js --platform=browser"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.1"
+  },
+  "dependencies": {
+    "qrcode": "1.5.3"
+  }
+}

@@ -137,3 +137,8 @@ graphify-out-app/
 .codex/
 agent skills/
 codex-skills/
+
+# Frontend build tooling (Wave 8 creator-frontend-hardening: Tailwind CLI + vendored QR build)
+# package.json/package-lock.json ARE committed for a reproducible build; only the installed
+# packages themselves are ignored.
+node_modules/

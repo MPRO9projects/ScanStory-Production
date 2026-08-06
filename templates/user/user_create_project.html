@@ -9,8 +9,8 @@
   <!-- Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 
-  <!-- QR Code Library -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js"></script>
+  <!-- QR Code Library (bundled locally - see static/vendor/qrcode; do not restore the CDN reference) -->
+  <script src="{{ url_for('static', filename='vendor/qrcode/qrcode.min.js') }}"></script>
 
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
@@ -2583,8 +2583,18 @@
       removePair(pairId);
     }
 
+    let qrLibraryWarningLogged = false;
+
+    function drawQRFallback(canvas, ctx, message) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#000000';
+      ctx.font = '14px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText(message, canvas.width / 2, canvas.height / 2);
+    }
+
     function updateQRPreview() {
-      const projectName = document.getElementById('projectName')?.value || '';
       const canvas = document.getElementById('qrPreviewCanvas');
       if (!canvas) return;
 
@@ -2593,27 +2603,41 @@
       canvas.height = 200;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      let qrData = `scanstory://ar-project/`;
-      qrData += projectName.trim() ? encodeURIComponent(projectName.trim()) + '/' : 'unnamed-project/';
-      qrData += new Date().getTime();
-
       try {
+        const projectName = document.getElementById('projectName')?.value || '';
+
+        let qrData = `scanstory://ar-project/`;
+        qrData += projectName.trim() ? encodeURIComponent(projectName.trim()) + '/' : 'unnamed-project/';
+        qrData += new Date().getTime();
+
+        if (typeof QRCode === 'undefined' || typeof QRCode.toCanvas !== 'function') {
+          if (!qrLibraryWarningLogged) {
+            console.error('QR preview unavailable: QRCode library failed to load.');
+            qrLibraryWarningLogged = true;
+          }
+          drawQRFallback(canvas, ctx, 'QR preview unavailable');
+          return;
+        }
+
         QRCode.toCanvas(canvas, qrData, {
           width: 180,
           margin: 1,
           color: { dark: '#000000', light: '#ffffff' }
         }, function (error) {
           if (error) {
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, 200, 200);
-            ctx.fillStyle = '#000000';
-            ctx.font = '14px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText('QR Preview', 100, 100);
+            if (!qrLibraryWarningLogged) {
+              console.error('QR preview generation failed:', error);
+              qrLibraryWarningLogged = true;
+            }
+            drawQRFallback(canvas, ctx, 'QR preview unavailable');
           }
         });
       } catch (e) {
-        console.error(e);
+        if (!qrLibraryWarningLogged) {
+          console.error('QR preview unavailable:', e);
+          qrLibraryWarningLogged = true;
+        }
+        drawQRFallback(canvas, ctx, 'QR preview unavailable');
       }
     }
 
