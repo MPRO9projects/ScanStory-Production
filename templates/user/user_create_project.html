@@ -2719,8 +2719,15 @@
       phase.textContent = text;
       amountEl.textContent = amount;
       amountEl.style.display = amount ? 'block' : 'none';
-      detailEl.textContent = detail;
-      detailEl.style.display = detail ? 'block' : 'none';
+      // Elapsed time is derived from a single shared timestamp (set once per submit, cleared on
+      // reset) rather than a setInterval/timer, so re-renders and retries can never stack a
+      // duplicate ticking timer.
+      const elapsedText = (uploadElapsedStartedAt && pct > 0)
+        ? `Elapsed ${formatDuration((performance.now() - uploadElapsedStartedAt) / 1000)}`
+        : '';
+      const fullDetail = detail && elapsedText ? `${detail} · ${elapsedText}` : (detail || elapsedText);
+      detailEl.textContent = fullDetail;
+      detailEl.style.display = fullDetail ? 'block' : 'none';
       fill.style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
       progress.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       logUploadProgressDom(text, selector);
@@ -2752,6 +2759,7 @@
       activeUploadXhr = null;
       activeUploadId = null;
       activeResumableUpload = null;
+      uploadElapsedStartedAt = null;
       setCancelUploadVisible(false);
       disableUploadNavigationWarning();
       if (submitBtn) {
@@ -3023,7 +3031,15 @@
         const payload = await fetchUploadJson(`/api/processing/jobs/${jobId}`, { method: 'GET', signal });
         const status = payload.status || payload.job?.status;
         if (status === 'completed' || status === 'failed') return payload;
-        setUploadProgress('Processing queued', 99, 'Processing marker. This can continue in the background.');
+        // Honest mapping only: processing_job_status_payload() (processing_queue.py) only ever
+        // reports 'queued' or an active status such as 'processing' while work is in flight - there
+        // is no separate backend signal for "optimizing media" vs "preparing recognition", so we
+        // don't invent one here.
+        if (status === 'processing') {
+          setUploadProgress('Preparing your project', 99, 'Optimizing your media for scanning. This can continue in the background.');
+        } else {
+          setUploadProgress('Processing queued', 98, 'Your marker is queued for processing.');
+        }
         await new Promise(resolve => setTimeout(resolve, delay));
         delay = Math.min(delay * 1.6, 6000);
       }
@@ -3224,8 +3240,8 @@
         }
 
         if (!sessionPayload) {
-          uploadState.phase = 'Preparing';
-          setUploadProgress('Preparing upload', 10, 'Creating a resumable upload session.', `0 B of ${formatBytes(totalBytes)}`);
+          uploadState.phase = 'Creating upload session';
+          setUploadProgress('Creating upload session', 10, 'Preparing a resumable upload session with the server.', `0 B of ${formatBytes(totalBytes)}`);
           sessionPayload = await createResumableSession(resumableMarkerFile, pair.video, projectName, controller.signal);
         }
 
@@ -3251,6 +3267,8 @@
           setUploadProgress('Finalizing upload', 94, 'Upload bytes were already assembled. Retrying finalization.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
         } else {
           await uploadResumableStream(session, resumableMarkerFile, pair.video, uploadState);
+          uploadState.phase = 'Upload complete';
+          setUploadProgress('Upload complete', 92, 'All bytes received. Confirming with the server before finalizing.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
         }
 
         uploadState.phase = 'Finalizing';
@@ -3289,7 +3307,10 @@
           if (['SESSION_EXPIRED', 'SESSION_FAILED', 'STORAGE_INCONSISTENT', 'IMAGE_VALIDATION_FAILED', 'VIDEO_VALIDATION_FAILED', 'CHECKSUM_MISMATCH', 'PROJECT_CREATION_FAILED'].includes(err.code)) {
             clearResumableUploadState();
           }
-          alert(message);
+          // No blocking alert() here: #uploadProgress is aria-live="polite", so screen readers
+          // already announce this failure message. Re-enabling the submit button below (via
+          // resetUploadSubmit) is the retry affordance - pressing it again resumes from the
+          // still-saved session/offset instead of restarting from zero.
         }
         resetUploadSubmit(submitBtn);
       }
@@ -3300,6 +3321,7 @@
     let activeUploadId = null;
     let uploadBeforeUnloadActive = false;
     let uploadRedirected = false;
+    let uploadElapsedStartedAt = null;
 
     document.getElementById('projectForm').addEventListener('submit', async function (e) {
       e.preventDefault();
@@ -3309,6 +3331,7 @@
       const readyPairs = pairIds.map(id => ({ id, pair: currentFiles[id] })).filter(item => item.pair.image && item.pair.video);
       const uploadId = (crypto.randomUUID ? crypto.randomUUID() : `upload-${Date.now()}-${Math.random().toString(16).slice(2)}`);
       const totalStart = performance.now();
+      uploadElapsedStartedAt = totalStart;
       const videoBytes = readyPairs.reduce((sum, item) => sum + (item.pair.video?.size || 0), 0);
       const uploadState = {
         uploadId,
