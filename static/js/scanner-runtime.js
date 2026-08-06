@@ -104,14 +104,23 @@
     return "standard";
   }
 
+  // Wave 7 (429-vs-cadence fix): a rate-limited response must never be retried on the plain
+  // fixed interval — that just re-hits the same limiter window and manufactures more 429s
+  // (see docs/development/wave-7-detection-overlay-audit.md §7). This cap is defensive only:
+  // every RATE_LIMITS scope this policy actually serves has a 60s window (app.py), so the
+  // server's own retry_after_seconds can never exceed that in practice.
+  const MAX_BACKOFF_MS = 60000;
+
   function createRequestPolicy(mode) {
     const cfg = MODES[mode] || MODES.standard;
     let inFlight = null;
     let latestSeq = 0;
     let lastStarted = -Infinity;
+    let backoffUntil = -Infinity;
     return {
       canStart(now, pageVisible, cameraActive, tracking) {
         if (!pageVisible || !cameraActive || inFlight) return false;
+        if (now < backoffUntil) return false;
         return now - lastStarted >= cfg.detectIntervalMs * (tracking ? 2 : 1);
       },
       start(now) {
@@ -128,8 +137,50 @@
       },
       timedOut(now) {
         return Boolean(inFlight && now - lastStarted >= cfg.requestTimeoutMs);
+      },
+      // Called when a response comes back 429/RATE_LIMITED. retryAfterMs is the server's own
+      // advertised wait (Retry-After header / retry_after_seconds body field, whichever the
+      // caller resolved) — never a client-guessed value. Only ever extends the deadline
+      // forward, so an earlier/smaller retry-after can't shorten an already-set later one.
+      noteRateLimited(now, retryAfterMs) {
+        const bounded = Math.max(0, Math.min(Number(retryAfterMs) || 0, MAX_BACKOFF_MS));
+        backoffUntil = Math.max(backoffUntil, now + bounded);
+      },
+      // Explicit clean-slate reset — called on Continue Scanning / Retry Camera so neither
+      // carries over a stale backoff deadline from the attempt that led to that panel.
+      resetBackoff() {
+        backoffUntil = -Infinity;
+      },
+      backoffRemainingMs(now) {
+        return Math.max(0, backoffUntil - now);
       }
     };
+  }
+
+  // Wave 7: a 429 response (RATE_LIMITED) must be classified BEFORE validateDetectionResponse
+  // ever sees it — that function has no concept of HTTP status and, given the 429 body shape
+  // ({error:true, code:"RATE_LIMITED", ...}, no "detected" key), would otherwise report it as
+  // {ok:true, code:"NO_MATCH"} — indistinguishable from a genuine "no marker in this frame"
+  // response. That misclassification is what let 429s silently inflate detectionFailCount and
+  // manufacture a false "recognition timed out" prompt (see the Wave 7 audit, §7). This check
+  // is deliberately status-code-first (the authoritative signal) with the body's own `code`
+  // field only as defense-in-depth for a proxy/environment that might strip the status.
+  function isRateLimitedResponse(status, payload) {
+    if (status === 429) return true;
+    return Boolean(payload && typeof payload === "object" && payload.code === "RATE_LIMITED");
+  }
+
+  // Resolves the server's advertised wait, preferring the JSON body field (set from the same
+  // limiter state as the header, see app.py's _scanner_rate_limited_response) with the
+  // Retry-After header as a fallback if the body is missing/malformed. Returns milliseconds,
+  // never negative, never trusting a wildly large value beyond one window (see MAX_BACKOFF_MS).
+  function resolveRetryAfterMs(payload, headerValue) {
+    const bodySeconds = payload && typeof payload === "object" ? Number(payload.retry_after_seconds) : NaN;
+    const headerSeconds = Number(headerValue);
+    const seconds = Number.isFinite(bodySeconds) && bodySeconds >= 0
+      ? bodySeconds
+      : (Number.isFinite(headerSeconds) && headerSeconds >= 0 ? headerSeconds : 1);
+    return Math.max(0, Math.round(seconds * 1000));
   }
 
   function validateDetectionResponse(payload) {
@@ -200,6 +251,7 @@
   root.ScanStoryScannerRuntime = {
     STATES, TRANSITIONS, TIMEOUTS, MODES, ERRORS,
     createStateMachine, detectCapabilities, selectRuntimeMode, createRequestPolicy,
-    validateDetectionResponse, createDiagnostics, isValidQuad
+    validateDetectionResponse, createDiagnostics, isValidQuad,
+    isRateLimitedResponse, resolveRetryAfterMs
   };
 })(window);

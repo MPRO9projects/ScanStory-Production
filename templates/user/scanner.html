@@ -1761,6 +1761,11 @@
       // so there is nothing to restart. Just clears the failure streak and resumes the
       // normal "scanning" status text.
       detectionFailCount = 0;
+      // Wave 7: a genuinely clean new timing window means no leftover rate-limit backoff
+      // either, not just a cleared failure streak — otherwise a backoff set during the PREVIOUS
+      // attempt could still suppress the very next scan after the user explicitly asked to
+      // keep going.
+      detectionPolicy.resetBackoff();
       hideRecognitionHelp('continue_clicked');
       setScannerUiState('scanning', 'recognition_continue');
       statusDiv.textContent = "🎯 Scan AR marker";
@@ -1830,6 +1835,9 @@
         sessionStorage.removeItem('scanstoryScannerPriorFailure');
         detectionFailCount = 0;
         recoveryAttempt = 0;
+        // Wave 7: Retry Camera restarts the request scheduler cleanly too — no leftover
+        // rate-limit backoff from whatever attempt led to this fallback panel.
+        detectionPolicy.resetBackoff();
         scannerGeneration++;
         window.__scannerUiGeneration = scannerGeneration;
         setScannerUiState('camera_starting', 'fallback_retry');
@@ -2514,7 +2522,7 @@
       return true;
     }
 
-    function scheduleAttemptSuccessor(attempt, reason) {
+    function scheduleAttemptSuccessor(attempt, reason, delayMs) {
       if (!attempt || attempt.successorScheduled || sessionEnding || attempt.scanLoopToken !== scanLoopToken) return false;
       // Task E (Pass 5): finalization inspects the FINAL scanner mode/bootstrap state right
       // before scheduling — not just already-healthy tracking. An accepted response starts
@@ -2536,11 +2544,11 @@
       }
       attempt.successorScheduled = true;
       diagState.successorScheduled = true;
-      scheduleNextScan(reason || 'after_attempt');
+      scheduleNextScan(reason || 'after_attempt', delayMs);
       return true;
     }
 
-    function finalizeDetectionAttempt(attempt, phase, reason, scheduleSuccessor = true) {
+    function finalizeDetectionAttempt(attempt, phase, reason, scheduleSuccessor = true, delayMs) {
       if (!attempt || activeDetectionAttempt !== attempt || attempt.terminal) return false;
       attempt.phase = phase || 'complete';
       attempt.terminal = true;
@@ -2562,7 +2570,7 @@
         token: attempt.scanLoopToken,
         scannerWorkMode
       });
-      if (scheduleSuccessor) scheduleAttemptSuccessor(attempt, 'after_attempt');
+      if (scheduleSuccessor) scheduleAttemptSuccessor(attempt, 'after_attempt', delayMs);
       if (activeDetectionAttempt === attempt) activeDetectionAttempt = null;
       return true;
     }
@@ -5663,6 +5671,30 @@
           return;
         }
         const data = await r.json();
+        // Wave 7 (429-vs-cadence fix — see docs/development/wave-7-detection-overlay-audit.md
+        // §7): a 429/RATE_LIMITED response must be classified and backed off BEFORE any of the
+        // staleness/validation logic below runs, and it must NEVER reach validateDetectionResponse
+        // or the `!data.detected` branch — the 429 body has no `detected` key, so without this
+        // check it would silently be treated as "no marker found this frame," incrementing
+        // detectionFailCount and eventually surfacing a false "recognition timed out" prompt
+        // purely from rate-limit noise. Checked regardless of session/staleness state (the rate
+        // limit itself is real server state, independent of whether THIS attempt is still
+        // current) so the backoff always gets recorded; finalizeDetectionAttempt's own
+        // activeDetectionAttempt check already no-ops safely if the attempt is no longer current.
+        if (runtime.isRateLimitedResponse(r.status, data)) {
+          const retryAfterMs = runtime.resolveRetryAfterMs(data, r.headers.get('Retry-After'));
+          detectionPolicy.noteRateLimited(performance.now(), retryAfterMs);
+          scannerDiagnostics.push('[RATE_LIMITED]', {
+            requestId, retryAfterMs, generation: requestGeneration, activeGeneration: scannerGeneration
+          });
+          detectionPolicy.finish(requestId);
+          finalizeDetectionAttempt(
+            attempt, 'complete', 'rate_limited',
+            !sessionEnding,
+            Math.max(DETECT_INTERVAL_MS, retryAfterMs)
+          );
+          return;
+        }
         // Exit-safety (round-4 fix): a request already in flight when endScannerSession()
         // ran can still resolve AFTER navigation begins. isStaleGeneration below (generation
         // bump on exit) already catches this indirectly, but this explicit sessionEnding
