@@ -289,6 +289,67 @@ def _log_scanner_latency(event, start_time, stage_timings=None, **fields):
                 continue
     app.logger.info("scanner_latency", extra={"scanner_latency": safe})
 
+
+_TIMING_MAX_MS = 24 * 60 * 60 * 1000
+
+
+def _elapsed_ms(start_time):
+    try:
+        return round(max(0.0, min((time.perf_counter() - start_time) * 1000, _TIMING_MAX_MS)), 2)
+    except Exception:
+        return 0.0
+
+
+def _safe_timing_value(value):
+    try:
+        return round(max(0.0, min(float(value), _TIMING_MAX_MS)), 2)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _log_upload_timing(event, **fields):
+    allowed = {
+        "upload_session_id", "owner_type", "pair_count", "total_bytes", "image_bytes", "video_bytes",
+        "chunk_size", "claimed_offset", "resulting_offset", "request_duration_ms",
+        "server_write_duration_ms", "duplicate_chunk", "offset_mismatch", "checksum_duration_ms",
+        "validation_duration_ms", "project_create_duration_ms", "qr_duration_ms", "enqueue_duration_ms",
+        "finalize_duration_ms", "recovered_existing_completion", "project_id", "status", "safe_error_code",
+    }
+    safe = {"event": event}
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
+        if key.endswith("_ms"):
+            safe[key] = _safe_timing_value(value)
+        elif key in {"upload_session_id", "pair_count", "total_bytes", "image_bytes", "video_bytes",
+                     "chunk_size", "claimed_offset", "resulting_offset", "project_id"}:
+            safe[key] = int(value) if value is not None else None
+        elif key in {"duplicate_chunk", "offset_mismatch", "recovered_existing_completion"}:
+            safe[key] = bool(value)
+        else:
+            safe[key] = value
+    app.logger.info("upload_timing", extra={"upload_timing": safe})
+
+
+def _log_processing_timing(event, **fields):
+    allowed = {
+        "job_id", "project_id", "job_type", "queue_wait_duration_ms", "processing_duration_ms",
+        "pair_count", "attempt_count", "status", "safe_error_code", "pair_id", "pair_index",
+        "pair_processing_duration_ms", "feature_generation_duration_ms",
+        "image_standardization_duration_ms", "enqueue_duration_ms",
+    }
+    safe = {"event": event}
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
+        if key.endswith("_ms"):
+            safe[key] = _safe_timing_value(value)
+        elif key in {"job_id", "project_id", "pair_count", "attempt_count", "pair_id", "pair_index"}:
+            safe[key] = int(value) if value is not None else None
+        else:
+            safe[key] = value
+    app.logger.info("processing_timing", extra={"processing_timing": safe})
+
 @app.context_processor
 def inject_recaptcha_key():
     return {
@@ -1578,15 +1639,32 @@ def get_project_display_number(project):
 
 
 def _schedule_project_pair_processing(project_id, failure_flash="Processing queue is unavailable. Please retry later."):
+    enqueue_start = time.perf_counter()
     try:
         job, created = enqueue_project_pair_processing(project_id)
         if created:
             app.logger.info(f"processing_job_enqueued job_id={job.id} project_id={project_id} type={job.job_type}")
         else:
             app.logger.info(f"processing_job_duplicate_ignored job_id={job.id} project_id={project_id} type={job.job_type}")
+        _log_processing_timing(
+            "processing_job_enqueue",
+            job_id=job.id,
+            project_id=project_id,
+            job_type=job.job_type,
+            enqueue_duration_ms=_elapsed_ms(enqueue_start),
+            status="queued" if created else "duplicate_active",
+        )
         return job
     except QueueUnavailable:
         app.logger.error(f"processing_queue_unavailable project_id={project_id}")
+        _log_processing_timing(
+            "processing_job_enqueue",
+            project_id=project_id,
+            job_type="process_project_pairs",
+            enqueue_duration_ms=_elapsed_ms(enqueue_start),
+            status="failed",
+            safe_error_code="QUEUE_UNAVAILABLE",
+        )
         if has_request_context():
             flash(failure_flash, "error")
         return None
@@ -5751,6 +5829,7 @@ def create_upload_session():
     """1. Create upload session. Validates declared sizes against the
     existing max-size config BEFORE allocating anything (no DB row, no
     temp file) - see resumable-upload-api-contract.md."""
+    request_start = time.perf_counter()
     user, admin = _upload_identity()
     if not user and not admin:
         return _upload_api_error("UNAUTHENTICATED", "Login required.", 401)
@@ -5827,6 +5906,17 @@ def create_upload_session():
     # always open-and-append without a first-chunk special case.
     open(_upload_session_temp_path(storage_token), "wb").close()
 
+    _log_upload_timing(
+        "upload_session_create",
+        upload_session_id=session_row.id,
+        owner_type="user" if user else "admin",
+        pair_count=1,
+        total_bytes=expected_total_size,
+        image_bytes=image_size,
+        video_bytes=video_size,
+        request_duration_ms=_elapsed_ms(request_start),
+        status=session_row.status,
+    )
     response = jsonify({"success": True, "session": _upload_session_payload(session_row)})
     response.status_code = 201
     return response
@@ -5839,6 +5929,7 @@ def upload_session_chunk(session_id):
     an already-accepted chunk (same claimed offset, offset < current
     recorded offset) is a safe idempotent no-op - see
     resumable-upload-api-contract.md."""
+    request_start = time.perf_counter()
     user, admin = _upload_identity()
     if not user and not admin:
         return _upload_api_error("UNAUTHENTICATED", "Login required.", 401)
@@ -5895,10 +5986,24 @@ def upload_session_chunk(session_id):
             return _upload_api_error(
                 "CHUNK_EXCEEDS_EXPECTED_SIZE", "This chunk would exceed the declared upload size.", 400
             )
+        write_start = time.perf_counter()
         with open(temp_path, "ab") as fh:
             fh.write(body)
+        write_duration_ms = _elapsed_ms(write_start)
         session_row.current_offset = os.path.getsize(temp_path)
         db.session.commit()
+        _log_upload_timing(
+            "upload_session_chunk",
+            upload_session_id=session_row.id,
+            chunk_size=len(body),
+            claimed_offset=claimed_offset,
+            resulting_offset=session_row.current_offset,
+            request_duration_ms=_elapsed_ms(request_start),
+            server_write_duration_ms=write_duration_ms,
+            duplicate_chunk=False,
+            offset_mismatch=False,
+            status="accepted",
+        )
         return jsonify({
             "success": True,
             "current_offset": session_row.current_offset,
@@ -5906,15 +6011,43 @@ def upload_session_chunk(session_id):
         })
 
     if claimed_offset < session_row.current_offset and claimed_offset + len(body) <= session_row.current_offset:
+        resulting_offset = session_row.current_offset
+        expected_total_size = session_row.expected_total_size
         db.session.rollback()
+        _log_upload_timing(
+            "upload_session_chunk",
+            upload_session_id=session_row.id,
+            chunk_size=len(body),
+            claimed_offset=claimed_offset,
+            resulting_offset=resulting_offset,
+            request_duration_ms=_elapsed_ms(request_start),
+            server_write_duration_ms=0,
+            duplicate_chunk=True,
+            offset_mismatch=False,
+            status="duplicate",
+        )
         return jsonify({
             "success": True,
-            "current_offset": session_row.current_offset,
-            "expected_total_size": session_row.expected_total_size,
+            "current_offset": resulting_offset,
+            "expected_total_size": expected_total_size,
             "note": "duplicate_chunk_ignored",
         })
 
+    resulting_offset = session_row.current_offset
     db.session.rollback()
+    _log_upload_timing(
+        "upload_session_chunk",
+        upload_session_id=session_id,
+        chunk_size=len(body),
+        claimed_offset=claimed_offset,
+        resulting_offset=resulting_offset,
+        request_duration_ms=_elapsed_ms(request_start),
+        server_write_duration_ms=0,
+        duplicate_chunk=False,
+        offset_mismatch=True,
+        status="offset_mismatch",
+        safe_error_code="OFFSET_MISMATCH",
+    )
     return _upload_api_error(
         "OFFSET_MISMATCH",
         f"Chunk offset does not match the session's current offset ({session_row.current_offset}).",
@@ -5945,6 +6078,12 @@ def _finalize_assemble_and_validate(session_row, user, admin):
     for admin owners, exactly like admin_handle_upload), same
     os.replace() atomic-move convention, same QR helpers, same
     _schedule_project_pair_processing() enqueue call."""
+    finalize_start = time.perf_counter()
+    checksum_duration_ms = 0
+    validation_duration_ms = 0
+    project_create_duration_ms = 0
+    qr_duration_ms = 0
+    enqueue_duration_ms = 0
     combined_path = _upload_session_temp_path(session_row.storage_token)
 
     def fail(code, message, http_status=422):
@@ -5952,21 +6091,40 @@ def _finalize_assemble_and_validate(session_row, user, admin):
         session_row.status = "failed"
         session_row.failure_code = code
         db.session.commit()
+        _log_upload_timing(
+            "upload_session_finalize",
+            upload_session_id=session_row.id,
+            project_id=session_row.project_id,
+            pair_count=1,
+            total_bytes=session_row.expected_total_size,
+            checksum_duration_ms=checksum_duration_ms,
+            validation_duration_ms=validation_duration_ms,
+            project_create_duration_ms=project_create_duration_ms,
+            qr_duration_ms=qr_duration_ms,
+            enqueue_duration_ms=enqueue_duration_ms,
+            finalize_duration_ms=_elapsed_ms(finalize_start),
+            recovered_existing_completion=False,
+            status=session_row.status,
+            safe_error_code=code,
+        )
         return _upload_api_error(code, message, http_status)
 
     if not os.path.exists(combined_path) or os.path.getsize(combined_path) != session_row.expected_total_size:
         return fail("STORAGE_INCONSISTENT", "Uploaded data is inconsistent with the declared size.", 500)
 
     if session_row.client_checksum_sha256:
+        checksum_start = time.perf_counter()
         digest = hashlib.sha256()
         with open(combined_path, "rb") as fh:
             for block in iter(lambda: fh.read(1024 * 1024), b""):
                 digest.update(block)
         computed = digest.hexdigest()
         session_row.computed_checksum_sha256 = computed
+        checksum_duration_ms = _elapsed_ms(checksum_start)
         if computed != session_row.client_checksum_sha256:
             return fail("CHECKSUM_MISMATCH", "Uploaded data failed checksum verification.")
 
+    validation_start = time.perf_counter()
     image_view = _BoundedFileView(combined_path, 0, session_row.image_size)
     video_view = _BoundedFileView(combined_path, session_row.image_size, session_row.video_size)
     img_temp = vid_temp = img_ext = vid_ext = None
@@ -6003,6 +6161,7 @@ def _finalize_assemble_and_validate(session_row, user, admin):
         # would silently no-op the cleanup on failure.
         image_view.close()
         video_view.close()
+        validation_duration_ms = _elapsed_ms(validation_start)
 
     if image_error is not None:
         app.logger.warning(f"resumable_upload_rejected image session_id={session_row.id}: {image_error.detail}")
@@ -6018,6 +6177,7 @@ def _finalize_assemble_and_validate(session_row, user, admin):
 
     is_admin_owner = admin is not None
     saved_paths = []
+    project_create_start = time.perf_counter()
     try:
         if not is_admin_owner:
             if not _reserve_project_quota_atomic(user):
@@ -6088,6 +6248,7 @@ def _finalize_assemble_and_validate(session_row, user, admin):
         session_row.project_id = project.id
         session_row.pair_id = pair.id
         db.session.commit()
+        project_create_duration_ms = _elapsed_ms(project_create_start)
     except _ResumableQuotaLimitReached:
         db.session.rollback()
         _safe_remove(img_temp)
@@ -6095,6 +6256,23 @@ def _finalize_assemble_and_validate(session_row, user, admin):
         session_row.status = "failed"
         session_row.failure_code = "PROJECT_LIMIT_REACHED"
         db.session.commit()
+        project_create_duration_ms = _elapsed_ms(project_create_start)
+        _log_upload_timing(
+            "upload_session_finalize",
+            upload_session_id=session_row.id,
+            project_id=session_row.project_id,
+            pair_count=1,
+            total_bytes=session_row.expected_total_size,
+            checksum_duration_ms=checksum_duration_ms,
+            validation_duration_ms=validation_duration_ms,
+            project_create_duration_ms=project_create_duration_ms,
+            qr_duration_ms=qr_duration_ms,
+            enqueue_duration_ms=enqueue_duration_ms,
+            finalize_duration_ms=_elapsed_ms(finalize_start),
+            recovered_existing_completion=False,
+            status=session_row.status,
+            safe_error_code="PROJECT_LIMIT_REACHED",
+        )
         return _upload_api_error("PROJECT_LIMIT_REACHED", "Project limit reached. Please upgrade your plan.", 403)
     except Exception as exc:
         db.session.rollback()
@@ -6109,11 +6287,29 @@ def _finalize_assemble_and_validate(session_row, user, admin):
         session_row.status = "failed"
         session_row.failure_code = "PROJECT_CREATION_FAILED"
         db.session.commit()
+        project_create_duration_ms = _elapsed_ms(project_create_start)
+        _log_upload_timing(
+            "upload_session_finalize",
+            upload_session_id=session_row.id,
+            project_id=session_row.project_id,
+            pair_count=1,
+            total_bytes=session_row.expected_total_size,
+            checksum_duration_ms=checksum_duration_ms,
+            validation_duration_ms=validation_duration_ms,
+            project_create_duration_ms=project_create_duration_ms,
+            qr_duration_ms=qr_duration_ms,
+            enqueue_duration_ms=enqueue_duration_ms,
+            finalize_duration_ms=_elapsed_ms(finalize_start),
+            recovered_existing_completion=False,
+            status=session_row.status,
+            safe_error_code="PROJECT_CREATION_FAILED",
+        )
         app.logger.error(f"resumable_upload_project_creation_failed session_id={session_row.id}: {exc}")
         return _upload_api_error("PROJECT_CREATION_FAILED", "Project creation failed. Please try again.", 500)
 
     # QR code generation - same helpers/convention the non-resumable path
     # uses, unmodified.
+    qr_start = time.perf_counter()
     if is_admin_owner:
         admin_name = admin.name or admin.email.split("@")[0]
         scanner_url = url_for(
@@ -6146,9 +6342,44 @@ def _finalize_assemble_and_validate(session_row, user, admin):
     project.qr_code_filename = qr_filename
     project.qr_code_path = (f"/admin/qr/{qr_filename}" if is_admin_owner else f"/qr/{qr_filename}")
     db.session.commit()
+    qr_duration_ms = _elapsed_ms(qr_start)
 
+    enqueue_start = time.perf_counter()
     if _finalize_enqueue_and_complete(session_row):
+        enqueue_duration_ms = _elapsed_ms(enqueue_start)
+        _log_upload_timing(
+            "upload_session_finalize",
+            upload_session_id=session_row.id,
+            project_id=session_row.project_id,
+            pair_count=1,
+            total_bytes=session_row.expected_total_size,
+            checksum_duration_ms=checksum_duration_ms,
+            validation_duration_ms=validation_duration_ms,
+            project_create_duration_ms=project_create_duration_ms,
+            qr_duration_ms=qr_duration_ms,
+            enqueue_duration_ms=enqueue_duration_ms,
+            finalize_duration_ms=_elapsed_ms(finalize_start),
+            recovered_existing_completion=False,
+            status=session_row.status,
+        )
         return jsonify({"success": True, "session": _upload_session_payload(session_row)})
+    enqueue_duration_ms = _elapsed_ms(enqueue_start)
+    _log_upload_timing(
+        "upload_session_finalize",
+        upload_session_id=session_row.id,
+        project_id=session_row.project_id,
+        pair_count=1,
+        total_bytes=session_row.expected_total_size,
+        checksum_duration_ms=checksum_duration_ms,
+        validation_duration_ms=validation_duration_ms,
+        project_create_duration_ms=project_create_duration_ms,
+        qr_duration_ms=qr_duration_ms,
+        enqueue_duration_ms=enqueue_duration_ms,
+        finalize_duration_ms=_elapsed_ms(finalize_start),
+        recovered_existing_completion=False,
+        status=session_row.status,
+        safe_error_code="QUEUE_ENQUEUE_FAILED",
+    )
     return _upload_api_error(
         "QUEUE_ENQUEUE_FAILED",
         "Upload was assembled and validated but could not be queued for processing. Retry finalize to try again.",
@@ -6162,6 +6393,7 @@ def finalize_upload_session(session_id):
     against double finalization (mirrors the payment-activation /
     quota-reservation atomic-UPDATE pattern elsewhere in this codebase) -
     see _finalize_conflict_response for every rejection code."""
+    finalize_start = time.perf_counter()
     user, admin = _upload_identity()
     if not user and not admin:
         return _upload_api_error("UNAUTHENTICATED", "Login required.", 401)
@@ -6171,6 +6403,7 @@ def finalize_upload_session(session_id):
         return _upload_api_error("NOT_FOUND", "Upload session not found.", 404)
 
     if session_row.status == "assembled":
+        enqueue_start = time.perf_counter()
         updated = UploadSession.query.filter(
             UploadSession.id == session_row.id, UploadSession.status == "assembled"
         ).update({UploadSession.status: "finalizing"}, synchronize_session=False)
@@ -6180,7 +6413,30 @@ def finalize_upload_session(session_id):
         db.session.commit()
         session_row = UploadSession.query.get(session_row.id)
         if _finalize_enqueue_and_complete(session_row):
+            _log_upload_timing(
+                "upload_session_finalize",
+                upload_session_id=session_row.id,
+                project_id=session_row.project_id,
+                pair_count=1,
+                total_bytes=session_row.expected_total_size,
+                enqueue_duration_ms=_elapsed_ms(enqueue_start),
+                finalize_duration_ms=_elapsed_ms(finalize_start),
+                recovered_existing_completion=True,
+                status=session_row.status,
+            )
             return jsonify({"success": True, "session": _upload_session_payload(session_row)})
+        _log_upload_timing(
+            "upload_session_finalize",
+            upload_session_id=session_row.id,
+            project_id=session_row.project_id,
+            pair_count=1,
+            total_bytes=session_row.expected_total_size,
+            enqueue_duration_ms=_elapsed_ms(enqueue_start),
+            finalize_duration_ms=_elapsed_ms(finalize_start),
+            recovered_existing_completion=True,
+            status=session_row.status,
+            safe_error_code="QUEUE_ENQUEUE_FAILED",
+        )
         return _upload_api_error(
             "QUEUE_ENQUEUE_FAILED",
             "Upload was assembled and validated but could not be queued for processing. Retry finalize to try again.",
@@ -6201,7 +6457,20 @@ def finalize_upload_session(session_id):
     ).update({UploadSession.status: "finalizing"}, synchronize_session=False)
     if updated != 1:
         db.session.rollback()
-        return _finalize_conflict_response(UploadSession.query.get(session_row.id))
+        current = UploadSession.query.get(session_row.id)
+        if current and current.status == "completed":
+            _log_upload_timing(
+                "upload_session_finalize",
+                upload_session_id=current.id,
+                project_id=current.project_id,
+                pair_count=1,
+                total_bytes=current.expected_total_size,
+                finalize_duration_ms=_elapsed_ms(finalize_start),
+                recovered_existing_completion=True,
+                status=current.status,
+                safe_error_code="ALREADY_FINALIZED",
+            )
+        return _finalize_conflict_response(current)
     db.session.commit()
     session_row = UploadSession.query.get(session_row.id)
 
