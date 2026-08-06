@@ -100,7 +100,12 @@ def test_repeated_upgrade_is_idempotent(bare_migration_app):
 def test_downgrade_only_drops_what_this_migration_added(bare_migration_app):
     app = bare_migration_app("downgrade_upload_sessions.db")
     with app.app_context():
-        migrate_upgrade()
+        # Upgrade to THIS migration's own revision, not the (possibly later,
+        # once more migrations stack on top - e.g. V1 Wave 6's
+        # 0b8fffb4c614) absolute head - this test's job is to prove
+        # 44340c16353c's own downgrade is scoped to what it added, which is
+        # independent of whatever lands after it.
+        migrate_upgrade(revision="44340c16353c")
         tables_before = set(inspect(shared_db.engine).get_table_names())
         migrate_downgrade(revision=PRIOR_HEAD)
         tables_after = set(inspect(shared_db.engine).get_table_names())
