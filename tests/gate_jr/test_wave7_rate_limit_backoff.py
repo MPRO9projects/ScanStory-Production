@@ -195,3 +195,63 @@ def test_detect_init_no_match_logs_structured_stage_timings(client, project_with
         assert stage in payload, f"missing {stage} in structured scanner_latency log"
         assert isinstance(payload[stage], (int, float))
         assert payload[stage] >= 0
+
+
+def test_scanner_guidance_uses_single_debounced_state_layer():
+    html = Path("templates/user/scanner.html").read_text(encoding="utf-8", errors="ignore")
+    assert 'id="scannerGuidance"' in html
+    assert 'role="status"' in html
+    assert 'aria-live="polite"' in html
+    assert "const SCANNER_GUIDANCE = Object.freeze" in html
+    for label in (
+        "Looking for image",
+        "Move closer",
+        "Move farther away",
+        "Hold steady",
+        "Improve lighting",
+        "Reduce glare",
+        "Keep the full image visible",
+        "Image found",
+        "Tracking image",
+        "Reacquiring image",
+        "Pausing briefly before retrying",
+        "Camera unavailable",
+        "Tap to retry camera",
+    ):
+        assert label in html
+    assert "const GUIDANCE_DEBOUNCE_MS = 900" in html
+    assert "function setScannerGuidance(state, reason, options = {})" in html
+    assert "scanner_guidance_debounced" in html
+    assert html.count("scannerGuidanceCountdownTimer") >= 4
+
+
+def test_rate_limit_backoff_updates_guidance_without_second_scheduler():
+    html = Path("templates/user/scanner.html").read_text(encoding="utf-8", errors="ignore")
+    branch = html[html.index("if (runtime.isRateLimitedResponse"):html.index("// Exit-safety", html.index("if (runtime.isRateLimitedResponse"))]
+    assert "runtime.resolveRetryAfterMs(data, r.headers.get('Retry-After'))" in branch
+    assert "detectionPolicy.noteRateLimited(performance.now(), retryAfterMs)" in branch
+    assert "setBackoffGuidance(retryAfterMs, 'rate_limited')" in branch
+    assert "Math.max(DETECT_INTERVAL_MS, retryAfterMs)" in branch
+    assert html.count("function scheduleNextScan(") == 1
+
+
+def test_backend_detection_responses_include_safe_guidance_fields():
+    source = Path("app.py").read_text(encoding="utf-8", errors="ignore")
+    assert "def _scanner_guidance(**extra):" in source
+    for field in (
+        '"blur_score"',
+        '"brightness_score"',
+        '"likely_blurry"',
+        '"likely_glare_or_dark"',
+        '"likely_dark"',
+        '"likely_glare"',
+        '"raw_keypoints"',
+        '"good_matches"',
+        '"frame_visibility"',
+    ):
+        assert field in source
+    assert '"scanner_guidance": _scanner_guidance' in source
+    guidance_body = source[source.index("def _scanner_guidance"):source.index("orb = _orb_detect()")]
+    assert "traceback" not in guidance_body.lower()
+    assert "path" not in guidance_body.lower()
+    assert "email" not in guidance_body.lower()

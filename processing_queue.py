@@ -11,6 +11,7 @@ QUEUE_JOB_TYPES = {"process_project_pairs"}
 ACTIVE_STATUSES = {"queued", "processing", "retrying", "ready", "claimed", "running", "retry_scheduled"}
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "superseded", "succeeded", "failed_terminal"}
 SAFE_ERROR_LIMIT = 500
+QUEUE_MODES = {"fake", "inline", "rq"}
 
 
 class QueueUnavailable(RuntimeError):
@@ -43,10 +44,42 @@ def _queue_mode():
     return "fake"
 
 
+def queue_mode():
+    mode = _queue_mode()
+    if mode not in QUEUE_MODES:
+        raise QueueUnavailable(f"unsupported queue mode: {mode}")
+    return mode
+
+
+def rq_timeout_seconds():
+    try:
+        return max(1, int(os.environ.get("RQ_DEFAULT_TIMEOUT", "600")))
+    except (TypeError, ValueError):
+        raise QueueUnavailable("RQ_DEFAULT_TIMEOUT must be a positive integer")
+
+
+def queue_name():
+    return (os.environ.get("RQ_QUEUE_NAME") or "scanstory-processing").strip() or "scanstory-processing"
+
+
+def queue_config_summary():
+    mode = queue_mode()
+    redis_configured = bool(os.environ.get("REDIS_URL"))
+    if mode == "rq" and not redis_configured:
+        raise QueueUnavailable("REDIS_URL is required when SCANSTORY_QUEUE_MODE=rq")
+    return {
+        "mode": mode,
+        "redis_configured": redis_configured,
+        "queue_name": queue_name(),
+        "timeout_seconds": rq_timeout_seconds(),
+    }
+
+
 def queue_available():
     if queue_required() and not os.environ.get("REDIS_URL"):
         return False
-    if _queue_mode() in {"fake", "inline"}:
+    mode = queue_mode()
+    if mode in {"fake", "inline"}:
         return True
     return bool(os.environ.get("REDIS_URL"))
 
@@ -101,18 +134,16 @@ def create_processing_job(job_type, project_id=None, pair_id=None, owner_user_id
 
 
 def _enqueue_transport(job):
-    mode = _queue_mode()
+    mode = queue_mode()
     if mode == "inline":
         from processing_operations import run_processing_job
         run_processing_job(job.id)
         return f"inline-{job.id}"
     if mode == "fake":
         return f"fake-{job.id}"
-    if mode != "rq":
-        raise QueueUnavailable("unsupported queue mode")
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
-        raise QueueUnavailable("queue unavailable")
+        raise QueueUnavailable("REDIS_URL is required when SCANSTORY_QUEUE_MODE=rq")
     try:
         from redis import Redis
         from rq import Queue, Retry
@@ -121,8 +152,8 @@ def _enqueue_transport(job):
     try:
         conn = Redis.from_url(redis_url)
         conn.ping()
-        queue = Queue(os.environ.get("RQ_QUEUE_NAME", "scanstory-processing"), connection=conn)
-        timeout = int(os.environ.get("RQ_DEFAULT_TIMEOUT", "600"))
+        queue = Queue(queue_name(), connection=conn)
+        timeout = rq_timeout_seconds()
         retry_count = max(0, int(job.max_attempts or 1) - 1)
         retry = Retry(max=retry_count, interval=[30, 120, 300, 900]) if retry_count else None
         queued = queue.enqueue(
@@ -269,7 +300,11 @@ def processing_job_status_payload(job):
 def redis_ready_check():
     if queue_required() and not os.environ.get("REDIS_URL"):
         return False
-    if _queue_mode() in {"fake", "inline"}:
+    try:
+        mode = queue_mode()
+    except QueueUnavailable:
+        return False
+    if mode in {"fake", "inline"}:
         return True
     if not os.environ.get("REDIS_URL"):
         return False

@@ -2,6 +2,7 @@ from datetime import timedelta
 import json
 from pathlib import Path
 
+import pytest
 from PIL import Image
 from werkzeug.security import generate_password_hash
 
@@ -191,6 +192,35 @@ def test_ready_checks_required_queue_without_leaking_url(client, monkeypatch):
     assert response.headers["Cache-Control"] == "no-store"
     payload = response.get_json()
     assert payload == {"status": "not_ready", "checks": {"database": "ok", "queue": "unavailable"}}
+
+
+def test_queue_config_validates_supported_modes(app_module, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "bogus")
+    with pytest.raises(app_module.QueueUnavailable):
+        app_module.queue_config_summary()
+
+
+def test_rq_mode_requires_redis_url(app_module, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "rq")
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    with pytest.raises(app_module.QueueUnavailable) as exc:
+        app_module.queue_config_summary()
+    assert "REDIS_URL is required" in str(exc.value)
+
+
+def test_queue_config_summary_is_safe_and_uses_expected_defaults(app_module, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "rq")
+    monkeypatch.setenv("REDIS_URL", "redis://:secret@127.0.0.1:6379/0")
+    monkeypatch.delenv("RQ_QUEUE_NAME", raising=False)
+    monkeypatch.delenv("RQ_DEFAULT_TIMEOUT", raising=False)
+    summary = app_module.queue_config_summary()
+    assert summary == {
+        "mode": "rq",
+        "redis_configured": True,
+        "queue_name": "scanstory-processing",
+        "timeout_seconds": 600,
+    }
+    assert "secret" not in str(summary)
 
 
 def test_recover_processing_jobs_dry_run_and_apply(app_module, db_session, normal_user):
