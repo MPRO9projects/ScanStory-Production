@@ -381,9 +381,26 @@ def test_resumable_upload_finalize_once_and_handles_incomplete_queue_failures():
     block = html[start:html.index("async function submitResumableSinglePair", start)]
     assert "if (activeResumableUpload.finalizeStarted)" in block
     assert "activeResumableUpload.finalizeStarted = true" in block
+    assert "err.code === 'ALREADY_FINALIZED'" in block
+    assert "reconcileUploadSessionFromServer(sessionId" in block
+    assert "normalizedCompletedUploadPayload(recovered)" in block
     assert "err.code === 'INCOMPLETE_UPLOAD'" in block
+    assert "recovered.session?.status === 'assembled'" in block
     assert "err.code !== 'QUEUE_ENQUEUE_FAILED'" in block
     assert "UPLOAD CLIENT FINALIZE RETRY" in block
+
+
+def test_resumable_upload_refresh_recovery_uses_authoritative_session_status():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("if (storedSessionMatchesFiles")
+    block = html[start:html.index("if (!sessionPayload)", start)]
+    assert "getUploadSessionStatus(stored.sessionId, controller.signal)" in block
+    assert "sessionPayload.session?.status === 'completed' && sessionPayload.session.project_id" in block
+    assert "window.location.href = `/success/${sessionPayload.session.project_id}`" in block
+    assert "sessionPayload.session?.status === 'assembled'" in block
+    assert "sessionPayload.session?.status === 'active'" in block
+    assert "RESUMABLE_TERMINAL_STATUSES.has(sessionPayload.session.status)" in block
+    assert "clearResumableUploadState()" in block
 
 
 def test_resumable_upload_processing_status_polling_is_bounded_and_optional():

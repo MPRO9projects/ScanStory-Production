@@ -308,6 +308,60 @@ def test_finalize_twice_rejected_not_double_processed(client, app_module, login_
     assert app_module.ProjectPair.query.count() == 1
 
 
+def test_lost_finalize_success_recovered_from_authoritative_status(
+    client, app_module, normal_user, login_user, monkeypatch
+):
+    _patch_qr(app_module, monkeypatch)
+    session_id = _create_and_upload(client)
+
+    first = _finalize(client, session_id)
+    assert first.status_code == 200
+    project_id = first.get_json()["session"]["project_id"]
+
+    retry = _finalize(client, session_id)
+    assert retry.status_code == 409
+    assert retry.get_json()["code"] == "ALREADY_FINALIZED"
+
+    status = _status(client, session_id)
+    assert status.status_code == 200
+    session = status.get_json()["session"]
+    assert session["status"] == "completed"
+    assert session["project_id"] == project_id
+
+    assert app_module.UploadSession.query.count() == 1
+    assert app_module.Project.query.count() == 1
+    assert app_module.ProjectPair.query.count() == 1
+    assert app_module.ProcessingJob.query.filter_by(project_id=project_id).count() == 1
+    app_module.db.session.refresh(normal_user)
+    assert (normal_user.projects_used or 0) == 1
+
+
+def test_foreign_user_cannot_recover_completed_upload_session(
+    client, app_module, db_session, login_user, monkeypatch
+):
+    _patch_qr(app_module, monkeypatch)
+    session_id = _create_and_upload(client)
+    assert _finalize(client, session_id).status_code == 200
+
+    other = app_module.User(
+        email="foreign-recovery@example.com",
+        password_hash=generate_password_hash("password123"),
+        is_verified=True,
+        subscription_status="active",
+    )
+    db_session.add(other)
+    db_session.commit()
+
+    with client.session_transaction() as sess:
+        sess["user_id"] = other.id
+
+    assert _status(client, session_id).status_code == 404
+    assert _finalize(client, session_id).status_code == 404
+    assert app_module.UploadSession.query.count() == 1
+    assert app_module.Project.query.count() == 1
+    assert app_module.ProjectPair.query.count() == 1
+
+
 # ---------------------------------------------------------------------
 # Validation failure at finalize: cleanup, no phantom Project/Pair, no quota
 # ---------------------------------------------------------------------
