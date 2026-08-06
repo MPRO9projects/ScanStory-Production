@@ -117,6 +117,13 @@
         {% endif %}
     </div>
     
+    <!-- V1 Wave 6: fallback video explainer - kept next to the controls below, not buried -->
+    <div class="glass p-4 mb-6 text-xs text-white/60 leading-relaxed">
+        <i class="fas fa-circle-info text-cyan-400 mr-1"></i>
+        <strong class="text-white/80">Project Fallback Video:</strong>
+        Shown to a scanner viewer ONLY when marker recognition fails or camera access is denied - it is never played as a general preview. Mark one pair below as this project's fallback.
+    </div>
+
     <!-- Media Pairs Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {% for pair in pairs %}
@@ -129,7 +136,7 @@
                     </div>
                     <span class="text-xs font-bold uppercase tracking-wider">Pair</span>
                 </div>
-                <span class="text-xs px-2 py-1 rounded-full 
+                <span class="text-xs px-2 py-1 rounded-full
                     {% if pair.is_processed %}bg-green-500/20 text-green-400{% else %}bg-yellow-500/20 text-yellow-400{% endif %}">
                     <i class="fas {% if pair.is_processed %}fa-check-circle{% else %}fa-spinner fa-spin{% endif %} mr-1"></i>
                     {{ 'Ready' if pair.is_processed else 'Processing' }}
@@ -174,6 +181,28 @@
                     </div>
                     {% endif %}
                 </div>
+
+                <!-- V1 Wave 6: project fallback controls -->
+                <div class="mt-3 pt-3 border-t border-white/10" data-pair-card data-pair-index="{{ pair.pair_index }}">
+                    {% if pair.video_filename %}
+                    <div class="flex items-center justify-between gap-2">
+                        {% if project.fallback_pair_id == pair.id %}
+                        <span class="fallback-badge text-xs px-2 py-1 rounded-full bg-purple-500/20 text-purple-300">
+                            <i class="fas fa-life-ring mr-1"></i> Project Fallback
+                        </span>
+                        {% endif %}
+                        <button type="button"
+                                class="fallback-btn ml-auto text-xs font-bold uppercase tracking-wider px-3 py-1.5 rounded-full border transition disabled:opacity-50 disabled:cursor-not-allowed {% if project.fallback_pair_id == pair.id %}bg-red-500/10 border-red-500/30 text-red-300 hover:bg-red-500/20{% else %}bg-white/5 border-white/15 text-white/80 hover:border-cyan-400/40{% endif %}"
+                                data-pair-index="{{ pair.pair_index }}"
+                                data-action="{{ 'clear' if project.fallback_pair_id == pair.id else 'set' }}"
+                                aria-label="{{ 'Remove this pair as the project fallback video' if project.fallback_pair_id == pair.id else 'Set this pair as the project fallback video' }}">
+                            {{ 'Remove Fallback' if project.fallback_pair_id == pair.id else 'Set as Project Fallback' }}
+                        </button>
+                    </div>
+                    {% else %}
+                    <p class="text-xs text-white/30 italic">Upload a video for this pair to make it eligible as the project fallback.</p>
+                    {% endif %}
+                </div>
             </div>
         </div>
         {% else %}
@@ -193,6 +222,74 @@
                 this.style.display = 'none';
             });
         });
+
+        // V1 Wave 6: project fallback-pair configuration
+        (function () {
+            const FALLBACK_URL = "{{ url_for('set_project_fallback_pair', project_id=project.id) }}";
+            const CSRF_TOKEN = "{{ csrf_token() }}";
+
+            function showToast(message, isError) {
+                let toast = document.getElementById('fallback-toast');
+                if (!toast) {
+                    toast = document.createElement('div');
+                    toast.id = 'fallback-toast';
+                    toast.setAttribute('role', 'status');
+                    toast.setAttribute('aria-live', 'polite');
+                    toast.style.cssText = 'position:fixed;top:16px;right:16px;z-index:9999;padding:10px 16px;border-radius:12px;font-size:12px;font-weight:700;transition:opacity .2s;';
+                    document.body.appendChild(toast);
+                }
+                toast.textContent = message;
+                toast.style.background = isError ? 'rgba(239,68,68,0.15)' : 'rgba(34,197,94,0.15)';
+                toast.style.border = isError ? '1px solid rgba(239,68,68,0.4)' : '1px solid rgba(34,197,94,0.4)';
+                toast.style.color = isError ? '#fca5a5' : '#86efac';
+                toast.style.opacity = '1';
+                clearTimeout(toast._hideTimer);
+                toast._hideTimer = setTimeout(() => { toast.style.opacity = '0'; }, 3000);
+            }
+
+            // ponytail: on success we reload rather than hand-patch every
+            // card's badge/button state in JS - project.fallback_pair_id
+            // rendered fresh by the server is the single source of truth,
+            // so this can never drift out of sync with it.
+            document.querySelectorAll('.fallback-btn').forEach(btn => {
+                btn.addEventListener('click', function () {
+                    if (btn.disabled) return;
+                    const action = btn.dataset.action;
+                    const pairIndex = action === 'clear' ? null : Number(btn.dataset.pairIndex);
+                    const originalText = btn.textContent;
+                    btn.disabled = true;
+                    btn.textContent = 'Saving...';
+
+                    fetch(FALLBACK_URL, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-CSRFToken': CSRF_TOKEN
+                        },
+                        body: JSON.stringify({ pair_index: pairIndex })
+                    })
+                    .then(async (response) => {
+                        let payload = null;
+                        try { payload = await response.json(); } catch (e) { /* non-JSON error page */ }
+                        if (!response.ok || !payload || !payload.success) {
+                            const message = (payload && payload.error) || 'Could not update the fallback video. Please try again.';
+                            showToast(message, true);
+                            btn.disabled = false;
+                            btn.textContent = originalText;
+                            return;
+                        }
+                        btn.textContent = 'Saved!';
+                        showToast(pairIndex === null ? 'Fallback video removed.' : 'Fallback video updated.', false);
+                        setTimeout(() => window.location.reload(), 500);
+                    })
+                    .catch(() => {
+                        showToast('Network error - could not update the fallback video.', true);
+                        btn.disabled = false;
+                        btn.textContent = originalText;
+                    });
+                });
+            });
+        })();
     </script>
 </body>
 </html>
