@@ -9,8 +9,8 @@
   <!-- Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 
-  <!-- QR Code Library -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js"></script>
+  <!-- QR Code Library (bundled locally - see static/vendor/qrcode; do not restore the CDN reference) -->
+  <script src="{{ url_for('static', filename='vendor/qrcode/qrcode.min.js') }}"></script>
 
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
@@ -230,6 +230,25 @@
       .nav-back {
         font-size: 9px;
         padding: 10px 14px;
+      }
+
+      /* Density reduction (Wave 8 mobile creator hierarchy pass): the desktop panel
+         padding/gap is generous glass-panel chrome that eats too much of a phone's
+         limited width/height. Shrinking it here only (mobile-scoped) keeps desktop
+         untouched while giving content more room. */
+      .content-grid {
+        gap: 18px;
+      }
+
+      .panel {
+        padding: 20px;
+      }
+
+      /* Tap targets: bump the 38px delete-pair icon button up to the ~44px minimum
+         recommended touch target size on mobile only. */
+      .icon-btn {
+        width: 44px;
+        height: 44px;
       }
     }
 
@@ -1005,6 +1024,30 @@
     .video-metadata.error {
       border-color: rgba(248, 113, 113, .42);
       background: rgba(248, 113, 113, .10);
+    }
+
+    /* Secondary technical detail (filename/size/resolution) collapses behind a native,
+       keyboard- and screen-reader-accessible disclosure widget. Desktop keeps it expanded
+       by default (see updateVideoMetadataCard's isNarrowViewport() check); this only
+       affects sizing/spacing. */
+    .video-meta-details {
+      margin-top: 6px;
+    }
+
+    .video-meta-details summary {
+      cursor: pointer;
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      color: rgba(255, 255, 255, .78);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+
+    .video-meta-details span {
+      display: block;
+      margin-top: 4px;
     }
 
     .upload-progress {
@@ -2216,6 +2259,10 @@
       return { label: 'Ready', warning: false, message: 'Video is ready for upload.' };
     }
 
+    function isNarrowViewport() {
+      return window.matchMedia('(max-width: 640px)').matches;
+    }
+
     function updateVideoMetadataCard(pairId) {
       const pair = currentFiles[pairId];
       const card = document.getElementById(`video-meta-${pairId}`);
@@ -2228,11 +2275,19 @@
         card.innerHTML = '<strong>Video status</strong><span>Select a video to inspect upload details.</span>';
         return;
       }
+      // Mobile density reduction: fold the technical detail lines behind a collapsed
+      // <details> disclosure. Desktop/tablet keep it expanded (matches prior behavior).
+      // A warning/error always stays expanded on every viewport - never hide a problem
+      // the creator needs to see behind a closed toggle.
+      const keepOpen = status.warning || status.error || !isNarrowViewport();
       card.innerHTML = `
         <strong>${status.label}</strong>
-        <span>${pair.video.name || 'video'} - ${formatBytes(pair.video.size)} - ${pair.video.type || 'unknown type'}</span><br>
-        <span>${meta?.width || '?'} x ${meta?.height || '?'} - ${meta?.resolutionClass || 'unknown resolution'} - ${meta?.orientation || 'unknown orientation'} - ${formatDuration(meta?.duration)}</span><br>
         <span>${status.message}</span>
+        <details class="video-meta-details"${keepOpen ? ' open' : ''}>
+          <summary>File details</summary>
+          <span>${pair.video.name || 'video'} - ${formatBytes(pair.video.size)} - ${pair.video.type || 'unknown type'}</span>
+          <span>${meta?.width || '?'} x ${meta?.height || '?'} - ${meta?.resolutionClass || 'unknown resolution'} - ${meta?.orientation || 'unknown orientation'} - ${formatDuration(meta?.duration)}</span>
+        </details>
       `;
     }
 
@@ -2583,8 +2638,18 @@
       removePair(pairId);
     }
 
+    let qrLibraryWarningLogged = false;
+
+    function drawQRFallback(canvas, ctx, message) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#000000';
+      ctx.font = '14px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText(message, canvas.width / 2, canvas.height / 2);
+    }
+
     function updateQRPreview() {
-      const projectName = document.getElementById('projectName')?.value || '';
       const canvas = document.getElementById('qrPreviewCanvas');
       if (!canvas) return;
 
@@ -2593,27 +2658,41 @@
       canvas.height = 200;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      let qrData = `scanstory://ar-project/`;
-      qrData += projectName.trim() ? encodeURIComponent(projectName.trim()) + '/' : 'unnamed-project/';
-      qrData += new Date().getTime();
-
       try {
+        const projectName = document.getElementById('projectName')?.value || '';
+
+        let qrData = `scanstory://ar-project/`;
+        qrData += projectName.trim() ? encodeURIComponent(projectName.trim()) + '/' : 'unnamed-project/';
+        qrData += new Date().getTime();
+
+        if (typeof QRCode === 'undefined' || typeof QRCode.toCanvas !== 'function') {
+          if (!qrLibraryWarningLogged) {
+            console.error('QR preview unavailable: QRCode library failed to load.');
+            qrLibraryWarningLogged = true;
+          }
+          drawQRFallback(canvas, ctx, 'QR preview unavailable');
+          return;
+        }
+
         QRCode.toCanvas(canvas, qrData, {
           width: 180,
           margin: 1,
           color: { dark: '#000000', light: '#ffffff' }
         }, function (error) {
           if (error) {
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(0, 0, 200, 200);
-            ctx.fillStyle = '#000000';
-            ctx.font = '14px Arial';
-            ctx.textAlign = 'center';
-            ctx.fillText('QR Preview', 100, 100);
+            if (!qrLibraryWarningLogged) {
+              console.error('QR preview generation failed:', error);
+              qrLibraryWarningLogged = true;
+            }
+            drawQRFallback(canvas, ctx, 'QR preview unavailable');
           }
         });
       } catch (e) {
-        console.error(e);
+        if (!qrLibraryWarningLogged) {
+          console.error('QR preview unavailable:', e);
+          qrLibraryWarningLogged = true;
+        }
+        drawQRFallback(canvas, ctx, 'QR preview unavailable');
       }
     }
 
@@ -2695,8 +2774,15 @@
       phase.textContent = text;
       amountEl.textContent = amount;
       amountEl.style.display = amount ? 'block' : 'none';
-      detailEl.textContent = detail;
-      detailEl.style.display = detail ? 'block' : 'none';
+      // Elapsed time is derived from a single shared timestamp (set once per submit, cleared on
+      // reset) rather than a setInterval/timer, so re-renders and retries can never stack a
+      // duplicate ticking timer.
+      const elapsedText = (uploadElapsedStartedAt && pct > 0)
+        ? `Elapsed ${formatDuration((performance.now() - uploadElapsedStartedAt) / 1000)}`
+        : '';
+      const fullDetail = detail && elapsedText ? `${detail} · ${elapsedText}` : (detail || elapsedText);
+      detailEl.textContent = fullDetail;
+      detailEl.style.display = fullDetail ? 'block' : 'none';
       fill.style.width = `${Math.max(0, Math.min(100, pct || 0))}%`;
       progress.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       logUploadProgressDom(text, selector);
@@ -2728,6 +2814,7 @@
       activeUploadXhr = null;
       activeUploadId = null;
       activeResumableUpload = null;
+      uploadElapsedStartedAt = null;
       setCancelUploadVisible(false);
       disableUploadNavigationWarning();
       if (submitBtn) {
@@ -2999,7 +3086,15 @@
         const payload = await fetchUploadJson(`/api/processing/jobs/${jobId}`, { method: 'GET', signal });
         const status = payload.status || payload.job?.status;
         if (status === 'completed' || status === 'failed') return payload;
-        setUploadProgress('Processing queued', 99, 'Processing marker. This can continue in the background.');
+        // Honest mapping only: processing_job_status_payload() (processing_queue.py) only ever
+        // reports 'queued' or an active status such as 'processing' while work is in flight - there
+        // is no separate backend signal for "optimizing media" vs "preparing recognition", so we
+        // don't invent one here.
+        if (status === 'processing') {
+          setUploadProgress('Preparing your project', 99, 'Optimizing your media for scanning. This can continue in the background.');
+        } else {
+          setUploadProgress('Processing queued', 98, 'Your marker is queued for processing.');
+        }
         await new Promise(resolve => setTimeout(resolve, delay));
         delay = Math.min(delay * 1.6, 6000);
       }
@@ -3200,8 +3295,8 @@
         }
 
         if (!sessionPayload) {
-          uploadState.phase = 'Preparing';
-          setUploadProgress('Preparing upload', 10, 'Creating a resumable upload session.', `0 B of ${formatBytes(totalBytes)}`);
+          uploadState.phase = 'Creating upload session';
+          setUploadProgress('Creating upload session', 10, 'Preparing a resumable upload session with the server.', `0 B of ${formatBytes(totalBytes)}`);
           sessionPayload = await createResumableSession(resumableMarkerFile, pair.video, projectName, controller.signal);
         }
 
@@ -3227,6 +3322,8 @@
           setUploadProgress('Finalizing upload', 94, 'Upload bytes were already assembled. Retrying finalization.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
         } else {
           await uploadResumableStream(session, resumableMarkerFile, pair.video, uploadState);
+          uploadState.phase = 'Upload complete';
+          setUploadProgress('Upload complete', 92, 'All bytes received. Confirming with the server before finalizing.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
         }
 
         uploadState.phase = 'Finalizing';
@@ -3265,7 +3362,10 @@
           if (['SESSION_EXPIRED', 'SESSION_FAILED', 'STORAGE_INCONSISTENT', 'IMAGE_VALIDATION_FAILED', 'VIDEO_VALIDATION_FAILED', 'CHECKSUM_MISMATCH', 'PROJECT_CREATION_FAILED'].includes(err.code)) {
             clearResumableUploadState();
           }
-          alert(message);
+          // No blocking alert() here: #uploadProgress is aria-live="polite", so screen readers
+          // already announce this failure message. Re-enabling the submit button below (via
+          // resetUploadSubmit) is the retry affordance - pressing it again resumes from the
+          // still-saved session/offset instead of restarting from zero.
         }
         resetUploadSubmit(submitBtn);
       }
@@ -3276,6 +3376,7 @@
     let activeUploadId = null;
     let uploadBeforeUnloadActive = false;
     let uploadRedirected = false;
+    let uploadElapsedStartedAt = null;
 
     document.getElementById('projectForm').addEventListener('submit', async function (e) {
       e.preventDefault();
@@ -3285,6 +3386,7 @@
       const readyPairs = pairIds.map(id => ({ id, pair: currentFiles[id] })).filter(item => item.pair.image && item.pair.video);
       const uploadId = (crypto.randomUUID ? crypto.randomUUID() : `upload-${Date.now()}-${Math.random().toString(16).slice(2)}`);
       const totalStart = performance.now();
+      uploadElapsedStartedAt = totalStart;
       const videoBytes = readyPairs.reduce((sum, item) => sum + (item.pair.video?.size || 0), 0);
       const uploadState = {
         uploadId,
