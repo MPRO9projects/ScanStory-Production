@@ -44,7 +44,8 @@ from models import (
     db, User, Admin, SubscriptionPlan, TrialDetails, OTPCode,
     Project, ProjectPair, PaymentOrder, ScanLog, SystemConfig,
     UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation,
-    RazorpayWebhookEvent, ProcessingJob, UploadSession, get_utc_now
+    RazorpayWebhookEvent, ProcessingJob, UploadSession, get_utc_now,
+    ScanEvent, SCAN_EVENT_TYPES
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
@@ -216,6 +217,8 @@ RATE_LIMITS = {
     "scanner_init": (45, 60),
     "scanner_track": (240, 60),
     "scanner_session_end": (90, 60),
+    "scanner_fallback": (60, 60),
+    "scanner_fallback_event": (60, 60),
     "upload": (8, 3600),
     "login_ip": (80, 900),
     "register_ip": (30, 3600),
@@ -1405,6 +1408,47 @@ def _project_unavailable_response():
 
 def _project_is_available(project):
     return bool(project and project.is_active)
+
+
+# ---------------------------------------------------------------------
+# Scanner fallback video resolution (V1 Wave 6)
+# ---------------------------------------------------------------------
+def _fallback_video_payload(pair, source):
+    """Never includes a raw filesystem path - video_url is the same
+    url_for("serve_video", ...) helper ProjectPair.get_video_url() already
+    uses, which itself re-checks project availability on every request."""
+    return {
+        "available": True,
+        "source": source,  # "pair" (pair-context hint) or "project_default"
+        "pair_index": pair.pair_index,
+        "video_url": pair.get_video_url(),
+    }
+
+
+def resolve_scanner_fallback_video(project, pair_index=None):
+    """Resolve the fallback video (if any) a scanner client may offer for
+    `project`, optionally preferring a specific pair's own video when a
+    pair-context hint is supplied (e.g. after a partial detection that
+    tracked toward a pair but never fully confirmed it). Falls back to the
+    project's designated project-level default fallback when no
+    pair-specific video is available or no hint was given.
+
+    Every ProjectPair lookup below is scoped to `project_id=project.id` -
+    a fallback response for one project can never resolve to another
+    project's pair, even if a caller supplies a pair_index/fallback_pair_id
+    that happens to exist under a different project.
+    """
+    if pair_index is not None:
+        pair = ProjectPair.query.filter_by(project_id=project.id, pair_index=pair_index).first()
+        if pair and pair.can_serve_video:
+            return _fallback_video_payload(pair, "pair")
+
+    if project.fallback_pair_id:
+        pair = ProjectPair.query.filter_by(id=project.fallback_pair_id, project_id=project.id).first()
+        if pair and pair.can_serve_video:
+            return _fallback_video_payload(pair, "project_default")
+
+    return {"available": False}
 
 
 def _validate_admin_role(role):
@@ -6245,6 +6289,61 @@ def project_view(project_id):
     return redirect(url_for("project_preview", project_id=project_id, admin_view=admin_view, user_id=view_user_id))
 
 
+def _apply_fallback_pair_selection(project):
+    """Shared body for set_project_fallback_pair()/admin_set_project_fallback_pair()
+    below. Designates (or clears) `project.fallback_pair_id` - always
+    re-checked against `project_id=project.id` so a pair belonging to a
+    DIFFERENT project can never be selected, no matter what pair_index is
+    submitted. No new upload flow: this only ever references one of the
+    project's own already-uploaded pairs."""
+    data = request.get_json(silent=True) if request.is_json else request.form
+    raw = data.get("pair_index") if data else None
+    if raw in (None, ""):
+        project.fallback_pair_id = None
+        db.session.commit()
+        return jsonify({"success": True, "fallback_pair_index": None})
+
+    try:
+        pair_index = int(raw)
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "code": "INVALID_PAIR_INDEX", "error": "pair_index must be an integer or null."}), 400
+
+    pair = ProjectPair.query.filter_by(project_id=project.id, pair_index=pair_index).first()
+    if not pair:
+        return jsonify({"success": False, "code": "PAIR_NOT_FOUND", "error": "No such pair on this project."}), 404
+
+    project.fallback_pair_id = pair.id
+    db.session.commit()
+    return jsonify({"success": True, "fallback_pair_index": pair.pair_index})
+
+
+@app.route("/project/<int:project_id>/fallback-pair", methods=["POST"])
+@login_required
+def set_project_fallback_pair(project_id):
+    """Creator-only (V1 Wave 6): designate or clear this project's
+    project-level default fallback video, reusing one of the project's own
+    existing pairs. Same ownership-check shape as project_view() above - a
+    project not owned by the calling user 404s (never a 403, so existence
+    is never leaked to a non-owner)."""
+    user = current_user()
+    project = Project.query.get_or_404(project_id)
+    if project.owner_user_id != user.id:
+        abort(404)
+    return _apply_fallback_pair_selection(project)
+
+
+@app.route("/admin/project/<int:project_id>/fallback-pair", methods=["POST"])
+@admin_required
+def admin_set_project_fallback_pair(project_id):
+    """Admin equivalent of set_project_fallback_pair() - same pattern as
+    admin_scanner_test_entry() below."""
+    admin = current_admin()
+    project = Project.query.get_or_404(project_id)
+    if project.owner_admin_id != admin.id:
+        abort(404)
+    return _apply_fallback_pair_selection(project)
+
+
 # --------------------------------------------------------------------------------------------
 # Subscription & Payment Routes
 # --------------------------------------------------------------------------------------------
@@ -6996,6 +7095,39 @@ def serve_qr(filename):
         return _project_unavailable_response()
     response = send_from_directory(QR_DIR, filename)
     return _apply_short_public_cache(response)
+
+
+@app.route("/api/scanner/<int:project_id>/fallback-video")
+def scanner_fallback_video(project_id):
+    """Public, unauthenticated: resolve the fallback video (if any) a
+    scanner client may offer after a recognition timeout / camera failure /
+    partial detection - see resolve_scanner_fallback_video() above. Optional
+    `pair_index` query param supplies the pair-context hint (the pair the
+    scanner was tracking toward before falling back).
+
+    Availability check mirrors serve_video()/serve_image()/serve_qr() above
+    exactly (_project_is_available): a suspended/inactive project is
+    unavailable here too. Shaped as JSON (matching this route's own JSON
+    contract, and detect_init's/detect_track's existing JSON-404 style for
+    the same suspended-project case) rather than those routes' plain-text
+    body - the underlying availability check is identical either way.
+    """
+    project = Project.query.get(project_id)
+    if not project:
+        return jsonify({"available": False, "error": "NOT_FOUND"}), 404
+    if not _project_is_available(project):
+        return jsonify({"available": False, "error": "PROJECT_UNAVAILABLE"}), 404
+
+    ok, retry_after = _check_rate_limit(
+        "scanner_fallback",
+        _rate_limit_key("fallback_video", project_id),
+    )
+    if not ok:
+        return _scanner_rate_limited_response(retry_after)
+
+    pair_index = request.args.get("pair_index", type=int)
+    return jsonify(resolve_scanner_fallback_video(project, pair_index))
+
 
 SCANNER_TEST_TOKEN_MAX_AGE_SECONDS = 120
 
@@ -7864,6 +7996,120 @@ def scanner_session_end():
         traceback.print_exc()
         db.session.rollback()
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/scanner/<int:project_id>/fallback-event", methods=["POST"])
+@csrf.exempt  # Public, unauthenticated scanner endpoint - no browser session/cookie to bind a CSRF token to (same class as detect_init/detect_track/session/end above).
+def scanner_fallback_event(project_id):
+    """Records one fallback/analytics event: pair_fallback_view,
+    project_fallback_view, recognition_timeout, or camera_unavailable (V1
+    Wave 6). Writes to the dedicated `scan_events` table ONLY - never to
+    ScanLog, never touches is_successful/counted - a fallback view must be
+    structurally impossible to be counted as a successful scan anywhere
+    ScanLog is aggregated (admin dashboards, project.scan_count, quota
+    counters). See ScanEvent's docstring in models.py for the full
+    reasoning.
+
+    Idempotent: a client-generated `client_event_id` (UUID) is the sole
+    idempotency key, enforced by scan_events' DB-level UNIQUE constraint - a
+    flaky-network retry that resends the same client_event_id gets a safe
+    `"duplicate": true` response instead of a second row.
+
+    "matched_scan" is deliberately NOT an accepted event_type here - a real
+    detection+overlay match can only ever be recorded by the server-side
+    detect_track()/detect_init() path itself, never claimed by a client
+    POST to this endpoint.
+    """
+    project = Project.query.get(project_id)
+    if not project:
+        return jsonify({"success": False, "code": "NOT_FOUND", "error": "Project not found."}), 404
+    if not _project_is_available(project):
+        return jsonify({"success": False, "code": "PROJECT_UNAVAILABLE", "error": "This project is currently suspended or unavailable."}), 404
+
+    if request.is_json:
+        data = request.get_json()
+    else:
+        data = request.form
+    if not data:
+        return jsonify({"success": False, "code": "INVALID_REQUEST", "error": "Missing request body."}), 400
+
+    ok, retry_after = _check_rate_limit(
+        "scanner_fallback_event",
+        _rate_limit_key("fallback_event", project_id, data.get("scan_session_id")),
+    )
+    if not ok:
+        return _scanner_rate_limited_response(retry_after)
+
+    event_type = (data.get("event_type") or "").strip()
+    client_event_id = (data.get("client_event_id") or "").strip()
+    scan_session_id = data.get("scan_session_id") or None
+    raw_pair_index = data.get("pair_index")
+    try:
+        pair_index = int(raw_pair_index) if raw_pair_index not in (None, "") else None
+    except (TypeError, ValueError):
+        pair_index = None
+
+    if event_type not in SCAN_EVENT_TYPES:
+        return jsonify({
+            "success": False,
+            "code": "INVALID_EVENT_TYPE",
+            "error": f"event_type must be one of: {', '.join(sorted(SCAN_EVENT_TYPES))}",
+        }), 400
+    if not client_event_id or len(client_event_id) > 36:
+        return jsonify({
+            "success": False,
+            "code": "MISSING_CLIENT_EVENT_ID",
+            "error": "client_event_id (a client-generated UUID) is required.",
+        }), 400
+
+    # An unrecognized pair_index for THIS project is silently dropped (pair
+    # context becomes None) rather than rejected outright - this is a
+    # best-effort analytics event, not a media-serving lookup, and a stale
+    # client-side pair_index should never block recording that a fallback
+    # genuinely happened. Scoping to project_id=project.id here is what
+    # prevents a pair_index from resolving to a different project's pair.
+    pair_id = None
+    if pair_index is not None:
+        pair = ProjectPair.query.filter_by(project_id=project.id, pair_index=pair_index).first()
+        if pair:
+            pair_id = pair.id
+
+    event = ScanEvent(
+        project_id=project.id,
+        pair_id=pair_id,
+        event_type=event_type,
+        scan_session_id=scan_session_id,
+        client_event_id=client_event_id,
+    )
+    db.session.add(event)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        existing = ScanEvent.query.filter_by(client_event_id=client_event_id).first()
+        if not existing:
+            raise
+        return jsonify({
+            "success": True,
+            "duplicate": True,
+            "event": {
+                "id": existing.id,
+                "event_type": existing.event_type,
+                "created_at": existing.created_at.isoformat(),
+            },
+        }), 200
+
+    return jsonify({
+        "success": True,
+        "duplicate": False,
+        "event": {
+            "id": event.id,
+            "event_type": event.event_type,
+            "created_at": event.created_at.isoformat(),
+        },
+    }), 201
+
+
 @app.route("/detect_track", methods=["POST"])
 @csrf.exempt  # Public, unauthenticated scanner endpoint - no browser session/cookie to bind a CSRF token to.
 def detect_track():

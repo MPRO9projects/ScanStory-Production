@@ -602,11 +602,35 @@ class Project(db.Model):
 
     is_active = db.Column(db.Boolean, default=True)
 
+    # V1 Wave 6: project-level default fallback video. References one of this
+    # project's OWN ProjectPair rows (reuses its existing video_filename -
+    # no separate fallback-video upload flow exists). Deliberately no
+    # db.relationship() here: Project already has a `pairs` relationship
+    # keyed off ProjectPair.project_id, and every read site re-verifies
+    # `ProjectPair.query.filter_by(id=fallback_pair_id, project_id=self.id)`
+    # rather than trusting this FK alone - belt-and-suspenders against a
+    # cross-project reference ever being served (see
+    # resolve_project_fallback_video() in app.py).
+    # use_alter=True + an explicit constraint name: projects <-> project_pairs
+    # would otherwise be a mutually-dependent (cyclic) FK pair (ProjectPair
+    # already has a NOT NULL FK back to projects.id) - without this,
+    # SQLAlchemy's table-sort for a from-scratch db.create_all() (bootstrap
+    # self-heal, test fixtures) cannot determine a safe creation order and
+    # this constraint would be silently dropped from consideration (SQLite
+    # tolerates that; a strict FK-enforcing backend would not). use_alter
+    # defers this one FK to a separate ALTER TABLE step, breaking the cycle.
+    fallback_pair_id = db.Column(
+        db.Integer,
+        db.ForeignKey("project_pairs.id", use_alter=True, name="fk_projects_fallback_pair_id"),
+        nullable=True,
+    )
+
     created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
     updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    pairs = db.relationship("ProjectPair", backref="project", lazy=True, cascade="all, delete-orphan", order_by="ProjectPair.pair_index")
+    pairs = db.relationship("ProjectPair", backref="project", lazy=True, cascade="all, delete-orphan", order_by="ProjectPair.pair_index", foreign_keys="ProjectPair.project_id")
     scan_logs = db.relationship("ScanLog", backref="project", lazy=True, cascade="all, delete-orphan")
+    scan_events = db.relationship("ScanEvent", backref="project", lazy=True, cascade="all, delete-orphan")
 
     def __repr__(self):
         owner = f"user:{self.owner_user_id}" if self.owner_user_id else f"admin:{self.owner_admin_id}"
@@ -664,6 +688,7 @@ class ProjectPair(db.Model):
     updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     scan_logs = db.relationship("ScanLog", backref="pair", lazy=True, cascade="all, delete-orphan")
+    scan_events = db.relationship("ScanEvent", backref="pair", lazy=True, cascade="all, delete-orphan")
 
     __table_args__ = (
         db.UniqueConstraint("project_id", "pair_index", name="uq_project_pair_index"),
@@ -808,6 +833,76 @@ class ScanLog(db.Model):
 
     def __repr__(self):
         return f"<ScanLog user={self.user_id} project={self.project_id}>"
+
+
+# ---------------------------------------------------------------------
+# Scanner fallback analytics (V1 Wave 6)
+# ---------------------------------------------------------------------
+# "matched_scan" is a documented vocabulary anchor, not an insertable value
+# here: a real successful detection+overlay is recorded exclusively via
+# ScanLog.is_successful=True (untouched by this wave - see ScanEvent
+# docstring below), and the client-facing fallback-event route in app.py
+# deliberately never accepts it - a match can only ever be recorded by the
+# server-side detection path, never claimed by a client POST.
+SCAN_EVENT_TYPES = {
+    "pair_fallback_view",
+    "project_fallback_view",
+    "recognition_timeout",
+    "camera_unavailable",
+}
+
+
+class ScanEvent(db.Model):
+    """Fallback/analytics event log (V1 Wave 6) - a table separate from
+    ScanLog by design, not an oversight.
+
+    ScanLog enforces UniqueConstraint(user_id, scan_session_id): at most ONE
+    row per scan session. That is structurally wrong for fallback events,
+    where a single session can produce more than one (a recognition-timeout
+    prompt, then later a pair fallback view, etc). ScanLog is also already
+    read by unfiltered aggregates that do not (and must not have to) know
+    about fallback semantics - e.g. admin_dashboard's
+    `ScanLog.query.filter_by(project_id=p.id).count()` and
+    `ScanLog.query.count()` "total_scans" stats have no is_successful filter
+    at all. Extending ScanLog with new event-type rows would silently
+    inflate those existing counters with fallback/timeout events unless
+    every call site were individually audited and patched. A new additive
+    table keeps that risk at zero: ScanLog and every one of its existing
+    call sites are completely untouched by this feature, so every
+    pre-migration ScanLog row keeps meaning exactly what it always meant -
+    is_successful=True is still "matched scan", unmoved and unredefined.
+
+    client_event_id is a client-generated UUID and is the sole idempotency
+    key: a flaky-network retry of the exact same logical event resends the
+    exact same client_event_id and gets a safe idempotent no-op on the
+    unique-constraint collision (see the fallback-event route in app.py) -
+    enforced at the DB level via a UNIQUE constraint, not just an in-app
+    duplicate check. A client must generate a fresh UUID per real event and
+    never reuse one across a genuinely different event/project/pair.
+    """
+    __tablename__ = "scan_events"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+    # Contextual pair hint: the specific pair the scanner was tracking
+    # toward (if any) when the fallback/timeout/camera event occurred.
+    # Nullable - camera_unavailable in particular can occur before any pair
+    # was ever identified.
+    pair_id = db.Column(db.Integer, db.ForeignKey("project_pairs.id"), nullable=True, index=True)
+
+    event_type = db.Column(db.String(30), nullable=False, index=True)
+    scan_session_id = db.Column(db.String(100), nullable=True, index=True)
+    client_event_id = db.Column(db.String(36), nullable=False, unique=True, index=True)
+
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+
+    @validates("event_type")
+    def validate_event_type(self, key, value):
+        return _validate_value(value, SCAN_EVENT_TYPES, key)
+
+    def __repr__(self):
+        return f"<ScanEvent project={self.project_id} type={self.event_type}>"
 
 
 # ---------------------------------------------------------------------
