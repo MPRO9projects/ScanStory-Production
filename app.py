@@ -139,16 +139,22 @@ SESSION_COOKIE_SECURE_ENABLED = _env_flag("SESSION_COOKIE_SECURE", default=False
 database_uri = os.environ.get("TEST_DATABASE_URL") if SCANSTORY_TESTING else os.environ.get("DATABASE_URL", "")
 engine_options = {}
 if database_uri and not database_uri.startswith("sqlite"):
+    connect_args = {
+        'connect_timeout': 10,
+    }
+
+    # utf8mb4 is a MySQL-specific connection option.
+    # PostgreSQL uses UTF-8 natively and does not accept this option.
+    if database_uri.startswith(("mysql://", "mysql+")):
+        connect_args['charset'] = 'utf8mb4'
+
     engine_options = {
         'pool_size': 10,
         'max_overflow': 20,
         'pool_recycle': 3600,
         'pool_pre_ping': True,
         'pool_timeout': 30,
-        'connect_args': {
-            'connect_timeout': 10,
-            'charset': 'utf8mb4'
-        }
+        'connect_args': connect_args,
     }
 
 app.config.update(
@@ -915,12 +921,21 @@ def _maybe_create_bootstrap_admin():
 # --------------------------------------------------------------------------------------------
 # Bootstrap (tables + default plans + initial admin + system config)
 # --------------------------------------------------------------------------------------------
+# Migration commands must be able to import app.py without creating
+# tables or inserting startup/bootstrap data.
+SCANSTORY_SKIP_STARTUP_BOOTSTRAP = _env_flag(
+    "SCANSTORY_SKIP_STARTUP_BOOTSTRAP",
+    default=False,
+)
+
 with app.app_context():
-    db.create_all()
-    ensure_marker_schema()
+    if not SCANSTORY_SKIP_STARTUP_BOOTSTRAP:
+        db.create_all()
+        ensure_marker_schema()
     
     # Create default trial plan
-    if SubscriptionPlan.query.filter_by(is_trial_plan=True).first() is None:
+    if (not SCANSTORY_SKIP_STARTUP_BOOTSTRAP and
+            SubscriptionPlan.query.filter_by(is_trial_plan=True).first() is None):
         trial_plan = SubscriptionPlan(
             plan_name="Free Trial",
             plan_description="Free trial with limited features",
@@ -940,7 +955,8 @@ with app.app_context():
         db.session.add(trial_plan)
     
     # Create Basic and Pro plans
-    if SubscriptionPlan.query.filter_by(plan_name="Basic").first() is None:
+    if (not SCANSTORY_SKIP_STARTUP_BOOTSTRAP and
+            SubscriptionPlan.query.filter_by(plan_name="Basic").first() is None):
         basic_plan = SubscriptionPlan(
             plan_name="Basic",
             plan_description="Basic subscription plan",
@@ -958,7 +974,8 @@ with app.app_context():
         )
         db.session.add(basic_plan)
     
-    if SubscriptionPlan.query.filter_by(plan_name="Pro").first() is None:
+    if (not SCANSTORY_SKIP_STARTUP_BOOTSTRAP and
+            SubscriptionPlan.query.filter_by(plan_name="Pro").first() is None):
         pro_plan = SubscriptionPlan(
             plan_name="Pro",
             plan_description="Professional subscription plan",
@@ -978,10 +995,12 @@ with app.app_context():
     
     # Create initial admin - only when explicitly enabled via env, with no
     # default credentials. See _maybe_create_bootstrap_admin.
-    _maybe_create_bootstrap_admin()
+    if not SCANSTORY_SKIP_STARTUP_BOOTSTRAP:
+        _maybe_create_bootstrap_admin()
     
     # Create default system config
-    if SystemConfig.query.count() == 0:
+    if (not SCANSTORY_SKIP_STARTUP_BOOTSTRAP and
+            SystemConfig.query.count() == 0):
         default_configs = [
             ("free_trial_projects", "1", "integer", "Free trial project limit"),
             ("free_trial_scans", "50", "integer", "Free trial scan limit"),
@@ -998,7 +1017,8 @@ with app.app_context():
                 description=description
             ))
     
-    db.session.commit()
+    if not SCANSTORY_SKIP_STARTUP_BOOTSTRAP:
+        db.session.commit()
 
 # --------------------------------------------------------------------------------------------
 # Helper Functions
