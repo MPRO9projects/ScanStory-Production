@@ -76,6 +76,15 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 logging.basicConfig(level=logging.DEBUG)
 app.logger.setLevel(logging.DEBUG)
+# ponytail: logging.getLogger("app") is a process-wide singleton keyed by
+# name, so it survives this module being re-imported. migrations/env.py's
+# fileConfig(...) call (default disable_existing_loggers=True) silently
+# flips .disabled=True on any already-registered logger it doesn't list
+# (alembic.ini only lists root/sqlalchemy/alembic/flask_migrate) whenever a
+# migration runs in the same process after app.py has been imported once -
+# e.g. the test suite. Re-assert enabled here, the one place every app.py
+# import already passes through, rather than chase every migration call site.
+app.logger.disabled = False
 
 # CSRF protection is enabled globally (see P0B). Narrow, justified exemptions
 # are applied per-route below via @csrf.exempt - see the route inventory in
