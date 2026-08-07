@@ -197,6 +197,9 @@
         }
 
         .resend-link {
+            background: transparent;
+            border: 0;
+            cursor: pointer;
             font-size: 10px;
             font-weight: 800;
             text-transform: uppercase;
@@ -348,6 +351,11 @@
                     We've sent a 6-digit code to:<br>
                     <span class="text-white font-bold">{{ email }}</span>
                 </p>
+                {% if not has_challenge %}
+                <p class="text-slate-300 text-xs leading-relaxed mt-4">
+                    This browser needs its own verification challenge. Request a new verification code on this device before entering an OTP.
+                </p>
+                {% endif %}
             </div>
 
             <!-- Flash Messages -->
@@ -371,9 +379,12 @@
 
             <div class="mt-10 pt-6 border-t border-white/5">
                 <p class="text-slate-500 text-[10px] uppercase font-bold tracking-widest mb-3">Didn't get the code?</p>
-                <a href="{{ url_for('resend_otp') }}" class="resend-link">
-                    <i class="fas fa-redo mr-2"></i> Request New OTP
-                </a>
+                <form method="POST" action="{{ url_for('resend_otp') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="resend-link">
+                        <i class="fas fa-redo mr-2"></i> Request New OTP
+                    </button>
+                </form>
             </div>
         </div>
     </div>

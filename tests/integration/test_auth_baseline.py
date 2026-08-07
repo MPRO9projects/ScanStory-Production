@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+import logging
+
 from werkzeug.security import generate_password_hash
 
 
@@ -27,6 +29,33 @@ def test_valid_registration_creates_user_trial_and_otp(client, app_module, isola
     assert user.trial_details is not None
     assert app_module.OTPCode.query.filter_by(email="new@example.com", purpose="verify_email").first() is not None
     assert isolated_app[1], "email seam should capture outgoing verification email"
+
+
+def test_registration_unexpected_error_is_sanitized(client, app_module, monkeypatch, caplog):
+    def boom(_action):
+        raise RuntimeError("internal database detail /secret/path")
+
+    monkeypatch.setattr(app_module, "verify_recaptcha_v3", boom)
+
+    with caplog.at_level(logging.ERROR, logger=app_module.app.logger.name):
+        response = client.post(
+            "/register",
+            data={
+                "email": "explode@example.com",
+                "first_name": "Explode",
+                "last_name": "User",
+                "phone": "123",
+                "password1": "password123",
+                "password2": "password123",
+            },
+        )
+
+    text = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "Registration could not be completed. Please try again later." in text
+    assert "internal database detail" not in text
+    assert "/secret/path" not in text
+    assert "registration_failed_unexpected" in caplog.text
 
 
 def test_duplicate_registration_stays_on_register(client, normal_user):
@@ -196,6 +225,42 @@ def test_login_required_rejects_stale_unverified_session(client, app_module, db_
         assert "user_id" not in sess
         assert "user_email" not in sess
         assert sess["pending_verify_email"] == user.email
+
+
+def test_verify_email_without_challenge_shows_device_recovery_guidance(client):
+    with client.session_transaction() as sess:
+        sess["pending_verify_email"] = "verify-device@example.com"
+
+    response = client.get("/verify-email/")
+
+    assert response.status_code == 200
+    text = response.get_data(as_text=True)
+    assert "Request a new verification code on this device" in text
+    assert 'method="POST" action="/resend-otp/"' in text
+
+
+def test_verify_email_without_challenge_does_not_accept_otp(client, app_module, db_session, plan):
+    user = app_module.User(
+        email="verify-no-challenge@example.com",
+        password_hash=generate_password_hash("password123"),
+        is_verified=False,
+        subscription_id=plan.id,
+        subscription_status="trial",
+        subscribed_project_limit=plan.total_project_limit,
+        subscribed_scan_limit=plan.total_scan_limit,
+    )
+    db_session.add(user)
+    db_session.commit()
+    with app_module.app.test_request_context("/", environ_base={"REMOTE_ADDR": "203.0.113.10"}):
+        code = app_module._create_otp(user.email, "verify_email", user_id=user.id)
+    with client.session_transaction() as sess:
+        sess["pending_verify_email"] = user.email
+
+    response = client.post("/verify-email/", data={"otp": code})
+
+    assert response.status_code == 200
+    assert b"Request a new verification code on this device" in response.data
+    assert app_module.User.query.get(user.id).is_verified is False
 
 
 def test_login_required_allows_verified_normal_session(client, normal_user):

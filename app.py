@@ -7,6 +7,7 @@ import threading
 import json
 import uuid
 import razorpay
+import math
 from functools import lru_cache, wraps
 from datetime import datetime as dt, timedelta
 from flask import (
@@ -102,6 +103,27 @@ def _env_flag(name, default=False):
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
+def _runtime_production_mode_flag_active():
+    for key in ("SCANSTORY_PRODUCTION", "APP_ENV", "ENV"):
+        value = (os.environ.get(key) or "").strip().lower()
+        if value in ("1", "true", "yes", "production", "prod"):
+            return True
+    return (os.environ.get("FLASK_ENV") or "").strip().lower() in ("production", "prod")
+
+
+def _smtp_timeout_seconds():
+    raw = (os.environ.get("SMTP_TIMEOUT_SECONDS") or "").strip()
+    if not raw:
+        return 10.0
+    try:
+        timeout = float(raw)
+    except ValueError as exc:
+        raise RuntimeError("SMTP_TIMEOUT_SECONDS must be a positive finite number.") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise RuntimeError("SMTP_TIMEOUT_SECONDS must be a positive finite number.")
+    return timeout
+
+
 def _validate_required_runtime_config():
     """Fail fast on missing required runtime-security configuration.
 
@@ -111,6 +133,17 @@ def _validate_required_runtime_config():
     missing = []
     if not os.environ.get("FLASK_SECRET_KEY"):
         missing.append("FLASK_SECRET_KEY")
+    if _runtime_production_mode_flag_active():
+        if not os.environ.get("DATABASE_URL"):
+            missing.append("DATABASE_URL")
+        for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "MAIL_FROM"):
+            if not os.environ.get(key):
+                missing.append(key)
+        if not _env_flag("SESSION_COOKIE_SECURE", default=False):
+            missing.append("SESSION_COOKIE_SECURE=true")
+        if os.environ.get("SCANSTORY_DEV_TESTING") == "1":
+            missing.append("SCANSTORY_DEV_TESTING=0")
+    _smtp_timeout_seconds()
     if missing:
         raise RuntimeError(
             "Missing required environment variable(s): " + ", ".join(missing) +
@@ -1717,6 +1750,7 @@ def send_email_smtp(to_email: str, subject: str, html_body: str):
     username = os.environ.get("SMTP_USER")
     password = os.environ.get("SMTP_PASS")
     mail_from = os.environ.get("MAIL_FROM", username)
+    timeout = _smtp_timeout_seconds()
     
     if not all([host, port, username, password, mail_from]):
         raise RuntimeError("SMTP env vars missing.")
@@ -1728,7 +1762,7 @@ def send_email_smtp(to_email: str, subject: str, html_body: str):
     msg.attach(MIMEText(html_body, "html"))
     
     context = ssl.create_default_context()
-    with smtplib.SMTP(host, port) as server:
+    with smtplib.SMTP(host, port, timeout=timeout) as server:
         server.ehlo()
         server.starttls(context=context)
         server.ehlo()
@@ -2221,11 +2255,7 @@ DEV_TEST_CONFIG_KEY = "dev_test_user_identity"
 
 
 def _production_mode_flag_active():
-    for key in ("SCANSTORY_PRODUCTION", "APP_ENV", "ENV"):
-        value = (os.environ.get(key) or "").strip().lower()
-        if value in ("1", "true", "yes", "production", "prod"):
-            return True
-    return (os.environ.get("FLASK_ENV") or "").strip().lower() in ("production", "prod")
+    return _runtime_production_mode_flag_active()
 
 
 def scanner_diagnostics_enabled():
@@ -4856,14 +4886,11 @@ def register():
             session["pending_verify_challenge_id"] = otp_rec.challenge_id
         return redirect(url_for("verify_email"))
 
-    except Exception as e:
-        print(f"❌ Registration error: {str(e)}")
-        print(f"❌ Error type: {type(e)}")
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        app.logger.exception("registration_failed_unexpected")
         db.session.rollback()
         
-        flash(f"Registration failed: {str(e)}", "error")
+        flash("Registration could not be completed. Please try again later.", "error")
         
         return render_template("user/register.html")
 
@@ -4874,15 +4901,21 @@ def verify_email():
     if not email:
         flash("No verification session found. Please register again.", "error")
         return redirect(url_for("register"))
+    has_challenge = bool(session.get("pending_verify_challenge_id"))
     
     if request.method == "GET":
-        return render_template("user/verify_email.html", email=email)
+        if not has_challenge:
+            flash("Request a new verification code on this device before entering an OTP.", "info")
+        return render_template("user/verify_email.html", email=email, has_challenge=has_challenge)
     
     otp = (request.form.get("otp") or "").strip()
     challenge_id = session.get("pending_verify_challenge_id")
+    if not challenge_id and not _active_otp(email, "verify_email"):
+        flash("Request a new verification code on this device before entering an OTP.", "warning")
+        return render_template("user/verify_email.html", email=email, has_challenge=False)
     if not _verify_otp(email, "verify_email", otp, challenge_id=challenge_id):
         flash("Verification could not be completed. Please try again or request a new code.", "error")
-        return render_template("user/verify_email.html", email=email)
+        return render_template("user/verify_email.html", email=email, has_challenge=has_challenge)
     
     user = User.query.filter_by(email=email).first()
     if not user:
@@ -4898,7 +4931,7 @@ def verify_email():
     flash("Email verified successfully. You can now login.", "success")
     return redirect(url_for("login"))
 
-@app.route("/resend-otp/", methods=["GET"])
+@app.route("/resend-otp/", methods=["POST"])
 def resend_otp():
     email = session.get("pending_verify_email")
     if not email:

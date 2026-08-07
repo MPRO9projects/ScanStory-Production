@@ -308,6 +308,38 @@ def test_successful_resend_invalidates_old_otp_and_new_otp_succeeds(app_module, 
         assert app_module._verify_otp(normal_user.email, "verify_email", delivered[-1], challenge_id=new_rec.challenge_id) is True
 
 
+def test_resend_otp_get_does_not_mutate_state(client, app_module, normal_user):
+    _old_code, old_rec = _issue_otp(app_module, normal_user.email, user_id=normal_user.id)
+    with client.session_transaction() as sess:
+        sess["pending_verify_email"] = normal_user.email
+        sess["pending_verify_challenge_id"] = old_rec.challenge_id
+
+    response = client.get("/resend-otp/", follow_redirects=False)
+
+    assert response.status_code == 405
+    assert app_module.OTPCode.query.filter_by(email=normal_user.email, purpose="verify_email").count() == 1
+    with client.session_transaction() as sess:
+        assert sess["pending_verify_challenge_id"] == old_rec.challenge_id
+
+
+def test_resend_otp_post_sets_new_device_challenge(client, app_module, normal_user):
+    app_module.OTP_RESEND_MIN_INTERVAL_SECONDS = 0
+    old_code, old_rec = _issue_otp(app_module, normal_user.email, user_id=normal_user.id)
+    with client.session_transaction() as sess:
+        sess["pending_verify_email"] = normal_user.email
+
+    response = client.post("/resend-otp/", follow_redirects=False)
+
+    assert response.status_code == 302
+    new_rec = app_module._latest_otp(normal_user.email, "verify_email")
+    assert new_rec.id != old_rec.id
+    assert app_module.OTPCode.query.get(old_rec.id).invalidated_at is not None
+    with client.session_transaction() as sess:
+        assert sess["pending_verify_challenge_id"] == new_rec.challenge_id
+    with app_module.app.test_request_context("/"):
+        assert app_module._verify_otp(normal_user.email, "verify_email", old_code, challenge_id=old_rec.challenge_id) is False
+
+
 def test_smtp_failure_does_not_corrupt_existing_verification_state(app_module, normal_user):
     app_module.OTP_RESEND_MIN_INTERVAL_SECONDS = 0
     old_code, old_rec = _issue_otp(app_module, normal_user.email, user_id=normal_user.id)

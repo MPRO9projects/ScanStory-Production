@@ -6,10 +6,46 @@ add_simple_admin.py backdoor credential.
 """
 import importlib
 import sys
+import smtplib
 
 import pytest
 
 pytestmark = pytest.mark.security
+
+
+def _fresh_import_app(monkeypatch, tmp_path, **env):
+    import dotenv
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: False)
+    for key in (
+        "FLASK_ENV",
+        "SCANSTORY_PRODUCTION",
+        "APP_ENV",
+        "ENV",
+        "SCANSTORY_DEV_TESTING",
+        "SESSION_COOKIE_SECURE",
+        "FLASK_SECRET_KEY",
+        "SCANSTORY_TESTING",
+        "DATABASE_URL",
+        "TEST_DATABASE_URL",
+        "SMTP_HOST",
+        "SMTP_PORT",
+        "SMTP_USER",
+        "SMTP_PASS",
+        "MAIL_FROM",
+        "SMTP_TIMEOUT_SECONDS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    for name in list(sys.modules):
+        if name == "app":
+            sys.modules.pop(name)
+    try:
+        return importlib.import_module("app")
+    finally:
+        for name in list(sys.modules):
+            if name == "app":
+                sys.modules.pop(name)
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +208,145 @@ def test_production_cookie_config_can_require_secure(monkeypatch, tmp_path):
         for name in list(sys.modules):
             if name == "app":
                 sys.modules.pop(name)
+
+
+def test_production_requires_secure_cookie(monkeypatch, tmp_path):
+    with pytest.raises(RuntimeError, match="SESSION_COOKIE_SECURE=true"):
+        _fresh_import_app(
+            monkeypatch,
+            tmp_path,
+            FLASK_ENV="production",
+            FLASK_SECRET_KEY="hardening-test-secret",
+            DATABASE_URL=f"sqlite:///{(tmp_path / 'prod.db').as_posix()}",
+            SMTP_HOST="smtp.example.com",
+            SMTP_PORT="587",
+            SMTP_USER="smtp-user",
+            SMTP_PASS="smtp-pass",
+            MAIL_FROM="no-reply@example.com",
+        )
+
+
+def test_production_secure_cookie_and_required_email_config_pass(monkeypatch, tmp_path):
+    app_module = _fresh_import_app(
+        monkeypatch,
+        tmp_path,
+        FLASK_ENV="production",
+        FLASK_SECRET_KEY="hardening-test-secret",
+        DATABASE_URL=f"sqlite:///{(tmp_path / 'prod-ok.db').as_posix()}",
+        SESSION_COOKIE_SECURE="1",
+        SCANSTORY_DEV_TESTING="0",
+        SMTP_HOST="smtp.example.com",
+        SMTP_PORT="587",
+        SMTP_USER="smtp-user",
+        SMTP_PASS="smtp-pass",
+        MAIL_FROM="no-reply@example.com",
+        SMTP_TIMEOUT_SECONDS="7.5",
+    )
+
+    assert app_module.app.config["SESSION_COOKIE_SECURE"] is True
+
+
+def test_production_refuses_dev_test_entitlement_flag(monkeypatch, tmp_path):
+    with pytest.raises(RuntimeError, match="SCANSTORY_DEV_TESTING=0"):
+        _fresh_import_app(
+            monkeypatch,
+            tmp_path,
+            FLASK_ENV="production",
+            FLASK_SECRET_KEY="hardening-test-secret",
+            DATABASE_URL=f"sqlite:///{(tmp_path / 'prod-dev-flag.db').as_posix()}",
+            SESSION_COOKIE_SECURE="1",
+            SCANSTORY_DEV_TESTING="1",
+            SMTP_HOST="smtp.example.com",
+            SMTP_PORT="587",
+            SMTP_USER="smtp-user",
+            SMTP_PASS="smtp-pass",
+            MAIL_FROM="no-reply@example.com",
+        )
+
+
+def test_production_requires_smtp_config(monkeypatch, tmp_path):
+    with pytest.raises(RuntimeError, match="SMTP_HOST"):
+        _fresh_import_app(
+            monkeypatch,
+            tmp_path,
+            FLASK_ENV="production",
+            FLASK_SECRET_KEY="hardening-test-secret",
+            DATABASE_URL=f"sqlite:///{(tmp_path / 'prod-no-smtp.db').as_posix()}",
+            SESSION_COOKIE_SECURE="1",
+            SCANSTORY_DEV_TESTING="0",
+        )
+
+
+def test_malformed_smtp_timeout_fails_config_validation(monkeypatch, tmp_path):
+    with pytest.raises(RuntimeError, match="SMTP_TIMEOUT_SECONDS"):
+        _fresh_import_app(
+            monkeypatch,
+            tmp_path,
+            FLASK_SECRET_KEY="hardening-test-secret",
+            SCANSTORY_TESTING="1",
+            TEST_DATABASE_URL=f"sqlite:///{(tmp_path / 'bad-timeout.db').as_posix()}",
+            SMTP_TIMEOUT_SECONDS="not-a-number",
+        )
+
+
+def test_send_email_smtp_passes_configured_timeout(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            captured["host"] = host
+            captured["port"] = port
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def ehlo(self):
+            captured["ehlo"] = captured.get("ehlo", 0) + 1
+
+        def starttls(self, context=None):
+            captured["starttls"] = context is not None
+
+        def login(self, username, password):
+            captured["username"] = username
+            captured["password"] = password
+
+        def sendmail(self, mail_from, to_email, message):
+            captured["mail_from"] = mail_from
+            captured["to_email"] = to_email
+            captured["message"] = message
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_USER", "smtp-user")
+    monkeypatch.setenv("SMTP_PASS", "smtp-pass")
+    monkeypatch.setenv("MAIL_FROM", "no-reply@example.com")
+    monkeypatch.setenv("SMTP_TIMEOUT_SECONDS", "6")
+    app_module = _fresh_import_app(
+        monkeypatch,
+        tmp_path,
+        FLASK_SECRET_KEY="hardening-test-secret",
+        SCANSTORY_TESTING="1",
+        TEST_DATABASE_URL=f"sqlite:///{(tmp_path / 'smtp-timeout.db').as_posix()}",
+        SMTP_HOST="smtp.example.com",
+        SMTP_PORT="587",
+        SMTP_USER="smtp-user",
+        SMTP_PASS="smtp-pass",
+        MAIL_FROM="no-reply@example.com",
+        SMTP_TIMEOUT_SECONDS="6",
+    )
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+
+    app_module.send_email_smtp("user@example.com", "Subject", "<p>Hello</p>")
+
+    assert captured["host"] == "smtp.example.com"
+    assert captured["port"] == 587
+    assert captured["timeout"] == 6.0
+    assert captured["username"] == "smtp-user"
+    assert captured["password"] == "smtp-pass"
 
 
 # ---------------------------------------------------------------------------
