@@ -54,7 +54,11 @@ def _assert_timing_payload_is_safe(payload):
             assert value >= 0
 
 
-def test_enqueue_creates_queued_record_and_fake_queue_id(app_module, db_session, normal_user):
+def test_enqueue_creates_queued_record_and_fake_queue_id(app_module, db_session, normal_user, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "fake")
+    monkeypatch.delenv("SCANSTORY_QUEUE_REQUIRED", raising=False)
+    monkeypatch.delenv("SCANSTORY_PRODUCTION", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
     project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
 
     job, created = app_module.enqueue_project_pair_processing(project.id)
@@ -183,7 +187,7 @@ def test_processing_status_endpoint_enforces_user_ownership(client, app_module, 
 
 def test_ready_checks_required_queue_without_leaking_url(client, monkeypatch):
     monkeypatch.setenv("SCANSTORY_QUEUE_REQUIRED", "1")
-    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "fake")
+    monkeypatch.delenv("SCANSTORY_QUEUE_MODE", raising=False)
     monkeypatch.delenv("REDIS_URL", raising=False)
 
     response = client.get("/ready")
@@ -192,6 +196,87 @@ def test_ready_checks_required_queue_without_leaking_url(client, monkeypatch):
     assert response.headers["Cache-Control"] == "no-store"
     payload = response.get_json()
     assert payload == {"status": "not_ready", "checks": {"database": "ok", "queue": "unavailable"}}
+
+
+def test_ready_explicit_rq_unavailable_reports_queue_not_ready(client, app_module, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "rq")
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    monkeypatch.setattr(app_module, "redis_ready_check", lambda: False)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.get_json() == {
+        "status": "not_ready",
+        "checks": {"database": "ok", "queue": "unavailable"},
+    }
+
+
+def test_ready_explicit_rq_available_reports_queue_ok(client, app_module, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "rq")
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    monkeypatch.setattr(app_module, "redis_ready_check", lambda: True)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "ready", "checks": {"database": "ok", "queue": "ok"}}
+
+
+@pytest.mark.parametrize("mode", ["fake", "inline"])
+def test_ready_fake_and_inline_modes_do_not_require_redis(client, app_module, monkeypatch, mode):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", mode)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    def redis_should_not_be_checked():
+        raise AssertionError("Redis readiness should not be checked for fake/inline queue modes")
+
+    monkeypatch.setattr(app_module, "redis_ready_check", redis_should_not_be_checked)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "ready", "checks": {"database": "ok"}}
+
+
+def test_healthz_remains_live_when_rq_redis_unavailable(client, app_module, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "rq")
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    monkeypatch.setattr(app_module, "redis_ready_check", lambda: False)
+
+    response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "ok"}
+
+
+def test_ready_redis_url_selected_rq_mode_requires_redis(client, app_module, monkeypatch):
+    monkeypatch.delenv("SCANSTORY_QUEUE_MODE", raising=False)
+    monkeypatch.delenv("SCANSTORY_QUEUE_REQUIRED", raising=False)
+    monkeypatch.delenv("SCANSTORY_TESTING", raising=False)
+    monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
+    monkeypatch.setattr(app_module, "redis_ready_check", lambda: False)
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "status": "not_ready",
+        "checks": {"database": "ok", "queue": "unavailable"},
+    }
+
+
+def test_ready_invalid_queue_mode_fails_safely(client, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "bogus")
+
+    response = client.get("/ready")
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "status": "not_ready",
+        "checks": {"database": "ok", "queue": "unavailable"},
+    }
 
 
 def test_queue_config_validates_supported_modes(app_module, monkeypatch):

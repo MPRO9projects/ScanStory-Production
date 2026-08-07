@@ -55,8 +55,8 @@ from processing_queue import (
     active_project_job,
     enqueue_project_pair_processing,
     queue_config_summary,
+    queue_mode,
     processing_job_status_payload,
-    queue_required,
     redis_ready_check,
     retry_failed_job,
     safe_error_summary,
@@ -580,7 +580,11 @@ def healthz():
 def _readiness_checks():
     db.session.execute(text("SELECT 1"))
     checks = {"database": "ok"}
-    if queue_required():
+    try:
+        mode = queue_mode()
+    except QueueUnavailable:
+        return {"database": "ok", "queue": "unavailable"}
+    if mode == "rq":
         if not redis_ready_check():
             return {"database": "ok", "queue": "unavailable"}
         checks["queue"] = "ok"

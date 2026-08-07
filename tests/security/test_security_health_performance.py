@@ -17,7 +17,12 @@ def clear_request_limiter(app_module):
     app_module.request_limiter.clear()
 
 
-def test_healthz_is_minimal_and_ready_checks_database(client):
+def test_healthz_is_minimal_and_ready_checks_database(client, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "fake")
+    monkeypatch.delenv("SCANSTORY_QUEUE_REQUIRED", raising=False)
+    monkeypatch.delenv("SCANSTORY_PRODUCTION", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
     health = client.get("/healthz")
     assert health.status_code == 200
     assert health.get_json() == {"status": "ok"}
