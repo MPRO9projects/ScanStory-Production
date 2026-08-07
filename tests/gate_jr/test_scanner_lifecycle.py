@@ -776,8 +776,16 @@ def test_recovery_failure_enters_fallback_and_does_not_resume_loops():
     not_recovered_idx = body.index("if (!recovered) {")
     enter_fallback_idx = body.index("enterFallback('CAMERA_UNAVAILABLE');", not_recovered_idx)
     return_idx = body.index("return;", enter_fallback_idx)
-    ready_to_scan_idx = body.index("safeTransition('ready_to_scan', reason);")
+    # Fix 7 (V1 Agent 2): this transition's return value is now checked before the loops
+    # start - a rejected transition routes to its OWN enterFallback('CAMERA_UNAVAILABLE')
+    # + return instead of silently starting the loops anyway.
+    ready_to_scan_idx = body.index(
+        "const readyForScan = safeTransition('ready_to_scan', reason, { site: 'recoverScannerInner_success' });"
+    )
     assert not_recovered_idx < enter_fallback_idx < return_idx < ready_to_scan_idx
+    assert "if (!readyForScan) {" in body
+    start_loops_idx = body.index("startDetectLoop();\n      startTrackingLoop();", ready_to_scan_idx)
+    assert ready_to_scan_idx < start_loops_idx
     assert "'automatic_recovery_failed'" in body
     assert "'automatic_recovery_succeeded'" in body
 
@@ -801,12 +809,82 @@ def test_fallback_available_never_appears_without_visible_action():
 
 
 def test_prior_failure_reload_routes_through_canonical_fallback_panel():
+    """Fix 5 (V1 Agent 2): the bare '1' flag became a {code, at} record so a transient
+    OpenCV load failure can be told apart from a hard capability failure, but a stored
+    failure of EITHER kind must still force fallback on this load - only the TTL/
+    consume-once behavior (covered by its own dedicated test) changed."""
     html = _scanner_html()
-    assert "const scannerPriorFailure = sessionStorage.getItem('scanstoryScannerPriorFailure') === '1';" in html
+    assert "let scannerPriorFailure = false;" in html
+    assert "sessionStorage.getItem(SCANNER_PRIOR_FAILURE_KEY);" in html
+    assert "scannerPriorFailure = true;" in html
     assert "return 'SCANNER_PRIOR_FAILURE';" in html
     fallback_start = html.index("if (scannerMode === 'fallback') {", html.index("fallbackRetryBtn.addEventListener"))
     fallback_body = html[fallback_start:fallback_start + 240]
     assert "enterFallback(scannerFallbackReason());" in fallback_body
+
+
+def test_prior_failure_is_stored_with_reason_and_timestamp_not_a_bare_flag():
+    """Fix 5: enterFallback() must persist enough to distinguish hard vs. transient on the
+    NEXT load - a bare '1' flag (the pre-fix format) can't carry that distinction."""
+    html = _scanner_html()
+    enter_fallback_start = html.index("function enterFallback(code) {")
+    enter_fallback_body = html[enter_fallback_start:enter_fallback_start + 800]
+    assert "JSON.stringify({ code: code || null, at: Date.now() })" in enter_fallback_body
+    assert "sessionStorage.setItem('scanstoryScannerPriorFailure'" in enter_fallback_body
+
+
+def test_prior_failure_transient_code_is_consumed_once_hard_code_is_not():
+    """Fix 5: only OPENCV_LOAD_FAILED (a load/network hiccup) is in the transient set and
+    gets cleared immediately after being honored for this load - a hard capability failure
+    (anything not in that set, including a legacy/unparsable value) must keep forcing
+    fallback and must NOT be cleared here."""
+    html = _scanner_html()
+    read_start = html.index("const SCANNER_PRIOR_FAILURE_KEY")
+    read_end = html.index("const scannerMode = runtime.selectRuntimeMode", read_start)
+    body = html[read_start:read_end]
+    assert "new Set(['OPENCV_LOAD_FAILED'])" in body
+    is_transient_idx = body.index("const isTransient")
+    remove_idx = body.index("sessionStorage.removeItem(SCANNER_PRIOR_FAILURE_KEY);", is_transient_idx)
+    if_transient_idx = body.rindex("if (isTransient)", is_transient_idx, remove_idx)
+    assert is_transient_idx < if_transient_idx < remove_idx
+
+
+def test_prior_failure_transient_consume_makes_this_load_the_retry_not_one_more_fallback_pass():
+    """Correction 1 (off-by-one fix): sequence is Load A fails -> sets the flag. Load B (the
+    very next fresh navigation) must consume the flag AND attempt a normal load on THAT SAME
+    load - not force one more fallback-only pass before a THIRD load finally retries. That
+    means the transient branch must clear the flag WITHOUT ever setting
+    scannerPriorFailure = true; only the hard-failure branch may set it true. This is a
+    structural proof (no JS engine in this test suite) - see the sibling Python-side
+    contract test that select_runtime_mode(..., prior_failure=False) never forces 'fallback'
+    from that flag alone."""
+    html = _scanner_html()
+    read_start = html.index("const SCANNER_PRIOR_FAILURE_KEY")
+    read_end = html.index("const scannerMode = runtime.selectRuntimeMode", read_start)
+    body = html[read_start:read_end]
+    if_transient_start = body.index("if (isTransient) {")
+    else_start = body.index("} else {", if_transient_start)
+    else_end = body.index("}", else_start + len("} else {")) + 1
+    if_branch = body[if_transient_start:else_start]
+    else_branch = body[else_start:else_end]
+    assert "sessionStorage.removeItem(SCANNER_PRIOR_FAILURE_KEY);" in if_branch
+    assert "scannerPriorFailure = true;" not in if_branch  # THIS load is the retry, not another forced fallback
+    assert "scannerPriorFailure = true;" in else_branch    # only the hard-failure path forces fallback here
+
+
+def test_select_runtime_mode_prior_failure_false_never_forces_fallback_alone():
+    """Python-side half of the Correction 1 proof: once the JS above leaves
+    scannerPriorFailure false for the consumed-transient case, selectRuntimeMode's own
+    contract (mirrored here via the scanner_runtime.py port used elsewhere in this suite)
+    must not fall back to 'fallback' on that flag alone for an otherwise-healthy device."""
+    from scanner_runtime import select_runtime_mode
+
+    healthy_caps = {
+        "secure_context": True, "camera_api": True, "webassembly": True, "canvas": True,
+        "device_memory": 4, "hardware_concurrency": 4, "screen_width": 390,
+    }
+    assert select_runtime_mode(healthy_caps, prior_failure=False) != "fallback"
+    assert select_runtime_mode(healthy_caps, prior_failure=True) == "fallback"
 
 
 def test_retry_camera_invokes_guarded_recovery_and_avoids_concurrent_starts():
@@ -1926,9 +2004,13 @@ def test_video_diagnostics_cover_play_pause_ended_loop_source_change_and_trackin
 
 def test_overlay_video_has_native_loop_enabled():
     """Section 3 decision rule: if loop is already enabled, do not add a fake fix. Confirmed
-    present — no change made to the video element."""
+    present — loop itself is unchanged; Fix 1 (V1 Agent 2) added disablePictureInPicture/
+    controlsList/aria-hidden to the same tag afterward, so this now matches the updated tag."""
     html = _scanner_html()
-    assert '<video id="overlay" autoplay playsinline loop preload="auto"></video>' in html
+    assert (
+        '<video id="overlay" autoplay playsinline loop preload="auto" disablePictureInPicture\n'
+        '        controlsList="nodownload nofullscreen noremoteplayback" aria-hidden="true"></video>'
+    ) in html
 
 
 def test_video_ended_does_not_drop_tracking():
@@ -6436,22 +6518,30 @@ def test_wave6_uses_final_backend_fallback_routes():
     assert "FALLBACK_ANALYTICS_ENDPOINT" not in html
 
 
-def test_wave6_project_fallback_discovery_omits_pair_index_without_verified_context():
+def test_wave6_fallback_discovery_never_sends_a_pair_index_hint():
+    """Fix 6 (V1 Agent 2): this used to send verifiedFallbackPairContext's pairIndex as a
+    pair_index query hint, and the server used to treat ANY confirmed match's own pair as
+    an implicit fallback candidate on the strength of that hint alone - a real product bug
+    (an ordinary matched pair's own AR video could be offered back as "fallback" with no
+    explicit fallback ever configured). The hint is gone entirely now; fallback is resolved
+    from Project.fallback_pair_id only (see resolve_scanner_fallback_video in app.py)."""
     html = _scanner_html()
     fn_start = html.index("async function discoverFallbackVideo(reason)")
     fn_body = html[fn_start:html.index("function submitFallbackAnalytics", fn_start)]
-    assert "const pairIndex = verifiedFallbackPairContext ? verifiedFallbackPairContext.pairIndex : null;" in fn_body
-    assert "if (Number.isInteger(pairIndex)) url.searchParams.set('pair_index', String(pairIndex));" in fn_body
+    assert "url.searchParams.set('pair_index'" not in fn_body
     assert "fallbackCandidate = {" in fn_body
     assert "kind: data.source === 'pair' ? 'pair' : 'project'," in fn_body
 
 
-def test_wave6_accepted_pair_fallback_discovery_uses_verified_pair_index_only():
+def test_wave6_match_accept_still_sets_verified_context_but_it_no_longer_feeds_fallback_query():
+    """verifiedFallbackPairContext is still recorded on every confirmed match accept (kept
+    for its other bookkeeping/analytics use), but Fix 6 means it must never again reach the
+    fallback-video request itself - see the sibling test above."""
     html = _scanner_html()
     fn_start = html.index("async function discoverFallbackVideo(reason)")
     fn_body = html[fn_start:html.index("function submitFallbackAnalytics", fn_start)]
     assert "verifiedFallbackPairContext" in fn_body
-    assert "url.searchParams.set('pair_index', String(pairIndex));" in fn_body
+    assert "url.searchParams.set('pair_index'" not in fn_body
     accepted_at = html.index("recordAcceptance();")
     set_context_at = html.index("setVerifiedFallbackPairContext(Number(newPairId), 'matched_detection');", accepted_at)
     match_diag_at = html.index("scannerDiagnostics.push('[SCAN MATCH ACCEPT]'", accepted_at)

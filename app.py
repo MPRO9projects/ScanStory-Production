@@ -268,6 +268,7 @@ RATE_LIMITS = {
     "scanner_session_end": (90, 60),
     "scanner_fallback": (60, 60),
     "scanner_fallback_event": (60, 60),
+    "scanner_opencv_telemetry": (30, 60),
     "upload": (8, 3600),
     "login_ip": (80, 900),
     "register_ip": (30, 3600),
@@ -1551,40 +1552,45 @@ def _project_is_available(project):
 # ---------------------------------------------------------------------
 # Scanner fallback video resolution (V1 Wave 6)
 # ---------------------------------------------------------------------
-def _fallback_video_payload(pair, source):
+def _fallback_video_payload(pair):
     """Never includes a raw filesystem path - video_url is the same
     url_for("serve_video", ...) helper ProjectPair.get_video_url() already
     uses, which itself re-checks project availability on every request."""
     return {
         "available": True,
-        "source": source,  # "pair" (pair-context hint) or "project_default"
+        "source": "project_default",
         "pair_index": pair.pair_index,
         "video_url": pair.get_video_url(),
     }
 
 
-def resolve_scanner_fallback_video(project, pair_index=None):
-    """Resolve the fallback video (if any) a scanner client may offer for
-    `project`, optionally preferring a specific pair's own video when a
-    pair-context hint is supplied (e.g. after a partial detection that
-    tracked toward a pair but never fully confirmed it). Falls back to the
-    project's designated project-level default fallback when no
-    pair-specific video is available or no hint was given.
+def resolve_scanner_fallback_video(project):
+    """Resolve the EXPLICIT fallback video (if any) a scanner client may offer for
+    `project`. Fallback is available if and only if the project creator configured
+    `Project.fallback_pair_id` AND that pair's video is actually servable
+    (`ProjectPair.can_serve_video`) - nothing else makes `available: true`.
 
-    Every ProjectPair lookup below is scoped to `project_id=project.id` -
-    a fallback response for one project can never resolve to another
-    project's pair, even if a caller supplies a pair_index/fallback_pair_id
-    that happens to exist under a different project.
+    Fix 6 (V1 Agent 2): this used to also treat ANY pair the client had merely matched/
+    tracked toward (a `pair_index` hint, sent unconditionally on every confirmed match -
+    see `verifiedFallbackPairContext` in scanner.html) as an implicit fallback candidate,
+    checked BEFORE `fallback_pair_id` and regardless of whether the creator ever configured
+    one. That meant an ordinary matched pair's own AR trigger video could be offered back to
+    the visitor as "fallback" even when no explicit fallback was ever set up - a real
+    product bug, not an intentional "partial detection" feature (the previous docstring's
+    framing was inaccurate; there is no code path here that only fires on a *partial* match).
+    The `pair_index` hint is no longer accepted by this function at all: it has no remaining
+    legitimate purpose once fallback is explicit-only, and accepting-but-ignoring it would
+    just leave a dead parameter inviting the same confusion again.
+
+    The ProjectPair lookup below is scoped to `project_id=project.id` - a fallback response
+    for one project can never resolve to another project's pair even if `fallback_pair_id`
+    happens to reference a row that exists (under a different project) after a project delete/
+    reassignment edge case.
     """
-    if pair_index is not None:
-        pair = ProjectPair.query.filter_by(project_id=project.id, pair_index=pair_index).first()
-        if pair and pair.can_serve_video:
-            return _fallback_video_payload(pair, "pair")
-
     if project.fallback_pair_id:
         pair = ProjectPair.query.filter_by(id=project.fallback_pair_id, project_id=project.id).first()
         if pair and pair.can_serve_video:
-            return _fallback_video_payload(pair, "project_default")
+            return _fallback_video_payload(pair)
 
     return {"available": False}
 
@@ -7445,11 +7451,14 @@ def serve_qr(filename):
 
 @app.route("/api/scanner/<int:project_id>/fallback-video")
 def scanner_fallback_video(project_id):
-    """Public, unauthenticated: resolve the fallback video (if any) a
-    scanner client may offer after a recognition timeout / camera failure /
-    partial detection - see resolve_scanner_fallback_video() above. Optional
-    `pair_index` query param supplies the pair-context hint (the pair the
-    scanner was tracking toward before falling back).
+    """Public, unauthenticated: resolve the EXPLICIT fallback video (if any) a
+    scanner client may offer after a recognition timeout / camera failure - see
+    resolve_scanner_fallback_video() above. Available only when the project
+    creator configured `fallback_pair_id` and that pair's video is servable;
+    an ordinary matched pair is never an implicit fallback candidate (Fix 6,
+    V1 Agent 2). No `pair_index` hint is accepted here anymore - it had no
+    remaining legitimate purpose once fallback became explicit-only, and a
+    stale client still sending one is silently ignored rather than erroring.
 
     Availability check mirrors serve_video()/serve_image()/serve_qr() above
     exactly (_project_is_available): a suspended/inactive project is
@@ -7471,8 +7480,7 @@ def scanner_fallback_video(project_id):
     if not ok:
         return _scanner_rate_limited_response(retry_after)
 
-    pair_index = request.args.get("pair_index", type=int)
-    return jsonify(resolve_scanner_fallback_video(project, pair_index))
+    return jsonify(resolve_scanner_fallback_video(project))
 
 
 SCANNER_TEST_TOKEN_MAX_AGE_SECONDS = 120
@@ -8520,6 +8528,84 @@ def scanner_fallback_event(project_id):
             "created_at": event.created_at.isoformat(),
         },
     }), 201
+
+
+# Correction 2 (V1 Agent 2): retry_success renamed to user_retry_success and
+# first_attempt_failure added - the retry shape changed from "up to 3 blind automatic
+# attempts" to "1 automatic attempt, then every further attempt is a user-initiated Retry
+# Camera click," so telemetry now distinguishes the automatic first attempt's own failure
+# (first_attempt_failure - the user is shown the retry/fallback choice, not yet fully
+# terminal) from a user-initiated retry also failing (terminal_failure).
+OPENCV_TELEMETRY_OUTCOMES = {
+    "first_attempt_success", "user_retry_success", "first_attempt_failure", "terminal_failure",
+}
+
+
+@app.route("/api/scanner/<int:project_id>/opencv-telemetry", methods=["POST"])
+@csrf.exempt  # Public, unauthenticated scanner endpoint - sent via navigator.sendBeacon, same
+              # class/no-cookie-CSRF-binding reasoning as scanner_session_end/fallback_event above.
+def scanner_opencv_telemetry(project_id):
+    """Lightweight, low-cardinality OpenCV cold-start outcome sink (V1 Agent 2, Fix 4).
+
+    Fire-and-forget, best-effort observability only - never touches ScanLog/ScanEvent,
+    never affects scan counting or fallback resolution, and writes no DB row (this is a
+    log line, not a table). Deliberately narrow: just enough to answer "did the vision
+    engine load, on which attempt, how long did it take, and what was the device/network
+    context" without becoming a general analytics subsystem.
+    """
+    project = Project.query.get(project_id)
+    if not project or not _project_is_available(project):
+        # Best-effort telemetry for a project that no longer resolves - still 200 so the
+        # client's sendBeacon isn't treated as a delivery failure, just nothing to log against.
+        return jsonify({"ok": True, "logged": False}), 200
+
+    ok, retry_after = _check_rate_limit(
+        "scanner_opencv_telemetry",
+        _rate_limit_key("opencv_telemetry", project_id),
+    )
+    if not ok:
+        return _scanner_rate_limited_response(retry_after)
+
+    data = request.get_json(silent=True) if request.is_json else request.form
+    if not data:
+        return jsonify({"ok": False, "error": "Missing request body."}), 400
+
+    outcome = (data.get("outcome") or "").strip()
+    if outcome not in OPENCV_TELEMETRY_OUTCOMES:
+        return jsonify({"ok": False, "error": "outcome must be one of: " + ", ".join(sorted(OPENCV_TELEMETRY_OUTCOMES))}), 400
+
+    def _clamp_int(value, lo, hi, default=None):
+        if value in (None, ""):
+            return default
+        try:
+            return max(lo, min(hi, int(value)))
+        except (TypeError, ValueError):
+            return default
+
+    def _parse_bool(value):
+        # Client may send this via form-encoded sendBeacon (booleans arrive as the
+        # strings "true"/"false") or JSON (real booleans) - handle both, never let a
+        # truthy non-empty string like "false" evaluate to True.
+        if value in (None, ""):
+            return None
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() == "true"
+
+    safe = {
+        "event": "scanner_opencv_load",
+        "project_id": project_id,
+        "outcome": outcome,
+        "attempt_count": _clamp_int(data.get("attempt_count"), 0, 10, default=0),
+        "total_duration_ms": _clamp_int(data.get("total_duration_ms"), 0, 300000, default=0),
+        "sw_controller": _parse_bool(data.get("sw_controller")),
+        "device_memory": _clamp_int(data.get("device_memory"), 0, 128),
+        "hardware_concurrency": _clamp_int(data.get("hardware_concurrency"), 0, 128),
+        "connection_effective_type": (str(data.get("connection_effective_type") or "")[:16] or None),
+        "scan_session_id": (str(data.get("scan_session_id") or "")[:64] or None),
+    }
+    app.logger.info("scanner_opencv_telemetry", extra={"scanner_opencv_telemetry": safe})
+    return jsonify({"ok": True, "logged": True}), 200
 
 
 @app.route("/detect_track", methods=["POST"])

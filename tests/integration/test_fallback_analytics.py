@@ -178,14 +178,15 @@ def test_fallback_video_unavailable_when_nothing_configured(client, project_with
     assert resp.get_json() == {"available": False}
 
 
-def test_fallback_video_pair_hint_resolves_to_that_pairs_own_video(client, project_with_pair):
+def test_fallback_video_pair_hint_alone_never_grants_fallback(client, project_with_pair):
+    """Fix 6 (V1 Agent 2) regression test: this is the exact bug being fixed - an ordinary
+    matched pair (the client sends pair_index for ANY confirmed match, not just a partial
+    one) must never become an implicit fallback candidate merely because a caller supplies
+    its pair_index. With no Project.fallback_pair_id configured, this must be unavailable
+    no matter what pair_index is sent."""
     project, pair = project_with_pair
     resp = client.get(f"/api/scanner/{project.id}/fallback-video?pair_index={pair.pair_index}")
-    payload = resp.get_json()
-    assert payload["available"] is True
-    assert payload["source"] == "pair"
-    assert payload["pair_index"] == pair.pair_index
-    assert f"/video/{project.id}/{pair.pair_index}" in payload["video_url"]
+    assert resp.get_json() == {"available": False}
 
 
 def test_fallback_video_falls_back_to_project_default_without_pair_hint(
@@ -202,24 +203,31 @@ def test_fallback_video_falls_back_to_project_default_without_pair_hint(
     assert payload["pair_index"] == pair.pair_index
 
 
-def test_fallback_video_pair_hint_preferred_over_project_default(client, app_module, db_session, project_with_pair):
+def test_fallback_video_pair_hint_never_overrides_project_default(client, app_module, db_session, project_with_pair):
+    """Fix 6: pair_index is no longer read by resolve_scanner_fallback_video at all - the
+    configured project default must be returned regardless of any pair_index hint sent
+    alongside it (previously the pair hint would win instead)."""
     project, pair0 = project_with_pair
-    pair1 = _make_pair(app_module, db_session, project, index=1)
-    project.fallback_pair_id = pair0.id  # project default points at pair 0
+    _pair1 = _make_pair(app_module, db_session, project, index=1)
+    project.fallback_pair_id = pair0.id
     db_session.commit()
 
-    # A pair-context hint for pair 1 must win over the project-level default.
     resp = client.get(f"/api/scanner/{project.id}/fallback-video?pair_index=1")
     payload = resp.get_json()
     assert payload["available"] is True
-    assert payload["source"] == "pair"
-    assert payload["pair_index"] == 1
+    assert payload["source"] == "project_default"
+    assert payload["pair_index"] == pair0.pair_index
 
 
 def test_fallback_video_skips_pair_with_no_actual_video_file(client, app_module, db_session, project_with_pair):
+    """Fix 6 case (3): an explicitly configured fallback whose pair has no servable video
+    file must resolve to unavailable, not error and not silently pick something else."""
     project, _pair0 = project_with_pair
     pair_no_video = _make_pair(app_module, db_session, project, index=1, with_video=False)
-    resp = client.get(f"/api/scanner/{project.id}/fallback-video?pair_index={pair_no_video.pair_index}")
+    project.fallback_pair_id = pair_no_video.id
+    db_session.commit()
+
+    resp = client.get(f"/api/scanner/{project.id}/fallback-video")
     assert resp.get_json() == {"available": False}
 
 

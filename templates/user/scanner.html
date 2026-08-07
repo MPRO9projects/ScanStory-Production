@@ -54,6 +54,13 @@
       height: 100%;
       object-fit: fill;  /* fill = stretch video to exactly cover overlayWrap before perspective warp */
       transform-origin: top left;
+      /* Explicit (not just inherited from #overlayWrap): iOS Safari's native single-tap
+         media-transport gesture on <video> is known to bypass ancestor-only pointer-events
+         inheritance in some WebKit builds. Setting it directly on the element itself is
+         cheap, defensive insurance against a future ancestor-rule change silently
+         re-enabling it — this video is a pure rendering surface, never a tap target. */
+      pointer-events: none;
+      -webkit-touch-callout: none;
     }
 
     #poseDebugCanvas {
@@ -583,7 +590,8 @@
     <video id="cam" autoplay playsinline muted></video>
 
     <div id="overlayWrap">
-      <video id="overlay" autoplay playsinline loop preload="auto"></video>
+      <video id="overlay" autoplay playsinline loop preload="auto" disablePictureInPicture
+        controlsList="nodownload nofullscreen noremoteplayback" aria-hidden="true"></video>
     </div>
     <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" id="wm-logo" alt="ScanStory">
     {% if scanner_diagnostics_enabled %}
@@ -787,6 +795,13 @@
       'fallback_playing',
       'returning'
     ]);
+    // scannerUiState is an intentionally-separate, WRITE-ONLY presentation label
+    // (document.documentElement.dataset.scannerUiState below is consumed only by CSS/manual
+    // inspection, never read back or branched on by scanner JS). It is NOT a second source of
+    // truth for the real FSM — `scannerState` above is the only thing that gates behavior.
+    // The two can legitimately disagree at any instant (they update on different triggers);
+    // that is cosmetic drift, not a correctness bug, and is not something to "fix" by merging
+    // the two systems. See safeTransition()/transitionScannerState() for the real FSM.
     let scannerUiState = null;
     function setScannerUiState(nextState, reason) {
       if (!SCANNER_UI_STATES.includes(nextState)) return false;
@@ -923,7 +938,40 @@
     scannerState.transition('checking_capabilities');
     const runtimeCapabilities = runtime.detectCapabilities();
     const runtimeOverride = new URLSearchParams(location.search).get('scanner_mode');
-    const scannerPriorFailure = sessionStorage.getItem('scanstoryScannerPriorFailure') === '1';
+    // Fix 5 (V1 Agent 2): a transient OpenCV load/network failure used to poison every future
+    // page load in this tab (a bare '1' flag, cleared only by an explicit "Retry Camera"
+    // click) even though the exact same failure mode is what Retry Camera itself proves is
+    // recoverable. Genuinely unsupported devices (no secure context, no camera API, etc.)
+    // must still reliably force fallback forever - only the load/network-failure case gets
+    // auto-recovery, and only once (consume-once, not a standing "this tab is broken" flag).
+    const SCANNER_PRIOR_FAILURE_KEY = 'scanstoryScannerPriorFailure';
+    // Load/network hiccups only - a device that is genuinely incapable (secure context,
+    // camera API, WebAssembly, unsupported browser) is never in this set and must keep
+    // forcing fallback on every future load until something external changes.
+    const TRANSIENT_SCANNER_FAILURE_CODES = new Set(['OPENCV_LOAD_FAILED']);
+    let scannerPriorFailure = false;
+    try {
+      const storedFailureRaw = sessionStorage.getItem(SCANNER_PRIOR_FAILURE_KEY);
+      if (storedFailureRaw) {
+        let storedFailure = null;
+        try { storedFailure = JSON.parse(storedFailureRaw); } catch (_) { storedFailure = null; }
+        // A legacy bare '1' (pre-Fix-5) or unparsable value has no known reason - treat as a
+        // hard failure (the safe default) rather than guessing it was transient.
+        const isTransient = Boolean(storedFailure && TRANSIENT_SCANNER_FAILURE_CODES.has(storedFailure.code));
+        if (isTransient) {
+          // Correction 1: consume-once means THIS load is the retry, not one more forced
+          // fallback pass before the retry. Load A failed and set the flag; THIS load (the
+          // very next fresh navigation) clears it and proceeds normally - scannerPriorFailure
+          // stays false so selectRuntimeMode() picks a real camera/OpenCV mode below, same as
+          // if nothing had ever failed. Only a SECOND consecutive failure sets the flag again.
+          sessionStorage.removeItem(SCANNER_PRIOR_FAILURE_KEY);
+        } else {
+          // Hard capability failure (or an unrecognized/legacy value) - keeps forcing fallback
+          // on every load until an explicit Retry Camera click clears it.
+          scannerPriorFailure = true;
+        }
+      }
+    } catch (_) { scannerPriorFailure = false; }
     const scannerMode = runtime.selectRuntimeMode(runtimeCapabilities, runtimeOverride, scannerPriorFailure);
     const runtimeConfig = runtime.MODES[scannerMode];
     if (scannerMode === 'fallback') { scannerState.transition('fallback'); } else { scannerState.transition('requesting_camera'); setScannerUiState('camera_starting', 'runtime_mode'); }
@@ -1514,7 +1562,35 @@
     let opencvLoadPromise = null;
     let opencvLoadTimer = null;
     let opencvLoadFailed = false;
-    const MAX_LOAD_ATTEMPTS = 3;
+    // Fix 2 (V1 Agent 2): incremented once per genuinely NEW loadOpenCV() attempt (never on the
+    // early-return "already loaded/already loading" paths). Every attempt's callbacks
+    // (onRuntimeInitialized/onAbort/onerror/timeout) capture the generation active when THAT
+    // attempt started; if the active generation has since moved on by the time one of those
+    // callbacks actually fires, it is stale and must return immediately without touching
+    // cvReady, timers, loops, or fallback - a delayed/duplicate opencv.js script execution
+    // (removeOpenCVScriptForRetry only detaches the DOM node, it cannot cancel an in-flight
+    // fetch/parse/eval that already started) must never be able to double-fire success or
+    // clobber the timer belonging to the attempt that superseded it.
+    let opencvLoadGeneration = 0;
+    let opencvLoadStartedAt = 0; // Fix 4: wall-clock start of the FIRST attempt in this load sequence, for total_duration_ms
+    // Correction 2 (V1 Agent 2): the original Fix 3 kept MAX_LOAD_ATTEMPTS=3 and layered a
+    // backoff on top - that still summed to ~45-48s of BLIND waiting (3 silent 15s attempts)
+    // before the user had any say. Redesigned instead of just made-safer: attempt 1 is the
+    // ONLY fully-automatic attempt (its own 15000ms timeout is UNCHANGED - a genuinely
+    // slow-but-healthy older iPhone's ~14MB opencv.js+wasm fetch still gets the full window,
+    // never shortened). The moment attempt 1 fails, control goes straight to the user via the
+    // EXISTING fallback panel (enterFallback() -> Retry Camera / Return / Watch Video
+    // Instead) instead of silently starting a 2nd/3rd identical wait. Any attempt after the
+    // first only ever happens because the user clicked "Retry Camera"
+    // (retryCameraFromFallback() resets opencvLoadAttempts and calls loadOpenCV again) - so
+    // there is no fixed attempt ceiling to enforce here anymore; every attempt past the first
+    // is opt-in, one click at a time, never a blind loop.
+    //
+    // Fully-automatic (no user interaction) worst-case ceiling: exactly 15000ms - attempt 1's
+    // timeout - because enterFallback() fires immediately and unconditionally on that
+    // failure, reaching a safe terminal state right away rather than after ~45s. A user who
+    // walks away mid-load lands on the fallback panel at ~15s, not ~45s, and is never
+    // stranded either way.
 
     function clearOpenCVLoadTimer() {
       if (opencvLoadTimer) {
@@ -1528,6 +1604,39 @@
       if (oldScript) oldScript.remove();
     }
 
+    // Fix 4: lightweight, low-cardinality OpenCV cold-start telemetry - same sendBeacon/
+    // fetch-keepalive delivery pattern endScannerSession() already uses (see above), posted
+    // to its own small endpoint (POST /api/scanner/<id>/opencv-telemetry) rather than
+    // overloading the fallback-event route's different (ScanEvent-table) contract. Never
+    // throws into and never gates any caller - telemetry delivery failure must never affect
+    // scanner behavior.
+    function reportOpenCVTelemetry(outcome) {
+      try {
+        const payload = {
+          outcome,
+          attempt_count: String(opencvLoadAttempts),
+          total_duration_ms: String(Math.max(0, Math.round(performance.now() - opencvLoadStartedAt))),
+          sw_controller: String(Boolean(navigator.serviceWorker && navigator.serviceWorker.controller)),
+          device_memory: String(runtimeCapabilities.deviceMemory ?? ''),
+          hardware_concurrency: String(runtimeCapabilities.hardwareConcurrency ?? ''),
+          connection_effective_type: (navigator.connection && navigator.connection.effectiveType) || '',
+          scan_session_id: scannerSessionId || ''
+        };
+        const url = `/api/scanner/${encodeURIComponent(PROJECT_ID)}/opencv-telemetry`;
+        if (navigator.sendBeacon) {
+          const blob = new Blob([new URLSearchParams(payload).toString()], { type: 'application/x-www-form-urlencoded' });
+          navigator.sendBeacon(url, blob);
+        } else {
+          fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams(payload).toString(),
+            keepalive: true
+          }).catch(() => {});
+        }
+      } catch (_) { /* best-effort only */ }
+    }
+
     function loadOpenCV(options) {
       options = options || {};
       if (cvReady) return Promise.resolve(true);
@@ -1539,14 +1648,42 @@
         removeOpenCVScriptForRetry();
       }
       opencvLoadAttempts++;
-      console.log(`Loading OpenCV (attempt ${opencvLoadAttempts}/${MAX_LOAD_ATTEMPTS})...`);
+      const myGeneration = ++opencvLoadGeneration;
+      // Correction 2: attempt 1 is the only automatic one - every later call only happens
+      // because the user clicked "Retry Camera" (retryCameraFromFallback() resets
+      // opencvLoadAttempts to 0 first), so isFirstAttempt doubles as "was this attempt
+      // automatic or user-initiated."
+      const isFirstAttempt = opencvLoadAttempts === 1;
+      if (isFirstAttempt) opencvLoadStartedAt = performance.now();
+      console.log(`Loading OpenCV (attempt ${opencvLoadAttempts}${isFirstAttempt ? ', automatic' : ', user-initiated retry'})...`);
 
       const statusDiv = document.getElementById('status');
-      statusDiv.textContent = deviceInfo.isLowEnd ? "Loading (may take a moment)..." : "Loading OpenCV...";
+      const stageLabel = document.getElementById('arStageLabel');
+      // Fix 3/Correction 2: a retry must look/read distinctly different from the first load -
+      // never an identical silent repeat of the same text. No "/N" denominator anymore since
+      // there's no fixed attempt ceiling - every retry past the first is one explicit click.
+      statusDiv.textContent = isFirstAttempt
+        ? (deviceInfo.isLowEnd ? "Loading (may take a moment)..." : "Loading OpenCV...")
+        : `Retrying vision engine (attempt ${opencvLoadAttempts})...`;
       statusDiv.className = "status scan";
+      if (stageLabel) {
+        stageLabel.textContent = isFirstAttempt
+          ? "Loading vision engine..."
+          : `Retrying vision engine (attempt ${opencvLoadAttempts})...`;
+      }
+      scannerDiagnostics.push(isFirstAttempt ? 'opencv_load_start' : 'opencv_load_retry', {
+        attempt: opencvLoadAttempts, userInitiated: !isFirstAttempt, generation: myGeneration
+      });
 
       opencvLoadPromise = new Promise(function (resolve) {
         function retryOrFallback(reason) {
+          if (myGeneration !== opencvLoadGeneration) {
+            scannerDiagnostics.push('opencv_stale_callback_ignored', {
+              source: 'retryOrFallback', reason: reason || null,
+              staleGeneration: myGeneration, activeGeneration: opencvLoadGeneration
+            });
+            return; // never clears the ACTIVE attempt's timer, never sets cvReady/fallback
+          }
           clearOpenCVLoadTimer();
           opencvLoadPromise = null;
           removeOpenCVScriptForRetry();
@@ -1554,16 +1691,21 @@
             resolve(true);
             return;
           }
-          if (opencvLoadAttempts < MAX_LOAD_ATTEMPTS) {
-            console.warn('OpenCV load failed, retrying...', reason || '');
-            loadOpenCV().then(resolve);
-          } else {
-            console.error('OpenCV failed to load');
-            opencvLoadFailed = true;
-            enterFallback('OPENCV_LOAD_FAILED');
-            document.getElementById('loadingSpinner').style.display = 'none';
-            resolve(false);
-          }
+          // Correction 2: no blind automatic retry loop anymore. ANY attempt's failure -
+          // whether this is the automatic first attempt or a user-initiated retry - goes
+          // straight to the user via the existing fallback panel (enterFallback() ->
+          // Retry Camera / Return / Watch Video Instead). Retry Camera remains clickable
+          // there for as many manual attempts as the user wants; nothing here loops on its
+          // own. isFirstAttempt only changes which telemetry outcome is recorded.
+          console.error(
+            isFirstAttempt ? 'OpenCV failed to load (first attempt)' : 'OpenCV failed to load (user-initiated retry)',
+            reason || ''
+          );
+          opencvLoadFailed = true;
+          reportOpenCVTelemetry(isFirstAttempt ? 'first_attempt_failure' : 'terminal_failure');
+          enterFallback('OPENCV_LOAD_FAILED');
+          document.getElementById('loadingSpinner').style.display = 'none';
+          resolve(false);
         }
 
         opencvLoadTimer = setTimeout(() => retryOrFallback('timeout'), 15000);
@@ -1576,6 +1718,12 @@
             return path;
           },
           onRuntimeInitialized: function () {
+            if (myGeneration !== opencvLoadGeneration) {
+              scannerDiagnostics.push('opencv_stale_callback_ignored', {
+                source: 'onRuntimeInitialized', staleGeneration: myGeneration, activeGeneration: opencvLoadGeneration
+              });
+              return; // a superseded attempt's WASM finished initializing too late - ignored
+            }
             clearOpenCVLoadTimer();
             cvReady = true;
             opencvLoadFailed = false;
@@ -1584,6 +1732,7 @@
             statusDiv.textContent = "Scan AR marker";
             statusDiv.className = "status scan";
             setScannerGuidance('looking', 'opencv_ready');
+            reportOpenCVTelemetry(isFirstAttempt ? 'first_attempt_success' : 'user_retry_success');
             startDetectLoop();
             startScannerStatusCycle();
             startTrackingLoop();
@@ -1710,9 +1859,14 @@
     }
 
     async function discoverFallbackVideo(reason) {
+      // Fix 6 (V1 Agent 2): no longer sends a pair_index hint - the server resolves fallback
+      // from Project.fallback_pair_id only now, never from whichever pair this session
+      // happened to match/track toward (that was the bug: an ordinary matched pair's own
+      // video could get offered back as "fallback" with no explicit fallback configured).
+      // verifiedFallbackPairContext still exists for other bookkeeping (recorded on analytics
+      // events below) but no longer feeds this request.
       const pairIndex = verifiedFallbackPairContext ? verifiedFallbackPairContext.pairIndex : null;
       const url = new URL(FALLBACK_VIDEO_ROUTE, window.location.origin);
-      if (Number.isInteger(pairIndex)) url.searchParams.set('pair_index', String(pairIndex));
       fallbackDiscoveryInFlight = true;
       updateFallbackWatchControls(reason || 'discover_start');
       try {
@@ -1930,7 +2084,12 @@
 
     function enterFallback(code) {
       scannerDiagnostics.push('camera_health_failed', { code, generation: scannerGeneration });
-      sessionStorage.setItem('scanstoryScannerPriorFailure', '1');
+      // Fix 5: store the reason + timestamp (not just a bare flag) so the NEXT load can tell
+      // a hard capability failure from a transient one - see TRANSIENT_SCANNER_FAILURE_CODES
+      // and the consume-once read near scannerPriorFailure above.
+      try {
+        sessionStorage.setItem('scanstoryScannerPriorFailure', JSON.stringify({ code: code || null, at: Date.now() }));
+      } catch (_) { /* sessionStorage unavailable (private mode quota, etc.) - non-fatal */ }
       stopCameraStream(code);
       invalidateDetection();
       stopDetectLoop(code);
@@ -2385,10 +2544,11 @@
     // clobbering current state.
     function transitionScannerState(nextState, reason, metadata) {
       metadata = metadata || {};
+      const site = metadata.site || null; // which call site requested this — for rejection diagnostics only
       if (typeof metadata.generation === 'number' && metadata.generation !== scannerGeneration) {
         scannerDiagnostics.push('[STALE RESULT IGNORED]', {
           code: 'stale_transition', attempted: nextState, reason,
-          requestGeneration: metadata.generation, activeGeneration: scannerGeneration
+          requestGeneration: metadata.generation, activeGeneration: scannerGeneration, site
         });
         return false;
       }
@@ -2397,7 +2557,7 @@
       try {
         scannerState.transition(nextState);
       } catch (err) {
-        scannerDiagnostics.push('[SCAN STATE]', { from, to: nextState, reason: reason || null, rejected: true });
+        scannerDiagnostics.push('[SCAN STATE]', { from, to: nextState, reason: reason || null, rejected: true, site });
         return false;
       }
       applyStatusForState(scannerState.state, reason);
@@ -3384,7 +3544,18 @@
         return;
       }
 
-      safeTransition('ready_to_scan', reason);
+      // Fix 7: this transition must actually succeed before loops restart — a rejected
+      // transition here (e.g. a fallback/paused race landed while restartCameraStream was
+      // awaiting) means the FSM disagrees the scanner should be live, so starting the loops
+      // anyway would run camera work behind the state machine's back.
+      const readyForScan = safeTransition('ready_to_scan', reason, { site: 'recoverScannerInner_success' });
+      if (!readyForScan) {
+        scannerDiagnostics.push('automatic_recovery_transition_rejected', {
+          reason, state: scannerState.state, generation: scannerGeneration, site: 'recoverScannerInner_success'
+        });
+        enterFallback('CAMERA_UNAVAILABLE');
+        return;
+      }
       startDetectLoop();
       startTrackingLoop();
       scannerDiagnostics.push('automatic_recovery_succeeded', { reason, generation: scannerGeneration });
@@ -4831,7 +5002,15 @@
         return;
       }
       clearTrackingGeometry('detect_timeout');
-      safeTransition('recovering');
+      // Fix 7 audit note: this call is reachable from 'detecting' (the state set at the top
+      // of detectOnceFromServer before the request that just timed out), and TRANSITIONS
+      // (scanner-runtime.js) does not list 'recovering' as a valid next state from
+      // 'detecting' — so this transition is REJECTED on that path today, pre-existing and
+      // unrelated to this audit's scope. Deliberately NOT gated on the return value here:
+      // doing so would block the detect/tracking loop restart on the most common detection-
+      // timeout-retry path, a real regression. Logged with a call-site tag instead so the
+      // pre-existing FSM/reality mismatch is visible for a future, non-surgical FSM fix.
+      safeTransition('recovering', 'detect_timeout', { site: 'handleDetectionTimeout' });
       statusDiv.textContent = "Recognition timed out. Trying again...";
       statusDiv.className = "status scan";
       startDetectLoop();
@@ -6053,11 +6232,23 @@
         setVerifiedFallbackPairContext(Number(newPairId), 'matched_detection');
         scannerDiagnostics.push('[SCAN MATCH ACCEPT]', { requestId, pairId: newPairId, wasTracking, sameTarget: isSameTarget });
         if (!wasTracking) scannerDiagnostics.push('[TRACK START]', { pairId: newPairId, generation: scannerGeneration });
+        // Fix 7: check the transition BEFORE starting the tracking loop, not after. This used
+        // to start the loop unconditionally and only attempt the transition as an afterthought
+        // whose return value nothing looked at — a rejected transition (e.g. a paused/fallback
+        // race landed between the request being sent and this response arriving) would leave
+        // the tracking loop running while the FSM thinks the scanner is elsewhere.
+        const enteredTracking = safeTransition('tracking', 'match_accept', { site: 'detectOnceFromServer_match_accept' });
+        if (!enteredTracking) {
+          scannerDiagnostics.push('[TRACK START REJECTED]', {
+            requestId, pairId: newPairId, state: scannerState.state, site: 'detectOnceFromServer_match_accept'
+          });
+          detectionPolicy.finish(requestId);
+          return;
+        }
         tracking = true;
         startTrackingLoop();
         setScannerUiState('matched', 'match_accept');
         setScannerGuidance('tracking', 'match_accept');
-        safeTransition('tracking', 'match_accept');
         trackingBadFrames = 0;
         graceEnteredAt = 0;
         lastDetectTs = performance.now();
