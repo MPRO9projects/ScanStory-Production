@@ -1,4 +1,0 @@
-legacy_project_id,resolution_type,target_workspace_id,customer_reference,resolved_by,resolution_note,status
-dynamic_user_owned,automatically_resolved,personal_workspace,masked_user,system,User-owned project maps to owner personal Workspace,automatically_resolved
-dynamic_admin_owned,unknown,,masked_admin,release_manager,Requires explicit CSV or JSON mapping,unresolved
-dynamic_missing_owner,unknown,,,release_manager,No silent assignment permitted,blocked

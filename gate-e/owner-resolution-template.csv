@@ -1,2 +1,0 @@
-legacy_project_id,resolution_type,target_workspace_public_key,target_workspace_id,customer_reference,ownership_status,resolved_by,resolved_at,resolution_note,approval_status,approved_by
-123,customer_workspace,wsp_example,,customer-ref,manually_resolved,ops@example.test,2026-07-30,example only,draft,approver@example.test

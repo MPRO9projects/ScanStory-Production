@@ -1,6 +1,0 @@
-mode,frame_width,detect_interval_ms,tracking_points,request_timeout_ms,status
-full,960,250,260,7000,implemented
-standard,720,350,180,8000,implemented
-lightweight,480,650,90,9000,implemented
-fallback,0,0,0,0,implemented
-

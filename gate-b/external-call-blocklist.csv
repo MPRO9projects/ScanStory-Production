@@ -1,7 +1,0 @@
-service,mechanism,status
-SMTP,smtplib.SMTP and SMTP_SSL monkeypatched to raise,blocked
-Razorpay,real keys cleared and tests use fake client,blocked
-reCAPTCHA,verify_recaptcha_v3 test seam returns OK,blocked
-HTTP requests,requests Session.request monkeypatched to raise,blocked
-Flask test client,in-process no socket,allowed
-Remote media/CDN backend fetch,requests block catches backend attempts,blocked

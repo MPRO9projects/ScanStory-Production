@@ -1,9 +1,0 @@
-command,total,passed,failed,skipped,xfailed,warnings,duration,status
-python -m pytest tests/models tests/migrations tests/compatibility --quiet,20,20,0,0,0,10,76.09s,passed
-python migration_gate_c.py dry-run --database-url sqlite:///F:/ScanStory-main/ScanStory-main/gate-c-temp-cli.sqlite,0,0,0,0,0,0,22.9s,passed
-powershell -ExecutionPolicy Bypass -File .\run-tests.ps1 fast,not captured,not captured,0,not captured,not captured,not captured,277.3s,passed
-powershell -ExecutionPolicy Bypass -File .\run-tests.ps1 contracts,not captured,not captured,0,not captured,not captured,not captured,200.5s,passed
-powershell -ExecutionPolicy Bypass -File .\run-tests.ps1 security,not captured,not captured,0,not captured,not captured,not captured,139.6s,passed
-powershell -ExecutionPolicy Bypass -File .\run-tests.ps1 full run 1,not captured,not captured,0,not captured,not captured,not captured,142.6s,passed
-powershell -ExecutionPolicy Bypass -File .\run-tests.ps1 full run 2,not captured,not captured,0,not captured,not captured,not captured,149.3s,passed
-python -m pytest --quiet,84 total,80,0,0,4,89,145.38s,passed

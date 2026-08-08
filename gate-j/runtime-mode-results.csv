@@ -1,6 +1,0 @@
-mode,result,notes
-full,passed,policy bounds and browser override probe passed
-standard,passed,policy bounds and browser override probe passed
-lightweight,passed,policy bounds and browser override probe passed
-fallback,passed,policy bounds and browser override probe passed
-

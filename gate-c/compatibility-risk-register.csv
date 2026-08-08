@@ -1,7 +1,0 @@
-risk,severity,status,mitigation
-Admin-owned projects have ambiguous future workspace,high,documented,checkpoint failure requiring explicit resolution
-Legacy scanner IDs remain sequential,medium,accepted for Gate C,public keys added but routes unchanged
-Workspace billing could conflict with user billing,high,deferred,do not activate Workspace billing in Gate C
-Real media migration may expose missing files,medium,deferred,represent paths only and verify before future migration
-SQLAlchemy legacy Query.get warnings,low,known,leave unchanged to avoid route churn
-CSV registers ignored by git,low,known,use git add -f gate-c/*.csv if committing

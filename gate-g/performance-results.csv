@@ -1,8 +1,0 @@
-scenario,result,threshold,notes
-30 Experiences,passed,<2.5s test threshold,paginated 20 rows
-100 Experiences,passed,<2.5s test threshold,paginated 20 rows
-500 Experiences,passed,<2.5s test threshold,paginated 20 rows
-30 Triggers detail/status,passed,<3.0s combined test threshold,bounded status payload
-100 Triggers detail/status,passed,<3.0s combined test threshold,bounded status payload
-scanner regression,passed,existing suite,scanner route unchanged
-legacy project list regression,passed,existing suite,project route unchanged

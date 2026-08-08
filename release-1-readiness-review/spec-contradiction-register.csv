@@ -1,8 +1,0 @@
-Contradiction,Files,Severity,Canonical Definition,Correct Before Implementation
-Project vs Experience,"24,26,current code",High,"Project is legacy compatibility; Experience is target product entity",Yes
-Pair vs Trigger,"08,24,26,current code",Medium,"ProjectPair maps to Trigger",Yes
-User billing vs Workspace billing,"16,19,models.py",High,"Workspace owns billing; User subscription is legacy",Yes
-QR during upload vs publication,"10,14,app.py upload",High,"Legacy QR may exist at upload; target QR activates at publish",Yes
-Experience View vs Scan vs Recognition Attempt,"19,23,ScanLog",High,"View is launch; attempt is detection; ScanLog legacy maps to both",Yes
-Deletion vs archive,"09,20,27",Medium,"Archive is product visibility; deletion is privacy/data operation",Yes
-Fallback billing,"13,19",Medium,"Fallback launch counts as Experience View; recognition attempts do not",Yes

@@ -1,7 +1,0 @@
-measurement,result,value,notes
-focused_gate_j_tests,passed,9 tests in 17.86s,pytest focused suite
-final_quiet_suite,passed,163 passed 4 xfailed in 271.18s,full pytest quiet
-chrome_runtime_probe,passed_with_limitations,about 1.5s wall time,headless fake camera timed out
-edge_runtime_probe,passed_with_limitations,about 2.2s wall time,headless fake camera timed out
-security_wrapper,passed,extended timeout required,wrapper slower than direct pytest target
-contracts_wrapper,passed,extended timeout required,wrapper slower than earlier gates

@@ -1,9 +1,0 @@
-scenario,status,notes
-1 Trigger publish/resolver,passed,focused Gate H test
-30 Triggers publish/resolver,passed,focused Gate H test
-100 Triggers publish/resolver,passed,focused Gate H test
-1 Version history,passed,covered by first publish tests
-10 Versions,not executed,documented gap
-50 Versions,not executed,documented gap
-legacy scanner response,passed,performance/contract suites green
-legacy Project response,passed,fast/full suites green

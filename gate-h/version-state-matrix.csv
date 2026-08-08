@@ -1,9 +1,0 @@
-state,mutable,publicly_served,notes
-draft,yes,no,editable creator Version
-needs_attention,yes,no,readiness failed
-ready_to_publish,yes,no,ready for publication
-publishing,no,no,transient service state
-published,no,yes,current when selected by Experience
-superseded,no,no,available for rollback
-failed_publish,yes,no,publication failed
-archived,no,no,retained history

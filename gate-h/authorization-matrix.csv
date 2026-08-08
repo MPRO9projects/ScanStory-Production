@@ -1,8 +1,0 @@
-role,draft,publish,rollback,pause,archive
-owner,yes,yes,yes,yes,yes
-admin,yes,yes,yes,yes,yes
-publisher,no,yes,yes,yes,yes
-creator,yes,no,no,no,no
-reviewer,no,no,no,no,no
-other_workspace,no,no,no,no,no
-anonymous,no,no,no,no,no

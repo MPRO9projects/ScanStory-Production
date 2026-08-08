@@ -1,9 +1,0 @@
-role,list,detail,create_experience,manage_trigger,qr_regenerate,publish
-owner,yes,yes,yes,yes,yes,no
-admin,yes,yes,yes,yes,yes,no
-creator,yes,yes,yes,yes,yes,no
-reviewer,yes,yes,no,no,no,no
-publisher,yes,yes,no,no,no,no
-analyst,yes,yes,no,no,no,no
-other_workspace,no,no,no,no,no,no
-anonymous,no,no,no,no,no,no

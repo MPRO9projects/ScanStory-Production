@@ -1,9 +1,0 @@
-surface,status,notes
-/scanner/<project_id>,compatible,legacy route preserved
-/detect_init,compatible,legacy recognition endpoint preserved
-QR routing,compatible,Gate H same-QR version behavior preserved
-auth,compatible,full suite passed
-payment,compatible,full suite passed
-public viewer,compatible,published version resolution preserved with fallback session marker
-legacy routes,compatible,no legacy scanner route removed
-

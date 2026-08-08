@@ -1,9 +1,0 @@
-surface,status,notes
-legacy QR routes,unchanged,covered by regression
-scanner contract,unchanged,covered by contracts
-auth,unchanged,covered by regression
-payment,unchanged,covered by regression
-real media,unchanged,no movement
-real npz,unchanged,no regeneration
-Flask startup,unchanged,worker not auto-started
-Workspace billing,unchanged,not activated
