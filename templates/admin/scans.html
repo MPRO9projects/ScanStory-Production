@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Scan Usage Monitoring - Admin Panel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <style>
         * {
             margin: 0;
@@ -11,28 +12,28 @@
             box-sizing: border-box;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
-        
+
         body {
-            background-color: #f8fafc;
-            color: #334155;
+            background-color: #050505;
+            color: #e6e6e9;
         }
-        
+
         .navbar {
-            background: linear-gradient(to right, #4f46e5, #7c3aed);
+            background: #0b0b0f;
             color: white;
             padding: 0 20px;
             height: 70px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border-bottom: 1px solid rgba(255,255,255,0.08);
             position: fixed;
             top: 0;
             left: 0;
             right: 0;
             z-index: 1000;
         }
-        
+
         .navbar-brand {
             font-size: 24px;
             font-weight: bold;
@@ -42,13 +43,13 @@
             align-items: center;
             gap: 10px;
         }
-        
+
         .navbar-menu {
             display: flex;
             align-items: center;
             gap: 20px;
         }
-        
+
         .nav-link {
             color: rgba(255, 255, 255, 0.9);
             text-decoration: none;
@@ -56,19 +57,19 @@
             border-radius: 8px;
             transition: all 0.3s;
         }
-        
+
         .nav-link:hover {
             background: rgba(255, 255, 255, 0.1);
             color: white;
         }
-        
+
         .user-menu {
             display: flex;
             align-items: center;
             gap: 10px;
             position: relative;
         }
-        
+
         .user-avatar {
             width: 40px;
             height: 40px;
@@ -79,55 +80,55 @@
             justify-content: center;
             font-weight: bold;
         }
-        
+
         .dropdown-menu {
             position: absolute;
             top: 100%;
             right: 0;
-            background: white;
+            background: #12121a;
             border-radius: 8px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 12px 32px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08);
             min-width: 200px;
             display: none;
             overflow: hidden;
             z-index: 1001;
         }
-        
+
         .dropdown-menu.show {
             display: block;
         }
-        
+
         .dropdown-item {
             display: block;
             padding: 12px 20px;
-            color: #334155;
+            color: #e6e6e9;
             text-decoration: none;
             transition: all 0.3s;
         }
-        
+
         .dropdown-item:hover {
-            background: #f1f5f9;
+            background: rgba(255,255,255,0.06);
         }
-        
+
         .sidebar {
             position: fixed;
             left: 0;
             top: 70px;
             bottom: 0;
             width: 250px;
-            background: white;
-            border-right: 1px solid #e2e8f0;
+            background: #0b0b0f;
+            border-right: 1px solid rgba(255,255,255,0.08);
             padding: 20px 0;
             overflow-y: auto;
             z-index: 999;
         }
-        
+
         .sidebar-section {
             margin-bottom: 25px;
         }
-        
+
         .sidebar-title {
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             font-size: 12px;
             font-weight: 600;
             text-transform: uppercase;
@@ -135,69 +136,97 @@
             padding: 0 20px;
             margin-bottom: 10px;
         }
-        
+
         .sidebar-link {
             display: flex;
             align-items: center;
             gap: 12px;
             padding: 12px 20px;
-            color: #475569;
+            color: #c9ced8;
+            background: transparent;
             text-decoration: none;
             transition: all 0.3s;
-            border-left: 3px solid transparent;
+            border: 1px solid transparent;
+            border-left: 0;
         }
-        
+
+        .sidebar-link:visited {
+            color: #c9ced8;
+        }
+
         .sidebar-link:hover {
-            background: #f1f5f9;
-            color: #4f46e5;
+            background: rgba(255,255,255,0.06);
+            color: #fff;
+            border-color: rgba(255,255,255,0.16);
+            border-left: 0;
         }
-        
+
+        .sidebar-link:focus-visible {
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            border-color: #00d4ff;
+            border-left: 0;
+            box-shadow: 0 0 0 3px rgba(0,212,255,0.28);
+            outline: none;
+        }
+
         .sidebar-link.active {
-            background: #e0e7ff;
-            color: #4f46e5;
-            border-left-color: #4f46e5;
+            background: rgba(255,0,122,0.14);
+            color: #fff;
+            border-color: rgba(255,0,122,0.32);
+            border-left: 0;
         }
-        
+
+        .sidebar-link[aria-disabled="true"],
+        .sidebar-link.disabled {
+            color: #5b6170;
+            background: transparent;
+            border-color: transparent;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
         .sidebar-link i {
+            color: currentColor;
             width: 20px;
             text-align: center;
         }
-        
+
         .main-content {
             margin-left: 250px;
             margin-top: 70px;
             padding: 30px;
             min-height: calc(100vh - 70px);
         }
-        
+
         .page-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 30px;
         }
-        
+
         .page-title {
             font-size: 28px;
             font-weight: 600;
-            color: #1e293b;
+            color: #e6e6e9;
         }
-        
+
         .stats-badge {
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            background: #f8fafc;
+            background: rgba(255,255,255,0.04);
             padding: 8px 15px;
             border-radius: 20px;
             font-weight: 500;
         }
-        
+
         .stats-badge.success {
-            background: #d1fae5;
-            color: #065f46;
+            background: rgba(34,197,94,0.14);
+            color: #4ade80;
         }
-        
+
         .btn {
             display: inline-block;
             padding: 10px 20px;
@@ -209,107 +238,110 @@
             transition: all 0.3s;
             border: none;
         }
-        
+
         .btn-primary {
-            background: #4f46e5;
+            background: #ff007a;
             color: white;
         }
-        
+
         .btn-primary:hover {
-            background: #4338ca;
+            background: #ff2d90;
         }
-        
+
         .btn-secondary {
-            background: #6b7280;
+            background: rgba(255,255,255,0.08);
             color: white;
         }
-        
+
         .btn-secondary:hover {
-            background: #4b5563;
+            background: rgba(255,255,255,0.16);
         }
-        
+
         .btn-sm {
             padding: 5px 10px;
             font-size: 12px;
         }
-        
+
         .card {
-            background: white;
+            background: #0b0b0f;
             border-radius: 12px;
             padding: 25px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border: 1px solid rgba(255,255,255,0.08);
             margin-bottom: 30px;
         }
-        
+
         .filter-card {
             margin-bottom: 20px;
         }
-        
+
         .filter-form {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 15px;
             align-items: end;
         }
-        
+
         .form-group {
             margin-bottom: 0;
         }
-        
+
         .form-group label {
             display: block;
             margin-bottom: 8px;
-            color: #555;
+            color: rgba(255,255,255,0.6);
             font-weight: 500;
             font-size: 14px;
         }
-        
+
         .form-control {
             width: 100%;
             padding: 10px;
-            border: 2px solid #e5e7eb;
+            border: 1px solid rgba(255,255,255,0.16);
             border-radius: 8px;
             font-size: 14px;
             transition: all 0.3s;
+            background: rgba(255,255,255,0.03);
+            color: #e6e6e9;
         }
-        
+        .form-control::placeholder { color: rgba(255,255,255,0.35); }
+
         .form-control:focus {
             outline: none;
-            border-color: #4f46e5;
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+            border-color: #00d4ff;
+            box-shadow: 0 0 0 3px rgba(0,212,255,0.18);
         }
-        
+
         .table-container {
             overflow-x: auto;
         }
-        
+
         .table {
             width: 100%;
             border-collapse: collapse;
         }
-        
+
         .table th {
-            background: #f8fafc;
+            background: transparent;
             padding: 12px 15px;
             text-align: left;
             font-weight: 600;
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             font-size: 14px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
         }
-        
+
         .table td {
             padding: 15px;
-            border-bottom: 1px solid #e2e8f0;
-            color: #475569;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            color: #e6e6e9;
         }
-        
+
         .table tbody tr:hover {
-            background: #f8fafc;
+            background: rgba(255,255,255,0.03);
         }
-        
+
         .badge {
             display: inline-block;
             padding: 4px 12px;
@@ -317,63 +349,63 @@
             font-size: 12px;
             font-weight: 600;
         }
-        
-        .badge-success { background: #d1fae5; color: #065f46; }
-        .badge-warning { background: #fef3c7; color: #92400e; }
-        .badge-danger { background: #fee2e2; color: #991b1b; }
-        .badge-info { background: #dbeafe; color: #1e40af; }
-        .badge-secondary { background: #f3f4f6; color: #6b7280; }
-        
+
+        .badge-success { background: rgba(34,197,94,0.14); color: #4ade80; }
+        .badge-warning { background: rgba(251,191,36,0.14); color: #fbbf24; }
+        .badge-danger { background: rgba(239,68,68,0.14); color: #f87171; }
+        .badge-info { background: rgba(0,212,255,0.14); color: #67e8f9; }
+        .badge-secondary { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.6); }
+
         .action-buttons {
             display: flex;
             gap: 5px;
         }
-        
+
         .status-tabs {
             display: flex;
             gap: 10px;
             margin-bottom: 20px;
         }
-        
+
         .status-tab {
             padding: 8px 20px;
             border-radius: 20px;
-            background: #f1f5f9;
-            color: #64748b;
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.6);
             text-decoration: none;
             font-size: 14px;
             font-weight: 500;
             transition: all 0.3s;
         }
-        
+
         .status-tab:hover {
-            background: #e2e8f0;
+            background: rgba(255,255,255,0.09);
         }
-        
+
         .status-tab.active {
-            background: #4f46e5;
-            color: white;
+            background: #ff007a;
+            color: #fff;
         }
-        
+
         .alert {
             padding: 15px;
             border-radius: 8px;
             margin-bottom: 20px;
             font-size: 14px;
         }
-        
+
         .alert-success {
-            background-color: #d1fae5;
-            color: #065f46;
-            border: 1px solid #a7f3d0;
+            background-color: rgba(34,197,94,0.14);
+            color: #4ade80;
+            border: 1px solid transparent;
         }
-        
+
         .alert-error {
-            background-color: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
+            background-color: rgba(239,68,68,0.14);
+            color: #f87171;
+            border: 1px solid transparent;
         }
-        
+
         .user-avatar-small {
             width: 36px;
             height: 36px;
@@ -386,169 +418,189 @@
             font-weight: bold;
             font-size: 14px;
         }
-        
+
         .scan-icon {
             width: 36px;
             height: 36px;
-            background: #e0e7ff;
-            color: #4f46e5;
+            background: rgba(255,0,122,0.12);
+            color: #ff007a;
             border-radius: 8px;
             display: flex;
             align-items: center;
             justify-content: center;
             font-size: 18px;
         }
-        
+
         .scan-duration {
             font-size: 12px;
-            color: #6b7280;
+            color: rgba(255,255,255,0.6);
             margin-top: 4px;
         }
-        
+
         .progress-bar {
             height: 8px;
-            background: #e2e8f0;
+            background: rgba(255,255,255,0.1);
             border-radius: 4px;
             overflow: hidden;
             margin-top: 5px;
         }
-        
+
         .progress-fill {
             height: 100%;
-            background: #4f46e5;
+            background: #ff007a;
             border-radius: 4px;
         }
-        
+
         .usage-indicator {
             display: flex;
             align-items: center;
             gap: 10px;
             margin-top: 8px;
         }
-        
+
         @media (max-width: 992px) {
             .sidebar {
                 width: 70px;
             }
-            
+
             .sidebar .sidebar-title,
             .sidebar .sidebar-link span {
                 display: none;
             }
-            
+
             .sidebar-link {
                 justify-content: center;
                 padding: 15px;
             }
-            
+
             .main-content {
                 margin-left: 70px;
             }
         }
-        
+
         @media (max-width: 768px) {
             .navbar-menu {
                 display: none;
             }
-            
+
             .main-content {
                 padding: 20px;
             }
-            
+
             .filter-form {
                 grid-template-columns: 1fr;
             }
-            
+
             .page-header {
                 flex-direction: column;
                 align-items: flex-start;
                 gap: 15px;
             }
-            
+
             .status-tabs {
                 flex-wrap: wrap;
             }
         }
     </style>
 </head>
-<body>
+<body class="ss-admin-scope">
     <!-- Navbar -->
     <nav class="navbar">
         <a href="/admin/dashboard" class="navbar-brand">
             <span>ScanStory Admin</span>
         </a>
-        
+
         <div class="navbar-menu">
             <span class="nav-link">Welcome, {{ admin.name }}</span>
         </div>
-        
+
         <div class="user-menu">
             <div class="user-avatar">
                 {{ admin.name[0] if admin.name else 'A' }}
             </div>
             <div class="dropdown-menu" id="userDropdown">
                 <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
+                {% if admin_can('superadmin.settings.manage') %}
                 <a href="/admin/settings" class="dropdown-item">Settings</a>
+                {% endif %}
                 <div class="dropdown-divider"></div>
                 <a href="/admin/logout" class="dropdown-item">Logout</a>
             </div>
             <span onclick="toggleDropdown()" style="cursor: pointer;">▼</span>
         </div>
     </nav>
-    
+
     <!-- Sidebar -->
     <div class="sidebar">
         <div class="sidebar-section">
             <div class="sidebar-title">Dashboard</div>
             <a href="/admin/dashboard" class="sidebar-link">
-                <i>📊</i>
-                <span>Overview</span>
+                <i class="fas fa-tachometer-alt"></i>
+                <span>Dashboard</span>
             </a>
         </div>
-        
+
         <div class="sidebar-section">
             <div class="sidebar-title">User Management</div>
-            <a href="/admin/user-profiles" class="sidebar-link">
-                <i>👥</i>
-                <span>User Profiles</span>
+            <a href="/admin/users" class="sidebar-link">
+                <i class="fas fa-users"></i>
+                <span>Users</span>
             </a>
         </div>
-        
+
         <div class="sidebar-section">
             <div class="sidebar-title">Content</div>
             <a href="/admin/projects" class="sidebar-link">
-                <i>📁</i>
+                <i class="fas fa-project-diagram"></i>
                 <span>Projects</span>
             </a>
             <a href="/admin/scans" class="sidebar-link active">
-                <i>🔍</i>
-                <span>Scan Usage</span>
+                <i class="fas fa-search"></i>
+                <span>Scans</span>
             </a>
         </div>
-        
+
         <div class="sidebar-section">
             <div class="sidebar-title">System</div>
+            {% if admin_can('superadmin.plans.manage') %}
             <a href="/admin/plans" class="sidebar-link">
-                <i>📋</i>
+                <i class="fas fa-list-alt"></i>
                 <span>Plans</span>
             </a>
+            {% endif %}
+            <a href="/admin/subscriptions" class="sidebar-link">
+                <i class="fas fa-receipt"></i>
+                <span>Subscriptions</span>
+            </a>
             <a href="/admin/payments" class="sidebar-link">
-                <i>💳</i>
+                <i class="fas fa-credit-card"></i>
                 <span>Payments</span>
             </a>
             {% if admin_can('superadmin.admins.manage') %}
             <a href="/admin/admins" class="sidebar-link">
-                <i>🛡️</i>
-                <span>Admins</span>
+                <i class="fas fa-user-shield"></i>
+                <span>Admin Management</span>
             </a>
             {% endif %}
+            {% if admin_can('superadmin.capacity.manage') %}
+            <a href="/admin/capacity" class="sidebar-link">
+                <i class="fas fa-gauge-high"></i>
+                <span>Capacity</span>
+            </a>
+            {% endif %}
+            {% if admin_can('superadmin.settings.manage') %}
             <a href="/admin/settings" class="sidebar-link">
-                <i>⚙️</i>
+                <i class="fas fa-cog"></i>
                 <span>Settings</span>
+            </a>
+            {% endif %}
+            <a href="/admin/activity-logs" class="sidebar-link">
+                <i class="fas fa-clipboard-list"></i>
+                <span>Activity Logs</span>
             </a>
         </div>
     </div>
-    
+
     <!-- Main Content -->
     <div class="main-content">
         <div class="page-header">
@@ -561,7 +613,7 @@
                 </span>
             </div>
         </div>
-        
+
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
@@ -571,7 +623,7 @@
                 {% endfor %}
             {% endif %}
         {% endwith %}
-        
+
         <!-- Status Tabs -->
         <div class="status-tabs">
             <a href="/admin/scans" class="status-tab {% if status == 'all' %}active{% endif %}">All Scans</a>
@@ -579,7 +631,7 @@
             <a href="/admin/scans?status=failed" class="status-tab {% if status == 'failed' %}active{% endif %}">Failed</a>
             <a href="/admin/scans?status=partial" class="status-tab {% if status == 'partial' %}active{% endif %}">Partial</a>
         </div>
-        
+
         <!-- Filters -->
         <div class="card filter-card">
             <form method="GET" action="/admin/scans" class="filter-form">
@@ -587,19 +639,19 @@
                     <label for="search">Search</label>
                     <input type="text" id="search" name="search" class="form-control" placeholder="Project name or user email" value="{{ search }}">
                 </div>
-                
+
                 <div class="form-row" style="grid-column: span 2; display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                     <div class="form-group">
                         <label for="start_date">Start Date</label>
                         <input type="date" id="start_date" name="start_date" class="form-control" value="{{ start_date }}">
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="end_date">End Date</label>
                         <input type="date" id="end_date" name="end_date" class="form-control" value="{{ end_date }}">
                     </div>
                 </div>
-                
+
                 <div class="form-group">
                     <label for="scan_type">Scan Type</label>
                     <select id="scan_type" name="scan_type" class="form-control">
@@ -609,14 +661,14 @@
                         <option value="comprehensive" {% if scan_type == 'comprehensive' %}selected{% endif %}>Comprehensive</option>
                     </select>
                 </div>
-                
+
                 <div class="form-group">
                     <button type="submit" class="btn btn-primary" style="height: 42px;">Apply Filters</button>
                     <a href="/admin/scans" class="btn btn-secondary" style="height: 42px;">Clear</a>
                 </div>
             </form>
         </div>
-        
+
         <!-- Scan Logs Table -->
         <div class="card">
             <div class="table-container">
@@ -650,9 +702,9 @@
                             <td>
                                 {% if scan.project %}
                                 <strong>{{ scan.project.name }}</strong><br>
-                                <small style="color: #6b7280;">{{ scan.project.pairs|length }} pairs</small>
+                                <small style="color: rgba(255,255,255,0.6);">{{ scan.project.pairs|length }} pairs</small>
                                 {% else %}
-                                <span style="color: #6b7280;">Project Deleted</span>
+                                <span style="color: rgba(255,255,255,0.6);">Project Deleted</span>
                                 {% endif %}
                             </td>
                             <td>
@@ -663,11 +715,11 @@
                                     </div>
                                     <div>
                                         <strong>{{ scan.user.full_name }}</strong><br>
-                                        <small style="color: #6b7280;">{{ scan.user.email }}</small>
+                                        <small style="color: rgba(255,255,255,0.6);">{{ scan.user.email }}</small>
                                     </div>
                                 </div>
                                 {% else %}
-                                <span style="color: #6b7280;">User Deleted</span>
+                                <span style="color: rgba(255,255,255,0.6);">User Deleted</span>
                                 {% endif %}
                             </td>
                             <td>
@@ -677,7 +729,7 @@
                                         <div class="progress-fill" style="width: {{ (scan.scanned_pairs_count / scan.total_pairs_count * 100) if scan.total_pairs_count > 0 else 0 }}%"></div>
                                     </div>
                                 </div>
-                                
+
                                 <div class="usage-indicator">
                                     <div>Detections: <strong>{{ scan.detections_count }}</strong></div>
                                     {% if scan.matched_pairs_count %}
@@ -704,10 +756,7 @@
                                     {% if scan.status == 'success' and scan.results_url %}
                                     <a href="{{ scan.results_url }}" target="_blank" class="btn btn-primary btn-sm">View Results</a>
                                     {% endif %}
-                                    <form action="/admin/scans/{{ scan.id }}/delete" method="POST" style="display: inline;">
-                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this scan log?')">Delete</button>
-                                    </form>
+                                    <button type="button" class="btn btn-secondary btn-sm" disabled title="Scan-log deletion is not available in this admin package.">Delete unavailable</button>
                                 </div>
                             </td>
                         </tr>
@@ -725,18 +774,18 @@
                 </table>
             </div>
         </div>
-        
+
         <!-- Scan Statistics -->
         <div class="card">
             <h3 style="margin-bottom: 15px;">Scan Statistics</h3>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
                 <div style="text-align: center;">
-                    <div style="font-size: 32px; font-weight: bold; color: #4f46e5;">{{ scan_logs|length }}</div>
-                    <div style="color: #6b7280;">Total Scans</div>
+                    <div style="font-size: 32px; font-weight: bold; color: #ff007a;">{{ scan_logs|length }}</div>
+                    <div style="color: rgba(255,255,255,0.6);">Total Scans</div>
                 </div>
                 <div style="text-align: center;">
                     <div style="font-size: 32px; font-weight: bold; color: #10b981;">{{ success_count }}</div>
-                    <div style="color: #6b7280;">Successful</div>
+                    <div style="color: rgba(255,255,255,0.6);">Successful</div>
                 </div>
                 <div style="text-align: center;">
                     <div style="font-size: 32px; font-weight: bold; color: #f59e0b;">
@@ -746,7 +795,7 @@
                         {% endfor %}
                         {{ total_scanned }}
                     </div>
-                    <div style="color: #6b7280;">Pairs Scanned</div>
+                    <div style="color: rgba(255,255,255,0.6);">Pairs Scanned</div>
                 </div>
                 <div style="text-align: center;">
                     <div style="font-size: 32px; font-weight: bold; color: #8b5cf6;">
@@ -756,10 +805,10 @@
                         {% endfor %}
                         {{ total_detections }}
                     </div>
-                    <div style="color: #6b7280;">Total Detections</div>
+                    <div style="color: rgba(255,255,255,0.6);">Total Detections</div>
                 </div>
             </div>
-            
+
             <!-- Type Distribution -->
             <div style="margin-top: 25px;">
                 <h4 style="margin-bottom: 15px;">Scan Type Distribution</h4>
@@ -772,11 +821,11 @@
                             {% set _ = types.update({'other': types['other'] + 1}) %}
                         {% endif %}
                     {% endfor %}
-                    
+
                     {% for type_name, count in types.items() if count > 0 %}
-                    <div style="background: #f8fafc; padding: 15px; border-radius: 8px; text-align: center;">
-                        <div style="font-size: 20px; font-weight: bold; color: #4f46e5;">{{ count }}</div>
-                        <div style="color: #64748b; text-transform: capitalize;">{{ type_name }}</div>
+                    <div style="background: rgba(255,255,255,0.04); padding: 15px; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 20px; font-weight: bold; color: #ff007a;">{{ count }}</div>
+                        <div style="color: rgba(255,255,255,0.6); text-transform: capitalize;">{{ type_name }}</div>
                     </div>
                     {% endfor %}
                 </div>
@@ -789,7 +838,7 @@
             const dropdown = document.getElementById('userDropdown');
             dropdown.classList.toggle('show');
         }
-        
+
         // Close dropdown when clicking outside
         window.onclick = function(event) {
             if (!event.target.matches('.user-menu span')) {
@@ -801,7 +850,7 @@
                 });
             }
         };
-        
+
         // Auto remove alerts after 5 seconds
         document.addEventListener('DOMContentLoaded', function() {
             const alerts = document.querySelectorAll('.alert');
@@ -812,12 +861,12 @@
                     setTimeout(() => alert.remove(), 500);
                 }, 5000);
             });
-            
+
             // Set date inputs max to today
             const today = new Date().toISOString().split('T')[0];
             document.getElementById('start_date')?.setAttribute('max', today);
             document.getElementById('end_date')?.setAttribute('max', today);
-            
+
             // Confirm before deleting scan
             const deleteForms = document.querySelectorAll('form[action*="delete"]');
             deleteForms.forEach(form => {

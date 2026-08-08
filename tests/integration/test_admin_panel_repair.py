@@ -55,7 +55,6 @@ def test_important_authenticated_admin_get_routes_render(client, app_module, db_
     for path in (
         "/admin/dashboard",
         "/admin/users",
-        "/admin/user-profiles",
         "/admin/projects",
         f"/admin/projects/{project.id}",
         "/admin/plans",

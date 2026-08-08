@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Edit Story | {{ project.name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
 
@@ -352,9 +353,9 @@
       animation: slideIn 0.35s ease-out;
     }
 
-    .flash-success { border-left: 4px solid #34d399; }
-    .flash-error { border-left: 4px solid #f87171; }
-    .flash-info { border-left: 4px solid #60a5fa; }
+    .flash-success { border-color: rgba(52,211,153,0.4); background: rgba(52,211,153,0.12); }
+    .flash-error { border-color: rgba(248,113,113,0.4); background: rgba(248,113,113,0.12); }
+    .flash-info { border-color: rgba(96,165,250,0.4); background: rgba(96,165,250,0.12); }
 
     @keyframes slideIn {
       from { transform: translateX(20px); opacity: 0; }
@@ -363,7 +364,7 @@
   </style>
 </head>
 
-<body>
+<body class="ss-user-scope">
   <div class="blob" style="width:500px;height:500px;background:#7000ff;top:-10%;left:-8%;"></div>
   <div class="blob" style="width:460px;height:460px;background:#ff007a;bottom:-10%;right:-8%;"></div>
 

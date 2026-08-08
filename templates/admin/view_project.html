@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Project Details - Admin Panel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * {
             margin: 0;
@@ -13,19 +15,19 @@
         }
         
         body {
-            background-color: #f8fafc;
-            color: #334155;
+            background-color: #050505;
+            color: #e6e6e9;
         }
         
         .navbar {
-            background: linear-gradient(to right, #4f46e5, #7c3aed);
+            background: #0b0b0f;
             color: white;
             padding: 0 20px;
             height: 70px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border-bottom: 1px solid rgba(255,255,255,0.08);
             position: fixed;
             top: 0;
             left: 0;
@@ -84,9 +86,9 @@
             position: absolute;
             top: 100%;
             right: 0;
-            background: white;
+            background: #12121a;
             border-radius: 8px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 12px 32px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08);
             min-width: 200px;
             display: none;
             overflow: hidden;
@@ -100,13 +102,13 @@
         .dropdown-item {
             display: block;
             padding: 12px 20px;
-            color: #334155;
+            color: #e6e6e9;
             text-decoration: none;
             transition: all 0.3s;
         }
         
         .dropdown-item:hover {
-            background: #f1f5f9;
+            background: rgba(255,255,255,0.06);
         }
         
         .sidebar {
@@ -115,8 +117,8 @@
             top: 70px;
             bottom: 0;
             width: 250px;
-            background: white;
-            border-right: 1px solid #e2e8f0;
+            background: #0b0b0f;
+            border-right: 1px solid rgba(255,255,255,0.08);
             padding: 20px 0;
             overflow-y: auto;
             z-index: 999;
@@ -127,7 +129,7 @@
         }
         
         .sidebar-title {
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             font-size: 12px;
             font-weight: 600;
             text-transform: uppercase;
@@ -141,24 +143,52 @@
             align-items: center;
             gap: 12px;
             padding: 12px 20px;
-            color: #475569;
+            color: #c9ced8;
+            background: transparent;
             text-decoration: none;
             transition: all 0.3s;
-            border-left: 3px solid transparent;
+            border: 1px solid transparent;
+            border-left: 0;
         }
-        
+
+        .sidebar-link:visited {
+            color: #c9ced8;
+        }
+
         .sidebar-link:hover {
-            background: #f1f5f9;
-            color: #4f46e5;
+            background: rgba(255,255,255,0.06);
+            color: #fff;
+            border-color: rgba(255,255,255,0.16);
+            border-left: 0;
         }
-        
+
+        .sidebar-link:focus-visible {
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            border-color: #00d4ff;
+            border-left: 0;
+            box-shadow: 0 0 0 3px rgba(0,212,255,0.28);
+            outline: none;
+        }
+
         .sidebar-link.active {
-            background: #e0e7ff;
-            color: #4f46e5;
-            border-left-color: #4f46e5;
+            background: rgba(255,0,122,0.14);
+            color: #fff;
+            border-color: rgba(255,0,122,0.32);
+            border-left: 0;
         }
-        
+
+        .sidebar-link[aria-disabled="true"],
+        .sidebar-link.disabled {
+            color: #5b6170;
+            background: transparent;
+            border-color: transparent;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
         .sidebar-link i {
+            color: currentColor;
             width: 20px;
             text-align: center;
         }
@@ -180,7 +210,7 @@
         .page-title {
             font-size: 28px;
             font-weight: 600;
-            color: #1e293b;
+            color: #e6e6e9;
         }
         
         .btn {
@@ -196,21 +226,21 @@
         }
         
         .btn-primary {
-            background: #4f46e5;
+            background: #ff007a;
             color: white;
         }
         
         .btn-primary:hover {
-            background: #4338ca;
+            background: #ff2d90;
         }
         
         .btn-secondary {
-            background: #6b7280;
+            background: rgba(255,255,255,0.08);
             color: white;
         }
         
         .btn-secondary:hover {
-            background: #4b5563;
+            background: rgba(255,255,255,0.16);
         }
         
         .btn-success {
@@ -246,10 +276,10 @@
         }
         
         .card {
-            background: white;
+            background: #0b0b0f;
             border-radius: 12px;
             padding: 25px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border: 1px solid rgba(255,255,255,0.08);
             margin-bottom: 30px;
         }
         
@@ -259,13 +289,13 @@
             align-items: center;
             margin-bottom: 20px;
             padding-bottom: 20px;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
         }
         
         .project-title {
             font-size: 24px;
             font-weight: 700;
-            color: #1e293b;
+            color: #e6e6e9;
         }
         
         .project-status-badge {
@@ -275,14 +305,14 @@
             font-weight: 600;
         }
         
-        .status-active {
-            background: #d1fae5;
-            color: #065f46;
+         {
+            background: rgba(34,197,94,0.14);
+            color: #4ade80;
         }
         
-        .status-inactive {
-            background: #fee2e2;
-            color: #991b1b;
+         {
+            background: rgba(239,68,68,0.14);
+            color: #f87171;
         }
         
         .info-grid {
@@ -293,7 +323,7 @@
         }
         
         .info-section {
-            background: #f8fafc;
+            background: rgba(255,255,255,0.04);
             padding: 20px;
             border-radius: 8px;
         }
@@ -301,7 +331,7 @@
         .info-section h3 {
             font-size: 16px;
             font-weight: 600;
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             margin-bottom: 15px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -312,7 +342,7 @@
             justify-content: space-between;
             margin-bottom: 12px;
             padding-bottom: 12px;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
         }
         
         .info-row:last-child {
@@ -322,12 +352,12 @@
         }
         
         .info-label {
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             font-size: 14px;
         }
         
         .info-value {
-            color: #1e293b;
+            color: #e6e6e9;
             font-weight: 500;
             text-align: right;
         }
@@ -340,15 +370,15 @@
         }
         
         .alert-success {
-            background-color: #d1fae5;
-            color: #065f46;
-            border: 1px solid #a7f3d0;
+            background-color: rgba(34,197,94,0.14);
+            color: #4ade80;
+            border: 1px solid transparent;
         }
         
         .alert-error {
-            background-color: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
+            background-color: rgba(239,68,68,0.14);
+            color: #f87171;
+            border: 1px solid transparent;
         }
         
         .user-avatar-large {
@@ -364,7 +394,7 @@
             margin-bottom: 15px;
         }
         
-        .avatar-user { background: #4f46e5; }
+        .avatar-user { background: #ff007a; }
         .avatar-admin { background: #8b5cf6; }
         
         .admin-badge {
@@ -380,7 +410,7 @@
         .pairs-container {
             max-height: 400px;
             overflow-y: auto;
-            border: 1px solid #e2e8f0;
+            border: 1px solid rgba(255,255,255,0.08);
             border-radius: 8px;
         }
         
@@ -389,12 +419,12 @@
             justify-content: space-between;
             align-items: center;
             padding: 15px;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
             transition: all 0.3s;
         }
         
         .pair-item:hover {
-            background: #f8fafc;
+            background: rgba(255,255,255,0.04);
         }
         
         .pair-item:last-child {
@@ -420,10 +450,10 @@
             font-weight: 600;
         }
         
-        .badge-success { background: #d1fae5; color: #065f46; }
-        .badge-warning { background: #fef3c7; color: #92400e; }
-        .badge-danger { background: #fee2e2; color: #991b1b; }
-        .badge-info { background: #dbeafe; color: #1e40af; }
+        .badge-success { background: rgba(34,197,94,0.14); color: #4ade80; }
+        .badge-warning { background: rgba(251,191,36,0.14); color: #fbbf24; }
+        .badge-danger { background: rgba(239,68,68,0.14); color: #f87171; }
+        .badge-info { background: rgba(0,212,255,0.14); color: #67e8f9; }
         
         .table-container {
             overflow-x: auto;
@@ -435,25 +465,25 @@
         }
         
         .table th {
-            background: #f8fafc;
+            background: transparent;
             padding: 12px 15px;
             text-align: left;
             font-weight: 600;
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             font-size: 14px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
         }
         
         .table td {
             padding: 15px;
-            border-bottom: 1px solid #e2e8f0;
-            color: #475569;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            color: #e6e6e9;
         }
         
         .table tbody tr:hover {
-            background: #f8fafc;
+            background: rgba(255,255,255,0.03);
         }
         
         @media (max-width: 992px) {
@@ -514,7 +544,7 @@
         }
     </style>
 </head>
-<body>
+<body class="ss-admin-scope">
     <!-- Navbar -->
     <nav class="navbar">
         <a href="/admin/dashboard" class="navbar-brand"><span>ScanStory Admin</span></a>
@@ -523,7 +553,9 @@
             <div class="user-avatar">{{ admin.name[0] if admin.name else 'A' }}</div>
             <div class="dropdown-menu" id="userDropdown">
                 <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
+                {% if admin_can('superadmin.settings.manage') %}
                 <a href="/admin/settings" class="dropdown-item">Settings</a>
+                {% endif %}
                 <div class="dropdown-divider"></div>
                 <a href="/admin/logout" class="dropdown-item">Logout</a>
             </div>
@@ -535,24 +567,34 @@
     <div class="sidebar">
         <div class="sidebar-section">
             <div class="sidebar-title">Dashboard</div>
-            <a href="/admin/dashboard" class="sidebar-link"><i>&#128202;</i><span>Overview</span></a>
+            <a href="/admin/dashboard" class="sidebar-link"><i class="fas fa-tachometer-alt"></i><span>Dashboard</span></a>
         </div>
         <div class="sidebar-section">
             <div class="sidebar-title">User Management</div>
-            <a href="/admin/user-profiles" class="sidebar-link"><i>&#128101;</i><span>User Profiles</span></a>
+            <a href="/admin/users" class="sidebar-link"><i class="fas fa-users"></i><span>Users</span></a>
         </div>
         <div class="sidebar-section">
             <div class="sidebar-title">Content</div>
-            <a href="/admin/projects" class="sidebar-link active"><i>&#128193;</i><span>Projects</span></a>
+            <a href="/admin/projects" class="sidebar-link active"><i class="fas fa-project-diagram"></i><span>Projects</span></a>
+            <a href="/admin/scans" class="sidebar-link"><i class="fas fa-search"></i><span>Scans</span></a>
         </div>
         <div class="sidebar-section">
             <div class="sidebar-title">System</div>
-            <a href="/admin/plans" class="sidebar-link"><i>&#128203;</i><span>Plans</span></a>
-            <a href="/admin/payments" class="sidebar-link"><i>&#128179;</i><span>Payments</span></a>
-            {% if admin_can('superadmin.admins.manage') %}
-            <a href="/admin/admins" class="sidebar-link"><i>&#128737;</i><span>Admins</span></a>
+            {% if admin_can('superadmin.plans.manage') %}
+            <a href="/admin/plans" class="sidebar-link"><i class="fas fa-list-alt"></i><span>Plans</span></a>
             {% endif %}
-            <a href="/admin/settings" class="sidebar-link"><i>&#9881;</i><span>Settings</span></a>
+            <a href="/admin/subscriptions" class="sidebar-link"><i class="fas fa-receipt"></i><span>Subscriptions</span></a>
+            <a href="/admin/payments" class="sidebar-link"><i class="fas fa-credit-card"></i><span>Payments</span></a>
+            {% if admin_can('superadmin.admins.manage') %}
+            <a href="/admin/admins" class="sidebar-link"><i class="fas fa-user-shield"></i><span>Admin Management</span></a>
+            {% endif %}
+            {% if admin_can('superadmin.capacity.manage') %}
+            <a href="/admin/capacity" class="sidebar-link"><i class="fas fa-gauge-high"></i><span>Capacity</span></a>
+            {% endif %}
+            {% if admin_can('superadmin.settings.manage') %}
+            <a href="/admin/settings" class="sidebar-link"><i class="fas fa-cog"></i><span>Settings</span></a>
+            {% endif %}
+            <a href="/admin/activity-logs" class="sidebar-link"><i class="fas fa-clipboard-list"></i><span>Activity Logs</span></a>
         </div>
     </div>
     <!-- Main Content -->
@@ -574,7 +616,7 @@
             <div class="project-header">
                 <div>
                     <div class="project-title">{{ project.name }}</div>
-                    <div style="color: #64748b; margin-top: 5px;">Global Project ID: {{ project.id }} &bull; Created: {{ project.created_at.strftime('%d %b %Y') if project.created_at else '-' }}</div>
+                    <div style="color: rgba(255,255,255,0.6); margin-top: 5px;">Global Project ID: {{ project.id }} &bull; Created: {{ project.created_at.strftime('%d %b %Y') if project.created_at else '-' }}</div>
                 </div>
                 <div style="text-align: right;"><div class="project-status-badge status-{{ 'active' if project.is_active else 'inactive' }}">{{ 'Active' if project.is_active else 'Suspended' }}</div></div>
             </div>
@@ -592,6 +634,12 @@
                 </form>
                 {% endif %}
                 <a href="{{ url_for('admin_scanner_test_entry', project_id=project.id) }}" class="btn btn-primary">Open Scanner Test</a>
+                {% if admin_can('superadmin.repair.execute') %}
+                <form method="POST" action="{{ url_for('admin_delete_project', project_id=project.id) }}" style="display:inline;" onsubmit="return confirm('Delete this project permanently? This removes all its files and data and cannot be undone.');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="btn btn-danger">Delete Project</button>
+                </form>
+                {% endif %}
             </div>
 
             <div class="info-grid">
@@ -622,26 +670,26 @@
         <div class="card">
             <h3 style="margin-bottom: 20px;">Scan Activity</h3>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
-                <div style="text-align: center;"><div style="font-size: 32px; font-weight: bold; color: #4f46e5;">{{ total_scans }}</div><div style="color: #6b7280;">Total Scan Sessions</div></div>
-                <div style="text-align: center;"><div style="font-size: 32px; font-weight: bold; color: #10b981;">{{ successful_scans }}</div><div style="color: #6b7280;">Successful Scans</div></div>
-                <div style="text-align: center;"><div style="font-size: 32px; font-weight: bold; color: #ef4444;">{{ failed_scans }}</div><div style="color: #6b7280;">Failed Scans</div></div>
+                <div style="text-align: center;"><div style="font-size: 32px; font-weight: bold; color: #ff007a;">{{ total_scans }}</div><div style="color: rgba(255,255,255,0.6);">Total Scan Sessions</div></div>
+                <div style="text-align: center;"><div style="font-size: 32px; font-weight: bold; color: #10b981;">{{ successful_scans }}</div><div style="color: rgba(255,255,255,0.6);">Successful Scans</div></div>
+                <div style="text-align: center;"><div style="font-size: 32px; font-weight: bold; color: #ef4444;">{{ failed_scans }}</div><div style="color: rgba(255,255,255,0.6);">Failed Scans</div></div>
             </div>
         </div>
 
         <div class="card">
             <h3 style="margin-bottom: 20px;">Pairs</h3>
-            {% if pair_count > pairs|length %}<p style="color: #64748b; margin-bottom: 15px;">Showing first {{ pairs|length }} pairs of {{ pair_count }} total.</p>{% endif %}
+            {% if pair_count > pairs|length %}<p style="color: rgba(255,255,255,0.6); margin-bottom: 15px;">Showing first {{ pairs|length }} pairs of {{ pair_count }} total.</p>{% endif %}
             <div class="table-container">
                 <table class="table">
                     <thead><tr><th>Pair ID</th><th>Image</th><th>Video</th><th>Sizes</th><th>Processing</th><th>Created</th><th>Recognition</th></tr></thead>
                     <tbody>
                         {% for pair in pairs %}
                         <tr>
-                            <td>{{ pair.id }}<br><small style="color: #6b7280;">Index {{ pair.pair_index }}</small></td>
+                            <td>{{ pair.id }}<br><small style="color: rgba(255,255,255,0.6);">Index {{ pair.pair_index }}</small></td>
                             <td>{{ pair.safe_image_filename }}</td>
                             <td>{{ pair.safe_video_filename }}</td>
-                            <td>Image: {{ pair.image_size if pair.image_size is not none else '-' }} bytes<br><small style="color: #6b7280;">Video: {{ pair.video_size if pair.video_size is not none else '-' }} bytes</small></td>
-                            <td>{{ pair.processing_status or '-' }}<br><small style="color: #6b7280;">Video: {{ pair.video_processing_status or '-' }} &bull; Features: {{ pair.feature_extraction_status or '-' }}</small></td>
+                            <td>Image: {{ pair.image_size if pair.image_size is not none else '-' }} bytes<br><small style="color: rgba(255,255,255,0.6);">Video: {{ pair.video_size if pair.video_size is not none else '-' }} bytes</small></td>
+                            <td>{{ pair.processing_status or '-' }}<br><small style="color: rgba(255,255,255,0.6);">Video: {{ pair.video_processing_status or '-' }} &bull; Features: {{ pair.feature_extraction_status or '-' }}</small></td>
                             <td>{{ pair.created_at.strftime('%d %b %Y, %I:%M %p') if pair.created_at else '-' }}</td>
                             <td><span class="badge {{ 'badge-success' if pair.recognition_ready else 'badge-warning' }}">{{ 'Ready' if pair.recognition_ready else 'Not ready' }}</span></td>
                         </tr>

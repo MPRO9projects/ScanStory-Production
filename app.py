@@ -1565,7 +1565,11 @@ def admin_page_size(default=25, max_size=100):
 
 
 def _project_unavailable_response():
-    return ("This project is currently suspended or unavailable.", 404)
+    # Body-only change (Task 7, V1 Agent 2): same 404 status for every caller
+    # (scanner() page view, serve_video/serve_image/serve_qr and their admin
+    # variants) - only the response body goes from a bare text string to a
+    # styled page. No scanner/recognition logic is upstream of this helper.
+    return (render_template("user/project_unavailable.html"), 404)
 
 
 def _project_is_available(project):
@@ -1879,6 +1883,12 @@ def login_required(view):
             # session["user_id"] - route them to their own dashboard instead of
             # the normal-user login page (see fix/admin-navigation-routing).
             if current_admin():
+                if (
+                    view.__name__ == "dashboard"
+                    and request.args.get("admin_view") == "true"
+                    and request.args.get("user_id", type=int)
+                ):
+                    return view(*args, **kwargs)
                 return redirect(url_for("admin_dashboard"))
             return redirect(url_for("login"))
         if getattr(u, "is_blocked", False):
@@ -4615,22 +4625,68 @@ def user_profile():
 @login_required
 def projects_page():
     user = current_user()
-    projects = (
-        Project.query
-        .filter_by(owner_user_id=user.id)
-        .order_by(Project.created_at.asc())  # Changed to asc for sequential numbering
-        .all()
+    q = (request.args.get("q") or "").strip()
+    status_filter = request.args.get("status", "all")
+
+    # Same pair-aggregation shape as admin_projects() (readiness by ProjectPair
+    # rollup) - reused here rather than inventing a new status concept.
+    pair_counts = (
+        db.session.query(
+            ProjectPair.project_id.label("project_id"),
+            func.count(ProjectPair.id).label("pair_count"),
+            func.sum(case((ProjectPair.is_processed == True, 1), else_=0)).label("ready_pair_count"),
+            func.sum(case((ProjectPair.processing_status == "failed", 1), else_=0)).label("failed_pair_count"),
+            func.sum(case((ProjectPair.processing_status == "processing", 1), else_=0)).label("processing_pair_count"),
+        )
+        .group_by(ProjectPair.project_id)
+        .subquery()
     )
-    
-    # Attach pairs count and display number
-    for idx, p in enumerate(projects, 1):
-        p.pairs_count = ProjectPair.query.filter_by(project_id=p.id).count()
-        p.display_number = idx  # Add sequential number
-    
+
+    query = (
+        db.session.query(
+            Project,
+            pair_counts.c.pair_count,
+        )
+        .filter(Project.owner_user_id == user.id)
+        .outerjoin(pair_counts, Project.id == pair_counts.c.project_id)
+    )
+
+    if q:
+        query = query.filter(Project.name.ilike(f"%{q}%"))
+
+    if status_filter == "ready":
+        query = query.filter(func.coalesce(pair_counts.c.pair_count, 0) > 0)
+        query = query.filter(func.coalesce(pair_counts.c.pair_count, 0) == func.coalesce(pair_counts.c.ready_pair_count, 0))
+    elif status_filter == "processing":
+        query = query.filter(func.coalesce(pair_counts.c.processing_pair_count, 0) > 0)
+    elif status_filter == "pending":
+        query = query.filter(func.coalesce(pair_counts.c.pair_count, 0) > 0)
+        query = query.filter(func.coalesce(pair_counts.c.ready_pair_count, 0) == 0)
+        query = query.filter(func.coalesce(pair_counts.c.failed_pair_count, 0) == 0)
+        query = query.filter(func.coalesce(pair_counts.c.processing_pair_count, 0) == 0)
+    elif status_filter == "failed":
+        query = query.filter(func.coalesce(pair_counts.c.failed_pair_count, 0) > 0)
+
+    # created_at is the reliable "recent activity" signal here: updated_at exists
+    # but the main edit/reprocess flows only mutate ProjectPair rows, not the
+    # Project row itself, so it doesn't move on the actions users take most.
+    # id DESC breaks ties deterministically instead of relying on DB order.
+    rows = query.order_by(Project.created_at.desc(), Project.id.desc()).all()
+
+    projects = []
+    for project, pair_count in rows:
+        project.pairs_count = int(pair_count or 0)
+        projects.append(project)
+
+    has_any_projects = db.session.query(Project.id).filter_by(owner_user_id=user.id).first() is not None
+
     return render_template(
         "user/projects.html",
         user=user,
-        projects=projects
+        projects=projects,
+        q=q,
+        status_filter=status_filter,
+        has_any_projects=has_any_projects,
     )
 
 @app.route("/projects/<int:project_id>/qr")
@@ -10082,72 +10138,24 @@ def _project_readiness_summary(pair_count, ready_pairs, failed_pairs, processing
 @app.route("/admin/user-profiles", methods=["GET"])
 @require_admin_permission("admin.users.view")
 def admin_user_profiles():
-    """Display all user profiles."""
-    admin = current_admin()
-    
-    # Get filter parameters
-    status = request.args.get("status", "all")
-    plan_id = request.args.get("plan_id", type=int)
-    search = request.args.get("search", "").strip()
-    
-    # Build query for users only
-    query = User.query
-    
-    # Apply status filters
-    if status == "active":
-        query = query.filter_by(is_blocked=False)
-    elif status == "blocked":
-        query = query.filter_by(is_blocked=True)
-    elif status == "trial":
-        query = query.filter_by(subscription_status="trial")
-    elif status == "paid":
-        query = query.filter_by(subscription_status="active")
-    
-    # Apply plan filter
-    if plan_id:
-        query = query.filter_by(subscription_id=plan_id)
-    
-    # Apply search filter
-    if search:
-        query = query.filter(
-            or_(
-                User.email.ilike(f"%{search}%"),
-                User.first_name.ilike(f"%{search}%"),
-                User.last_name.ilike(f"%{search}%")
-            )
-        )
-    
-    per_page = admin_page_size()
-    pagination = query.order_by(User.created_at.desc()).paginate(
-        page=max(request.args.get("page", 1, type=int), 1),
-        per_page=per_page,
-        error_out=False,
-    )
-    users = pagination.items
-    if users:
-        project_counts = dict(
-            db.session.query(Project.owner_user_id, func.count(Project.id))
-            .filter(Project.owner_user_id.in_([user.id for user in users]))
-            .group_by(Project.owner_user_id)
-            .all()
-        )
-        for user in users:
-            user.live_project_count = int(project_counts.get(user.id, 0))
-    
-    # Get all plans for filter dropdown
-    plans = SubscriptionPlan.query.filter_by(is_active=True).all()
-    
-    return render_template(
-        "admin/user_profiles.html",
-        admin=admin,
-        users=users,
-        plans=plans,
-        status=status,
-        search=search,
-        selected_plan_id=plan_id,
-        pagination=pagination,
-        per_page=per_page
-    )
+    """Legacy route, kept for backward compatibility (bookmarks/links).
+
+    admin_users (/admin/users) is now the single canonical admin user list -
+    it already covers filtering, search, and block/unblock. The one action
+    this page had that admin_users lacked ("View User Dashboard") has been
+    added to the user-detail page (admin_view_user) instead. Redirect
+    directly rather than maintaining two separate user-list
+    implementations/templates, forwarding the filters this page accepted so
+    existing bookmarks/links keep working.
+    """
+    return redirect(url_for(
+        "admin_users",
+        status=request.args.get("status", "all"),
+        plan_id=request.args.get("plan_id", type=int),
+        search=request.args.get("search", "").strip() or None,
+        page=request.args.get("page", type=int),
+        per_page=request.args.get("per_page", type=int),
+    ))
 
 @app.route("/admin/projects", methods=["GET"])
 @require_admin_permission("admin.projects.view")
@@ -10450,19 +10458,64 @@ def admin_scans():
 def admin_user_scans(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
-    
+
     # Get user scan history
     scan_history = ScanLog.query.filter_by(user_id=user_id).order_by(ScanLog.created_at.desc()).all()
-    
+
     # Get scan statistics
     total_scans = len(scan_history)
     successful_scans = sum(1 for scan in scan_history if scan.is_successful)
     failed_scans = total_scans - successful_scans
-    
+
     # Get recent scans (last 7 days)
     seven_days_ago = dt.utcnow() - timedelta(days=7)
     recent_scans = [scan for scan in scan_history if scan.created_at >= seven_days_ago]
-    
+
+    # templates/admin/user_scans.html renders scan_logs/status/search (status
+    # tabs + search box) which this route never used to pass - Jinja's
+    # lenient Undefined silently rendered them as an empty table instead of
+    # crashing. status maps onto the real ScanLog.is_successful boolean;
+    # "partial" has no backing concept on ScanLog (a plain boolean, no
+    # partial state), so it correctly yields zero rows rather than
+    # inventing one. search filters the one real searchable relationship,
+    # the scan's project name.
+    status = request.args.get("status", "all")
+    search = request.args.get("search", "").strip()
+
+    scan_logs_query = ScanLog.query.filter_by(user_id=user_id)
+    if status == "success":
+        scan_logs_query = scan_logs_query.filter(ScanLog.is_successful.is_(True))
+    elif status == "failed":
+        scan_logs_query = scan_logs_query.filter(ScanLog.is_successful.is_(False))
+    elif status != "all":
+        # e.g. "partial" - not a real ScanLog state, so no row can match it.
+        scan_logs_query = scan_logs_query.filter(ScanLog.id.is_(None))
+
+    if search:
+        scan_logs_query = scan_logs_query.join(Project, ScanLog.project_id == Project.id).filter(
+            Project.name.ilike(f"%{search}%")
+        )
+
+    scan_logs = scan_logs_query.order_by(ScanLog.created_at.desc()).all()
+
+    # ponytail: the table/stat rows below also read scan.duration_minutes,
+    # scan.scanned_pairs_count and scan.detections_count - fields ScanLog
+    # never tracked (it logs one pass/fail boolean per session, not
+    # per-pair progress or timing). Left undefined, the header stats block
+    # does `total + scan.scanned_pairs_count` which raises (Undefined has
+    # no __add__), and the per-row progress bar does
+    # `scan.total_pairs_count > 0` which raises the same way - so once
+    # scan_logs has real rows this crashes instead of rendering. Zeroed
+    # here as honest placeholders (no fabricated numbers); total_pairs_count
+    # is real data pulled from the project relationship. Add real
+    # duration/progress columns to ScanLog if this ever needs to be genuine.
+    for scan in scan_logs:
+        scan.status = "success" if scan.is_successful else "failed"
+        scan.duration_minutes = 0
+        scan.scanned_pairs_count = 0
+        scan.detections_count = 0
+        scan.total_pairs_count = len(scan.project.pairs) if scan.project else 0
+
     return render_template("admin/user_scans.html",
                          admin=admin,
                          user=user,
@@ -10470,7 +10523,10 @@ def admin_user_scans(user_id):
                          total_scans=total_scans,
                          successful_scans=successful_scans,
                          failed_scans=failed_scans,
-                         recent_scans=recent_scans)
+                         recent_scans=recent_scans,
+                         scan_logs=scan_logs,
+                         status=status,
+                         search=search)
 
 @app.route("/admin/scans/<int:user_id>/update-limit", methods=["POST"])
 @require_admin_permission("admin.users.manage")
@@ -10549,57 +10605,105 @@ def admin_settings():
     admin = current_admin()
     
     if request.method == "POST":
-        # Update trial settings
+        # Update trial settings - these are the only settings.html fields actually
+        # read back anywhere else in the app (see get_system_config("free_trial_*")
+        # call sites). Every other field this route used to accept (site_name,
+        # site_url, support_email, currency, razorpay_enabled, max_login_attempts,
+        # session_timeout, maintenance_mode, allow_registration,
+        # require_email_verification, login_notifications, payment_mode) was
+        # confirmed to have zero runtime effect anywhere in the codebase - written
+        # to SystemConfig but never read back. Rather than pretend those controls
+        # do something, the settings.html form now marks them read-only/"not active
+        # in V1" and this route no longer processes them, so a save can never
+        # silently overwrite a previously-set value with a disabled input's default.
         free_trial_projects = request.form.get("free_trial_projects", type=int)
         free_trial_scans = request.form.get("free_trial_scans", type=int)
         free_trial_days = request.form.get("free_trial_days", type=int)
-        razorpay_enabled = request.form.get("razorpay_enabled") == "on"
-        
+
         set_system_config("free_trial_projects", free_trial_projects, "integer", "Free trial project limit")
         set_system_config("free_trial_scans", free_trial_scans, "integer", "Free trial scan limit")
         set_system_config("free_trial_days", free_trial_days, "integer", "Free trial duration in days")
-        set_system_config("razorpay_enabled", razorpay_enabled, "boolean", "Enable Razorpay payments")
-        
-        # Update general settings
-        site_name = request.form.get("site_name", "").strip()
-        site_url = request.form.get("site_url", "").strip()
-        support_email = request.form.get("support_email", "").strip()
-        currency = request.form.get("currency", "INR")
-        
-        set_system_config("site_name", site_name, "string", "Website name")
-        set_system_config("site_url", site_url, "string", "Website URL")
-        set_system_config("support_email", support_email, "string", "Support email")
-        set_system_config("currency", currency, "string", "Default currency")
-        
-        # Update security settings
-        max_login_attempts = request.form.get("max_login_attempts", type=int)
-        session_timeout = request.form.get("session_timeout", type=int)
-        
-        set_system_config("max_login_attempts", max_login_attempts, "integer", "Maximum login attempts")
-        set_system_config("session_timeout", session_timeout, "integer", "Session timeout in minutes")
-        
-        # Update other settings
-        maintenance_mode = request.form.get("maintenance_mode") == "on"
-        allow_registration = request.form.get("allow_registration") == "on"
-        require_email_verification = request.form.get("require_email_verification") == "on"
-        login_notifications = request.form.get("login_notifications") == "on"
-        payment_mode = request.form.get("payment_mode", "test")
-        
-        set_system_config("maintenance_mode", maintenance_mode, "boolean", "Maintenance mode")
-        set_system_config("allow_registration", allow_registration, "boolean", "Allow user registration")
-        set_system_config("require_email_verification", require_email_verification, "boolean", "Require email verification")
-        set_system_config("login_notifications", login_notifications, "boolean", "Login notifications")
-        set_system_config("payment_mode", payment_mode, "string", "Payment mode")
-        
+
         # Log activity
         log_admin_activity(admin.id, "settings_update", "Updated system settings")
         
         flash("Settings updated successfully.", "success")
         return redirect(url_for("admin_settings"))
     
-    return render_template("admin/settings.html", 
+    return render_template("admin/settings.html",
                          admin=admin,
-                         get_system_config=get_system_config) 
+                         get_system_config=get_system_config)
+
+# --------------------------------------------------------------------------------------------
+# Admin Routes - Capacity (V1 paid-account capacity gate). Read-and-safely-edit-two-fields
+# UI only - reuses the exact same read query as the `capacity-status` CLI command
+# (_capacity_state_snapshot()) and never touches consumed_count directly, which stays
+# derived from PaymentReservation rows via the atomic reserve/release helpers above.
+# --------------------------------------------------------------------------------------------
+@app.route("/admin/capacity", methods=["GET", "POST"])
+@require_admin_permission("superadmin.capacity.manage")
+def admin_capacity():
+    admin = current_admin()
+    config = _get_or_create_capacity_config()
+
+    if request.method == "POST":
+        configured_limit_raw = (request.form.get("configured_limit") or "").strip()
+        enabled = request.form.get("enabled") == "on"
+
+        try:
+            configured_limit = int(configured_limit_raw)
+            if configured_limit < 1:
+                raise ValueError()
+        except ValueError:
+            flash("Configured limit must be a positive integer.", "error")
+            return redirect(url_for("admin_capacity"))
+
+        old_limit, old_enabled = config.configured_limit, config.enabled
+        config.configured_limit = configured_limit
+        config.enabled = enabled
+        db.session.commit()
+
+        log_admin_activity(
+            admin.id, "capacity_config_update",
+            f"Updated capacity config: limit {old_limit} -> {configured_limit}, enabled {old_enabled} -> {enabled}"
+        )
+        flash("Capacity settings updated.", "success")
+        return redirect(url_for("admin_capacity"))
+
+    snapshot = _capacity_state_snapshot()
+    return render_template("admin/capacity.html", admin=admin, snapshot=snapshot)
+
+# --------------------------------------------------------------------------------------------
+# Admin Routes - Razorpay Webhook Events (read-only). Never displays raw payload,
+# signature, or secrets - only the metadata columns RazorpayWebhookEvent stores.
+# --------------------------------------------------------------------------------------------
+@app.route("/admin/webhook-events", methods=["GET"])
+@require_admin_permission("admin.payments.view")
+def admin_webhook_events():
+    admin = current_admin()
+
+    order_id = request.args.get("order_id", type=int)
+    query = RazorpayWebhookEvent.query
+    order = None
+    if order_id:
+        order = PaymentOrder.query.get_or_404(order_id)
+        query = query.filter_by(payment_order_id=order.id)
+
+    per_page = admin_page_size()
+    pagination = query.order_by(RazorpayWebhookEvent.received_at.desc()).paginate(
+        page=max(request.args.get("page", 1, type=int), 1),
+        per_page=per_page,
+        error_out=False,
+    )
+
+    return render_template(
+        "admin/webhook_events.html",
+        admin=admin,
+        events=pagination.items,
+        pagination=pagination,
+        per_page=per_page,
+        order=order,
+    )
 
 # --------------------------------------------------------------------------------------------
 # Admin Routes - Activity Logs

@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>System Settings - Admin Panel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * {
             margin: 0;
@@ -13,19 +15,19 @@
         }
         
         body {
-            background-color: #f8fafc;
-            color: #334155;
+            background-color: #050505;
+            color: #e6e6e9;
         }
         
         .navbar {
-            background: linear-gradient(to right, #4f46e5, #7c3aed);
+            background: #0b0b0f;
             color: white;
             padding: 0 20px;
             height: 70px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border-bottom: 1px solid rgba(255,255,255,0.08);
             position: fixed;
             top: 0;
             left: 0;
@@ -84,9 +86,9 @@
             position: absolute;
             top: 100%;
             right: 0;
-            background: white;
+            background: #12121a;
             border-radius: 8px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 12px 32px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08);
             min-width: 200px;
             display: none;
             overflow: hidden;
@@ -100,13 +102,13 @@
         .dropdown-item {
             display: block;
             padding: 12px 20px;
-            color: #334155;
+            color: #e6e6e9;
             text-decoration: none;
             transition: all 0.3s;
         }
         
         .dropdown-item:hover {
-            background: #f1f5f9;
+            background: rgba(255,255,255,0.06);
         }
         
         .sidebar {
@@ -115,8 +117,8 @@
             top: 70px;
             bottom: 0;
             width: 250px;
-            background: white;
-            border-right: 1px solid #e2e8f0;
+            background: #0b0b0f;
+            border-right: 1px solid rgba(255,255,255,0.08);
             padding: 20px 0;
             overflow-y: auto;
             z-index: 999;
@@ -127,7 +129,7 @@
         }
         
         .sidebar-title {
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             font-size: 12px;
             font-weight: 600;
             text-transform: uppercase;
@@ -141,24 +143,52 @@
             align-items: center;
             gap: 12px;
             padding: 12px 20px;
-            color: #475569;
+            color: #c9ced8;
+            background: transparent;
             text-decoration: none;
             transition: all 0.3s;
-            border-left: 3px solid transparent;
+            border: 1px solid transparent;
+            border-left: 0;
         }
-        
+
+        .sidebar-link:visited {
+            color: #c9ced8;
+        }
+
         .sidebar-link:hover {
-            background: #f1f5f9;
-            color: #4f46e5;
+            background: rgba(255,255,255,0.06);
+            color: #fff;
+            border-color: rgba(255,255,255,0.16);
+            border-left: 0;
         }
-        
+
+        .sidebar-link:focus-visible {
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            border-color: #00d4ff;
+            border-left: 0;
+            box-shadow: 0 0 0 3px rgba(0,212,255,0.28);
+            outline: none;
+        }
+
         .sidebar-link.active {
-            background: #e0e7ff;
-            color: #4f46e5;
-            border-left-color: #4f46e5;
+            background: rgba(255,0,122,0.14);
+            color: #fff;
+            border-color: rgba(255,0,122,0.32);
+            border-left: 0;
         }
-        
+
+        .sidebar-link[aria-disabled="true"],
+        .sidebar-link.disabled {
+            color: #5b6170;
+            background: transparent;
+            border-color: transparent;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
         .sidebar-link i {
+            color: currentColor;
             width: 20px;
             text-align: center;
         }
@@ -180,7 +210,7 @@
         .page-title {
             font-size: 28px;
             font-weight: 600;
-            color: #1e293b;
+            color: #e6e6e9;
         }
         
         .btn {
@@ -196,21 +226,21 @@
         }
         
         .btn-primary {
-            background: #4f46e5;
+            background: #ff007a;
             color: white;
         }
         
         .btn-primary:hover {
-            background: #4338ca;
+            background: #ff2d90;
         }
         
         .btn-secondary {
-            background: #6b7280;
+            background: rgba(255,255,255,0.08);
             color: white;
         }
         
         .btn-secondary:hover {
-            background: #4b5563;
+            background: rgba(255,255,255,0.16);
         }
         
         .btn-success {
@@ -223,10 +253,10 @@
         }
         
         .card {
-            background: white;
+            background: #0b0b0f;
             border-radius: 12px;
             padding: 25px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border: 1px solid rgba(255,255,255,0.08);
             margin-bottom: 30px;
         }
         
@@ -236,13 +266,13 @@
             align-items: center;
             margin-bottom: 20px;
             padding-bottom: 15px;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
         }
         
         .card-title {
             font-size: 18px;
             font-weight: 600;
-            color: #1e293b;
+            color: #e6e6e9;
         }
         
         .form-group {
@@ -252,7 +282,7 @@
         .form-group label {
             display: block;
             margin-bottom: 8px;
-            color: #555;
+            color: rgba(255,255,255,0.6);
             font-weight: 500;
             font-size: 14px;
         }
@@ -260,21 +290,24 @@
         .form-control {
             width: 100%;
             padding: 10px;
-            border: 2px solid #e5e7eb;
+            border: 1px solid rgba(255,255,255,0.16);
             border-radius: 8px;
             font-size: 14px;
             transition: all 0.3s;
+            background: rgba(255,255,255,0.03);
+            color: #e6e6e9;
         }
+        .form-control::placeholder { color: rgba(255,255,255,0.35); }
         
         .form-control:focus {
             outline: none;
-            border-color: #4f46e5;
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+            border-color: #00d4ff;
+            box-shadow: 0 0 0 3px rgba(0,212,255,0.18);
         }
         
         .form-text {
             font-size: 12px;
-            color: #6b7280;
+            color: rgba(255,255,255,0.6);
             margin-top: 5px;
         }
         
@@ -322,11 +355,25 @@
         }
         
         input:checked + .slider {
-            background-color: #4f46e5;
+            background-color: #ff007a;
         }
-        
+
         input:checked + .slider:before {
             transform: translateX(26px);
+        }
+
+        /* V1-inactive toggles (Task: settings controls must look and behave
+           genuinely inert, not just carry a banner) - dim but readable,
+           explicit not-allowed cursor, no hover feedback. */
+        .switch input:disabled + .slider {
+            cursor: not-allowed;
+            opacity: 0.45;
+        }
+        .switch input:disabled:checked + .slider {
+            background-color: rgba(255, 0, 122, 0.45);
+        }
+        .switch:has(input:disabled) {
+            cursor: not-allowed;
         }
         
         .alert {
@@ -337,21 +384,21 @@
         }
         
         .alert-success {
-            background-color: #d1fae5;
-            color: #065f46;
-            border: 1px solid #a7f3d0;
+            background-color: rgba(34,197,94,0.14);
+            color: #4ade80;
+            border: 1px solid transparent;
         }
         
         .alert-error {
-            background-color: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
+            background-color: rgba(239,68,68,0.14);
+            color: #f87171;
+            border: 1px solid transparent;
         }
         
         .alert-warning {
-            background-color: #fef3c7;
-            color: #92400e;
-            border: 1px solid #fde68a;
+            background-color: rgba(251,191,36,0.14);
+            color: #fbbf24;
+            border: 1px solid transparent;
         }
         
         .badge {
@@ -362,8 +409,8 @@
             font-weight: 600;
         }
         
-        .badge-success { background: #d1fae5; color: #065f46; }
-        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-success { background: rgba(34,197,94,0.14); color: #4ade80; }
+        .badge-warning { background: rgba(251,191,36,0.14); color: #fbbf24; }
         
         .settings-nav {
             display: flex;
@@ -375,8 +422,8 @@
         .settings-nav-link {
             padding: 10px 20px;
             border-radius: 8px;
-            background: #f1f5f9;
-            color: #64748b;
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.6);
             text-decoration: none;
             font-size: 14px;
             font-weight: 500;
@@ -384,22 +431,22 @@
         }
         
         .settings-nav-link:hover {
-            background: #e2e8f0;
+            background: rgba(255,255,255,0.1);
         }
         
         .settings-nav-link.active {
-            background: #4f46e5;
+            background: #ff007a;
             color: white;
         }
         
         .api-key-display {
-            background: #f8fafc;
+            background: rgba(255,255,255,0.04);
             padding: 15px;
             border-radius: 8px;
             font-family: monospace;
             word-break: break-all;
             margin-bottom: 10px;
-            border: 1px solid #e2e8f0;
+            border: 1px solid rgba(255,255,255,0.08);
         }
         
         @media (max-width: 992px) {
@@ -441,7 +488,7 @@
         }
     </style>
 </head>
-<body>
+<body class="ss-admin-scope">
     <!-- Navbar -->
     <nav class="navbar">
         <a href="/admin/dashboard" class="navbar-brand">
@@ -458,7 +505,9 @@
             </div>
             <div class="dropdown-menu" id="userDropdown">
                 <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
+                {% if admin_can('superadmin.settings.manage') %}
                 <a href="/admin/settings" class="dropdown-item">Settings</a>
+                {% endif %}
                 <div class="dropdown-divider"></div>
                 <a href="/admin/logout" class="dropdown-item">Logout</a>
             </div>
@@ -471,46 +520,68 @@
         <div class="sidebar-section">
             <div class="sidebar-title">Dashboard</div>
             <a href="/admin/dashboard" class="sidebar-link">
-                <i>📊</i>
-                <span>Overview</span>
+                <i class="fas fa-tachometer-alt"></i>
+                <span>Dashboard</span>
             </a>
         </div>
-        
+
         <div class="sidebar-section">
             <div class="sidebar-title">User Management</div>
-            <a href="/admin/user-profiles" class="sidebar-link">
-                <i>👥</i>
-                <span>User Profiles</span>
+            <a href="/admin/users" class="sidebar-link">
+                <i class="fas fa-users"></i>
+                <span>Users</span>
             </a>
         </div>
-        
+
         <div class="sidebar-section">
             <div class="sidebar-title">Content</div>
             <a href="/admin/projects" class="sidebar-link">
-                <i>📁</i>
+                <i class="fas fa-project-diagram"></i>
                 <span>Projects</span>
             </a>
+            <a href="/admin/scans" class="sidebar-link">
+                <i class="fas fa-search"></i>
+                <span>Scans</span>
+            </a>
         </div>
-        
+
         <div class="sidebar-section">
             <div class="sidebar-title">System</div>
+            {% if admin_can('superadmin.plans.manage') %}
             <a href="/admin/plans" class="sidebar-link">
-                <i>📋</i>
+                <i class="fas fa-list-alt"></i>
                 <span>Plans</span>
             </a>
+            {% endif %}
+            <a href="/admin/subscriptions" class="sidebar-link">
+                <i class="fas fa-receipt"></i>
+                <span>Subscriptions</span>
+            </a>
             <a href="/admin/payments" class="sidebar-link">
-                <i>💳</i>
+                <i class="fas fa-credit-card"></i>
                 <span>Payments</span>
             </a>
             {% if admin_can('superadmin.admins.manage') %}
             <a href="/admin/admins" class="sidebar-link">
-                <i>🛡️</i>
-                <span>Admins</span>
+                <i class="fas fa-user-shield"></i>
+                <span>Admin Management</span>
             </a>
             {% endif %}
+            {% if admin_can('superadmin.capacity.manage') %}
+            <a href="/admin/capacity" class="sidebar-link">
+                <i class="fas fa-gauge-high"></i>
+                <span>Capacity</span>
+            </a>
+            {% endif %}
+            {% if admin_can('superadmin.settings.manage') %}
             <a href="/admin/settings" class="sidebar-link active">
-                <i>⚙️</i>
+                <i class="fas fa-cog"></i>
                 <span>Settings</span>
+            </a>
+            {% endif %}
+            <a href="/admin/activity-logs" class="sidebar-link">
+                <i class="fas fa-clipboard-list"></i>
+                <span>Activity Logs</span>
             </a>
         </div>
     </div>
@@ -543,58 +614,60 @@
         <div class="card tab-content" id="generalTab">
             <div class="card-header">
                 <h2 class="card-title">General Settings</h2>
-                <button type="submit" form="generalForm" class="btn btn-primary">Save Changes</button>
+                <span class="badge badge-warning">Not active in V1</span>
             </div>
-            
-            <form id="generalForm" method="POST" action="{{ url_for('admin_settings') }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="alert alert-warning">
+                These fields are stored but not read anywhere else in ScanStory V1 yet - changing them here would have no effect on the live app, so the controls are shown read-only rather than implying they do something.
+            </div>
+
+            <form id="generalForm">
                 <div class="form-row">
                     <div class="form-group">
                         <label for="site_name">Site Name</label>
-                        <input type="text" id="site_name" name="site_name" class="form-control" value="{{ get_system_config('site_name', 'ScanStory') }}" required>
+                        <input type="text" id="site_name" class="form-control" value="{{ get_system_config('site_name', 'ScanStory') }}" disabled>
                         <div class="form-text">Display name of your application</div>
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="site_url">Site URL</label>
-                        <input type="url" id="site_url" name="site_url" class="form-control" value="{{ get_system_config('site_url', 'https://scanstory.com') }}" required>
+                        <input type="url" id="site_url" class="form-control" value="{{ get_system_config('site_url', 'https://scanstory.com') }}" disabled>
                         <div class="form-text">Main URL of your application</div>
                     </div>
                 </div>
-                
+
                 <div class="form-row">
                     <div class="form-group">
                         <label for="support_email">Support Email</label>
-                        <input type="email" id="support_email" name="support_email" class="form-control" value="{{ get_system_config('support_email', 'support@scanstory.com') }}" required>
+                        <input type="email" id="support_email" class="form-control" value="{{ get_system_config('support_email', 'support@scanstory.com') }}" disabled>
                         <div class="form-text">Email for technical support</div>
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="currency">Currency</label>
-                        <select id="currency" name="currency" class="form-control" required>
+                        <select id="currency" class="form-control" disabled>
                             <option value="INR" {% if get_system_config('currency', 'INR') == 'INR' %}selected{% endif %}>INR (₹)</option>
                             <option value="USD" {% if get_system_config('currency', 'INR') == 'USD' %}selected{% endif %}>USD ($)</option>
                         </select>
                         <div class="form-text">Default currency for payments</div>
                     </div>
                 </div>
-                
+
                 <div class="form-group">
                     <label>Maintenance Mode</label>
                     <div style="display: flex; align-items: center; gap: 15px; margin-top: 8px;">
                         <label class="switch">
-                            <input type="checkbox" name="maintenance_mode" {% if get_system_config('maintenance_mode', False) %}checked{% endif %}>
+                            <input type="checkbox" disabled {% if get_system_config('maintenance_mode', False) %}checked{% endif %}>
                             <span class="slider"></span>
                         </label>
                         <span>Enable maintenance mode (blocks user access)</span>
                     </div>
                 </div>
-                
+
                 <div class="form-group">
                     <label>Allow User Registration</label>
                     <div style="display: flex; align-items: center; gap: 15px; margin-top: 8px;">
                         <label class="switch">
-                            <input type="checkbox" name="allow_registration" {% if get_system_config('allow_registration', True) %}checked{% endif %}>
+                            <input type="checkbox" disabled {% if get_system_config('allow_registration', True) %}checked{% endif %}>
                             <span class="slider"></span>
                         </label>
                         <span>Allow new users to register</span>
@@ -638,58 +711,36 @@
         <div class="card tab-content" id="paymentTab" style="display: none;">
             <div class="card-header">
                 <h2 class="card-title">Payment Settings</h2>
-                <button type="submit" form="paymentForm" class="btn btn-primary">Save Changes</button>
+                <span class="badge badge-warning">Not active in V1</span>
             </div>
-            
-            <form id="paymentForm" method="POST" action="{{ url_for('admin_settings') }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <div class="alert alert-warning">
-                    ⚠️ Payment gateway settings. Configure carefully.
-                </div>
-                
+            <div class="alert alert-warning">
+                These toggles are not wired to the live Razorpay integration yet - the app currently reads its Razorpay/live-vs-test behavior from server environment configuration, not from these stored values. Shown read-only to avoid implying a switch here changes payment behavior.
+            </div>
+
+            <form id="paymentForm">
                 <div class="form-group">
                     <label>Enable Razorpay Payments</label>
                     <div style="display: flex; align-items: center; gap: 15px; margin-top: 8px;">
                         <label class="switch">
-                            <input type="checkbox" name="razorpay_enabled" {% if get_system_config('razorpay_enabled', True) %}checked{% endif %}>
+                            <input type="checkbox" disabled {% if get_system_config('razorpay_enabled', True) %}checked{% endif %}>
                             <span class="slider"></span>
                         </label>
                         <span>Enable Razorpay payment gateway</span>
                     </div>
-                    <div class="form-text">
-                        {% if get_system_config('razorpay_enabled', True) %}
-                        <span class="badge badge-success">ENABLED</span> Razorpay payments are active
-                        {% else %}
-                        <span class="badge badge-warning">DISABLED</span> Razorpay payments are inactive
-                        {% endif %}
-                    </div>
                 </div>
-                
-                <div class="alert alert-warning" style="display: none;" id="razorpayWarning">
-                    ⚠️ Razorpay keys must be set in environment variables for security.
-                </div>
-                
+
                 <div class="form-group">
                     <label>Payment Mode</label>
                     <div style="display: flex; gap: 20px; margin-top: 8px;">
                         <label style="display: flex; align-items: center; gap: 8px;">
-                            <input type="radio" name="payment_mode" value="test" {% if get_system_config('payment_mode', 'test') == 'test' %}checked{% endif %}>
+                            <input type="radio" disabled {% if get_system_config('payment_mode', 'test') == 'test' %}checked{% endif %}>
                             Test Mode
                         </label>
                         <label style="display: flex; align-items: center; gap: 8px;">
-                            <input type="radio" name="payment_mode" value="live" {% if get_system_config('payment_mode', 'test') == 'live' %}checked{% endif %}>
+                            <input type="radio" disabled {% if get_system_config('payment_mode', 'test') == 'live' %}checked{% endif %}>
                             Live Mode
                         </label>
                     </div>
-                    {% if get_system_config('payment_mode', 'test') == 'test' %}
-                    <div class="form-text">
-                        <span class="badge badge-warning">TEST MODE</span> Payments won't be processed
-                    </div>
-                    {% else %}
-                    <div class="form-text">
-                        <span class="badge badge-success">LIVE MODE</span> Real payments will be processed
-                    </div>
-                    {% endif %}
                 </div>
             </form>
         </div>
@@ -698,45 +749,43 @@
         <div class="card tab-content" id="securityTab" style="display: none;">
             <div class="card-header">
                 <h2 class="card-title">Security Settings</h2>
-                <button type="submit" form="securityForm" class="btn btn-primary">Save Changes</button>
+                <span class="badge badge-warning">Not active in V1</span>
             </div>
-            
-            <form id="securityForm" method="POST" action="{{ url_for('admin_settings') }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <div class="alert alert-warning">
-                    ⚠️ Security settings affect all users. Changes may impact user experience.
-                </div>
-                
+            <div class="alert alert-warning">
+                These fields are not read anywhere else in ScanStory V1 yet (admin login lockout uses its own fixed policy, and there is no app-level session-timeout enforcement wired to this value). Shown read-only rather than implying a save here changes account security behavior.
+            </div>
+
+            <form id="securityForm">
                 <div class="form-row">
                     <div class="form-group">
                         <label for="session_timeout">Session Timeout (minutes)</label>
-                        <input type="number" id="session_timeout" name="session_timeout" class="form-control" value="{{ get_system_config('session_timeout', 30) }}" min="5" max="1440">
+                        <input type="number" id="session_timeout" class="form-control" value="{{ get_system_config('session_timeout', 30) }}" disabled>
                         <div class="form-text">User session timeout in minutes</div>
                     </div>
-                    
+
                     <div class="form-group">
                         <label for="max_login_attempts">Max Login Attempts</label>
-                        <input type="number" id="max_login_attempts" name="max_login_attempts" class="form-control" value="{{ get_system_config('max_login_attempts', 5) }}" min="1" max="10">
+                        <input type="number" id="max_login_attempts" class="form-control" value="{{ get_system_config('max_login_attempts', 5) }}" disabled>
                         <div class="form-text">Before temporary account lock</div>
                     </div>
                 </div>
-                
+
                 <div class="form-group">
                     <label>Require Email Verification</label>
                     <div style="display: flex; align-items: center; gap: 15px; margin-top: 8px;">
                         <label class="switch">
-                            <input type="checkbox" name="require_email_verification" {% if get_system_config('require_email_verification', True) %}checked{% endif %}>
+                            <input type="checkbox" disabled {% if get_system_config('require_email_verification', True) %}checked{% endif %}>
                             <span class="slider"></span>
                         </label>
                         <span>Require users to verify email before login</span>
                     </div>
                 </div>
-                
+
                 <div class="form-group">
                     <label>Enable Login Notifications</label>
                     <div style="display: flex; align-items: center; gap: 15px; margin-top: 8px;">
                         <label class="switch">
-                            <input type="checkbox" name="login_notifications" {% if get_system_config('login_notifications', True) %}checked{% endif %}>
+                            <input type="checkbox" disabled {% if get_system_config('login_notifications', True) %}checked{% endif %}>
                             <span class="slider"></span>
                         </label>
                         <span>Send email notification for new logins</span>

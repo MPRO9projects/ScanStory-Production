@@ -438,6 +438,50 @@ def test_known_and_unknown_admin_forgot_password_responses_are_generic(client, a
     assert b"If an admin account exists with this email" in unknown.data
 
 
+def test_admin_password_reset_email_template_renders(app_module):
+    """P0 regression (V1 Agent 2, task 1): admin/reset_password_email.html did
+    not exist on disk, so every call to send_admin_password_reset_email()
+    raised jinja2.TemplateNotFound before it ever reached the SMTP call - the
+    admin forgot-password route silently swallowed that exception (see
+    test_known_and_unknown_admin_forgot_password_responses_are_generic, which
+    can't distinguish a template error from a missing-SMTP-config error from
+    the outside), so the OTP challenge_id was never stored in the session and
+    the admin could never actually complete a reset. This test calls the
+    render path directly and fails on TemplateNotFound specifically.
+    """
+    with app_module.app.app_context():
+        html = app_module.render_template(
+            "admin/reset_password_email.html",
+            code="123456",
+            minutes=10,
+            email="admin@scanstory.com",
+            year=2026,
+        )
+    assert "123456" in html
+    assert "admin@scanstory.com" in html
+
+
+def test_admin_forgot_password_sets_otp_session_state_for_known_admin(client, admin, isolated_app):
+    """End-to-end version of the P0 fix: isolated_app's fake_send_email mock
+    still exercises the real render_template() call inside
+    send_admin_password_reset_email() first - proving the request path that
+    used to raise TemplateNotFound before ever reaching SMTP now completes,
+    the challenge id reaches the session, and the rendered email actually
+    contains the OTP code (not just an empty/error body)."""
+    _app_module, sent_emails, _tmp_path = isolated_app
+    response = client.post("/admin/forgot-password", data={"email": admin.email}, follow_redirects=False)
+    assert response.status_code == 302
+    with client.session_transaction() as sess:
+        assert sess.get("pending_admin_reset_email") == admin.email
+        challenge_id = sess.get("pending_admin_reset_challenge_id")
+        assert challenge_id
+
+    assert len(sent_emails) == 1
+    assert sent_emails[0]["to"] == admin.email
+    assert "Password Reset" in sent_emails[0]["subject"]
+    assert admin.email in sent_emails[0]["html"]
+
+
 def test_concurrent_verification_requests_result_in_one_success(app_module, db_session, normal_user):
     normal_user.is_verified = False
     db_session.commit()

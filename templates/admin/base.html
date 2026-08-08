@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ScanStory Admin - {% block title %}{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -11,143 +12,221 @@
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
-    <!-- Custom Admin CSS -->
+    <!-- Custom Admin CSS: ScanStory's dark console variant of the shared design system
+         (see static/css/design-system.css --ss-* tokens). Bootstrap's grid/nav/dropdown
+         structure is kept (familiar, functional); only the color language changes so admin
+         reads as an operational console that still belongs to the ScanStory brand instead
+         of a generic light Bootstrap admin template. -->
     <style>
         :root {
-            --primary-color: #4e73df;
-            --secondary-color: #858796;
-            --success-color: #1cc88a;
-            --info-color: #36b9cc;
-            --warning-color: #f6c23e;
-            --danger-color: #e74a3b;
-            --light-color: #f8f9fc;
-            --dark-color: #5a5c69;
+            --primary-color: var(--ss-primary, #ff007a);
+            --secondary-color: var(--ss-text-muted, #9aa1ac);
+            --success-color: #22c55e;
+            --info-color: var(--ss-accent, #00d4ff);
+            --warning-color: #fbbf24;
+            --danger-color: #ef4444;
+            --light-color: var(--ss-surface-2, #12121a);
+            --dark-color: var(--ss-text, #e6e6e9);
+            --admin-nav-text: #c9ced8;
+            --admin-nav-icon: #c9ced8;
+            --admin-nav-hover-text: #ffffff;
+            --admin-nav-hover-bg: rgba(255, 255, 255, 0.08);
+            --admin-nav-focus-ring: rgba(0, 212, 255, 0.38);
+            --admin-nav-active-text: #ffffff;
+            --admin-nav-active-bg: rgba(255, 0, 122, 0.18);
+            --admin-nav-disabled-text: #5b6170;
         }
-        
+
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #f8f9fc;
+            font-family: -apple-system, 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--ss-surface-0, #050505);
+            color: var(--ss-text, #e6e6e9);
             min-height: 100vh;
         }
-        
+
         .sidebar {
-            background-color: var(--primary-color);
+            background-color: var(--ss-surface-1, #0b0b0f);
+            border-right: 1px solid var(--ss-border, rgba(255,255,255,0.08));
             min-height: 100vh;
-            box-shadow: 0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.15);
         }
-        
+
         .sidebar .nav-link {
-            color: rgba(255, 255, 255, 0.8);
+            color: var(--admin-nav-text);
+            background-color: transparent;
+            border: 1px solid transparent;
             padding: 0.75rem 1rem;
             margin: 0.2rem 0;
-            border-radius: 0.35rem;
-            transition: all 0.3s;
-        }
-        
-        .sidebar .nav-link:hover {
-            color: #fff;
-            background-color: rgba(255, 255, 255, 0.1);
-        }
-        
-        .sidebar .nav-link.active {
-            color: #fff;
-            background-color: rgba(255, 255, 255, 0.2);
-        }
-        
-        .sidebar .nav-link i {
-            margin-right: 0.5rem;
-        }
-        
-        .navbar {
-            box-shadow: 0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.15);
-        }
-        
-        .card {
-            border: none;
-            box-shadow: 0 0.15rem 1.75rem 0 rgba(58, 59, 69, 0.15);
             border-radius: 0.5rem;
-            margin-bottom: 1.5rem;
+            transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease, color 150ms ease;
         }
-        
+
+        .sidebar .nav-link:visited {
+            color: var(--admin-nav-text);
+        }
+
+        .sidebar .nav-link:hover {
+            color: var(--admin-nav-hover-text);
+            background-color: var(--admin-nav-hover-bg);
+            border-color: var(--ss-border-strong, rgba(255,255,255,0.16));
+        }
+
+        .sidebar .nav-link:focus-visible {
+            color: var(--admin-nav-hover-text);
+            background-color: var(--admin-nav-hover-bg);
+            border-color: var(--info-color);
+            box-shadow: 0 0 0 3px var(--admin-nav-focus-ring);
+            outline: none;
+        }
+
+        .sidebar .nav-link.active,
+        .sidebar .nav-link[aria-current="page"] {
+            color: var(--admin-nav-active-text);
+            background-color: var(--admin-nav-active-bg);
+            border-color: rgba(255, 0, 122, 0.32);
+        }
+
+        .sidebar .nav-link.disabled,
+        .sidebar .nav-link[aria-disabled="true"] {
+            color: var(--admin-nav-disabled-text);
+            background-color: transparent;
+            border-color: transparent;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        .sidebar .nav-link i {
+            color: currentColor;
+            margin-right: 0.5rem;
+            width: 18px;
+            text-align: center;
+        }
+
+        .navbar {
+            background-color: var(--ss-surface-1, #0b0b0f) !important;
+            border-bottom: 1px solid var(--ss-border, rgba(255,255,255,0.08));
+        }
+
+        .navbar-brand, .navbar .nav-link, .navbar-toggler-icon { color: var(--ss-text, #e6e6e9) !important; }
+        .navbar-brand.text-primary { color: var(--ss-primary, #ff007a) !important; }
+        .navbar-toggler { border-color: var(--ss-border-strong, rgba(255,255,255,0.16)); }
+        .dropdown-menu { background-color: var(--ss-surface-2, #12121a); border: 1px solid var(--ss-border, rgba(255,255,255,0.08)); }
+        .dropdown-item, .dropdown-item-text { color: var(--ss-text, #e6e6e9); }
+        .dropdown-item:hover { background-color: rgba(255,255,255,0.06); color: #fff; }
+        .dropdown-divider { border-color: var(--ss-border, rgba(255,255,255,0.08)); }
+
+        .card {
+            background-color: var(--ss-surface-1, #0b0b0f);
+            color: var(--ss-text, #e6e6e9);
+            border: 1px solid var(--ss-border, rgba(255,255,255,0.08));
+            border-radius: 0.75rem;
+            margin-bottom: 1.5rem;
+            box-shadow: none;
+        }
+
         .card-header {
-            background-color: #fff;
-            border-bottom: 1px solid #e3e6f0;
+            background-color: transparent;
+            border-bottom: 1px solid var(--ss-border, rgba(255,255,255,0.08));
             padding: 1rem 1.35rem;
             font-weight: 600;
         }
-        
+
         .stat-card {
-            border-left: 0.25rem solid;
+            border: 1px solid var(--ss-border, rgba(255,255,255,0.08));
+            background: var(--ss-surface-1, #0b0b0f);
         }
-        
-        .stat-card.border-primary {
-            border-left-color: var(--primary-color) !important;
-        }
-        
-        .stat-card.border-success {
-            border-left-color: var(--success-color) !important;
-        }
-        
-        .stat-card.border-info {
-            border-left-color: var(--info-color) !important;
-        }
-        
-        .stat-card.border-warning {
-            border-left-color: var(--warning-color) !important;
-        }
-        
+
+        .stat-card.border-primary { background: linear-gradient(180deg, rgba(255,0,122,0.08), transparent 60%); }
+        .stat-card.border-success { background: linear-gradient(180deg, rgba(34,197,94,0.08), transparent 60%); }
+        .stat-card.border-info { background: linear-gradient(180deg, rgba(0,212,255,0.08), transparent 60%); }
+        .stat-card.border-warning { background: linear-gradient(180deg, rgba(251,191,36,0.08), transparent 60%); }
+
         .stat-card .stat-value {
             font-size: 1.5rem;
             font-weight: 700;
+            color: var(--ss-text, #e6e6e9);
         }
-        
+
         .stat-card .stat-label {
             font-size: 0.8rem;
             color: var(--secondary-color);
             text-transform: uppercase;
             letter-spacing: 0.05rem;
         }
-        
+
         .btn-admin {
             background-color: var(--primary-color);
             color: white;
             border: none;
             padding: 0.5rem 1.5rem;
-            border-radius: 0.35rem;
-            transition: all 0.3s;
+            border-radius: 0.5rem;
+            transition: all 0.2s ease;
+            min-height: 44px;
         }
-        
+
         .btn-admin:hover {
-            background-color: #2e59d9;
+            background-color: #ff2d90;
             color: white;
         }
-        
+
+        /* Bootstrap's default .text-muted / .text-dark assume a light page background;
+           override so admin copy stays readable against the dark ScanStory console. */
+        .text-muted { color: var(--ss-text-muted, #9aa1ac) !important; }
+        .text-dark { color: var(--ss-text, #e6e6e9) !important; }
+        h1, h2, h3, h4, h5, h6 { color: var(--ss-text, #e6e6e9); }
+
+        /* Bootstrap 5 paints table backgrounds/hover via CSS custom properties
+           consumed by `.table > :not(caption) > * > *` as
+           `background-color: var(--bs-table-bg)` plus
+           `box-shadow: inset 0 0 0 9999px var(--bs-table-accent-bg)`, and by
+           `.table-hover > tbody > tr:hover > *` as
+           `--bs-table-accent-bg: var(--bs-table-hover-bg); color: var(--bs-table-hover-color);`
+           set directly on each <td>/<th> (not the <tr>). Left at Bootstrap's
+           defaults, --bs-table-hover-color resolves to --bs-body-color
+           (#212529, near-black) because this page never sets
+           data-bs-theme="dark" - so on hover every cell's text color is
+           force-set to near-black directly on the td, which no tr-level
+           color rule can override (a value declared on the element itself
+           always wins over one merely inherited from an ancestor). Combined
+           with the near-black inset box-shadow wash, that reads as a solid
+           black rectangle swallowing the row. Redefining the tokens here
+           (rather than fighting the mechanism with a competing tr:hover
+           rule) makes Bootstrap's own hover math produce the intended
+           subtle light-tint highlight with readable text instead. */
+        .table {
+            --bs-table-bg: transparent;
+            --bs-table-color: var(--ss-text, #e6e6e9);
+            --bs-table-hover-bg: rgba(255, 255, 255, 0.04);
+            --bs-table-hover-color: var(--ss-text, #e6e6e9);
+            color: var(--ss-text, #e6e6e9);
+        }
         .table th {
             font-weight: 600;
-            color: var(--dark-color);
+            color: var(--ss-text-muted, #9aa1ac);
             border-top: none;
+            border-bottom-color: var(--ss-border, rgba(255,255,255,0.08));
         }
-        
+        .table td { border-color: var(--ss-border, rgba(255,255,255,0.08)); }
+
         .badge-admin {
             padding: 0.35rem 0.65rem;
-            border-radius: 0.35rem;
-            font-weight: 500;
+            border-radius: 999px;
+            font-weight: 600;
         }
-        
+
         .alert-admin {
-            border-radius: 0.35rem;
-            border: none;
+            border-radius: 0.5rem;
+            border: 1px solid var(--ss-border-strong, rgba(255,255,255,0.16));
         }
-        
+
         .content-wrapper {
             padding: 2rem;
         }
-        
+
         @media (max-width: 768px) {
             .sidebar {
                 min-height: auto;
             }
-            
+
             .content-wrapper {
                 padding: 1rem;
             }
@@ -156,7 +235,7 @@
     
     {% block extra_css %}{% endblock %}
 </head>
-<body>
+<body class="ss-admin-scope">
     <!-- Flash Messages -->
     {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
@@ -210,42 +289,53 @@
             <!-- Sidebar -->
             {% if admin %}
                 <div class="col-lg-2 col-md-3 d-none d-md-block sidebar">
-                    <div class="position-sticky pt-3">
+                    <div class="position-sticky top-0 pt-3">
                         <ul class="nav flex-column">
                             <li class="nav-item mb-2">
-                                <a class="nav-link {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" href="{{ url_for('admin_dashboard') }}">
+                                <a class="nav-link {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" {% if request.endpoint == 'admin_dashboard' %}aria-current="page"{% endif %} href="{{ url_for('admin_dashboard') }}">
                                     <i class="fas fa-tachometer-alt"></i> Dashboard
                                 </a>
                             </li>
                             
                             <li class="nav-item mb-2">
-                                <a class="nav-link {% if 'admin_users' in request.endpoint or 'admin_view_user' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_users') }}">
+                                <a class="nav-link {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_user_profiles') %}active{% endif %}" {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_user_profiles') %}aria-current="page"{% endif %} href="{{ url_for('admin_users') }}">
                                     <i class="fas fa-users"></i> Users
                                 </a>
                             </li>
-                            
+
                             <!-- ============================================= -->
                             <!-- Canonical Projects entry (single link -->
                             <!-- for all admin project management; see -->
                             <!-- fix/admin-navigation-routing). -->
                             <!-- ============================================= -->
                             <li class="nav-item mb-2">
-                                <a class="nav-link {% if request.endpoint in ('admin_projects', 'admin_view_project', 'admin_my_projects') %}active{% endif %}" href="{{ url_for('admin_projects') }}">
+                                <a class="nav-link {% if request.endpoint in ('admin_projects', 'admin_view_project', 'admin_my_projects') %}active{% endif %}" {% if request.endpoint in ('admin_projects', 'admin_view_project', 'admin_my_projects') %}aria-current="page"{% endif %} href="{{ url_for('admin_projects') }}">
                                     <i class="fas fa-project-diagram"></i> Projects
+                                </a>
+                            </li>
+
+                            <li class="nav-item mb-2">
+                                <a class="nav-link {% if request.endpoint in ('admin_scans', 'admin_user_scans') %}active{% endif %}" {% if request.endpoint in ('admin_scans', 'admin_user_scans') %}aria-current="page"{% endif %} href="{{ url_for('admin_scans') }}">
+                                    <i class="fas fa-search"></i> Scans
                                 </a>
                             </li>
 
                             {% if admin_can('superadmin.plans.manage') %}
                                 <li class="nav-item mb-2">
-                                    <a class="nav-link {% if 'admin_plans' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_plans') }}">
+                                    <a class="nav-link {% if 'admin_plans' in request.endpoint %}active{% endif %}" {% if 'admin_plans' in request.endpoint %}aria-current="page"{% endif %} href="{{ url_for('admin_plans') }}">
                                         <i class="fas fa-list-alt"></i> Plans
                                     </a>
                                 </li>
                             {% endif %}
                             
+                            <li class="nav-item mb-2">
+                                <a class="nav-link {% if 'admin_subscriptions' in request.endpoint %}active{% endif %}" {% if 'admin_subscriptions' in request.endpoint %}aria-current="page"{% endif %} href="{{ url_for('admin_subscriptions') }}">
+                                    <i class="fas fa-receipt"></i> Subscriptions
+                                </a>
+                            </li>
                             
                             <li class="nav-item mb-2">
-                                <a class="nav-link {% if 'admin_payments' in request.endpoint or 'admin_view_payment' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_payments') }}">
+                                <a class="nav-link {% if 'admin_payments' in request.endpoint or 'admin_view_payment' in request.endpoint %}active{% endif %}" {% if 'admin_payments' in request.endpoint or 'admin_view_payment' in request.endpoint %}aria-current="page"{% endif %} href="{{ url_for('admin_payments') }}">
                                     <i class="fas fa-credit-card"></i> Payments
                                 </a>
                             </li>
@@ -253,20 +343,34 @@
                             
                             {% if admin_can('superadmin.admins.manage') %}
                                 <li class="nav-item mb-2">
-                                    <a class="nav-link {% if 'admin_manage_admins' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_manage_admins') }}">
-                                        <i class="fas fa-user-shield"></i> Admins
+                                    <a class="nav-link {% if 'admin_manage_admins' in request.endpoint %}active{% endif %}" {% if 'admin_manage_admins' in request.endpoint %}aria-current="page"{% endif %} href="{{ url_for('admin_manage_admins') }}">
+                                        <i class="fas fa-user-shield"></i> Admin Management
                                     </a>
                                 </li>
                             {% endif %}
-                            
-                            
+
+                            {% if admin_can('superadmin.capacity.manage') %}
+                                <li class="nav-item mb-2">
+                                    <a class="nav-link {% if 'admin_capacity' in request.endpoint %}active{% endif %}" {% if 'admin_capacity' in request.endpoint %}aria-current="page"{% endif %} href="{{ url_for('admin_capacity') }}">
+                                        <i class="fas fa-gauge-high"></i> Capacity
+                                    </a>
+                                </li>
+                            {% endif %}
+
+
                             {% if admin_can('superadmin.settings.manage') %}
                                 <li class="nav-item mb-2">
-                                    <a class="nav-link {% if 'admin_settings' in request.endpoint %}active{% endif %}" href="{{ url_for('admin_settings') }}">
+                                    <a class="nav-link {% if 'admin_settings' in request.endpoint %}active{% endif %}" {% if 'admin_settings' in request.endpoint %}aria-current="page"{% endif %} href="{{ url_for('admin_settings') }}">
                                         <i class="fas fa-cog"></i> Settings
                                     </a>
                                 </li>
                             {% endif %}
+
+                            <li class="nav-item mb-2">
+                                <a class="nav-link {% if 'admin_activity_logs' in request.endpoint %}active{% endif %}" {% if 'admin_activity_logs' in request.endpoint %}aria-current="page"{% endif %} href="{{ url_for('admin_activity_logs') }}">
+                                    <i class="fas fa-clipboard-list"></i> Activity Logs
+                                </a>
+                            </li>
                         </ul>
                     </div>
                 </div>

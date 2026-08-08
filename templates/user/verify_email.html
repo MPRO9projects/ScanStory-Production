@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SCANSTORY | Security Verification</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
 
     <!-- External Libraries -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
@@ -322,7 +323,7 @@
     </style>
 </head>
 
-<body>
+<body class="ss-user-scope">
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% set latest_category, latest_message = messages[-1] %}
@@ -363,8 +364,9 @@
 
             <form method="POST">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="text" name="otp" class="otp-input glass" placeholder="000000" maxlength="6" required
-                    autocomplete="one-time-code">
+                <label for="verifyOtp" class="ss-visually-hidden">Verification code</label>
+                <input id="verifyOtp" type="text" name="otp" class="otp-input glass" placeholder="000000" maxlength="6" required
+                    inputmode="numeric" autocomplete="one-time-code">
 
                 <div class="mb-8">
                     <p class="text-[10px] text-slate-500 uppercase font-black tracking-widest">
@@ -372,8 +374,8 @@
                     </p>
                 </div>
 
-                <button type="submit" class="btn-neo glow-btn w-full justify-center text-lg">
-                    <i class="fas fa-shield-check"></i> Confirm Identity
+                <button type="submit" class="ss-btn ss-btn-primary ss-btn-block" style="min-height:52px;font-size:0.95rem;">
+                    <i class="fas fa-shield-check" aria-hidden="true"></i> Confirm Identity
                 </button>
             </form>
 

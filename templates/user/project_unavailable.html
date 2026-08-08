@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Unavailable - ScanStory</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--ss-bg, #050505);
+      color: var(--ss-text, rgba(255,255,255,0.92));
+      font-family: -apple-system, 'Segoe UI', Arial, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      max-width: 480px;
+      width: 100%;
+      background: var(--ss-surface-1, #0b0b0f);
+      border: 1px solid var(--ss-border, rgba(255,255,255,0.08));
+      border-radius: var(--ss-radius-lg, 18px);
+      padding: 40px 32px;
+      text-align: center;
+    }
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: var(--ss-text-muted, rgba(255,255,255,0.6));
+      font-size: 13px;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+    }
+    .icon {
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 20px;
+      border-radius: 50%;
+      background: rgba(255, 0, 122, 0.12);
+      color: var(--ss-primary, #ff007a);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+    }
+    h1 {
+      font-size: 22px;
+      margin: 0 0 12px;
+      color: var(--ss-text, rgba(255,255,255,0.92));
+    }
+    p {
+      color: var(--ss-text-muted, rgba(255,255,255,0.6));
+      line-height: 1.5;
+      margin: 0;
+    }
+  </style>
+</head>
+<body class="ss-user-scope">
+  <main data-page="project-unavailable">
+    <div class="card" role="status">
+      <div class="brand">SCANSTORY</div>
+      <div class="icon" aria-hidden="true">&#9888;</div>
+      <h1>This experience is unavailable</h1>
+      <p>The project you're looking for is currently suspended or unavailable. If you believe this is a mistake, please contact the person who shared this with you.</p>
+    </div>
+  </main>
+</body>
+</html>

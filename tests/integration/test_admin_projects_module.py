@@ -155,14 +155,18 @@ def test_admin_project_detail_missing_project_returns_404(client, admin):
     assert response.status_code == 404
 
 
-def test_admin_user_profiles_preserves_filters_and_live_project_counts(client, app_module, db_session, admin, normal_user):
+def test_admin_user_profiles_redirects_to_admin_users_forwarding_search(client, app_module, db_session, admin, normal_user):
+    # admin/user-profiles is a retired legacy route (admin/users is canonical);
+    # it now redirects, forwarding the filters it used to accept.
     _login_admin(client, admin)
     _project(app_module, db_session, "Profile Count One", owner_user=normal_user)
     _project(app_module, db_session, "Profile Count Two", owner_user=normal_user)
-    response = client.get(f"/admin/user-profiles?search={normal_user.email}")
-    assert response.status_code == 200
-    assert b"User Profiles" in response.data
-    assert b"Projects owned by displayed users" in response.data
-    assert b"2" in response.data
-    assert normal_user.email.encode() in response.data
-    assert b"/admin/users/" in response.data
+    response = client.get(f"/admin/user-profiles?search={normal_user.email}", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["Location"].startswith("/admin/users")
+
+    followed = client.get(f"/admin/user-profiles?search={normal_user.email}", follow_redirects=True)
+    assert followed.status_code == 200
+    assert b"User Profiles" not in followed.data
+    assert normal_user.email.encode() in followed.data
+    assert b"/admin/users/" in followed.data

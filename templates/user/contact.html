@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Contact ScanStory | AR Platform Support &amp; Sales — Get in Touch</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <meta name="description" content="Reach the ScanStory team for support, sales enquiries, or partnerships. Call +91 73385 44142 or email us — response within 24 hours.">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://myscanstory.com/contact">
@@ -325,15 +326,15 @@
             max-width: 340px;
             animation: slideIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             box-shadow: 0 20px 40px rgba(0,0,0,0.4);
-            border-left: 4px solid;
+            border: 1px solid rgba(255,255,255,0.15);
             font-size: 14px;
         }
         @keyframes slideIn {
             from { transform: translateX(120%) scale(0.85); opacity: 0; }
             to   { transform: translateX(0) scale(1); opacity: 1; }
         }
-        .toast-success { background: linear-gradient(135deg,#10b981,#059669); border-left-color: #34d399; }
-        .toast-error   { background: linear-gradient(135deg,#ef4444,#dc2626); border-left-color: #f87171; }
+        .toast-success { background: linear-gradient(135deg,#10b981,#059669); }
+        .toast-error   { background: linear-gradient(135deg,#ef4444,#dc2626); }
 
         /* Map */
         .map-container { border-radius: 20px; overflow: hidden; border: 1px solid rgba(255,255,255,0.08); }
@@ -356,7 +357,7 @@
     {% endif %}
 </head>
 
-<body>
+<body class="ss-user-scope">
     <div class="blob blob-1"></div>
     <div class="blob blob-2"></div>
     <div id="toastContainer"></div>

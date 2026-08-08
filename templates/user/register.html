@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Start Free — Create AR Experiences with ScanStory | No Download Required</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <meta name="description" content="Create your free ScanStory account and start building web-based AR experiences. Upload photos and videos, generate QR scan codes, and launch interactive AR stories without app downloads.">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://myscanstory.com/register">
@@ -1088,7 +1089,7 @@
     {% endif %}
 </head>
 
-<body>
+<body class="ss-user-scope">
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% set latest_category, latest_message = messages[-1] %}
@@ -1129,54 +1130,55 @@
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <!-- Email Field -->
                     <div class="input-group">
-                        <label class="label-style">IDENTITY (EMAIL)</label>
-                        <input type="email" name="email" class="input-gloss" placeholder="@gmail.com" required>
+                        <label class="label-style" for="regEmail">IDENTITY (EMAIL)</label>
+                        <input type="email" id="regEmail" name="email" class="input-gloss" placeholder="@gmail.com"
+                            autocomplete="email" inputmode="email" required>
                     </div>
 
                     <!-- Name Fields -->
                     <div class="name-grid">
                         <div class="input-group">
-                            <label class="label-style">FIRST NAME</label>
-                            <input type="text" name="first_name" class="input-gloss" placeholder="Enter Your First Name"
-                                required>
+                            <label class="label-style" for="regFirstName">FIRST NAME</label>
+                            <input type="text" id="regFirstName" name="first_name" class="input-gloss" placeholder="Enter Your First Name"
+                                autocomplete="given-name" required>
                         </div>
                         <div class="input-group">
-                            <label class="label-style">LAST NAME</label>
-                            <input type="text" name="last_name" class="input-gloss" placeholder="Enter Your Last Name"
-                                required>
+                            <label class="label-style" for="regLastName">LAST NAME</label>
+                            <input type="text" id="regLastName" name="last_name" class="input-gloss" placeholder="Enter Your Last Name"
+                                autocomplete="family-name" required>
                         </div>
                     </div>
 
                     <!-- Password Field -->
                     <div class="input-group">
-                        <label class="label-style">SECURE KEY (PASSWORD)</label>
+                        <label class="label-style" for="password1">SECURE KEY (PASSWORD)</label>
                         <div class="password-wrapper">
                             <input type="password" name="password1" id="password1" class="input-gloss"
-                                placeholder="Enter Your Password" required>
-                            <button type="button" class="toggle-password"
+                                placeholder="Enter Your Password" autocomplete="new-password" required>
+                            <button type="button" class="toggle-password" aria-label="Show password" aria-pressed="false"
                                 onclick="togglePasswordVisibility('password1', 'eye1')">
-                                <i id="eye1" class="fas fa-eye"></i>
+                                <i id="eye1" class="fas fa-eye" aria-hidden="true"></i>
                             </button>
                         </div>
                     </div>
 
                     <!-- Confirm Password Field -->
                     <div class="input-group">
-                        <label class="label-style">CONFIRM PASSWORD</label>
+                        <label class="label-style" for="password2">CONFIRM PASSWORD</label>
                         <div class="password-wrapper">
                             <input type="password" name="password2" id="password2" class="input-gloss"
-                                placeholder="Confirm Password" required>
-                            <button type="button" class="toggle-password"
+                                placeholder="Confirm Password" autocomplete="new-password" required>
+                            <button type="button" class="toggle-password" aria-label="Show password" aria-pressed="false"
                                 onclick="togglePasswordVisibility('password2', 'eye2')">
-                                <i id="eye2" class="fas fa-eye"></i>
+                                <i id="eye2" class="fas fa-eye" aria-hidden="true"></i>
                             </button>
                         </div>
                     </div>
 
                     <!-- Phone Field -->
                     <div class="input-group">
-                        <label class="label-style">PHONE</label>
-                        <input type="text" name="phone" class="input-gloss" placeholder="+91">
+                        <label class="label-style" for="regPhone">PHONE</label>
+                        <input type="tel" id="regPhone" name="phone" class="input-gloss" placeholder="+91" autocomplete="tel">
                     </div>
 
                     <!-- Terms Checkbox - SIMPLE STYLE WITHOUT CONTAINER -->

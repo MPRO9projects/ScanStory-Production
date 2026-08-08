@@ -4,187 +4,183 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Admin Login - ScanStory</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <style>
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: -apple-system, 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
         }
-        
+
         body {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: var(--ss-surface-0, #050505);
+            color: var(--ss-text, #e6e6e9);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
             padding: 20px;
         }
-        
+
         .login-container {
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            background: var(--ss-surface-1, #0b0b0f);
+            border: 1px solid var(--ss-border, rgba(255,255,255,0.08));
+            border-radius: 18px;
+            box-shadow: 0 30px 70px rgba(0, 0, 0, 0.55);
             width: 100%;
-            max-width: 450px;
+            max-width: 420px;
             overflow: hidden;
         }
-        
+
         .login-header {
-            background: linear-gradient(to right, #4f46e5, #7c3aed);
-            color: white;
-            padding: 30px;
+            padding: 32px 32px 20px;
             text-align: center;
+            border-bottom: 1px solid var(--ss-border, rgba(255,255,255,0.08));
         }
-        
+
         .login-header h1 {
-            font-size: 28px;
-            margin-bottom: 5px;
+            font-size: 22px;
+            margin-bottom: 4px;
+            font-weight: 700;
         }
-        
+
         .login-header p {
-            opacity: 0.9;
-            font-size: 14px;
+            color: var(--ss-text-muted, rgba(255,255,255,0.55));
+            font-size: 13px;
         }
-        
+
         .login-body {
-            padding: 40px;
+            padding: 32px;
         }
-        
+
         .form-group {
-            margin-bottom: 25px;
+            margin-bottom: 20px;
         }
-        
+
         .form-group label {
             display: block;
             margin-bottom: 8px;
-            color: #555;
-            font-weight: 500;
+            color: var(--ss-text-muted, rgba(255,255,255,0.6));
+            font-weight: 600;
+            font-size: 13px;
         }
-        
+
         .form-control {
             width: 100%;
-            padding: 14px;
-            border: 2px solid #e5e7eb;
+            min-height: 46px;
+            padding: 0 14px;
+            border: 1px solid var(--ss-border-strong, rgba(255,255,255,0.16));
+            background: rgba(255,255,255,0.03);
+            color: var(--ss-text, #e6e6e9);
             border-radius: 10px;
-            font-size: 16px;
-            transition: all 0.3s;
+            font-size: 15px;
+            transition: border-color 150ms ease, box-shadow 150ms ease;
         }
-        
+
+        .form-control::placeholder { color: var(--ss-text-faint, rgba(255,255,255,0.35)); }
+
         .form-control:focus {
             outline: none;
-            border-color: #4f46e5;
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+            border-color: var(--ss-accent, #00d4ff);
+            box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.18);
         }
-        
-        .btn {
-            display: block;
-            width: 100%;
-            padding: 15px;
-            background: linear-gradient(to right, #4f46e5, #7c3aed);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 20px rgba(79, 70, 229, 0.2);
-        }
-        
+
         .forgot-link {
             text-align: center;
             margin-top: 20px;
         }
-        
+
         .forgot-link a {
-            color: #4f46e5;
+            color: var(--ss-text-muted, rgba(255,255,255,0.55));
             text-decoration: none;
-            font-size: 14px;
+            font-size: 13px;
         }
-        
+
         .forgot-link a:hover {
-            text-decoration: underline;
+            color: var(--ss-accent, #00d4ff);
         }
-        
+
         .alert {
-            padding: 12px 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            font-size: 14px;
+            padding: 12px 14px;
+            border-radius: 10px;
+            margin-bottom: 18px;
+            font-size: 13px;
+            border: 1px solid transparent;
         }
-        
+
         .alert-success {
-            background-color: #d1fae5;
-            color: #065f46;
-            border: 1px solid #a7f3d0;
+            background-color: rgba(34, 197, 94, 0.12);
+            color: #86efac;
+            border-color: rgba(34, 197, 94, 0.3);
         }
-        
+
         .alert-error {
-            background-color: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
+            background-color: rgba(239, 68, 68, 0.12);
+            color: #fca5a5;
+            border-color: rgba(239, 68, 68, 0.3);
         }
-        
+
         .logo {
             display: block;
-            margin: 0 auto 20px;
-            font-size: 32px;
-            font-weight: bold;
-            color: white;
+            margin: 0 auto 14px;
+            font-size: 22px;
+            font-weight: 800;
+            font-style: italic;
+            letter-spacing: -0.02em;
+            color: var(--ss-text, #fff);
             text-decoration: none;
         }
-        
+        .logo span { color: var(--ss-primary, #ff007a); }
+
         @media (max-width: 480px) {
             .login-container {
                 max-width: 100%;
             }
-            
+
             .login-body {
-                padding: 30px 20px;
+                padding: 24px 20px;
             }
         }
     </style>
 </head>
-<body>
+<body class="ss-admin-scope">
     <div class="login-container">
         <div class="login-header">
-            <a href="/" class="logo">ScanStory</a>
-            <h1>Admin Panel</h1>
-            <p>Enter your credentials to access the dashboard</p>
+            <a href="/" class="logo">SCAN<span>STORY</span></a>
+            <h1>Admin Console</h1>
+            <p>Sign in to manage the platform</p>
         </div>
-        
+
         <div class="login-body">
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
                     {% for category, message in messages %}
-                        <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}">
+                        <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}" role="alert">
                             {{ message }}
                         </div>
                     {% endfor %}
                 {% endif %}
             {% endwith %}
-            
+
             <form method="POST" action="/admin/login">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="form-group">
-                    <label for="email">Email Address</label>
-                    <input type="email" id="email" name="email" class="form-control" placeholder="admin@scanstory.com" required>
+                    <label for="email">Email address</label>
+                    <input type="email" id="email" name="email" class="form-control" placeholder="admin@scanstory.com"
+                        autocomplete="username" inputmode="email" required autofocus>
                 </div>
-                
+
                 <div class="form-group">
                     <label for="password">Password</label>
-                    <input type="password" id="password" name="password" class="form-control" placeholder="••••••••" required>
+                    <input type="password" id="password" name="password" class="form-control" placeholder="••••••••"
+                        autocomplete="current-password" required>
                 </div>
-                
-                <button type="submit" class="btn">Sign In</button>
-                
+
+                <button type="submit" class="ss-btn ss-btn-primary ss-btn-block" style="min-height:48px;">Sign in</button>
+
                 <div class="forgot-link">
-                    <a href="/admin/forgot-password">Forgot Password?</a>
+                    <a href="/admin/forgot-password">Forgot password?</a>
                 </div>
             </form>
         </div>
@@ -201,9 +197,6 @@
                     setTimeout(() => alert.remove(), 500);
                 }, 5000);
             });
-            
-            // Focus on email field
-            document.getElementById('email').focus();
         });
     </script>
 </body>

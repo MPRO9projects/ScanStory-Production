@@ -5,6 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0, user-scalable=no" />
   <title>SCANSTORY | {{ project_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
 
   <style>
     body {
@@ -152,15 +153,19 @@
       background: rgba(255, 255, 255, 0.05);
       color: white;
       border: 1px solid rgba(255, 255, 255, 0.1);
-      padding: 8px 15px;
+      padding: 8px 16px;
+      min-height: 44px;
       border-radius: 50px;
       text-decoration: none;
       font-size: 14px;
-      display: flex;
+      font-weight: 600;
+      display: inline-flex;
       align-items: center;
-      gap: 5px;
+      gap: 6px;
       cursor: pointer;
+      transition: background-color 150ms ease, border-color 150ms ease;
     }
+    .back-btn:hover { background: rgba(255, 255, 255, 0.09); border-color: rgba(255, 255, 255, 0.22); }
 
     .info-badge {
       position: absolute;
@@ -510,7 +515,7 @@
   </style>
 </head>
 
-<body>
+<body class="ss-user-scope">
   <div class="header">
     {# Root-cause fix (round 1): this used to hardcode href="/". Round-2 fix: session.get
        ('user_id')/session.get('admin_id') alone are NOT safe — the public QR link for a
@@ -641,21 +646,20 @@
        with multiple image/video pairs (there is no single "the" video to play), so this
        is a recovery-failed state with two real actions, not a fake claim of a fallback
        flow that isn't actually wired up. -->
-  <div id="fallbackPanel" role="region" aria-live="polite" aria-labelledby="fallbackMessage" style="display:none;margin:12px auto 0;max-width:520px;padding:16px 18px;border-radius:12px;background:rgba(255,60,60,0.08);border:1px solid rgba(255,90,90,0.35);text-align:center;">
-    <div id="fallbackMessage" style="color:#ff9090;font-weight:700;margin-bottom:14px;font-size:14px;"></div>
-    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-      <button type="button" id="fallbackWatchBtn" aria-label="Watch video instead"
-        style="display:none;min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(255,255,255,0.45);background:rgba(255,255,255,0.12);color:#fff;font-weight:800;cursor:pointer;">
-        Watch video instead
-      </button>
-      <button type="button" id="fallbackRetryBtn"
-        style="min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(0,212,255,0.5);background:rgba(0,212,255,0.12);color:#00d4ff;font-weight:700;cursor:pointer;">
+  <div id="fallbackPanel" role="region" aria-live="polite" aria-labelledby="fallbackMessage" style="display:none;margin:12px auto 0;max-width:420px;padding:20px;border-radius:16px;background:rgba(20,10,10,0.92);border:1px solid rgba(255,90,90,0.3);text-align:center;">
+    <div id="fallbackMessage" style="color:#ff9090;font-weight:700;margin-bottom:16px;font-size:14px;"></div>
+    <div class="ss-scan-actions">
+      <button type="button" id="fallbackRetryBtn" class="ss-scan-btn ss-scan-btn-primary">
+        <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
         Retry Camera
+      </button>
+      <button type="button" id="fallbackWatchBtn" class="ss-scan-btn ss-scan-btn-secondary" aria-label="Watch video instead" style="display:none;">
+        <i class="fa-solid fa-play" aria-hidden="true"></i>
+        Watch video instead
       </button>
       {# Same server-resolved destination as Back — see resolve_scanner_entry_context() in
          app.py. Both controls must always agree on where "away from the scanner" goes. #}
-      <a id="fallbackReturnBtn" href="{{ resolved_back_destination }}"
-        style="min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);color:#fff;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;">
+      <a id="fallbackReturnBtn" href="{{ resolved_back_destination }}" class="ss-scan-btn ss-scan-btn-tertiary">
         Return to Project
       </a>
     </div>
@@ -665,30 +669,29 @@
        hasn't found a marker after repeated tries. Deliberately styled and worded
        differently from #fallbackPanel — "Continue Scanning" never touches the camera or
        loops, unlike "Retry Camera" above, which calls the guarded recovery path. -->
-  <div id="recognitionHelpPanel" role="region" aria-live="polite" aria-labelledby="recognitionHelpMessage" style="display:none;margin:12px auto 0;max-width:520px;padding:16px 18px;border-radius:12px;background:rgba(0,212,255,0.08);border:1px solid rgba(0,212,255,0.3);text-align:center;">
-    <div id="recognitionHelpMessage" style="color:#00d4ff;font-weight:700;margin-bottom:14px;font-size:14px;">
+  <div id="recognitionHelpPanel" role="region" aria-live="polite" aria-labelledby="recognitionHelpMessage" style="display:none;margin:12px auto 0;max-width:420px;padding:20px;border-radius:16px;background:rgba(8,16,20,0.92);border:1px solid rgba(0,212,255,0.25);text-align:center;">
+    <div id="recognitionHelpMessage" style="color:#00d4ff;font-weight:700;margin-bottom:16px;font-size:14px;">
       Recognition is taking too long. Try moving closer or improving lighting.
     </div>
-    <div style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
-      <button type="button" id="recognitionWatchBtn" aria-label="Watch video instead"
-        style="display:none;min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(255,255,255,0.45);background:rgba(255,255,255,0.12);color:#fff;font-weight:800;cursor:pointer;">
-        Watch video instead
-      </button>
-      <button type="button" id="recognitionContinueBtn"
-        style="min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(0,212,255,0.5);background:rgba(0,212,255,0.12);color:#00d4ff;font-weight:700;cursor:pointer;">
+    <div class="ss-scan-actions">
+      <button type="button" id="recognitionContinueBtn" class="ss-scan-btn ss-scan-btn-primary">
+        <i class="fa-solid fa-camera" aria-hidden="true"></i>
         Continue Scanning
       </button>
-      <a id="recognitionReturnBtn" href="{{ resolved_back_destination }}"
-        style="min-height:44px;padding:0 20px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.06);color:#fff;font-weight:700;text-decoration:none;display:inline-flex;align-items:center;">
+      <button type="button" id="recognitionWatchBtn" class="ss-scan-btn ss-scan-btn-secondary" aria-label="Watch video instead" style="display:none;">
+        <i class="fa-solid fa-play" aria-hidden="true"></i>
+        Watch video instead
+      </button>
+      <a id="recognitionReturnBtn" href="{{ resolved_back_destination }}" class="ss-scan-btn ss-scan-btn-tertiary">
         Return
       </a>
     </div>
   </div>
 
-  <div id="fallbackVideoPanel" role="region" aria-live="polite" aria-labelledby="fallbackVideoTitle" style="display:none;margin:12px auto 0;max-width:720px;padding:14px;border-radius:12px;background:rgba(0,0,0,0.78);border:1px solid rgba(255,255,255,0.18);text-align:center;">
-    <div id="fallbackVideoTitle" style="color:#fff;font-weight:800;margin-bottom:10px;font-size:14px;">Video fallback</div>
-    <video id="fallbackVideo" controls playsinline preload="metadata" aria-label="Fallback video" style="width:100%;max-height:60vh;background:#000;border-radius:8px;"></video>
-    <div id="fallbackVideoStatus" style="margin-top:10px;color:rgba(255,255,255,0.78);font-size:13px;">Use the player controls to watch the video.</div>
+  <div id="fallbackVideoPanel" role="region" aria-live="polite" aria-labelledby="fallbackVideoTitle" style="display:none;margin:12px auto 0;max-width:520px;padding:16px;border-radius:16px;background:rgba(10,10,14,0.94);border:1px solid var(--ss-border-strong, rgba(255,255,255,0.18));text-align:center;">
+    <div id="fallbackVideoTitle" style="color:#fff;font-weight:700;margin-bottom:12px;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;">Watching fallback video</div>
+    <video id="fallbackVideo" controls playsinline preload="metadata" aria-label="Fallback video" style="width:100%;max-height:60vh;background:#000;border-radius:10px;"></video>
+    <div id="fallbackVideoStatus" style="margin-top:10px;color:rgba(255,255,255,0.65);font-size:12px;">Use the player controls to watch the video.</div>
   </div>
 
   {% if scanner_diagnostics_enabled %}

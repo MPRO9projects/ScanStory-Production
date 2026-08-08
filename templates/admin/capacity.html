@@ -1,0 +1,74 @@
+{% extends "admin/base.html" %}
+{% block title %}Capacity{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="h3 mb-0">Paid-Account Capacity</h1>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3 col-6">
+        <div class="card stat-card p-3">
+            <div class="stat-label">Configured Limit</div>
+            <div class="stat-value">{{ snapshot.configured_limit }}</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-6">
+        <div class="card stat-card p-3">
+            <div class="stat-label">Enabled</div>
+            <div class="stat-value">{{ 'Yes' if snapshot.enabled else 'No' }}</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-6">
+        <div class="card stat-card p-3">
+            <div class="stat-label">Consumed (reserved + activated)</div>
+            <div class="stat-value">{{ snapshot.consumed_count }}</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-6">
+        <div class="card stat-card p-3">
+            <div class="stat-label">Live Reserved (pending checkout)</div>
+            <div class="stat-value">{{ snapshot.reserved_count }}</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-6">
+        <div class="card stat-card p-3">
+            <div class="stat-label">Activated Reservations</div>
+            <div class="stat-value">{{ snapshot.activated_reservation_count }}</div>
+        </div>
+    </div>
+    <div class="col-md-3 col-6">
+        <div class="card stat-card p-3">
+            <div class="stat-label">Active Users</div>
+            <div class="stat-value">{{ snapshot.active_user_count }}</div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Edit Capacity Settings</div>
+    <div class="card-body p-4">
+        <div class="alert alert-info alert-admin mb-3">
+            Only the configured limit and enabled/paused state can be edited here. Consumed count is derived from
+            live payment reservations and is never editable directly - it stays in sync automatically as
+            reservations are created, activated, released, or expired. Reconciliation/recovery (expiring stale
+            reservations, repairing drift) remains a CLI-only operation for now (<code>flask expire-stale-reservations</code>,
+            <code>flask reconcile-capacity-reservations</code>).
+        </div>
+        <form method="POST" action="{{ url_for('admin_capacity') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="mb-3">
+                <label for="configured_limit" class="form-label">Configured Limit</label>
+                <input type="number" min="1" step="1" id="configured_limit" name="configured_limit"
+                       class="form-control" value="{{ snapshot.configured_limit }}" required style="max-width: 220px;">
+                <div class="form-text text-muted">Must be a positive integer. Lowering this can never evict an
+                    already-activated customer; it only limits new reservations.</div>
+            </div>
+            <div class="mb-3 form-check form-switch">
+                <input type="checkbox" class="form-check-input" id="enabled" name="enabled" {% if snapshot.enabled %}checked{% endif %}>
+                <label class="form-check-label" for="enabled">Enabled (accept new capacity reservations)</label>
+            </div>
+            <button type="submit" class="btn btn-admin" onclick="return confirm('Save these capacity settings?');">Save Changes</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

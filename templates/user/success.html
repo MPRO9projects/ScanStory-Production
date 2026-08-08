@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ScanStory | Project Created</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
 
     <!-- External Libraries -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
@@ -136,21 +137,35 @@
         }
 
         .btn-secondary {
-            background: linear-gradient(90deg, var(--accent), #0077ff);
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(255, 255, 255, 0.16);
+            box-shadow: none;
+            padding: 1rem;
         }
 
         .btn-secondary:hover {
-            background: #fff;
-            color: #000;
+            background: rgba(0, 212, 255, 0.1);
+            border-color: rgba(0, 212, 255, 0.35);
+            color: #00d4ff;
+            transform: translateY(-2px);
+            box-shadow: none;
         }
 
         .btn-tertiary {
-            background: linear-gradient(90deg, #a855f7, #8b5cf6);
+            background: transparent;
+            border-color: transparent;
+            box-shadow: none;
+            font-weight: 700;
+            letter-spacing: 0.18em;
+            padding: 0.85rem;
+            color: rgba(255, 255, 255, 0.6);
         }
 
         .btn-tertiary:hover {
-            background: #fff;
-            color: #000;
+            background: rgba(255, 255, 255, 0.05);
+            color: #fff;
+            transform: none;
+            box-shadow: none;
         }
 
         .back-nav {
@@ -294,7 +309,7 @@
     </style>
 </head>
 
-<body class="flex items-center justify-center min-h-screen p-6">
+<body class="flex items-center justify-center min-h-screen p-6 ss-user-scope">
 
     <div class="blob blob-1"></div>
     <div class="blob blob-2"></div>
@@ -414,7 +429,7 @@
             <!-- Back Links -->
             <div class="text-center pt-8 mt-8 border-t border-white/10">
                 <p class="text-slate-500 text-[10px] uppercase tracking-[0.2em] font-bold">
-                    Need help? <a href="#" class="text-accent hover:text-white transition-all ml-1">Contact Support</a>
+                    Need help? <a href="{{ url_for('contact_page') }}" class="text-accent hover:text-white transition-all ml-1">Contact Support</a>
                     | <a href="{% if is_admin %}{{ url_for('admin_dashboard') }}{% else %}{{ url_for('user_profile') }}{% endif %}"
                         class="text-accent hover:text-white transition-all ml-1">{% if is_admin %}Dashboard{% else
                         %}View Profile{% endif %}</a>

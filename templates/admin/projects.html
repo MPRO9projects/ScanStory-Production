@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Projects - Admin Panel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * {
             margin: 0;
@@ -13,19 +15,19 @@
         }
         
         body {
-            background-color: #f8fafc;
-            color: #334155;
+            background-color: #050505;
+            color: #e6e6e9;
         }
         
         .navbar {
-            background: linear-gradient(to right, #4f46e5, #7c3aed);
+            background: #0b0b0f;
             color: white;
             padding: 0 20px;
             height: 70px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border-bottom: 1px solid rgba(255,255,255,0.08);
             position: fixed;
             top: 0;
             left: 0;
@@ -89,9 +91,9 @@
             position: absolute;
             top: 100%;
             right: 0;
-            background: white;
+            background: #12121a;
             border-radius: 8px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 12px 32px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08);
             min-width: 200px;
             display: none;
             overflow: hidden;
@@ -105,13 +107,13 @@
         .dropdown-item {
             display: block;
             padding: 12px 20px;
-            color: #334155;
+            color: #e6e6e9;
             text-decoration: none;
             transition: all 0.3s;
         }
         
         .dropdown-item:hover {
-            background: #f1f5f9;
+            background: rgba(255,255,255,0.06);
         }
         
         .sidebar {
@@ -120,8 +122,8 @@
             top: 70px;
             bottom: 0;
             width: 250px;
-            background: white;
-            border-right: 1px solid #e2e8f0;
+            background: #0b0b0f;
+            border-right: 1px solid rgba(255,255,255,0.08);
             padding: 20px 0;
             overflow-y: auto;
             z-index: 999;
@@ -132,7 +134,7 @@
         }
         
         .sidebar-title {
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             font-size: 12px;
             font-weight: 600;
             text-transform: uppercase;
@@ -146,24 +148,52 @@
             align-items: center;
             gap: 12px;
             padding: 12px 20px;
-            color: #475569;
+            color: #c9ced8;
+            background: transparent;
             text-decoration: none;
             transition: all 0.3s;
-            border-left: 3px solid transparent;
+            border: 1px solid transparent;
+            border-left: 0;
         }
-        
+
+        .sidebar-link:visited {
+            color: #c9ced8;
+        }
+
         .sidebar-link:hover {
-            background: #f1f5f9;
-            color: #4f46e5;
+            background: rgba(255,255,255,0.06);
+            color: #fff;
+            border-color: rgba(255,255,255,0.16);
+            border-left: 0;
         }
-        
+
+        .sidebar-link:focus-visible {
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            border-color: #00d4ff;
+            border-left: 0;
+            box-shadow: 0 0 0 3px rgba(0,212,255,0.28);
+            outline: none;
+        }
+
         .sidebar-link.active {
-            background: #e0e7ff;
-            color: #4f46e5;
-            border-left-color: #4f46e5;
+            background: rgba(255,0,122,0.14);
+            color: #fff;
+            border-color: rgba(255,0,122,0.32);
+            border-left: 0;
         }
-        
+
+        .sidebar-link[aria-disabled="true"],
+        .sidebar-link.disabled {
+            color: #5b6170;
+            background: transparent;
+            border-color: transparent;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
         .sidebar-link i {
+            color: currentColor;
             width: 20px;
             text-align: center;
         }
@@ -185,7 +215,7 @@
         .page-title {
             font-size: 28px;
             font-weight: 600;
-            color: #1e293b;
+            color: #e6e6e9;
         }
         
         .btn {
@@ -201,21 +231,21 @@
         }
         
         .btn-primary {
-            background: #4f46e5;
+            background: #ff007a;
             color: white;
         }
         
         .btn-primary:hover {
-            background: #4338ca;
+            background: #ff2d90;
         }
         
         .btn-secondary {
-            background: #6b7280;
+            background: rgba(255,255,255,0.08);
             color: white;
         }
         
         .btn-secondary:hover {
-            background: #4b5563;
+            background: rgba(255,255,255,0.16);
         }
         
         .btn-sm {
@@ -260,10 +290,10 @@
         }
         
         .card {
-            background: white;
+            background: #0b0b0f;
             border-radius: 12px;
             padding: 25px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border: 1px solid rgba(255,255,255,0.08);
             margin-bottom: 30px;
         }
         
@@ -285,7 +315,7 @@
         .form-group label {
             display: block;
             margin-bottom: 8px;
-            color: #555;
+            color: rgba(255,255,255,0.6);
             font-weight: 500;
             font-size: 14px;
         }
@@ -293,16 +323,19 @@
         .form-control {
             width: 100%;
             padding: 10px;
-            border: 2px solid #e5e7eb;
+            border: 1px solid rgba(255,255,255,0.16);
             border-radius: 8px;
             font-size: 14px;
             transition: all 0.3s;
+            background: rgba(255,255,255,0.03);
+            color: #e6e6e9;
         }
+        .form-control::placeholder { color: rgba(255,255,255,0.35); }
         
         .form-control:focus {
             outline: none;
-            border-color: #4f46e5;
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+            border-color: #00d4ff;
+            box-shadow: 0 0 0 3px rgba(0,212,255,0.18);
         }
         
         .table-container {
@@ -315,25 +348,25 @@
         }
         
         .table th {
-            background: #f8fafc;
+            background: transparent;
             padding: 12px 15px;
             text-align: left;
             font-weight: 600;
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             font-size: 14px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
         }
         
         .table td {
             padding: 15px;
-            border-bottom: 1px solid #e2e8f0;
-            color: #475569;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            color: #e6e6e9;
         }
         
         .table tbody tr:hover {
-            background: #f8fafc;
+            background: rgba(255,255,255,0.03);
         }
         
         .badge {
@@ -344,11 +377,11 @@
             font-weight: 600;
         }
         
-        .badge-success { background: #d1fae5; color: #065f46; }
-        .badge-warning { background: #fef3c7; color: #92400e; }
-        .badge-danger { background: #fee2e2; color: #991b1b; }
-        .badge-info { background: #dbeafe; color: #1e40af; }
-        .badge-secondary { background: #f3f4f6; color: #6b7280; }
+        .badge-success { background: rgba(34,197,94,0.14); color: #4ade80; }
+        .badge-warning { background: rgba(251,191,36,0.14); color: #fbbf24; }
+        .badge-danger { background: rgba(239,68,68,0.14); color: #f87171; }
+        .badge-info { background: rgba(0,212,255,0.14); color: #67e8f9; }
+        .badge-secondary { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.6); }
         
         .action-buttons {
             display: flex;
@@ -366,8 +399,8 @@
         .status-tab {
             padding: 8px 20px;
             border-radius: 20px;
-            background: #f1f5f9;
-            color: #64748b;
+            background: rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.6);
             text-decoration: none;
             font-size: 14px;
             font-weight: 500;
@@ -375,12 +408,12 @@
         }
         
         .status-tab:hover {
-            background: #e2e8f0;
+            background: rgba(255,255,255,0.09);
         }
         
         .status-tab.active {
-            background: #4f46e5;
-            color: white;
+            background: #ff007a;
+            color: #fff;
         }
         
         .alert {
@@ -391,21 +424,21 @@
         }
         
         .alert-success {
-            background-color: #d1fae5;
-            color: #065f46;
-            border: 1px solid #a7f3d0;
+            background-color: rgba(34,197,94,0.14);
+            color: #4ade80;
+            border: 1px solid transparent;
         }
         
         .alert-error {
-            background-color: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
+            background-color: rgba(239,68,68,0.14);
+            color: #f87171;
+            border: 1px solid transparent;
         }
         
         .user-avatar-small {
             width: 36px;
             height: 36px;
-            background: #4f46e5;
+            background: #ff007a;
             color: white;
             border-radius: 50%;
             display: flex;
@@ -474,7 +507,7 @@
         }
     </style>
 </head>
-<body>
+<body class="ss-admin-scope">
     <!-- Navbar -->
     <nav class="navbar">
         <a href="/admin/dashboard" class="navbar-brand">
@@ -488,7 +521,9 @@
             <div class="user-avatar">{{ admin.name[0] if admin.name else 'A' }}</div>
             <div class="dropdown-menu" id="userDropdown">
                 <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
+                {% if admin_can('superadmin.settings.manage') %}
                 <a href="/admin/settings" class="dropdown-item">Settings</a>
+                {% endif %}
                 <div class="dropdown-divider"></div>
                 <a href="/admin/logout" class="dropdown-item">Logout</a>
             </div>
@@ -499,24 +534,34 @@
     <div class="sidebar">
         <div class="sidebar-section">
             <div class="sidebar-title">Dashboard</div>
-            <a href="/admin/dashboard" class="sidebar-link"><i>&#128202;</i><span>Overview</span></a>
+            <a href="/admin/dashboard" class="sidebar-link"><i class="fas fa-tachometer-alt"></i><span>Dashboard</span></a>
         </div>
         <div class="sidebar-section">
             <div class="sidebar-title">User Management</div>
-            <a href="/admin/user-profiles" class="sidebar-link"><i>&#128101;</i><span>User Profiles</span></a>
+            <a href="/admin/users" class="sidebar-link"><i class="fas fa-users"></i><span>Users</span></a>
         </div>
         <div class="sidebar-section">
             <div class="sidebar-title">Content</div>
-            <a href="/admin/projects" class="sidebar-link active"><i>&#128193;</i><span>Projects</span></a>
+            <a href="/admin/projects" class="sidebar-link active"><i class="fas fa-project-diagram"></i><span>Projects</span></a>
+            <a href="/admin/scans" class="sidebar-link"><i class="fas fa-search"></i><span>Scans</span></a>
         </div>
         <div class="sidebar-section">
             <div class="sidebar-title">System</div>
-            <a href="/admin/plans" class="sidebar-link"><i>&#128203;</i><span>Plans</span></a>
-            <a href="/admin/payments" class="sidebar-link"><i>&#128179;</i><span>Payments</span></a>
-            {% if admin_can('superadmin.admins.manage') %}
-            <a href="/admin/admins" class="sidebar-link"><i>&#128737;</i><span>Admins</span></a>
+            {% if admin_can('superadmin.plans.manage') %}
+            <a href="/admin/plans" class="sidebar-link"><i class="fas fa-list-alt"></i><span>Plans</span></a>
             {% endif %}
-            <a href="/admin/settings" class="sidebar-link"><i>&#9881;</i><span>Settings</span></a>
+            <a href="/admin/subscriptions" class="sidebar-link"><i class="fas fa-receipt"></i><span>Subscriptions</span></a>
+            <a href="/admin/payments" class="sidebar-link"><i class="fas fa-credit-card"></i><span>Payments</span></a>
+            {% if admin_can('superadmin.admins.manage') %}
+            <a href="/admin/admins" class="sidebar-link"><i class="fas fa-user-shield"></i><span>Admin Management</span></a>
+            {% endif %}
+            {% if admin_can('superadmin.capacity.manage') %}
+            <a href="/admin/capacity" class="sidebar-link"><i class="fas fa-gauge-high"></i><span>Capacity</span></a>
+            {% endif %}
+            {% if admin_can('superadmin.settings.manage') %}
+            <a href="/admin/settings" class="sidebar-link"><i class="fas fa-cog"></i><span>Settings</span></a>
+            {% endif %}
+            <a href="/admin/activity-logs" class="sidebar-link"><i class="fas fa-clipboard-list"></i><span>Activity Logs</span></a>
         </div>
     </div>
     <!-- Main Content -->
@@ -583,25 +628,25 @@
                             <td><strong>{{ row.project.id }}</strong></td>
                             <td>
                                 <strong>{{ row.project.name }}</strong><br>
-                                <small style="color: #6b7280;">{{ 'Active' if row.project.is_active else 'Suspended' }}</small>
+                                <small style="color: rgba(255,255,255,0.6);">{{ 'Active' if row.project.is_active else 'Suspended' }}</small>
                             </td>
                             <td>
                                 {{ row.owner.type }} #{{ row.owner.id or '-' }}<br>
                                 <strong>{{ row.owner.name }}</strong><br>
-                                <small style="color: #6b7280;">{{ row.owner.email }}</small>
+                                <small style="color: rgba(255,255,255,0.6);">{{ row.owner.email }}</small>
                             </td>
                             <td>
                                 {{ row.project.created_at.strftime('%d %b %Y, %I:%M %p') if row.project.created_at else '-' }}<br>
-                                <small style="color: #6b7280;">Updated: {{ row.project.updated_at.strftime('%d %b %Y, %I:%M %p') if row.project.updated_at else '-' }}</small>
+                                <small style="color: rgba(255,255,255,0.6);">Updated: {{ row.project.updated_at.strftime('%d %b %Y, %I:%M %p') if row.project.updated_at else '-' }}</small>
                             </td>
                             <td><strong>{{ row.pair_count }}</strong></td>
                             <td>
                                 <span class="badge {% if row.readiness_summary == 'Ready' %}badge-success{% elif row.failed_pair_count %}badge-danger{% else %}badge-warning{% endif %}">{{ row.readiness_summary }}</span><br>
-                                <small style="color: #6b7280;">QR: {{ 'Present' if row.qr_ready else 'Missing' }}</small>
+                                <small style="color: rgba(255,255,255,0.6);">QR: {{ 'Present' if row.qr_ready else 'Missing' }}</small>
                             </td>
                             <td>
                                 <strong>{{ row.scan_count }}</strong> total<br>
-                                <small style="color: #6b7280;">{{ row.successful_scan_count }} successful / {{ row.failed_scan_count }} failed</small>
+                                <small style="color: rgba(255,255,255,0.6);">{{ row.successful_scan_count }} successful / {{ row.failed_scan_count }} failed</small>
                             </td>
                             <td>
                                 <a href="/admin/projects/{{ row.project.id }}" class="btn btn-primary btn-sm">View Details</a>
@@ -611,8 +656,8 @@
                         <tr>
                             <td colspan="8" style="text-align: center; padding: 40px;">
                                 <div style="font-size: 48px; margin-bottom: 20px; opacity: 0.3;">&#128193;</div>
-                                <h3 style="color: #64748b; margin-bottom: 10px;">No Projects Found</h3>
-                                <p style="color: #94a3b8;">No projects match your current filters.</p>
+                                <h3 style="color: rgba(255,255,255,0.6); margin-bottom: 10px;">No Projects Found</h3>
+                                <p style="color: rgba(255,255,255,0.4);">No projects match your current filters.</p>
                             </td>
                         </tr>
                         {% endfor %}
@@ -622,7 +667,7 @@
         </div>
         <div class="card">
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px; flex-wrap: wrap;">
-                <div style="color: #64748b;">Page {{ pagination.page }} of {{ pagination.pages or 1 }} ? {{ pagination.total }} matching projects</div>
+                <div style="color: rgba(255,255,255,0.6);">Page {{ pagination.page }} of {{ pagination.pages or 1 }} ? {{ pagination.total }} matching projects</div>
                 <div class="action-buttons">
                     {% if pagination.has_prev %}
                     <a class="btn btn-secondary" href="{{ url_for('admin_projects', page=pagination.prev_num, search=search, owner_type=owner_type, readiness=readiness, per_page=per_page) }}">Previous</a>

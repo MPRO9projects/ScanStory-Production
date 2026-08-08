@@ -5,6 +5,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Add New Plan - Admin Panel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * {
             margin: 0;
@@ -14,19 +16,19 @@
         }
 
         body {
-            background-color: #f8fafc;
-            color: #334155;
+            background-color: #050505;
+            color: #e6e6e9;
         }
 
         .navbar {
-            background: linear-gradient(to right, #4f46e5, #7c3aed);
+            background: #0b0b0f;
             color: white;
             padding: 0 20px;
             height: 70px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border-bottom: 1px solid rgba(255,255,255,0.08);
             position: fixed;
             top: 0;
             left: 0;
@@ -85,9 +87,9 @@
             position: absolute;
             top: 100%;
             right: 0;
-            background: white;
+            background: #12121a;
             border-radius: 8px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 12px 32px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08);
             min-width: 200px;
             display: none;
             overflow: hidden;
@@ -101,13 +103,13 @@
         .dropdown-item {
             display: block;
             padding: 12px 20px;
-            color: #334155;
+            color: #e6e6e9;
             text-decoration: none;
             transition: all 0.3s;
         }
 
         .dropdown-item:hover {
-            background: #f1f5f9;
+            background: rgba(255,255,255,0.06);
         }
 
         .sidebar {
@@ -116,8 +118,8 @@
             top: 70px;
             bottom: 0;
             width: 250px;
-            background: white;
-            border-right: 1px solid #e2e8f0;
+            background: #0b0b0f;
+            border-right: 1px solid rgba(255,255,255,0.08);
             padding: 20px 0;
             overflow-y: auto;
             z-index: 999;
@@ -128,7 +130,7 @@
         }
 
         .sidebar-title {
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             font-size: 12px;
             font-weight: 600;
             text-transform: uppercase;
@@ -142,24 +144,52 @@
             align-items: center;
             gap: 12px;
             padding: 12px 20px;
-            color: #475569;
+            color: #c9ced8;
+            background: transparent;
             text-decoration: none;
             transition: all 0.3s;
-            border-left: 3px solid transparent;
+            border: 1px solid transparent;
+            border-left: 0;
+        }
+
+        .sidebar-link:visited {
+            color: #c9ced8;
         }
 
         .sidebar-link:hover {
-            background: #f1f5f9;
-            color: #4f46e5;
+            background: rgba(255,255,255,0.06);
+            color: #fff;
+            border-color: rgba(255,255,255,0.16);
+            border-left: 0;
+        }
+
+        .sidebar-link:focus-visible {
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            border-color: #00d4ff;
+            border-left: 0;
+            box-shadow: 0 0 0 3px rgba(0,212,255,0.28);
+            outline: none;
         }
 
         .sidebar-link.active {
-            background: #e0e7ff;
-            color: #4f46e5;
-            border-left-color: #4f46e5;
+            background: rgba(255,0,122,0.14);
+            color: #fff;
+            border-color: rgba(255,0,122,0.32);
+            border-left: 0;
+        }
+
+        .sidebar-link[aria-disabled="true"],
+        .sidebar-link.disabled {
+            color: #5b6170;
+            background: transparent;
+            border-color: transparent;
+            cursor: not-allowed;
+            pointer-events: none;
         }
 
         .sidebar-link i {
+            color: currentColor;
             width: 20px;
             text-align: center;
         }
@@ -181,7 +211,7 @@
         .page-title {
             font-size: 28px;
             font-weight: 600;
-            color: #1e293b;
+            color: #e6e6e9;
         }
 
         .btn {
@@ -197,28 +227,28 @@
         }
 
         .btn-primary {
-            background: #4f46e5;
+            background: #ff007a;
             color: white;
         }
 
         .btn-primary:hover {
-            background: #4338ca;
+            background: #ff2d90;
         }
 
         .btn-secondary {
-            background: #6b7280;
+            background: rgba(255,255,255,0.08);
             color: white;
         }
 
         .btn-secondary:hover {
-            background: #4b5563;
+            background: rgba(255,255,255,0.16);
         }
 
         .card {
-            background: white;
+            background: #0b0b0f;
             border-radius: 12px;
             padding: 30px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border: 1px solid rgba(255,255,255,0.08);
             margin-bottom: 30px;
         }
 
@@ -229,7 +259,7 @@
         .form-group label {
             display: block;
             margin-bottom: 8px;
-            color: #555;
+            color: rgba(255,255,255,0.6);
             font-weight: 500;
             font-size: 14px;
         }
@@ -242,16 +272,19 @@
         .form-control {
             width: 100%;
             padding: 12px;
-            border: 2px solid #e5e7eb;
+            border: 1px solid rgba(255,255,255,0.16);
             border-radius: 8px;
             font-size: 14px;
             transition: all 0.3s;
+            background: rgba(255,255,255,0.03);
+            color: #e6e6e9;
         }
+        .form-control::placeholder { color: rgba(255,255,255,0.35); }
 
         .form-control:focus {
             outline: none;
-            border-color: #4f46e5;
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+            border-color: #00d4ff;
+            box-shadow: 0 0 0 3px rgba(0,212,255,0.18);
         }
 
         textarea.form-control {
@@ -291,19 +324,19 @@
         }
 
         .alert-success {
-            background-color: #d1fae5;
-            color: #065f46;
-            border: 1px solid #a7f3d0;
+            background-color: rgba(34,197,94,0.14);
+            color: #4ade80;
+            border: 1px solid transparent;
         }
 
         .alert-error {
-            background-color: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
+            background-color: rgba(239,68,68,0.14);
+            color: #f87171;
+            border: 1px solid transparent;
         }
 
         .help-text {
-            color: #6b7280;
+            color: rgba(255,255,255,0.6);
             font-size: 12px;
             margin-top: 5px;
         }
@@ -350,7 +383,7 @@
     </style>
 </head>
 
-<body>
+<body class="ss-admin-scope">
     <!-- Navbar -->
     <nav class="navbar">
         <a href="/admin/dashboard" class="navbar-brand">
@@ -367,7 +400,9 @@
             </div>
             <div class="dropdown-menu" id="userDropdown">
                 <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
+                {% if admin_can('superadmin.settings.manage') %}
                 <a href="/admin/settings" class="dropdown-item">Settings</a>
+                {% endif %}
                 <div class="dropdown-divider"></div>
                 <a href="/admin/logout" class="dropdown-item">Logout</a>
             </div>
@@ -380,46 +415,68 @@
         <div class="sidebar-section">
             <div class="sidebar-title">Dashboard</div>
             <a href="/admin/dashboard" class="sidebar-link">
-                <i>📊</i>
-                <span>Overview</span>
+                <i class="fas fa-tachometer-alt"></i>
+                <span>Dashboard</span>
             </a>
         </div>
 
         <div class="sidebar-section">
             <div class="sidebar-title">User Management</div>
-            <a href="/admin/user-profiles" class="sidebar-link">
-                <i>👥</i>
-                <span>User Profiles</span>
+            <a href="/admin/users" class="sidebar-link">
+                <i class="fas fa-users"></i>
+                <span>Users</span>
             </a>
         </div>
 
         <div class="sidebar-section">
             <div class="sidebar-title">Content</div>
             <a href="/admin/projects" class="sidebar-link">
-                <i>📁</i>
+                <i class="fas fa-project-diagram"></i>
                 <span>Projects</span>
+            </a>
+            <a href="/admin/scans" class="sidebar-link">
+                <i class="fas fa-search"></i>
+                <span>Scans</span>
             </a>
         </div>
 
         <div class="sidebar-section">
             <div class="sidebar-title">System</div>
+            {% if admin_can('superadmin.plans.manage') %}
             <a href="/admin/plans" class="sidebar-link active">
-                <i>📋</i>
+                <i class="fas fa-list-alt"></i>
                 <span>Plans</span>
             </a>
+            {% endif %}
+            <a href="/admin/subscriptions" class="sidebar-link">
+                <i class="fas fa-receipt"></i>
+                <span>Subscriptions</span>
+            </a>
             <a href="/admin/payments" class="sidebar-link">
-                <i>💳</i>
+                <i class="fas fa-credit-card"></i>
                 <span>Payments</span>
             </a>
             {% if admin_can('superadmin.admins.manage') %}
             <a href="/admin/admins" class="sidebar-link">
-                <i>🛡️</i>
-                <span>Admins</span>
+                <i class="fas fa-user-shield"></i>
+                <span>Admin Management</span>
             </a>
             {% endif %}
+            {% if admin_can('superadmin.capacity.manage') %}
+            <a href="/admin/capacity" class="sidebar-link">
+                <i class="fas fa-gauge-high"></i>
+                <span>Capacity</span>
+            </a>
+            {% endif %}
+            {% if admin_can('superadmin.settings.manage') %}
             <a href="/admin/settings" class="sidebar-link">
-                <i>⚙️</i>
+                <i class="fas fa-cog"></i>
                 <span>Settings</span>
+            </a>
+            {% endif %}
+            <a href="/admin/activity-logs" class="sidebar-link">
+                <i class="fas fa-clipboard-list"></i>
+                <span>Activity Logs</span>
             </a>
         </div>
     </div>
@@ -626,7 +683,7 @@ Email support" rows="5"></textarea>
             if (unlimitedCheck.checked) {
                 scanInput.value = 'Unlimited';
                 scanInput.readOnly = true;
-                scanInput.style.backgroundColor = '#f3f4f6';
+                scanInput.style.backgroundColor = 'rgba(255,255,255,0.06)';
             } else {
                 scanInput.value = '';
                 scanInput.readOnly = false;

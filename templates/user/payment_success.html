@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ScanStory | Payment Successful</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     
     <!-- External Libraries -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
@@ -251,7 +252,7 @@
         }
     </style>
 </head>
-<body>
+<body class="ss-user-scope">
 
     <!-- Blobs -->
     <div id="blob1" class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]"></div>
@@ -488,17 +489,17 @@
                 </h2>
                 
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <a href="{{ url_for('user_create_project_page') }}" 
-                       class="btn-neo glow-btn justify-center hover:border-pink-500/50 hover:text-pink-400">
-                        <i class="fas fa-plus-circle"></i> Create Project
+                    <a href="{{ url_for('user_create_project_page') }}"
+                       class="ss-btn ss-btn-primary ss-btn-block">
+                        <i class="fas fa-plus-circle" aria-hidden="true"></i> Create Story
                     </a>
-                    <a href="{{ url_for('dashboard') }}" 
-                       class="btn-neo justify-center hover:border-cyan-400/50 hover:text-cyan-400">
-                        <i class="fas fa-home"></i> Dashboard
+                    <a href="{{ url_for('dashboard') }}"
+                       class="ss-btn ss-btn-secondary ss-btn-block">
+                        <i class="fas fa-home" aria-hidden="true"></i> Dashboard
                     </a>
-                    <a href="{{ url_for('user_profile') }}" 
-                       class="btn-neo justify-center hover:border-green-400/50 hover:text-green-400">
-                        <i class="fas fa-user-cog"></i> Profile
+                    <a href="{{ url_for('user_profile') }}"
+                       class="ss-btn ss-btn-secondary ss-btn-block">
+                        <i class="fas fa-user-cog" aria-hidden="true"></i> Profile
                     </a>
                 </div>
             </div>

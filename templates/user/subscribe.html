@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ScanStory Pricing | AR Experience Platform Plans &amp; Scan Limits</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <meta name="description"
         content="Compare ScanStory pricing plans for creating WebAR experiences. View project limits, scan limits, QR-based AR features, and choose the right AR platform plan for your needs.">
     <meta name="robots" content="index, follow">
@@ -37,7 +38,7 @@
     }
     </script>
 
-    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <style>
@@ -686,7 +687,7 @@
 </style>
 </head>
 
-<body>
+<body class="ss-user-scope">
     <!-- Background Blobs -->
     <div class="blob blob-1"></div>
     <div class="blob blob-2"></div>

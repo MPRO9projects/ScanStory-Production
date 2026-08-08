@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Manage Admins - Admin Panel</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * {
             margin: 0;
@@ -13,19 +15,19 @@
         }
         
         body {
-            background-color: #f8fafc;
-            color: #334155;
+            background-color: #050505;
+            color: #e6e6e9;
         }
         
         .navbar {
-            background: linear-gradient(to right, #4f46e5, #7c3aed);
+            background: #0b0b0f;
             color: white;
             padding: 0 20px;
             height: 70px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border-bottom: 1px solid rgba(255,255,255,0.08);
             position: fixed;
             top: 0;
             left: 0;
@@ -84,9 +86,9 @@
             position: absolute;
             top: 100%;
             right: 0;
-            background: white;
+            background: #12121a;
             border-radius: 8px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 12px 32px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08);
             min-width: 200px;
             display: none;
             overflow: hidden;
@@ -100,13 +102,13 @@
         .dropdown-item {
             display: block;
             padding: 12px 20px;
-            color: #334155;
+            color: #e6e6e9;
             text-decoration: none;
             transition: all 0.3s;
         }
         
         .dropdown-item:hover {
-            background: #f1f5f9;
+            background: rgba(255,255,255,0.06);
         }
         
         .sidebar {
@@ -115,8 +117,8 @@
             top: 70px;
             bottom: 0;
             width: 250px;
-            background: white;
-            border-right: 1px solid #e2e8f0;
+            background: #0b0b0f;
+            border-right: 1px solid rgba(255,255,255,0.08);
             padding: 20px 0;
             overflow-y: auto;
             z-index: 999;
@@ -127,7 +129,7 @@
         }
         
         .sidebar-title {
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             font-size: 12px;
             font-weight: 600;
             text-transform: uppercase;
@@ -141,24 +143,52 @@
             align-items: center;
             gap: 12px;
             padding: 12px 20px;
-            color: #475569;
+            color: #c9ced8;
+            background: transparent;
             text-decoration: none;
             transition: all 0.3s;
-            border-left: 3px solid transparent;
+            border: 1px solid transparent;
+            border-left: 0;
         }
-        
+
+        .sidebar-link:visited {
+            color: #c9ced8;
+        }
+
         .sidebar-link:hover {
-            background: #f1f5f9;
-            color: #4f46e5;
+            background: rgba(255,255,255,0.06);
+            color: #fff;
+            border-color: rgba(255,255,255,0.16);
+            border-left: 0;
         }
-        
+
+        .sidebar-link:focus-visible {
+            background: rgba(255,255,255,0.08);
+            color: #fff;
+            border-color: #00d4ff;
+            border-left: 0;
+            box-shadow: 0 0 0 3px rgba(0,212,255,0.28);
+            outline: none;
+        }
+
         .sidebar-link.active {
-            background: #e0e7ff;
-            color: #4f46e5;
-            border-left-color: #4f46e5;
+            background: rgba(255,0,122,0.14);
+            color: #fff;
+            border-color: rgba(255,0,122,0.32);
+            border-left: 0;
         }
-        
+
+        .sidebar-link[aria-disabled="true"],
+        .sidebar-link.disabled {
+            color: #5b6170;
+            background: transparent;
+            border-color: transparent;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
         .sidebar-link i {
+            color: currentColor;
             width: 20px;
             text-align: center;
         }
@@ -180,7 +210,7 @@
         .page-title {
             font-size: 28px;
             font-weight: 600;
-            color: #1e293b;
+            color: #e6e6e9;
         }
         
         .btn {
@@ -196,21 +226,21 @@
         }
         
         .btn-primary {
-            background: #4f46e5;
+            background: #ff007a;
             color: white;
         }
         
         .btn-primary:hover {
-            background: #4338ca;
+            background: #ff2d90;
         }
         
         .btn-secondary {
-            background: #6b7280;
+            background: rgba(255,255,255,0.08);
             color: white;
         }
         
         .btn-secondary:hover {
-            background: #4b5563;
+            background: rgba(255,255,255,0.16);
         }
         
         .btn-sm {
@@ -246,10 +276,10 @@
         }
         
         .card {
-            background: white;
+            background: #0b0b0f;
             border-radius: 12px;
             padding: 25px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            box-shadow: none; border: 1px solid rgba(255,255,255,0.08);
             margin-bottom: 30px;
         }
         
@@ -263,25 +293,25 @@
         }
         
         .table th {
-            background: #f8fafc;
+            background: transparent;
             padding: 12px 15px;
             text-align: left;
             font-weight: 600;
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
             font-size: 14px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            border-bottom: 1px solid #e2e8f0;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
         }
         
         .table td {
             padding: 15px;
-            border-bottom: 1px solid #e2e8f0;
-            color: #475569;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            color: #e6e6e9;
         }
         
         .table tbody tr:hover {
-            background: #f8fafc;
+            background: rgba(255,255,255,0.03);
         }
         
         .badge {
@@ -292,11 +322,11 @@
             font-weight: 600;
         }
         
-        .badge-success { background: #d1fae5; color: #065f46; }
-        .badge-warning { background: #fef3c7; color: #92400e; }
-        .badge-danger { background: #fee2e2; color: #991b1b; }
-        .badge-info { background: #dbeafe; color: #1e40af; }
-        .badge-secondary { background: #f3f4f6; color: #6b7280; }
+        .badge-success { background: rgba(34,197,94,0.14); color: #4ade80; }
+        .badge-warning { background: rgba(251,191,36,0.14); color: #fbbf24; }
+        .badge-danger { background: rgba(239,68,68,0.14); color: #f87171; }
+        .badge-info { background: rgba(0,212,255,0.14); color: #67e8f9; }
+        .badge-secondary { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.6); }
         
         .action-buttons {
             display: flex;
@@ -311,21 +341,21 @@
         }
         
         .alert-success {
-            background-color: #d1fae5;
-            color: #065f46;
-            border: 1px solid #a7f3d0;
+            background-color: rgba(34,197,94,0.14);
+            color: #4ade80;
+            border: 1px solid transparent;
         }
         
         .alert-error {
-            background-color: #fee2e2;
-            color: #991b1b;
-            border: 1px solid #fecaca;
+            background-color: rgba(239,68,68,0.14);
+            color: #f87171;
+            border: 1px solid transparent;
         }
         
         .admin-avatar {
             width: 36px;
             height: 36px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #ff007a 0%, #7000ff 100%);
             color: white;
             border-radius: 50%;
             display: flex;
@@ -338,7 +368,7 @@
         .empty-state {
             text-align: center;
             padding: 50px 20px;
-            color: #64748b;
+            color: rgba(255,255,255,0.6);
         }
         
         .empty-state-icon {
@@ -388,7 +418,7 @@
         }
     </style>
 </head>
-<body>
+<body class="ss-admin-scope">
     <!-- Navbar -->
     <nav class="navbar">
         <a href="/admin/dashboard" class="navbar-brand">
@@ -405,7 +435,9 @@
             </div>
             <div class="dropdown-menu" id="userDropdown">
                 <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
+                {% if admin_can('superadmin.settings.manage') %}
                 <a href="/admin/settings" class="dropdown-item">Settings</a>
+                {% endif %}
                 <div class="dropdown-divider"></div>
                 <a href="/admin/logout" class="dropdown-item">Logout</a>
             </div>
@@ -418,44 +450,68 @@
         <div class="sidebar-section">
             <div class="sidebar-title">Dashboard</div>
             <a href="/admin/dashboard" class="sidebar-link">
-                <i>📊</i>
-                <span>Overview</span>
+                <i class="fas fa-tachometer-alt"></i>
+                <span>Dashboard</span>
             </a>
         </div>
-        
+
         <div class="sidebar-section">
             <div class="sidebar-title">User Management</div>
-            <a href="/admin/user-profiles" class="sidebar-link">
-                <i>👥</i>
-                <span>User Profiles</span>
+            <a href="/admin/users" class="sidebar-link">
+                <i class="fas fa-users"></i>
+                <span>Users</span>
             </a>
         </div>
-        
+
         <div class="sidebar-section">
             <div class="sidebar-title">Content</div>
             <a href="/admin/projects" class="sidebar-link">
-                <i>📁</i>
+                <i class="fas fa-project-diagram"></i>
                 <span>Projects</span>
             </a>
+            <a href="/admin/scans" class="sidebar-link">
+                <i class="fas fa-search"></i>
+                <span>Scans</span>
+            </a>
         </div>
-        
+
         <div class="sidebar-section">
             <div class="sidebar-title">System</div>
+            {% if admin_can('superadmin.plans.manage') %}
             <a href="/admin/plans" class="sidebar-link">
-                <i>📋</i>
+                <i class="fas fa-list-alt"></i>
                 <span>Plans</span>
             </a>
+            {% endif %}
+            <a href="/admin/subscriptions" class="sidebar-link">
+                <i class="fas fa-receipt"></i>
+                <span>Subscriptions</span>
+            </a>
             <a href="/admin/payments" class="sidebar-link">
-                <i>💳</i>
+                <i class="fas fa-credit-card"></i>
                 <span>Payments</span>
             </a>
+            {% if admin_can('superadmin.admins.manage') %}
             <a href="/admin/admins" class="sidebar-link active">
-                <i>🛡️</i>
-                <span>Admins</span>
+                <i class="fas fa-user-shield"></i>
+                <span>Admin Management</span>
             </a>
+            {% endif %}
+            {% if admin_can('superadmin.capacity.manage') %}
+            <a href="/admin/capacity" class="sidebar-link">
+                <i class="fas fa-gauge-high"></i>
+                <span>Capacity</span>
+            </a>
+            {% endif %}
+            {% if admin_can('superadmin.settings.manage') %}
             <a href="/admin/settings" class="sidebar-link">
-                <i>⚙️</i>
+                <i class="fas fa-cog"></i>
                 <span>Settings</span>
+            </a>
+            {% endif %}
+            <a href="/admin/activity-logs" class="sidebar-link">
+                <i class="fas fa-clipboard-list"></i>
+                <span>Activity Logs</span>
             </a>
         </div>
     </div>
@@ -502,7 +558,7 @@
                                     </div>
                                     <div>
                                         <strong>{{ admin_user.name or 'No Name' }}</strong><br>
-                                        <small style="color: #6b7280;">{{ admin_user.email }}</small>
+                                        <small style="color: rgba(255,255,255,0.6);">{{ admin_user.email }}</small>
                                     </div>
                                 </div>
                             </td>
@@ -523,9 +579,9 @@
                             <td>
                                 {% if admin_user.last_login_at %}
                                 {{ admin_user.last_login_at.strftime('%d %b %Y') }}<br>
-                                <small style="color: #6b7280;">{{ admin_user.last_login_at.strftime('%I:%M %p') }}</small>
+                                <small style="color: rgba(255,255,255,0.6);">{{ admin_user.last_login_at.strftime('%I:%M %p') }}</small>
                                 {% else %}
-                                <span style="color: #6b7280;">Never</span>
+                                <span style="color: rgba(255,255,255,0.6);">Never</span>
                                 {% endif %}
                             </td>
                             <td>
@@ -578,20 +634,20 @@
             <h3 style="margin-bottom: 15px;">Admin Statistics</h3>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
                 <div style="text-align: center;">
-                    <div style="font-size: 32px; font-weight: bold; color: #4f46e5;">{{ admins|length }}</div>
-                    <div style="color: #6b7280;">Total Admins</div>
+                    <div style="font-size: 32px; font-weight: bold; color: #ff007a;">{{ admins|length }}</div>
+                    <div style="color: rgba(255,255,255,0.6);">Total Admins</div>
                 </div>
                 <div style="text-align: center;">
                     <div style="font-size: 32px; font-weight: bold; color: #10b981;">{{ admins|selectattr('is_active', 'equalto', true)|list|length }}</div>
-                    <div style="color: #6b7280;">Active</div>
+                    <div style="color: rgba(255,255,255,0.6);">Active</div>
                 </div>
                 <div style="text-align: center;">
                     <div style="font-size: 32px; font-weight: bold; color: #f59e0b;">{{ admins|selectattr('role', 'equalto', 'superadmin')|list|length }}</div>
-                    <div style="color: #6b7280;">Super Admins</div>
+                    <div style="color: rgba(255,255,255,0.6);">Super Admins</div>
                 </div>
                 <div style="text-align: center;">
                     <div style="font-size: 32px; font-weight: bold; color: #8b5cf6;">{{ admins|selectattr('last_login_at', 'none')|list|length }}</div>
-                    <div style="color: #6b7280;">Never Logged In</div>
+                    <div style="color: rgba(255,255,255,0.6);">Never Logged In</div>
                 </div>
             </div>
         </div>

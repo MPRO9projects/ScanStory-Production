@@ -46,7 +46,6 @@ def test_normal_admin_keeps_permitted_support_routes(client, secondary_admin, pr
         "/admin/dashboard",
         "/admin/users",
         f"/admin/users/{normal_user.id}",
-        "/admin/user-profiles",
         "/admin/projects",
         f"/admin/projects/{project.id}",
         "/admin/payments",

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Story | ScanStory</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
 
@@ -183,6 +184,24 @@
             font-weight: 700;
             text-decoration: underline;
             text-underline-offset: 3px;
+        }
+
+        /* Search & filter toolbar */
+        .stories-toolbar {
+            display: flex;
+            align-items: flex-end;
+            flex-wrap: wrap;
+            gap: 16px;
+            background: var(--glass-bg);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 20px 24px;
+            margin-bottom: 28px;
+        }
+
+        .stories-toolbar-actions {
+            display: flex;
+            gap: 10px;
         }
 
         /* Projects grid */
@@ -458,13 +477,18 @@
         @media (max-width: 640px) {
             .page { padding: 88px 16px 48px; }
             .navbar { padding: 0 1rem; }
+            .nav-actions { gap: 6px; }
+            .nav-btn { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
             .nav-btn span { display: none; }
             .projects-grid { grid-template-columns: 1fr; }
+            .stories-toolbar { flex-direction: column; align-items: stretch; padding: 16px; }
+            .stories-toolbar-actions { flex-direction: column; }
+            .stories-toolbar-actions .ss-btn { width: 100%; }
         }
     </style>
 </head>
 
-<body>
+<body class="ss-user-scope">
     <!-- Ambient Blobs -->
     <div class="blob w-96 h-96 bg-purple-600" style="width:380px;height:380px;background:#7000ff;top:-8%;left:-5%;"></div>
     <div class="blob" style="width:420px;height:420px;background:#ff007a;bottom:-10%;right:-5%;"></div>
@@ -474,17 +498,25 @@
         <a href="{{ url_for('landing') }}">
             <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" class="nav-logo" alt="ScanStory">
         </a>
-        <div class="nav-actions">
+        <div class="nav-actions" role="navigation" aria-label="Primary">
             <a href="{{ url_for('dashboard') }}" class="nav-btn nav-btn-ghost">
-                <i class="fas fa-gauge-high"></i>
+                <i class="fas fa-gauge-high" aria-hidden="true"></i>
                 <span>Dashboard</span>
             </a>
+            <a href="{{ url_for('projects_page') }}" class="nav-btn nav-btn-ghost" aria-current="page" style="background:rgba(255,0,122,0.12);border-color:rgba(255,0,122,0.3);color:#fff;">
+                <i class="fas fa-folder-open" aria-hidden="true"></i>
+                <span>My Stories</span>
+            </a>
+            <a href="{{ url_for('subscribe_page') }}" class="nav-btn nav-btn-ghost">
+                <i class="fas fa-crown" aria-hidden="true"></i>
+                <span>Plans</span>
+            </a>
             <a href="{{ url_for('user_profile') }}" class="nav-btn nav-btn-ghost">
-                <i class="fas fa-user"></i>
+                <i class="fas fa-user" aria-hidden="true"></i>
                 <span>Profile</span>
             </a>
             <a href="{{ url_for('logout') }}" class="nav-btn nav-btn-danger">
-                <i class="fas fa-right-from-bracket"></i>
+                <i class="fas fa-right-from-bracket" aria-hidden="true"></i>
                 <span>Logout</span>
             </a>
         </div>
@@ -529,12 +561,38 @@
             <p class="page-subtitle">Each story is a live AR experience tied to a unique QR code.</p>
         </div>
 
+        <!-- Search & filter -->
+        <form method="GET" action="{{ url_for('projects_page') }}" class="stories-toolbar" data-aos="fade-up">
+            <div class="ss-field" style="margin-bottom:0; flex:2; min-width:220px;">
+                <label class="ss-label" for="q">Search stories</label>
+                <input type="search" id="q" name="q" class="ss-input" placeholder="Search by story name..." value="{{ q }}">
+            </div>
+            <div class="ss-field" style="margin-bottom:0; flex:1; min-width:170px;">
+                <label class="ss-label" for="status">Status</label>
+                <select id="status" name="status" class="ss-select">
+                    <option value="all" {% if status_filter == 'all' %}selected{% endif %}>All stories</option>
+                    <option value="ready" {% if status_filter == 'ready' %}selected{% endif %}>Ready</option>
+                    <option value="processing" {% if status_filter == 'processing' %}selected{% endif %}>Processing</option>
+                    <option value="pending" {% if status_filter == 'pending' %}selected{% endif %}>Pending</option>
+                    <option value="failed" {% if status_filter == 'failed' %}selected{% endif %}>Needs fix</option>
+                </select>
+            </div>
+            <div class="stories-toolbar-actions">
+                <button type="submit" class="ss-btn ss-btn-primary">
+                    <i class="fas fa-magnifying-glass" aria-hidden="true"></i> Search
+                </button>
+                {% if q or status_filter != 'all' %}
+                <a href="{{ url_for('projects_page') }}" class="ss-btn ss-btn-secondary">Clear</a>
+                {% endif %}
+            </div>
+        </form>
+
         <!-- Grid -->
         <div class="projects-grid">
             {% if projects %}
                 {% for project in projects %}
                 <div class="project-card" data-aos="fade-up" data-aos-delay="{{ loop.index0 * 60 }}">
-                    <span class="card-number">{{ project.display_number }}</span>
+                    <span class="card-number">{{ project|project_display_number }}</span>
 
                     <div class="card-icon-wrap">
                         <i class="fas fa-cube"></i>
@@ -588,6 +646,18 @@
                     </div>
                 </div>
                 {% endfor %}
+            {% elif has_any_projects %}
+                <div class="empty-state" data-aos="fade-up">
+                    <div class="empty-icon">
+                        <i class="fas fa-magnifying-glass"></i>
+                    </div>
+                    <h3>No stories match</h3>
+                    <p>No stories match your search or filter. Try a different name or clear it to see all your stories.</p>
+                    <a href="{{ url_for('projects_page') }}" class="empty-cta">
+                        <i class="fas fa-rotate-left"></i>
+                        Clear search & filter
+                    </a>
+                </div>
             {% else %}
                 <div class="empty-state" data-aos="fade-up">
                     <div class="empty-icon">

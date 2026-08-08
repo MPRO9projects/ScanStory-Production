@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login | ScanStory</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <meta name="robots" content="noindex, nofollow">
     <link rel="canonical" href="https://myscanstory.com/">
 
@@ -650,7 +651,7 @@
     </style>
 </head>
 
-<body>
+<body class="ss-user-scope">
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% set latest_category, latest_message = messages[-1] %}
@@ -692,18 +693,19 @@
             <form method="POST" class="relative z-10">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="input-group">
-                    <label class="label-style">IDENTITY (EMAIL)</label>
-                    <input type="email" name="email" placeholder="@gmail.com" class="input-gloss" required>
+                    <label class="label-style" for="loginEmail">IDENTITY (EMAIL)</label>
+                    <input type="email" id="loginEmail" name="email" placeholder="@gmail.com" class="input-gloss"
+                        autocomplete="username" inputmode="email" required>
                 </div>
 
                 <div class="input-group">
-                    <label class="label-style">SECURE KEY (PASSWORD)</label>
+                    <label class="label-style" for="passwordInput">SECURE KEY (PASSWORD)</label>
                     <div class="password-container">
                         <input type="password" name="password" id="passwordInput" placeholder="Enter Your Password"
-                            class="input-gloss" required>
+                            class="input-gloss" autocomplete="current-password" required>
                         <button type="button" class="toggle-password" id="togglePassword"
-                            aria-label="Toggle password visibility">
-                            <i class="fas fa-eye"></i>
+                            aria-label="Show password" aria-pressed="false">
+                            <i class="fas fa-eye" aria-hidden="true"></i>
                         </button>
                     </div>
                 </div>

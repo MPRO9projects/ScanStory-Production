@@ -1,0 +1,888 @@
+/*
+ * ScanStory shared design system.
+ * Presentation only. Loaded alongside (after) tailwind.build.css and any
+ * per-page <style> block, so its rules must stay additive: new component
+ * classes (ss-*) and global resets (focus-visible, reduced-motion), never
+ * a redefinition of existing --primary/--secondary/--accent tokens that
+ * templates already rely on for continuity.
+ *
+ * Brand identity is intentionally unchanged: magenta/cyan on near-black.
+ * What changes is discipline - neon is an accent for the one primary
+ * action per view, not a default border/box-shadow on every element.
+ */
+
+:root {
+  /* Brand accents (match existing per-page tokens, centralized here) */
+  --ss-primary: #ff007a;
+  --ss-secondary: #7000ff;
+  --ss-accent: #00d4ff;
+  --ss-bg: #050505;
+
+  /* Surface levels - one step of lightness apart, tinted toward the brand hue */
+  --ss-surface-0: #050505;      /* page background */
+  --ss-surface-1: #0b0b0f;      /* raised panel */
+  --ss-surface-2: #12121a;      /* card on a panel */
+  --ss-surface-3: #191926;      /* popover / menu / sheet */
+  --ss-border: rgba(255, 255, 255, 0.08);
+  --ss-border-strong: rgba(255, 255, 255, 0.16);
+
+  /* Text */
+  --ss-text: rgba(255, 255, 255, 0.92);
+  --ss-text-muted: rgba(255, 255, 255, 0.6);
+  --ss-text-faint: rgba(255, 255, 255, 0.4);
+
+  /* Spacing scale (4px base) */
+  --ss-space-1: 4px;
+  --ss-space-2: 8px;
+  --ss-space-3: 12px;
+  --ss-space-4: 16px;
+  --ss-space-5: 24px;
+  --ss-space-6: 32px;
+  --ss-space-7: 48px;
+  --ss-space-8: 64px;
+
+  /* Radii */
+  --ss-radius-sm: 8px;
+  --ss-radius-md: 12px;
+  --ss-radius-lg: 18px;
+  --ss-radius-xl: 24px;
+  --ss-radius-pill: 999px;
+
+  /* Motion */
+  --ss-ease: cubic-bezier(0.19, 1, 0.22, 1); /* ease-out-expo */
+  --ss-duration-fast: 150ms;
+  --ss-duration: 220ms;
+
+  /* Glow - reserved for the single primary action per view, never ambient */
+  --ss-glow-primary: 0 0 24px rgba(255, 0, 122, 0.28);
+  --ss-glow-accent: 0 0 24px rgba(0, 212, 255, 0.24);
+  --ss-focus-ring: 0 0 0 3px rgba(0, 212, 255, 0.45);
+}
+
+@media (prefers-color-scheme: light) {
+  /* ScanStory is a deliberately dark, cinematic product end to end (creator
+     tool + viewer + admin console). We do not ship a light variant; this
+     block only guards against a stray OS light-mode UA stylesheet tinting
+     form controls. */
+  :root { color-scheme: dark; }
+}
+
+/* ---------- Global resets shared everywhere ---------- */
+
+.ss-scope, .ss-scope * {
+  box-sizing: border-box;
+}
+
+/* Accessible focus - one consistent ring, replaces inconsistent per-page outlines */
+.ss-scope a:focus-visible,
+.ss-scope button:focus-visible,
+.ss-scope input:focus-visible,
+.ss-scope textarea:focus-visible,
+.ss-scope select:focus-visible,
+.ss-scope [tabindex]:focus-visible,
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--ss-accent);
+  outline-offset: 2px;
+  border-radius: var(--ss-radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------- Buttons ----------
+ * One family, five roles. Primary = the one dominant action in view.
+ * Secondary = supporting action, visible but quieter. Tertiary = text-only.
+ * Destructive = isolated red, never adjacent-styled like primary.
+ * Ghost = icon/utility only.
+ */
+.ss-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ss-space-2);
+  min-height: 44px;
+  padding: 0 var(--ss-space-5);
+  border-radius: var(--ss-radius-md);
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 0.875rem;
+  letter-spacing: 0.01em;
+  border: 1px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: transform var(--ss-duration-fast) var(--ss-ease),
+              box-shadow var(--ss-duration-fast) var(--ss-ease),
+              background-color var(--ss-duration-fast) var(--ss-ease),
+              border-color var(--ss-duration-fast) var(--ss-ease),
+              opacity var(--ss-duration-fast) var(--ss-ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.ss-btn:active { transform: translateY(1px) scale(0.99); }
+.ss-btn:disabled,
+.ss-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none;
+  box-shadow: none;
+}
+
+.ss-btn-primary {
+  background: var(--ss-primary);
+  color: #fff;
+  border-color: var(--ss-primary);
+}
+.ss-btn-primary:hover:not(:disabled) {
+  background: #ff2d90;
+  box-shadow: var(--ss-glow-primary);
+  transform: translateY(-1px);
+}
+
+.ss-btn-secondary {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--ss-text);
+  border-color: var(--ss-border-strong);
+}
+.ss-btn-secondary:hover:not(:disabled) {
+  border-color: var(--ss-accent);
+  background: rgba(0, 212, 255, 0.08);
+}
+
+.ss-btn-tertiary {
+  background: transparent;
+  color: var(--ss-text-muted);
+  border-color: transparent;
+  padding: 0 var(--ss-space-3);
+}
+.ss-btn-tertiary:hover:not(:disabled) {
+  color: var(--ss-text);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.ss-btn-destructive {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.35);
+}
+.ss-btn-destructive:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: #ef4444;
+  color: #fff;
+}
+
+.ss-btn-ghost {
+  background: transparent;
+  color: var(--ss-text-muted);
+  border-color: transparent;
+  min-height: 40px;
+  min-width: 40px;
+  padding: 0 var(--ss-space-2);
+}
+.ss-btn-ghost:hover:not(:disabled) {
+  color: var(--ss-text);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ss-btn-sm { min-height: 36px; padding: 0 var(--ss-space-4); font-size: 0.8125rem; }
+.ss-btn-block { width: 100%; }
+
+.ss-btn .ss-spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: ss-spin 0.7s linear infinite;
+}
+@keyframes ss-spin { to { transform: rotate(360deg); } }
+
+/* ---------- Surfaces / cards ---------- */
+.ss-surface {
+  background: var(--ss-surface-1);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-lg);
+}
+.ss-card {
+  background: var(--ss-surface-2);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-lg);
+  padding: var(--ss-space-5);
+  transition: border-color var(--ss-duration) var(--ss-ease);
+}
+.ss-card:hover { border-color: var(--ss-border-strong); }
+
+/* ---------- Badges / status chips ---------- */
+.ss-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ss-space-1);
+  padding: 3px 10px;
+  border-radius: var(--ss-radius-pill);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid transparent;
+  line-height: 1.6;
+}
+.ss-badge-dot::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.ss-badge-success { background: rgba(34, 197, 94, 0.12); color: #4ade80; border-color: rgba(34, 197, 94, 0.3); }
+.ss-badge-warning { background: rgba(251, 191, 36, 0.12); color: #fbbf24; border-color: rgba(251, 191, 36, 0.3); }
+.ss-badge-danger  { background: rgba(239, 68, 68, 0.12); color: #f87171; border-color: rgba(239, 68, 68, 0.3); }
+.ss-badge-info    { background: rgba(0, 212, 255, 0.12); color: #67e8f9; border-color: rgba(0, 212, 255, 0.3); }
+.ss-badge-neutral { background: rgba(255, 255, 255, 0.06); color: var(--ss-text-muted); border-color: var(--ss-border); }
+
+/* ---------- Forms ---------- */
+.ss-field { display: flex; flex-direction: column; gap: var(--ss-space-2); margin-bottom: var(--ss-space-4); }
+.ss-label { font-size: 0.8125rem; font-weight: 600; color: var(--ss-text-muted); }
+.ss-help { font-size: 0.75rem; color: var(--ss-text-faint); }
+.ss-error-text { font-size: 0.75rem; color: #f87171; display: flex; align-items: center; gap: 6px; }
+
+.ss-input,
+.ss-textarea,
+.ss-select {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 var(--ss-space-4);
+  border-radius: var(--ss-radius-md);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--ss-border-strong);
+  color: var(--ss-text);
+  font-family: inherit;
+  font-size: 0.9375rem;
+  transition: border-color var(--ss-duration-fast) var(--ss-ease), box-shadow var(--ss-duration-fast) var(--ss-ease);
+}
+.ss-textarea { min-height: 96px; padding: var(--ss-space-3) var(--ss-space-4); resize: vertical; }
+.ss-input::placeholder, .ss-textarea::placeholder { color: var(--ss-text-faint); }
+.ss-input:focus, .ss-textarea:focus, .ss-select:focus {
+  outline: none;
+  border-color: var(--ss-accent);
+  box-shadow: var(--ss-focus-ring);
+}
+.ss-input[aria-invalid="true"], .ss-field-invalid .ss-input {
+  border-color: #ef4444;
+}
+
+/* ---------- Empty / loading / skeleton states ---------- */
+.ss-empty {
+  text-align: center;
+  padding: var(--ss-space-8) var(--ss-space-5);
+  border: 1px dashed var(--ss-border-strong);
+  border-radius: var(--ss-radius-xl);
+  color: var(--ss-text-muted);
+}
+.ss-skeleton {
+  background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.09) 37%, rgba(255,255,255,0.04) 63%);
+  background-size: 400% 100%;
+  animation: ss-shimmer 1.6s ease-in-out infinite;
+  border-radius: var(--ss-radius-md);
+}
+@keyframes ss-shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+
+/* ---------- Toast / banner ---------- */
+.ss-toast {
+  display: flex;
+  align-items: center;
+  gap: var(--ss-space-3);
+  padding: var(--ss-space-3) var(--ss-space-4);
+  border-radius: var(--ss-radius-md);
+  border: 1px solid var(--ss-border-strong);
+  background: var(--ss-surface-3);
+  font-size: 0.875rem;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+}
+.ss-toast-success { border-color: rgba(34,197,94,0.4); }
+.ss-toast-error { border-color: rgba(239,68,68,0.4); }
+
+/* ---------- Navigation ---------- */
+.ss-nav-link {
+  position: relative;
+  color: var(--ss-text-muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: var(--ss-space-2) var(--ss-space-3);
+  border-radius: var(--ss-radius-sm);
+  text-decoration: none;
+  transition: color var(--ss-duration-fast) var(--ss-ease), background-color var(--ss-duration-fast) var(--ss-ease);
+}
+.ss-nav-link:hover { color: var(--ss-text); background: rgba(255,255,255,0.05); }
+.ss-nav-link[aria-current="page"],
+.ss-nav-link.is-active {
+  color: #fff;
+  background: rgba(255, 0, 122, 0.12);
+}
+.ss-nav-link[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: var(--ss-space-3);
+  right: var(--ss-space-3);
+  bottom: 2px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--ss-primary);
+}
+
+/* Mobile menu sheet - slides in, respects reduced motion via the global rule above */
+.ss-mobile-menu {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  visibility: hidden;
+}
+.ss-mobile-menu.is-open { visibility: visible; }
+.ss-mobile-menu-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transition: opacity var(--ss-duration) var(--ss-ease);
+}
+.ss-mobile-menu.is-open .ss-mobile-menu-backdrop { opacity: 1; }
+.ss-mobile-menu-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(86vw, 360px);
+  background: var(--ss-surface-1);
+  border-left: 1px solid var(--ss-border);
+  padding: var(--ss-space-5);
+  padding-top: max(var(--ss-space-5), env(safe-area-inset-top));
+  padding-bottom: max(var(--ss-space-5), env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: var(--ss-space-2);
+  transform: translateX(100%);
+  transition: transform var(--ss-duration) var(--ss-ease);
+  overflow-y: auto;
+}
+.ss-mobile-menu.is-open .ss-mobile-menu-panel { transform: translateX(0); }
+.ss-mobile-menu-panel .ss-nav-link { padding: var(--ss-space-3) var(--ss-space-3); font-size: 1rem; min-height: 44px; display: flex; align-items: center; }
+
+/* When the mobile sheet is open, the page behind it must not scroll */
+body.ss-menu-open { overflow: hidden; }
+
+/* ---------- Utility ---------- */
+.ss-container { max-width: 1200px; margin: 0 auto; padding-left: var(--ss-space-5); padding-right: var(--ss-space-5); }
+.ss-visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap;
+}
+.ss-skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--ss-primary);
+  color: #fff;
+  padding: 10px 16px;
+  border-radius: 0 0 var(--ss-radius-sm) 0;
+  z-index: 999;
+  font-weight: 700;
+  font-size: 0.8125rem;
+}
+.ss-skip-link:focus { left: 0; }
+
+@media (max-width: 640px) {
+  .ss-container { padding-left: var(--ss-space-4); padding-right: var(--ss-space-4); }
+}
+
+/* ---------- Admin console (calmer, denser variant of the same tokens) ----------
+ * Admin belongs to ScanStory (same dark base, same two accents) but reads as an
+ * operational console: tighter type scale, restrained accent use, data-first
+ * tables/toolbars instead of glowing consumer cards.
+ */
+.ss-admin { font-size: 0.9375rem; }
+.ss-admin-shell { min-height: 100vh; background: var(--ss-surface-0); color: var(--ss-text); }
+.ss-admin-header {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ss-space-4);
+  padding: 0 var(--ss-space-5);
+  background: var(--ss-surface-1);
+  border-bottom: 1px solid var(--ss-border);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.ss-admin-sidebar {
+  background: var(--ss-surface-1);
+  border-right: 1px solid var(--ss-border);
+  padding: var(--ss-space-4);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ss-admin-sidebar .ss-nav-link { justify-content: flex-start; gap: var(--ss-space-2); }
+.ss-admin-main { padding: var(--ss-space-5); }
+.ss-admin-page-title { font-size: 1.375rem; font-weight: 700; letter-spacing: -0.01em; margin: 0; }
+.ss-admin-page-sub { color: var(--ss-text-muted); font-size: 0.875rem; margin-top: 4px; }
+
+.ss-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ss-space-3);
+  padding: var(--ss-space-4);
+  background: var(--ss-surface-1);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-lg);
+  margin-bottom: var(--ss-space-4);
+}
+
+.ss-table-wrap {
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-lg);
+  overflow-x: auto;
+  background: var(--ss-surface-1);
+}
+.ss-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; min-width: 640px; }
+.ss-table th {
+  text-align: left;
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ss-text-faint);
+  font-weight: 700;
+  padding: var(--ss-space-3) var(--ss-space-4);
+  border-bottom: 1px solid var(--ss-border);
+  white-space: nowrap;
+}
+.ss-table td {
+  padding: var(--ss-space-3) var(--ss-space-4);
+  border-bottom: 1px solid var(--ss-border);
+  color: var(--ss-text);
+  vertical-align: middle;
+}
+.ss-table tbody tr:last-child td { border-bottom: none; }
+.ss-table tbody tr:hover { background: rgba(255, 255, 255, 0.025); }
+.ss-table td.ss-cell-muted { color: var(--ss-text-muted); }
+
+.ss-stat-card {
+  background: var(--ss-surface-1);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-lg);
+  padding: var(--ss-space-4) var(--ss-space-5);
+}
+.ss-stat-value { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.01em; }
+.ss-stat-label { font-size: 0.75rem; color: var(--ss-text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+
+@media (max-width: 900px) {
+  .ss-admin-main { padding: var(--ss-space-4); }
+}
+
+/* ---------- Admin form controls & dropdowns (scoped to .ss-admin-scope) ----------
+ * Root cause of the "dark closed select, white-popup-when-opened" defect
+ * (screenshots on /admin/users and /admin/projects, but present on every
+ * admin page that has a <select>): neither this file nor admin/base.html
+ * ever set `color-scheme`, so Chromium/Windows paints the native <option>
+ * popup with its light-theme UA styling regardless of what background/color
+ * the closed <select> itself has been given. Several standalone admin pages
+ * (add_admin.html, edit_admin.html, capacity.html) go further and have zero
+ * override for `.form-control`/`.form-select`/`select`/`input`/`textarea` at
+ * all, so they inherit Bootstrap's default *white* control styling verbatim
+ * - a plainer instance of the same class of bug.
+ *
+ * This file is loaded by every admin template (confirmed: all live
+ * admin/*.html either <link> it directly or extend admin/base.html, which
+ * does) AND by customer-facing user/*.html templates, so the fix can't be
+ * unscoped without touching customer-facing UI (out of scope for this pass).
+ * `.ss-admin-scope` is added to the <body> of every live admin page as the
+ * one shared hook; nothing here fires unless that class is present.
+ *
+ * Real browser limitation (verified in Chromium, not overclaimed): the
+ * `color-scheme: dark` declaration plus `background-color`/`color` on
+ * `<option>` is the full extent of what Chromium's native dropdown popup
+ * honors. It does NOT expose the popup's hover/highlight color, border,
+ * border-radius, box-shadow, or font to CSS - the highlighted-row color
+ * when arrowing through options is painted by the OS widget, not the page.
+ * `color-scheme: dark` is what actually fixes the popup's own background/
+ * text; the explicit `option` colors are a standards-compliant reinforcement
+ * that most engines also honor, not a guarantee of full popup theming.
+ */
+.ss-admin-scope {
+  color-scheme: dark;
+
+  --admin-control-bg: var(--ss-surface-2);
+  --admin-control-bg-hover: rgba(255, 255, 255, 0.06);
+  --admin-control-text: var(--ss-text);
+  --admin-control-muted: var(--ss-text-muted);
+  --admin-control-border: var(--ss-border-strong);
+  --admin-control-border-focus: var(--ss-accent);
+  --admin-control-disabled-bg: rgba(255, 255, 255, 0.02);
+  --admin-control-disabled-text: var(--ss-text-faint);
+  --admin-control-focus-ring: var(--ss-focus-ring);
+}
+
+.ss-admin-scope select,
+.ss-admin-scope .form-select,
+.ss-admin-scope .form-control,
+.ss-admin-scope input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+.ss-admin-scope textarea {
+  background-color: var(--admin-control-bg);
+  color: var(--admin-control-text);
+  border: 1px solid var(--admin-control-border);
+  border-radius: 8px;
+}
+.ss-admin-scope select:hover:not(:disabled),
+.ss-admin-scope .form-select:hover:not(:disabled),
+.ss-admin-scope .form-control:hover:not(:disabled):not([readonly]),
+.ss-admin-scope input:hover:not(:disabled):not([readonly]),
+.ss-admin-scope textarea:hover:not(:disabled):not([readonly]) {
+  border-color: var(--admin-control-muted);
+}
+.ss-admin-scope select:focus,
+.ss-admin-scope .form-select:focus,
+.ss-admin-scope .form-control:focus,
+.ss-admin-scope input:focus,
+.ss-admin-scope textarea:focus {
+  outline: none;
+  border-color: var(--admin-control-border-focus);
+  box-shadow: var(--admin-control-focus-ring);
+}
+.ss-admin-scope ::placeholder { color: var(--admin-control-muted); opacity: 1; }
+
+/* Native <option> styling - see limitation note above. */
+.ss-admin-scope select option {
+  background-color: var(--admin-control-bg);
+  color: var(--admin-control-text);
+}
+.ss-admin-scope select option:disabled {
+  color: var(--admin-control-disabled-text);
+}
+
+.ss-admin-scope select:invalid,
+.ss-admin-scope .form-control[aria-invalid="true"],
+.ss-admin-scope .form-select[aria-invalid="true"],
+.ss-admin-scope .ss-field-invalid .form-control {
+  border-color: #ef4444;
+}
+
+/* Disabled / readonly - dim but readable, explicit not-allowed cursor, no
+   hover feedback suggesting interactivity (Task 7: V1-inactive settings
+   controls use these same rules). */
+.ss-admin-scope select:disabled,
+.ss-admin-scope .form-select:disabled,
+.ss-admin-scope .form-control:disabled,
+.ss-admin-scope input:disabled,
+.ss-admin-scope textarea:disabled,
+.ss-admin-scope input[readonly],
+.ss-admin-scope textarea[readonly],
+.ss-admin-scope select[readonly] {
+  background-color: var(--admin-control-disabled-bg);
+  color: var(--admin-control-disabled-text);
+  border-color: var(--ss-border);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+/* Bootstrap / custom dropdown menus - covers every admin "userDropdown"
+   account menu (the Bootstrap-JS-driven one in admin/base.html, and the
+   identical custom-JS-toggled markup reused across the standalone admin
+   pages) plus any other `.dropdown-menu`/`.dropdown-item`. */
+.ss-admin-scope .dropdown-menu {
+  background-color: var(--admin-control-bg);
+  color: var(--admin-control-text);
+  border: 1px solid var(--ss-border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+.ss-admin-scope .dropdown-item,
+.ss-admin-scope .dropdown-item-text {
+  color: var(--admin-control-text);
+}
+.ss-admin-scope .dropdown-item:hover,
+.ss-admin-scope .dropdown-item:focus-visible {
+  background-color: var(--admin-control-bg-hover);
+  color: #fff;
+  outline: none;
+}
+.ss-admin-scope .dropdown-item:active {
+  background-color: rgba(255, 0, 122, 0.14);
+  color: #fff;
+}
+.ss-admin-scope .dropdown-item.disabled,
+.ss-admin-scope .dropdown-item[aria-disabled="true"] {
+  color: var(--admin-control-disabled-text);
+  pointer-events: none;
+  cursor: not-allowed;
+  background-color: transparent;
+}
+.ss-admin-scope .dropdown-divider {
+  border: none;
+  border-top: 1px solid var(--ss-border);
+  margin: 4px 0;
+  height: 0;
+}
+
+/* ---------- User (customer-facing) form controls & dropdowns (scoped to
+   .ss-user-scope) ----------
+ * Direct sibling of the `.ss-admin-scope` block above - same root cause,
+ * verified independently on the user side: neither this file nor any
+ * user/*.html template ever set `color-scheme`, so Chromium/Windows paints
+ * every native <select> popup with light-theme UA styling regardless of the
+ * closed control's authored background. Confirmed live in Chromium via
+ * Playwright on /projects (the `.ss-select` Status filter added in the prior
+ * task) and /contact (the `select.form-input` enquiry-type field): both
+ * closed selects are correctly dark, both open to a white popup with the
+ * default blue OS highlight.
+ *
+ * Unlike the admin portal, every real text/password/email/OTP input on every
+ * live user page already carries a bespoke, already-dark class of its own
+ * (`.input-gloss`, `.form-input`, `.ss-input`, `.input-field`, `.otp-input`,
+ * etc - checked all of login/register/forgot/reset/verify/contact/projects/
+ * create-project). Re-declaring background/border/radius for `select`,
+ * `input`, `textarea` at normal specificity here would win the cascade over
+ * those page-local classes on ties (extra element-type selector) and quietly
+ * re-skin controls that are not broken - a redesign this task explicitly
+ * rules out. So the default/hover/focus/disabled/invalid baseline below is
+ * wrapped in `:where(.ss-user-scope)`, which carries zero specificity: it
+ * only ever applies to a control that has no other rule claiming the
+ * property, i.e. it is a pure fallback for any select/input/textarea that
+ * ISN'T already styled, while every existing bespoke design keeps rendering
+ * pixel-identical. The two things that actually need to win unconditionally
+ * - `color-scheme: dark` (ancestor-level, inherited, doesn't repaint
+ * anything authored) and the native `<option>` popup colors - are declared
+ * at normal specificity below, same as the admin block.
+ *
+ * Real browser limitation (re-verified for the user pages, not assumed from
+ * the admin pass): `color-scheme: dark` plus `background-color`/`color` on
+ * `<option>` is still the full extent of what Chromium's native dropdown
+ * popup honors. The highlighted/hovered row inside an open native <select>
+ * popup is painted by the OS widget and is not exposed to page CSS at all -
+ * no selector reaches it. `color-scheme: dark` is what actually flips the
+ * popup itself (and its default hover tint) to a dark UA theme; the explicit
+ * `option` rules are standards-compliant reinforcement on top of that, not a
+ * guarantee of full popup theming.
+ */
+.ss-user-scope {
+  color-scheme: dark;
+
+  --user-control-bg: var(--ss-surface-2);
+  --user-control-bg-hover: rgba(255, 255, 255, 0.06);
+  --user-control-text: var(--ss-text);
+  --user-control-muted: var(--ss-text-muted);
+  --user-control-border: var(--ss-border-strong);
+  --user-control-border-focus: var(--ss-accent);
+  --user-control-disabled-bg: rgba(255, 255, 255, 0.02);
+  --user-control-disabled-text: var(--ss-text-faint);
+  --user-control-focus-ring: var(--ss-focus-ring);
+}
+
+/* Fallback baseline only (see note above) - zero-specificity :where() so any
+   page-local control class always wins on a tie. */
+:where(.ss-user-scope) select,
+:where(.ss-user-scope) .form-select,
+:where(.ss-user-scope) .form-control,
+:where(.ss-user-scope) input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="file"]),
+:where(.ss-user-scope) textarea {
+  background-color: var(--user-control-bg);
+  color: var(--user-control-text);
+  border: 1px solid var(--user-control-border);
+  border-radius: 8px;
+}
+:where(.ss-user-scope) select:hover:not(:disabled),
+:where(.ss-user-scope) .form-select:hover:not(:disabled),
+:where(.ss-user-scope) .form-control:hover:not(:disabled):not([readonly]),
+:where(.ss-user-scope) input:hover:not(:disabled):not([readonly]),
+:where(.ss-user-scope) textarea:hover:not(:disabled):not([readonly]) {
+  border-color: var(--user-control-muted);
+}
+:where(.ss-user-scope) select:focus,
+:where(.ss-user-scope) .form-select:focus,
+:where(.ss-user-scope) .form-control:focus,
+:where(.ss-user-scope) input:focus,
+:where(.ss-user-scope) textarea:focus {
+  outline: none;
+  border-color: var(--user-control-border-focus);
+  box-shadow: var(--user-control-focus-ring);
+}
+:where(.ss-user-scope) select:focus-visible,
+:where(.ss-user-scope) .form-select:focus-visible,
+:where(.ss-user-scope) .form-control:focus-visible,
+:where(.ss-user-scope) input:focus-visible,
+:where(.ss-user-scope) textarea:focus-visible {
+  outline: 2px solid var(--user-control-border-focus);
+  outline-offset: 2px;
+}
+:where(.ss-user-scope) ::placeholder { color: var(--user-control-muted); opacity: 1; }
+
+:where(.ss-user-scope) select:invalid,
+:where(.ss-user-scope) .form-control[aria-invalid="true"],
+:where(.ss-user-scope) .form-select[aria-invalid="true"],
+:where(.ss-user-scope) .ss-field-invalid .form-control {
+  border-color: #ef4444;
+}
+
+:where(.ss-user-scope) select:disabled,
+:where(.ss-user-scope) .form-select:disabled,
+:where(.ss-user-scope) .form-control:disabled,
+:where(.ss-user-scope) input:disabled,
+:where(.ss-user-scope) textarea:disabled,
+:where(.ss-user-scope) input[readonly],
+:where(.ss-user-scope) textarea[readonly],
+:where(.ss-user-scope) select[readonly] {
+  background-color: var(--user-control-disabled-bg);
+  color: var(--user-control-disabled-text);
+  border-color: var(--ss-border);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+/* Native <option> styling - the actual fix for the reported defect. Normal
+   specificity (not :where()) so it applies unconditionally; where a page
+   already sets its own option background (e.g. contact.html's
+   `select.form-input option`), that page-local rule wins ties via source
+   order (this stylesheet is linked before any page's inline <style> block),
+   so no visual change there beyond gaining color-scheme dark - see
+   limitation note above. */
+.ss-user-scope select option {
+  background-color: var(--user-control-bg);
+  color: var(--user-control-text);
+}
+.ss-user-scope select option:disabled {
+  color: var(--user-control-muted);
+}
+
+/* Bootstrap-style / custom dropdown menus - no user page currently renders
+   `.dropdown-menu`/`.dropdown-item` markup (the account/nav menus on the
+   user side are bespoke `.nav-dropdown-menu` and `.ss-mobile-menu`, already
+   independently dark-styled - see design-system.css `.ss-mobile-menu` rules
+   and landing.html's own `.nav-dropdown-menu` block), but this mirrors the
+   admin block 1:1 so any future Bootstrap dropdown added to a user page is
+   covered for free. */
+.ss-user-scope .dropdown-menu {
+  background-color: var(--user-control-bg);
+  color: var(--user-control-text);
+  border: 1px solid var(--ss-border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+}
+.ss-user-scope .dropdown-item,
+.ss-user-scope .dropdown-item-text {
+  color: var(--user-control-text);
+}
+.ss-user-scope .dropdown-item:hover,
+.ss-user-scope .dropdown-item:focus-visible {
+  background-color: var(--user-control-bg-hover);
+  color: #fff;
+  outline: none;
+}
+.ss-user-scope .dropdown-item:active {
+  background-color: rgba(255, 0, 122, 0.14);
+  color: #fff;
+}
+.ss-user-scope .dropdown-item.disabled,
+.ss-user-scope .dropdown-item[aria-disabled="true"] {
+  color: var(--user-control-disabled-text);
+  pointer-events: none;
+  cursor: not-allowed;
+  background-color: transparent;
+}
+.ss-user-scope .dropdown-divider {
+  border: none;
+  border-top: 1px solid var(--ss-border);
+  margin: 4px 0;
+  height: 0;
+}
+
+/* ---------- Scanner recovery / fallback action cluster ----------
+ * Used by #fallbackPanel and #recognitionHelpPanel in scanner.html.
+ * Presentation only - these classes carry no CV/lifecycle behavior; JS still
+ * binds by element id exactly as before. Three fixed roles, one dominant
+ * action per panel:
+ *   .ss-scan-btn-primary   - the one real recovery action (Retry Camera / Continue Scanning)
+ *   .ss-scan-btn-secondary - the opt-in alternative (Watch Video Instead), only when eligible
+ *   .ss-scan-btn-tertiary  - the quiet exit (Return / Return to Project)
+ */
+.ss-scan-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--ss-space-3);
+  align-items: stretch;
+}
+.ss-scan-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ss-space-2);
+  min-height: 48px;
+  padding: 0 var(--ss-space-5);
+  border-radius: var(--ss-radius-md);
+  font-weight: 700;
+  font-size: 0.9375rem;
+  text-decoration: none;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: transform var(--ss-duration-fast) var(--ss-ease),
+              box-shadow var(--ss-duration-fast) var(--ss-ease),
+              background-color var(--ss-duration-fast) var(--ss-ease),
+              border-color var(--ss-duration-fast) var(--ss-ease),
+              opacity var(--ss-duration-fast) var(--ss-ease);
+  -webkit-tap-highlight-color: transparent;
+}
+.ss-scan-btn:active { transform: translateY(1px) scale(0.99); }
+.ss-scan-btn:disabled, .ss-scan-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.ss-scan-btn .ss-spinner { width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: ss-spin 0.7s linear infinite; }
+
+.ss-scan-btn-primary {
+  background: var(--ss-accent);
+  color: #001318;
+  border-color: var(--ss-accent);
+  font-size: 1rem;
+}
+.ss-scan-btn-primary:hover:not(:disabled) {
+  background: #33ddff;
+  box-shadow: var(--ss-glow-accent);
+  transform: translateY(-1px);
+}
+
+.ss-scan-btn-secondary {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ss-text);
+  border-color: var(--ss-border-strong);
+}
+.ss-scan-btn-secondary:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.ss-scan-btn-tertiary {
+  background: transparent;
+  color: var(--ss-text-muted);
+  border-color: transparent;
+  min-height: 40px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+}
+.ss-scan-btn-tertiary:hover:not(:disabled) {
+  color: var(--ss-text);
+  text-decoration-color: currentColor;
+}
+
+@media (min-width: 480px) {
+  .ss-scan-actions { flex-direction: row; flex-wrap: wrap; justify-content: center; }
+  .ss-scan-btn-primary { flex: 1 1 100%; }
+  .ss-scan-btn-secondary, .ss-scan-btn-tertiary { flex: 0 1 auto; }
+}

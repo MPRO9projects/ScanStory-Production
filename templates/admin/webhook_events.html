@@ -1,0 +1,86 @@
+{% extends "admin/base.html" %}
+{% block title %}Webhook Events{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1 class="h3 mb-0">Razorpay Webhook Events</h1>
+    {% if order %}
+    <a href="{{ url_for('admin_view_payment', payment_id=order.id) }}" class="btn btn-secondary">&larr; Back to Payment</a>
+    {% endif %}
+</div>
+
+{% if order %}
+<div class="alert alert-info alert-admin mb-3">
+    Showing webhook events linked to PaymentOrder <strong>{{ order.order_id }}</strong> only.
+    <a href="{{ url_for('admin_webhook_events') }}">View all events</a>.
+</div>
+{% endif %}
+
+<div class="card">
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>Event ID</th>
+                        <th>Type</th>
+                        <th>Status</th>
+                        <th>Failure Code</th>
+                        <th>Attempts</th>
+                        <th>Payment Order</th>
+                        <th>Received</th>
+                        <th>Processed</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for event in events %}
+                    <tr>
+                        <td>{{ event.id }}</td>
+                        <td>{{ event.event_type }}</td>
+                        <td>
+                            {% if event.processing_status == 'processed' %}
+                            <span class="badge badge-admin bg-success">Processed</span>
+                            {% elif event.processing_status == 'failed' %}
+                            <span class="badge badge-admin bg-danger">Failed</span>
+                            {% elif event.processing_status == 'ignored' %}
+                            <span class="badge badge-admin bg-secondary">Ignored</span>
+                            {% else %}
+                            <span class="badge badge-admin bg-warning text-dark">{{ event.processing_status|title }}</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ event.failure_code or '-' }}</td>
+                        <td>{{ event.attempt_count }}</td>
+                        <td>
+                            {% if event.payment_order_id %}
+                            <a href="{{ url_for('admin_view_payment', payment_id=event.payment_order_id) }}">{{ event.payment_order_id }}</a>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>{{ event.received_at.strftime('%d %b %Y %I:%M %p') if event.received_at else '-' }}</td>
+                        <td>{{ event.processed_at.strftime('%d %b %Y %I:%M %p') if event.processed_at else '-' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="8" class="text-center text-muted py-4">No webhook events found.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% if pagination %}
+<div class="d-flex justify-content-between align-items-center mt-3">
+    <div class="text-muted">Page {{ pagination.page }} of {{ pagination.pages or 1 }} - {{ pagination.total }} events</div>
+    <div class="d-flex gap-2">
+        {% if pagination.has_prev %}
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('admin_webhook_events', page=pagination.prev_num, order_id=order.id if order else none, per_page=per_page) }}">Previous</a>
+        {% endif %}
+        {% if pagination.has_next %}
+        <a class="btn btn-secondary btn-sm" href="{{ url_for('admin_webhook_events', page=pagination.next_num, order_id=order.id if order else none, per_page=per_page) }}">Next</a>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+{% endblock %}

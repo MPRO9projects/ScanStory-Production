@@ -170,6 +170,53 @@ def test_ajax_mutation_with_valid_csrf_header_succeeds(csrf_client, csrf_app, mo
 
 
 # ---------------------------------------------------------------------------
+# 4b: admin mutation form (new /admin/capacity route, V1 Agent 2 task 2) -
+# proves the same global CSRFProtect enforcement covers admin POST forms too,
+# not just the user-facing routes exercised above.
+# ---------------------------------------------------------------------------
+
+def _make_superadmin(csrf_app, email="capacity-admin@example.com"):
+    with csrf_app.app.app_context():
+        admin_obj = csrf_app.Admin(
+            email=email,
+            name="Capacity Admin",
+            password_hash=generate_password_hash("AdminPass123"),
+            role="superadmin",
+            is_active=True,
+        )
+        csrf_app.db.session.add(admin_obj)
+        csrf_app.db.session.commit()
+        return admin_obj.id
+
+
+def test_admin_capacity_post_without_csrf_token_rejected(csrf_client, csrf_app):
+    admin_id = _make_superadmin(csrf_app)
+    with csrf_client.session_transaction() as sess:
+        sess["admin_id"] = admin_id
+    response = csrf_client.post("/admin/capacity", data={"configured_limit": "50", "enabled": "on"})
+    assert response.status_code == 400
+    text = response.get_data(as_text=True)
+    assert "could not be verified" in text or "expired" in text
+
+
+def test_admin_capacity_post_with_valid_csrf_token_succeeds(csrf_client, csrf_app):
+    admin_id = _make_superadmin(csrf_app, email="capacity-admin2@example.com")
+    with csrf_client.session_transaction() as sess:
+        sess["admin_id"] = admin_id
+    page = csrf_client.get("/admin/capacity")
+    token = _extract_hidden_csrf_token(page.get_data(as_text=True))
+    response = csrf_client.post(
+        "/admin/capacity",
+        data={"configured_limit": "77", "enabled": "on", "csrf_token": token},
+    )
+    assert response.status_code == 302
+    with csrf_app.app.app_context():
+        config = csrf_app.CapacityConfig.query.get(1)
+        assert config.configured_limit == 77
+        assert config.enabled is True
+
+
+# ---------------------------------------------------------------------------
 # 5: justified scanner exemption still works, unauthenticated, no token
 # ---------------------------------------------------------------------------
 

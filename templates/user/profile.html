@@ -5,6 +5,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
     <title>ScanStory | Profile</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
     <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
@@ -380,7 +381,7 @@
     </style>
 </head>
 
-<body>
+<body class="ss-user-scope">
     <div class="page-wrapper">
         <div class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]"></div>
         <div class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]"></div>
@@ -413,14 +414,14 @@
             </div>
 
             <div class="flex gap-2">
-                <a class="btn-neo hidden sm:flex" href="{{ url_for('subscribe_page') }}">
-                    <i class="fas fa-crown"></i> <span class="hidden md:inline">Upgrade</span>
+                <a class="ss-btn ss-btn-secondary ss-btn-sm hidden sm:flex" href="{{ url_for('subscribe_page') }}">
+                    <i class="fas fa-crown" aria-hidden="true"></i> <span class="hidden md:inline">Upgrade</span>
                 </a>
-                <a class="btn-neo sm:hidden" href="{{ url_for('subscribe_page') }}" title="Upgrade">
-                    <i class="fas fa-crown"></i>
+                <a class="ss-btn ss-btn-secondary ss-btn-sm sm:hidden" href="{{ url_for('subscribe_page') }}" aria-label="Upgrade">
+                    <i class="fas fa-crown" aria-hidden="true"></i>
                 </a>
-                <a class="btn-neo glow-btn" href="{{ url_for('logout') }}">
-                    <i class="fa-solid fa-right-from-bracket"></i> <span class="hidden sm:inline">Logout</span>
+                <a class="ss-btn ss-btn-tertiary ss-btn-sm" href="{{ url_for('logout') }}">
+                    <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> <span class="hidden sm:inline">Logout</span>
                 </a>
             </div>
         </header>
