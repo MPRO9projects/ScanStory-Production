@@ -95,6 +95,20 @@ def _make_pending_order(app_module, db_session, user, plan, razorpay_order_id, o
     return order
 
 
+def _attach_reservation(app_module, db_session, user, order, status="reserved", expires_delta=timedelta(minutes=30)):
+    reservation = app_module.PaymentReservation(
+        user_id=user.id,
+        payment_order_id=order.id,
+        status=status,
+        expires_at=datetime.utcnow() + expires_delta,
+    )
+    db_session.add(reservation)
+    config = app_module._get_or_create_capacity_config()
+    config.consumed_count = 1 if status in ("reserved", "activated") else 0
+    db_session.commit()
+    return reservation
+
+
 def _verify(client, order_id, payment_id="pay_1", signature="sig", **extra):
     data = {
         "razorpay_payment_id": payment_id,
@@ -258,6 +272,132 @@ def test_expired_reservation_blocks_activation(client, app_module, db_session, n
     second_response = _verify(client, "order_expired")
     assert second_response.get_json()["success"] is False
     assert second_response.get_json()["code"] == "RESERVATION_EXPIRED"
+
+
+def test_reconcile_payment_activations_dry_run_does_not_mutate(app_module, db_session, normal_user):
+    paid_plan = _paid_plan(app_module)
+    order = _make_pending_order(app_module, db_session, normal_user, paid_plan, "order_reconcile_dry", "ORD_RECON_DRY")
+    order.razorpay_payment_id = "pay_reconcile_dry"
+    reservation = _attach_reservation(app_module, db_session, normal_user, order)
+    db_session.commit()
+
+    result = app_module.app.test_cli_runner().invoke(args=["reconcile-payment-activations"])
+
+    assert result.exit_code == 0
+    assert "Mode: dry-run" in result.output
+    assert "Candidates: 1" in result.output
+    assert "Activated: 0" in result.output
+    assert "Skipped: 1" in result.output
+    db_session.expire_all()
+    assert app_module.PaymentOrder.query.get(order.id).status == "pending"
+    assert app_module.PaymentReservation.query.get(reservation.id).status == "reserved"
+    assert app_module.User.query.get(normal_user.id).subscription_status == "trial"
+
+
+def test_reconcile_payment_activations_apply_activates_entitlement_once(app_module, db_session, normal_user, monkeypatch):
+    paid_plan = _paid_plan(app_module)
+    normal_user.projects_used = 4
+    normal_user.scans_used = 9
+    db_session.commit()
+    order = _make_pending_order(app_module, db_session, normal_user, paid_plan, "order_reconcile_apply", "ORD_RECON_APPLY")
+    order.razorpay_payment_id = "pay_reconcile_apply"
+    reservation = _attach_reservation(app_module, db_session, normal_user, order)
+    db_session.commit()
+    monkeypatch.setattr(
+        app_module,
+        "send_payment_success_email",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("CLI must not send email")),
+    )
+
+    result = app_module.app.test_cli_runner().invoke(args=["reconcile-payment-activations", "--apply"])
+
+    assert result.exit_code == 0
+    assert "Activated: 1" in result.output
+    assert "Failed: 0" in result.output
+    db_session.expire_all()
+    user = app_module.User.query.get(normal_user.id)
+    refreshed_order = app_module.PaymentOrder.query.get(order.id)
+    assert refreshed_order.status == "success"
+    assert user.subscription_id == paid_plan.id
+    assert user.subscription_status == "active"
+    assert user.subscribed_project_limit == paid_plan.total_project_limit
+    assert user.subscribed_scan_limit == paid_plan.total_scan_limit
+    assert user.projects_used == 0
+    assert user.scans_used == 0
+    assert app_module.PaymentReservation.query.get(reservation.id).status == "activated"
+
+    first_end = refreshed_order.subscription_end
+    user.projects_used = 3
+    user.scans_used = 2
+    db_session.commit()
+
+    second = app_module.app.test_cli_runner().invoke(args=["reconcile-payment-activations", "--apply"])
+
+    assert second.exit_code == 0
+    assert "Candidates: 0" in second.output
+    db_session.expire_all()
+    assert app_module.PaymentOrder.query.get(order.id).subscription_end == first_end
+    user = app_module.User.query.get(normal_user.id)
+    assert user.projects_used == 3
+    assert user.scans_used == 2
+
+
+def test_reconcile_payment_activations_ignores_pending_order_without_payment_id(app_module, db_session, normal_user):
+    paid_plan = _paid_plan(app_module)
+    order = _make_pending_order(app_module, db_session, normal_user, paid_plan, "order_reconcile_no_pay", "ORD_RECON_NO_PAY")
+    _attach_reservation(app_module, db_session, normal_user, order)
+
+    result = app_module.app.test_cli_runner().invoke(args=["reconcile-payment-activations", "--apply"])
+
+    assert result.exit_code == 0
+    assert "Candidates: 0" in result.output
+    db_session.expire_all()
+    assert app_module.PaymentOrder.query.get(order.id).status == "pending"
+    assert app_module.User.query.get(normal_user.id).subscription_status == "trial"
+
+
+@pytest.mark.parametrize("status", ["released", "expired"])
+def test_reconcile_payment_activations_skips_released_or_expired_reservation(app_module, db_session, normal_user, status):
+    paid_plan = _paid_plan(app_module)
+    order = _make_pending_order(
+        app_module, db_session, normal_user, paid_plan, f"order_reconcile_{status}", f"ORD_RECON_{status.upper()}"
+    )
+    order.razorpay_payment_id = f"pay_reconcile_{status}"
+    reservation = _attach_reservation(app_module, db_session, normal_user, order, status=status)
+    db_session.commit()
+
+    result = app_module.app.test_cli_runner().invoke(args=["reconcile-payment-activations", "--apply"])
+
+    assert result.exit_code == 0
+    assert "Activated: 0" in result.output
+    assert "Skipped: 1" in result.output
+    db_session.expire_all()
+    assert app_module.PaymentOrder.query.get(order.id).status == "pending"
+    assert app_module.PaymentReservation.query.get(reservation.id).status == status
+    assert app_module.User.query.get(normal_user.id).subscription_status == "trial"
+
+
+def test_reconcile_payment_activations_counts_replay_as_skipped(app_module, db_session, normal_user, monkeypatch):
+    paid_plan = _paid_plan(app_module)
+    order = _make_pending_order(app_module, db_session, normal_user, paid_plan, "order_reconcile_replay", "ORD_RECON_REPLAY")
+    order.razorpay_payment_id = "pay_reconcile_replay"
+    _attach_reservation(app_module, db_session, normal_user, order)
+    db_session.commit()
+    calls = []
+
+    def replay(_order):
+        calls.append(_order.id)
+        return {"success": True, "order_id": _order.order_id, "plan_name": paid_plan.plan_name, "replay": True}
+
+    monkeypatch.setattr(app_module, "activate_payment", replay)
+
+    result = app_module.app.test_cli_runner().invoke(args=["reconcile-payment-activations", "--apply"])
+
+    assert result.exit_code == 0
+    assert calls == [order.id]
+    assert "Activated: 0" in result.output
+    assert "Skipped: 1" in result.output
+    assert "Failed: 0" in result.output
     assert app_module.PaymentOrder.query.get(order.id).status == "pending"
 
 

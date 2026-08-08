@@ -7353,6 +7353,81 @@ def webhook_replay_report():
     click.echo(f"Total replay/duplicate deliveries observed: {total_replays}")
 
 
+@app.cli.command("reconcile-payment-activations")
+@click.option("--apply", "apply_changes", is_flag=True, help="Activate eligible pending orders. Default is dry-run.")
+def reconcile_payment_activations(apply_changes):
+    """Recover pending orders whose verified Razorpay payment id is already
+    stored, but whose subscription activation did not complete.
+
+    The command never accepts CLI-supplied payment proof and never sends
+    success email; activate_payment() remains the only entitlement path.
+    """
+    candidate_ids = [
+        row.id for row in PaymentOrder.query.filter(
+            PaymentOrder.status == "pending",
+            PaymentOrder.razorpay_payment_id.isnot(None),
+            PaymentOrder.razorpay_payment_id != "",
+        ).order_by(PaymentOrder.id.asc()).all()
+    ]
+    counts = {"candidates": len(candidate_ids), "activated": 0, "skipped": 0, "failed": 0}
+
+    click.echo("Mode: apply" if apply_changes else "Mode: dry-run")
+    click.echo(f"Candidates: {counts['candidates']}")
+
+    for order_id in candidate_ids:
+        try:
+            db.session.rollback()
+            order = PaymentOrder.query.get(order_id)
+            if (
+                not order
+                or order.status != "pending"
+                or not (order.razorpay_payment_id or "").strip()
+            ):
+                counts["skipped"] += 1
+                click.echo(f"payment_order_id={order_id} skipped: no_longer_eligible")
+                continue
+
+            reservation = PaymentReservation.query.filter_by(payment_order_id=order.id).first()
+            if reservation and reservation.status in ("released", "expired"):
+                counts["skipped"] += 1
+                click.echo(f"payment_order_id={order.id} skipped: reservation_{reservation.status}")
+                continue
+            if reservation and reservation.status == "reserved" and reservation.expires_at < dt.utcnow():
+                counts["skipped"] += 1
+                click.echo(f"payment_order_id={order.id} skipped: reservation_expired")
+                continue
+
+            if not apply_changes:
+                counts["skipped"] += 1
+                click.echo(f"payment_order_id={order.id} dry-run: eligible")
+                continue
+
+            result = activate_payment(order)
+            if result.get("success") and result.get("replay"):
+                counts["skipped"] += 1
+                click.echo(f"payment_order_id={order.id} skipped: replay")
+            elif result.get("success"):
+                counts["activated"] += 1
+                click.echo(f"payment_order_id={order.id} activated")
+            else:
+                code = result.get("code") or "ACTIVATION_FAILED"
+                if code == "ORDER_NOT_PENDING":
+                    counts["skipped"] += 1
+                    click.echo(f"payment_order_id={order.id} skipped: {code}")
+                else:
+                    counts["failed"] += 1
+                    click.echo(f"payment_order_id={order.id} failed: {code}")
+        except Exception as exc:
+            db.session.rollback()
+            counts["failed"] += 1
+            app.logger.exception(f"payment_activation_reconcile_failed payment_order_id={order_id}")
+            click.echo(f"payment_order_id={order_id} failed: {safe_error_summary(exc)}")
+
+    click.echo(f"Activated: {counts['activated']}")
+    click.echo(f"Skipped: {counts['skipped']}")
+    click.echo(f"Failed: {counts['failed']}")
+
+
 @app.route("/payment-success")
 @login_required
 def payment_success():
