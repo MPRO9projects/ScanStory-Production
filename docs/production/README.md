@@ -49,7 +49,7 @@ Classifications:
 | Flask/session | `SECURITY_HSTS_ENABLED` | optional, production-only, safe default | Enable only after HTTPS is verified. |
 | Flask/session | `SECURITY_CSP_ENABLED` | optional, safe default | Controls CSP header emission. |
 | Flask/session | `SECURITY_CSP_ENFORCE` | optional, production-only, safe default | Enforce only after browser certification. |
-| Database | `DATABASE_URL` | required, secret, production-only, no safe default | Production relational database URL. |
+| Database | `DATABASE_URL` | required, secret, production-only, no safe default | Production PostgreSQL URL. Startup rejects SQLite or non-PostgreSQL URLs in production. |
 | Database | `TEST_DATABASE_URL` | optional, staging/local, secret if remote | Disposable/local test DB only. |
 | Razorpay | `RAZORPAY_KEY_ID` | required for payments, secret, production-only/staging-only, no safe default | Use test-mode value in staging. |
 | Razorpay | `RAZORPAY_KEY_SECRET` | required for payments, secret, production-only/staging-only, no safe default | Never log. |
@@ -70,8 +70,10 @@ Classifications:
 | Application mode | `SCANSTORY_TESTING` | optional, safe default off | Must not be enabled in production. |
 | Logging | `LOG_LEVEL` | future, not yet active | Do not rely on this until logging config reads it. |
 | Logging | `STRUCTURED_LOGGING_ENABLED` | future, not yet active | Use when centralized logging is ready. |
-| Future queue | `REDIS_URL` | future, secret, not yet active | Required before Redis/RQ rollout. |
-| Future queue | `RQ_QUEUE_NAME` | future, optional, not yet active | Queue monitoring is future until Redis/RQ exists. |
+| Queue | `REDIS_URL` | required in production, secret, no safe default | Required with `SCANSTORY_QUEUE_MODE=rq`; production startup rejects missing Redis. |
+| Queue | `SCANSTORY_QUEUE_MODE` | required in production, no safe default | Must be `rq` in production. `fake`/`inline` are development/test only. |
+| Queue | `RQ_QUEUE_NAME` | optional, safe default | RQ queue name, default `scanstory-processing`. |
+| Upload | `SCANSTORY_RESUMABLE_CHUNK_MAX_BYTES` | optional, safe default | Max raw request body accepted by the resumable chunk route; default 1 MiB. Reverse proxy request-body limits for `/api/uploads/sessions/*/chunk` must allow at least this value and should not greatly exceed it. |
 | Future limiter | `RATE_LIMIT_REDIS_URL` | future, secret, not yet active | Required before horizontal scale/shared limiter. |
 | Razorpay | `RAZORPAY_WEBHOOK_SECRET` | required for webhook reconciliation, secret, production-only, no safe default | Dedicated Razorpay webhook secret, separate from `RAZORPAY_KEY_SECRET` with no fallback between them. `POST /webhooks/razorpay` fails closed (rejects, processes nothing) when this is absent/empty. |
 
@@ -89,6 +91,7 @@ so staging checks do not certify the wrong behavior.
 | Scanner tracking limit | `240` requests per `60` seconds per normalized client IP. |
 | Scanner session-end limit | `90` requests per `60` seconds per normalized client IP. |
 | Upload limit | `8` upload starts per `3600` seconds per normalized client IP. |
+| Resumable chunk body limit | `SCANSTORY_RESUMABLE_CHUNK_MAX_BYTES`, default `1048576` bytes. Reverse proxy request-body limits must match this route-level cap. |
 | Login IP limit | `80` attempts per `900` seconds per normalized client IP. |
 | Register IP limit | `30` attempts per `3600` seconds per normalized client IP. |
 | Forgot-password IP limit | `30` attempts per `3600` seconds per normalized client IP. |

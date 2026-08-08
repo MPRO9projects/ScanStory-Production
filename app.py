@@ -38,6 +38,7 @@ import click
 
 from sqlalchemy import or_, desc, func, and_, case, text, inspect
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import aliased
 
 # ✅ Import models
@@ -124,6 +125,13 @@ def _smtp_timeout_seconds():
     return timeout
 
 
+def _database_backend_name(database_url):
+    try:
+        return make_url(database_url).get_backend_name()
+    except Exception as exc:
+        raise RuntimeError("DATABASE_URL must be a valid SQLAlchemy database URL.") from exc
+
+
 def _validate_required_runtime_config():
     """Fail fast on missing required runtime-security configuration.
 
@@ -134,11 +142,22 @@ def _validate_required_runtime_config():
     if not os.environ.get("FLASK_SECRET_KEY"):
         missing.append("FLASK_SECRET_KEY")
     if _runtime_production_mode_flag_active():
-        if not os.environ.get("DATABASE_URL"):
+        database_url = os.environ.get("DATABASE_URL")
+        if not database_url:
             missing.append("DATABASE_URL")
+        elif _database_backend_name(database_url) != "postgresql":
+            missing.append("DATABASE_URL=postgresql")
         for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "MAIL_FROM"):
             if not os.environ.get(key):
                 missing.append(key)
+        try:
+            effective_queue_mode = queue_mode()
+        except QueueUnavailable as exc:
+            raise RuntimeError("SCANSTORY_QUEUE_MODE must be rq in production.") from exc
+        if effective_queue_mode != "rq":
+            missing.append("SCANSTORY_QUEUE_MODE=rq")
+        if not os.environ.get("REDIS_URL"):
+            missing.append("REDIS_URL")
         if not _env_flag("SESSION_COOKIE_SECURE", default=False):
             missing.append("SESSION_COOKIE_SECURE=true")
         if os.environ.get("SCANSTORY_DEV_TESTING") == "1":
@@ -5698,6 +5717,10 @@ def handle_upload():
 UPLOAD_SESSION_TTL_MINUTES = int(os.environ.get("SCANSTORY_UPLOAD_SESSION_TTL_MINUTES", "1440"))
 UPLOAD_SESSION_ABANDONED_STALE_MINUTES = int(os.environ.get("SCANSTORY_UPLOAD_SESSION_ABANDONED_STALE_MINUTES", "120"))
 UPLOAD_SESSION_CLEANUP_BATCH_LIMIT = int(os.environ.get("SCANSTORY_UPLOAD_CLEANUP_BATCH_LIMIT", "200"))
+RESUMABLE_UPLOAD_CHUNK_MAX_BYTES = int(os.environ.get("SCANSTORY_RESUMABLE_CHUNK_MAX_BYTES", str(1024 * 1024)))
+if RESUMABLE_UPLOAD_CHUNK_MAX_BYTES <= 0:
+    raise RuntimeError("SCANSTORY_RESUMABLE_CHUNK_MAX_BYTES must be a positive integer.")
+app.config["RESUMABLE_UPLOAD_CHUNK_MAX_BYTES"] = RESUMABLE_UPLOAD_CHUNK_MAX_BYTES
 
 
 class _ResumableQuotaLimitReached(Exception):
@@ -6015,7 +6038,13 @@ def upload_session_chunk(session_id):
     except (TypeError, ValueError):
         return _upload_api_error("INVALID_OFFSET", "X-Chunk-Offset header must be a non-negative integer.", 400)
 
+    max_chunk_bytes = app.config.get("RESUMABLE_UPLOAD_CHUNK_MAX_BYTES", RESUMABLE_UPLOAD_CHUNK_MAX_BYTES)
+    if request.content_length is not None and request.content_length > max_chunk_bytes:
+        return _upload_api_error("CHUNK_TOO_LARGE", "Chunk body exceeds the allowed size.", 413)
+
     body = request.get_data(cache=False)
+    if len(body) > max_chunk_bytes:
+        return _upload_api_error("CHUNK_TOO_LARGE", "Chunk body exceeds the allowed size.", 413)
     if not body:
         return _upload_api_error("EMPTY_CHUNK", "Chunk body must not be empty.", 400)
 

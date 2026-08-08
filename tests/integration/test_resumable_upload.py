@@ -271,6 +271,26 @@ def test_empty_chunk_rejected(client, login_user):
     assert bad.get_json()["code"] == "EMPTY_CHUNK"
 
 
+def test_configured_max_size_chunk_succeeds(client, app_module, login_user):
+    max_chunk = app_module.app.config["RESUMABLE_UPLOAD_CHUNK_MAX_BYTES"]
+    resp = _create_session(client, max_chunk, max_chunk)
+    session_id = resp.get_json()["session"]["id"]
+    ok = _send_chunk(client, session_id, 0, b"x" * max_chunk)
+    assert ok.status_code == 200
+    assert ok.get_json()["current_offset"] == max_chunk
+
+
+def test_oversized_chunk_rejected_without_advancing_offset(client, app_module, login_user):
+    max_chunk = app_module.app.config["RESUMABLE_UPLOAD_CHUNK_MAX_BYTES"]
+    resp = _create_session(client, max_chunk + 1, max_chunk + 1)
+    session_id = resp.get_json()["session"]["id"]
+    bad = _send_chunk(client, session_id, 0, b"x" * (max_chunk + 1))
+    assert bad.status_code == 413
+    assert bad.get_json()["code"] == "CHUNK_TOO_LARGE"
+    status = _status(client, session_id).get_json()["session"]
+    assert status["current_offset"] == 0
+
+
 def test_chunk_exceeding_declared_size_rejected(client, login_user):
     resp = _create_session(client, 10, 10)
     session_id = resp.get_json()["session"]["id"]
