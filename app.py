@@ -141,12 +141,13 @@ def _validate_required_runtime_config():
     missing = []
     if not os.environ.get("FLASK_SECRET_KEY"):
         missing.append("FLASK_SECRET_KEY")
-    if _runtime_production_mode_flag_active():
-        database_url = os.environ.get("DATABASE_URL")
+    database_url = os.environ.get("DATABASE_URL")
+    if not SCANSTORY_TESTING:
         if not database_url:
             missing.append("DATABASE_URL")
         elif _database_backend_name(database_url) != "postgresql":
             missing.append("DATABASE_URL=postgresql")
+    if _runtime_production_mode_flag_active():
         for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "MAIL_FROM"):
             if not os.environ.get(key):
                 missing.append(key)
@@ -190,7 +191,8 @@ SESSION_COOKIE_SECURE_ENABLED = _env_flag("SESSION_COOKIE_SECURE", default=False
 # ✅ ADD DATABASE CONFIGURATION HERE
 database_uri = os.environ.get("TEST_DATABASE_URL") if SCANSTORY_TESTING else os.environ.get("DATABASE_URL", "")
 engine_options = {}
-if database_uri and not database_uri.startswith("sqlite"):
+database_backend = _database_backend_name(database_uri) if database_uri else ""
+if database_uri and database_backend != "sqlite":
     connect_args = {
         'connect_timeout': 10,
     }
@@ -982,11 +984,16 @@ def _maybe_create_bootstrap_admin():
 # tables or inserting startup/bootstrap data.
 SCANSTORY_SKIP_STARTUP_BOOTSTRAP = _env_flag(
     "SCANSTORY_SKIP_STARTUP_BOOTSTRAP",
-    default=False,
+    default=not SCANSTORY_TESTING,
 )
 
 with app.app_context():
     if not SCANSTORY_SKIP_STARTUP_BOOTSTRAP:
+        if not SCANSTORY_TESTING:
+            raise RuntimeError(
+                "Runtime db.create_all() bootstrap is disabled outside tests. "
+                "Run Alembic migrations with `flask --app app db upgrade` and seed data explicitly."
+            )
         db.create_all()
         ensure_marker_schema()
     
@@ -11232,18 +11239,11 @@ def faqs_page():
 # Main Application Entry Point
 # --------------------------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Create application context and bootstrap database
-    with app.app_context():
-        # Create all tables first
-        db.create_all()
-        ensure_marker_schema()
-        
-        # Then populate with default data
-        bootstrap_database()
-    
     # Run the app.
     # NOTE: this is the Werkzeug development server. Production deployments
     # must run behind a real WSGI server (gunicorn, waitress, etc.) - never
-    # via `python app.py`. debug/use_reloader only activate when FLASK_DEBUG=1
-    # is explicitly set (and are always off when SCANSTORY_TESTING=1).
+    # via `python app.py`. Apply schema first with `flask --app app db upgrade`;
+    # this entry point never creates tables. debug/use_reloader only activate
+    # when FLASK_DEBUG=1 is explicitly set (and are always off when
+    # SCANSTORY_TESTING=1).
     app.run(host="0.0.0.0", port=5000, debug=FLASK_DEBUG_ENABLED, use_reloader=FLASK_DEBUG_ENABLED)

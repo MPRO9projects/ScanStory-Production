@@ -78,7 +78,8 @@ def test_flask_debug_env_enables_debug_outside_testing(monkeypatch, tmp_path):
     monkeypatch.setenv("FLASK_DEBUG", "1")
     monkeypatch.setenv("FLASK_SECRET_KEY", "hardening-test-secret")
     monkeypatch.setenv("SCANSTORY_TESTING", "0")
-    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{(tmp_path / 'debug-flag.db').as_posix()}")
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pw@localhost:5432/scanstory_dev")
+    monkeypatch.setenv("SCANSTORY_SKIP_STARTUP_BOOTSTRAP", "1")
     for name in list(sys.modules):
         if name == "app":
             sys.modules.pop(name)
@@ -217,7 +218,9 @@ def test_production_requires_secure_cookie(monkeypatch, tmp_path):
             tmp_path,
             FLASK_ENV="production",
             FLASK_SECRET_KEY="hardening-test-secret",
-            DATABASE_URL=f"sqlite:///{(tmp_path / 'prod.db').as_posix()}",
+            DATABASE_URL="postgresql+psycopg://user:pw@localhost:5432/scanstory_prod",
+            SCANSTORY_QUEUE_MODE="rq",
+            REDIS_URL="redis://127.0.0.1:6379/0",
             SMTP_HOST="smtp.example.com",
             SMTP_PORT="587",
             SMTP_USER="smtp-user",
@@ -232,9 +235,12 @@ def test_production_secure_cookie_and_required_email_config_pass(monkeypatch, tm
         tmp_path,
         FLASK_ENV="production",
         FLASK_SECRET_KEY="hardening-test-secret",
-        DATABASE_URL=f"sqlite:///{(tmp_path / 'prod-ok.db').as_posix()}",
+        DATABASE_URL="postgresql+psycopg://user:pw@localhost:5432/scanstory_prod",
         SESSION_COOKIE_SECURE="1",
         SCANSTORY_DEV_TESTING="0",
+        SCANSTORY_QUEUE_MODE="rq",
+        REDIS_URL="redis://127.0.0.1:6379/0",
+        SCANSTORY_SKIP_STARTUP_BOOTSTRAP="1",
         SMTP_HOST="smtp.example.com",
         SMTP_PORT="587",
         SMTP_USER="smtp-user",
@@ -253,9 +259,11 @@ def test_production_refuses_dev_test_entitlement_flag(monkeypatch, tmp_path):
             tmp_path,
             FLASK_ENV="production",
             FLASK_SECRET_KEY="hardening-test-secret",
-            DATABASE_URL=f"sqlite:///{(tmp_path / 'prod-dev-flag.db').as_posix()}",
+            DATABASE_URL="postgresql+psycopg://user:pw@localhost:5432/scanstory_prod",
             SESSION_COOKIE_SECURE="1",
             SCANSTORY_DEV_TESTING="1",
+            SCANSTORY_QUEUE_MODE="rq",
+            REDIS_URL="redis://127.0.0.1:6379/0",
             SMTP_HOST="smtp.example.com",
             SMTP_PORT="587",
             SMTP_USER="smtp-user",
@@ -271,9 +279,11 @@ def test_production_requires_smtp_config(monkeypatch, tmp_path):
             tmp_path,
             FLASK_ENV="production",
             FLASK_SECRET_KEY="hardening-test-secret",
-            DATABASE_URL=f"sqlite:///{(tmp_path / 'prod-no-smtp.db').as_posix()}",
+            DATABASE_URL="postgresql+psycopg://user:pw@localhost:5432/scanstory_prod",
             SESSION_COOKIE_SECURE="1",
             SCANSTORY_DEV_TESTING="0",
+            SCANSTORY_QUEUE_MODE="rq",
+            REDIS_URL="redis://127.0.0.1:6379/0",
         )
 
 
