@@ -1148,6 +1148,299 @@
       }
     }
 
+    /* ====== Mobile creator wizard ======
+       Everything in this section is deliberately inert on desktop/laptop: the default
+       rules keep the new wizard chrome hidden, and the layout switch only happens inside
+       the 640px mobile breakpoint the rest of this file already uses. Desktop keeps the
+       existing two-panel form exactly as it was. */
+    .wizard-progress,
+    .wizard-actions,
+    .wizard-recap,
+    .pair-summary,
+    .wizard-name-required {
+      display: none;
+    }
+
+    /* Transparent on desktop so the .panel elements stay direct children of the grid and
+       the two-column layout is byte-for-byte what it was. */
+    .wizard-pane-wrap {
+      display: contents;
+    }
+
+    .wizard-type-options {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 22px;
+    }
+
+    .wizard-type-option {
+      text-align: left;
+      padding: 14px 16px;
+      border-radius: var(--radius-md);
+      background: rgba(0, 0, 0, 0.22);
+      border: 1px solid rgba(255, 255, 255, 0.10);
+      color: #fff;
+      cursor: pointer;
+      transition: all 0.3s var(--ease);
+    }
+
+    .wizard-type-option strong {
+      display: block;
+      font-size: 14px;
+      font-weight: 900;
+      margin-bottom: 4px;
+    }
+
+    .wizard-type-option span {
+      display: block;
+      font-size: 12px;
+      line-height: 1.45;
+      color: rgba(255, 255, 255, 0.58);
+    }
+
+    .wizard-type-option.active {
+      border-color: rgba(0, 212, 255, 0.55);
+      background: rgba(0, 212, 255, 0.10);
+      box-shadow: 0 0 20px rgba(0, 212, 255, 0.14);
+    }
+
+    .wizard-type-option .type-badge {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #ffcf6b;
+      background: rgba(255, 207, 107, 0.12);
+      border: 1px solid rgba(255, 207, 107, 0.35);
+    }
+
+    .wizard-name-error {
+      display: none;
+      margin-top: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #ff9db8;
+    }
+
+    .wizard-name-error.is-visible {
+      display: block;
+    }
+
+    /* Direct QR Video has no camera step at all, so the marker/target controls are
+       removed from the form rather than just visually dimmed. */
+    body[data-experience-type="direct_qr"] .pair-image-block,
+    body[data-experience-type="direct_qr"] .marker-tools,
+    body[data-experience-type="direct_qr"] .marker-substep,
+    body[data-experience-type="direct_qr"] .recap-target {
+      display: none !important;
+    }
+
+    body[data-experience-type="direct_qr"] .upload-grid {
+      grid-template-columns: 1fr;
+    }
+
+    @media (max-width: 640px) {
+      .wizard-progress {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0;
+        margin-bottom: 18px;
+        padding: 14px 10px;
+        border-radius: var(--radius-md);
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid rgba(255, 255, 255, 0.10);
+      }
+
+      .wizard-progress-step {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        flex: 1;
+      }
+
+      .wizard-progress-dot {
+        font-size: 15px;
+        line-height: 1;
+        color: rgba(255, 255, 255, 0.32);
+      }
+
+      .wizard-progress-step.is-active .wizard-progress-dot,
+      .wizard-progress-step.is-done .wizard-progress-dot {
+        color: var(--accent);
+      }
+
+      .wizard-progress-label {
+        font-size: 9px;
+        font-weight: 800;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.42);
+      }
+
+      .wizard-progress-step.is-active .wizard-progress-label {
+        color: #fff;
+      }
+
+      /* One pane visible at a time. `~=` matches a single value inside the
+         space-separated list, so the left panel (panes "1 2") stays on screen for both
+         of its child steps and disappears on step 3. */
+      body[data-wizard-step="1"] [data-wizard-pane]:not([data-wizard-pane~="1"]),
+      body[data-wizard-step="2"] [data-wizard-pane]:not([data-wizard-pane~="2"]),
+      body[data-wizard-step="3"] [data-wizard-pane]:not([data-wizard-pane~="3"]) {
+        display: none;
+      }
+
+      /* Screen 1: the story name must be impossible to miss. */
+      .wizard-name-required {
+        display: inline;
+        color: var(--primary);
+        margin-left: 4px;
+      }
+
+      #projectName {
+        font-size: 1.05rem;
+        padding: 1.25rem 1.4rem;
+      }
+
+      .project-name-group .input-label {
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        color: rgba(255, 255, 255, 0.78);
+      }
+
+      .wizard-recap {
+        display: block;
+        margin-bottom: 20px;
+      }
+
+      .wizard-recap-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 10px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        font-size: 13px;
+      }
+
+      .wizard-recap-row dt {
+        color: rgba(255, 255, 255, 0.5);
+        font-weight: 700;
+      }
+
+      .wizard-recap-row dd {
+        color: #fff;
+        font-weight: 800;
+        text-align: right;
+        word-break: break-word;
+      }
+
+      /* Completed pairs collapse to a one-line summary so screen 2 never becomes a
+         single very long scrolling form. */
+      .pair-item.is-collapsed .upload-grid,
+      .pair-item.is-collapsed .video-metadata,
+      .pair-item.is-collapsed .marker-tools,
+      .pair-item.is-collapsed .pair-substep,
+      .pair-item.is-collapsed .pair-header {
+        display: none;
+      }
+
+      .pair-item.is-collapsed .pair-summary {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .pair-summary img {
+        width: 46px;
+        height: 46px;
+        border-radius: 12px;
+        object-fit: cover;
+        flex-shrink: 0;
+      }
+
+      .pair-summary-text {
+        flex: 1;
+        min-width: 0;
+      }
+
+      .pair-summary-title {
+        font-size: 13px;
+        font-weight: 900;
+      }
+
+      .pair-summary-files {
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.5);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .pair-summary-actions {
+        display: flex;
+        gap: 8px;
+        flex-shrink: 0;
+      }
+
+      /* Sticky action bar: Back / Next / Create are always reachable with a thumb. */
+      .wizard-actions {
+        display: flex;
+        gap: 10px;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 60;
+        padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+        background: rgba(5, 5, 5, 0.92);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
+      }
+
+      .wizard-actions button {
+        flex: 1;
+        border: none;
+        border-radius: 999px;
+        padding: 15px 12px;
+        font-size: 13px;
+        font-weight: 900;
+        font-family: inherit;
+        cursor: pointer;
+        color: #fff;
+        background: rgba(255, 255, 255, 0.10);
+      }
+
+      .wizard-actions button.primary {
+        background: linear-gradient(135deg, var(--primary), var(--secondary));
+      }
+
+      .wizard-actions button[disabled] {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .wizard-actions button[hidden] {
+        display: none;
+      }
+
+      body {
+        padding-bottom: 92px;
+      }
+
+      /* The desktop submit row stays in the form (it is the real submit control and the
+         upload progress panel must sit above it), but on mobile the sticky bar drives it. */
+      .action-buttons .upload-btn {
+        display: none;
+      }
+    }
+
     .crop-modal {
       display: none;
       position: fixed;
@@ -1359,22 +1652,64 @@
 
     <form method="POST" enctype="multipart/form-data" id="projectForm"
       action="{% if is_admin %}{{ url_for('admin_handle_upload') }}{% else %}{{ url_for('handle_upload') }}{% endif %}">
+
+      <!-- Mobile-only step indicator (hidden on desktop, where the whole form is on screen) -->
+      <div class="wizard-progress" id="wizardProgress" aria-hidden="true">
+        <div class="wizard-progress-step is-active" data-wizard-progress="1">
+          <span class="wizard-progress-dot">&#9679;</span>
+          <span class="wizard-progress-label">Details</span>
+        </div>
+        <div class="wizard-progress-step" data-wizard-progress="2">
+          <span class="wizard-progress-dot">&#9675;</span>
+          <span class="wizard-progress-label">Content</span>
+        </div>
+        <div class="wizard-progress-step" data-wizard-progress="3">
+          <span class="wizard-progress-dot">&#9675;</span>
+          <span class="wizard-progress-label">Review</span>
+        </div>
+      </div>
+
       <div class="content-grid">
 
         <!-- Left Panel -->
+        <div class="wizard-pane-wrap" data-wizard-pane="1 2">
         <div class="panel">
-          <div class="panel-title"><span class="step-chip">1</span> Name your story</div>
+          <div data-wizard-pane="1">
+            <div class="panel-title"><span class="step-chip">1</span> Create ScanStory</div>
 
-          <div class="project-name-group">
-            <label class="input-label">Story Name</label>
-            <input type="text" name="name" id="projectName" class="input-field" placeholder="Enter story name" required
-              oninput="updateQRPreview(); updateFormFields();" />
+            <div class="project-name-group">
+              <label class="input-label" for="projectName">Story Name<span class="wizard-name-required">*</span></label>
+              <input type="text" name="name" id="projectName" class="input-field" placeholder="Enter story name" required
+                oninput="updateQRPreview(); updateFormFields(); clearStoryNameError();" />
+              <div class="wizard-name-error" id="storyNameError">Please give your ScanStory a name.</div>
+            </div>
+
+            <label class="input-label">Choose Experience Type</label>
+            <div class="wizard-type-options" id="experienceTypeOptions">
+              <button type="button" class="wizard-type-option active" id="experienceTypeImageVideo"
+                onclick="setExperienceType('image_video')">
+                <strong>Image &rarr; Video</strong>
+                <span>Viewers scan the QR code, point their camera at your photo, and the video plays over it.</span>
+              </button>
+              <button type="button" class="wizard-type-option" id="experienceTypeDirectQr"
+                onclick="setExperienceType('direct_qr')">
+                <strong>Direct QR Video</strong>
+                <span>Viewers scan the QR code and the video plays straight away. No camera or target photo needed.</span>
+                <span class="type-badge" id="directQrBadge" hidden>Coming soon</span>
+              </button>
+            </div>
+            <input type="hidden" name="experience_type" id="experienceType" value="image_video" />
+            <p class="help-text" id="directQrNotice" style="margin:-12px 0 18px;display:none;">
+              Direct QR Video is not ready to publish yet, so this ScanStory cannot be created with it selected.
+              Switch back to Image &rarr; Video to continue.
+            </p>
           </div>
 
-          <div class="panel-title"><span class="step-chip">2</span> Add your photo &amp; video</div>
-          <p class="help-text" style="margin-top:-8px;margin-bottom:16px;">
-            For each memory: pick the photo people will scan, the video that plays when they scan it, and (optionally) adjust the exact area that triggers it.
-          </p>
+          <div data-wizard-pane="2">
+            <div class="panel-title" id="contentStepTitle"><span class="step-chip">2</span> Add your photo &amp; video</div>
+            <p class="help-text" id="contentStepHelp" style="margin-top:-8px;margin-bottom:16px;">
+              For each pair: pick the photo people will scan, the video that plays when they scan it, and (optionally) adjust the exact area that triggers it.
+            </p>
 
           <div id="pairsContainer"></div>
           <div class="help-text" id="pairLimitMessage" style="margin-bottom:16px; color:#d1d5db; font-size:0.95rem;">
@@ -1388,13 +1723,27 @@
           </div>
 
           <button type="button" class="add-pair-btn" onclick="addPair()" id="addPairBtn">
-            <i class="fas fa-plus"></i>&nbsp; Add Another Moment
+            <i class="fas fa-plus"></i>&nbsp; Add another pair
           </button>
+          </div>
+        </div>
         </div>
 
         <!-- Right Panel -->
+        <div class="wizard-pane-wrap" data-wizard-pane="3">
         <div class="panel">
-          <div class="panel-title"><span class="step-chip">3</span> Review &amp; create</div>
+          <div class="panel-title"><i class="fas fa-eye"></i> Story Preview</div>
+
+          <dl class="wizard-recap" id="wizardRecap">
+            <div class="wizard-recap-row">
+              <dt>Story name</dt>
+              <dd id="recapStoryName">Not set yet</dd>
+            </div>
+            <div class="wizard-recap-row">
+              <dt>Experience type</dt>
+              <dd id="recapExperienceType">Image &rarr; Video</dd>
+            </div>
+          </dl>
 
           <div class="preview-list" id="previewList">
             <div class="preview-card empty-state">
@@ -1412,7 +1761,7 @@
             </div>
             <p
               style="font-size:11px; color: rgba(255,255,255,.42); margin-top: 12px; letter-spacing:.12em; text-transform:uppercase;">
-              Scan this to relive your memoty anytime
+              Scan this to relive your memory anytime
             </p>
           </div>
 
@@ -1424,6 +1773,9 @@
           </div>
 
           <div class="action-buttons">
+            <button type="button" class="action-btn clear-btn" id="testExperienceBtn" onclick="testExperiencePreview()">
+              <i class="fas fa-play"></i> Test Experience
+            </button>
             <button type="submit" class="action-btn upload-btn" id="submitBtn" disabled>
               <i class="fas fa-qrcode"></i> Get My Scan Code
             </button>
@@ -1435,7 +1787,15 @@
             </button>
           </div>
         </div>
+        </div>
 
+      </div>
+
+      <!-- Mobile-only sticky wizard controls (hidden on desktop) -->
+      <div class="wizard-actions" id="wizardActions">
+        <button type="button" id="wizardBackBtn" onclick="goToWizardStep(currentWizardStep - 1)" hidden>Back</button>
+        <button type="button" class="primary" id="wizardNextBtn" onclick="goToWizardStep(currentWizardStep + 1)">Next</button>
+        <button type="button" class="primary" id="wizardCreateBtn" onclick="document.getElementById('submitBtn').click()" hidden disabled>Create ScanStory</button>
       </div>
     </form>
   </div>
@@ -1584,10 +1944,194 @@
       };
     }
 
+    /* ===================== Mobile creator wizard =====================
+       The wizard is a pure client-side view over the SAME form DOM: steps are shown and
+       hidden with CSS, nothing is re-rendered. That is what makes "Screen 2 -> Screen 1 ->
+       Screen 2" keep every typed value and every selected file without a re-upload, and it
+       needs no backend contract at all. Desktop never enters the stepped mode. */
+    const WIZARD_LAST_STEP = 3;
+    let currentWizardStep = 1;
+
+    function goToWizardStep(step) {
+      const target = Math.min(WIZARD_LAST_STEP, Math.max(1, step));
+      if (target > 1 && !validateWizardStep(currentWizardStep)) return;
+      currentWizardStep = target;
+      updateWizardChrome();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function validateWizardStep(step) {
+      if (step !== 1) return true;
+      const nameField = document.getElementById('projectName');
+      if (nameField.value.trim()) return true;
+      showStoryNameError();
+      return false;
+    }
+
+    function showStoryNameError() {
+      const nameField = document.getElementById('projectName');
+      const error = document.getElementById('storyNameError');
+      if (error) error.classList.add('is-visible');
+      nameField.setAttribute('aria-invalid', 'true');
+      nameField.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      nameField.focus({ preventScroll: true });
+    }
+
+    function clearStoryNameError() {
+      const error = document.getElementById('storyNameError');
+      if (error) error.classList.remove('is-visible');
+      document.getElementById('projectName').removeAttribute('aria-invalid');
+    }
+
+    function updateWizardChrome() {
+      document.body.dataset.wizardStep = String(currentWizardStep);
+      document.querySelectorAll('[data-wizard-progress]').forEach(node => {
+        const step = Number(node.dataset.wizardProgress);
+        node.classList.toggle('is-active', step === currentWizardStep);
+        node.classList.toggle('is-done', step < currentWizardStep);
+        const dot = node.querySelector('.wizard-progress-dot');
+        if (dot) dot.textContent = step <= currentWizardStep ? '●' : '○';
+      });
+
+      const back = document.getElementById('wizardBackBtn');
+      const next = document.getElementById('wizardNextBtn');
+      const create = document.getElementById('wizardCreateBtn');
+      const submit = document.getElementById('submitBtn');
+      if (back) back.hidden = currentWizardStep === 1;
+      if (next) next.hidden = currentWizardStep === WIZARD_LAST_STEP;
+      if (create) {
+        create.hidden = currentWizardStep !== WIZARD_LAST_STEP;
+        create.disabled = !submit || submit.disabled;
+      }
+      updateWizardRecap();
+    }
+
+    function updateWizardRecap() {
+      const name = document.getElementById('projectName').value.trim();
+      const recapName = document.getElementById('recapStoryName');
+      const recapType = document.getElementById('recapExperienceType');
+      if (recapName) recapName.textContent = name || 'Not set yet';
+      if (recapType) recapType.textContent = experienceType() === 'direct_qr' ? 'Direct QR Video' : 'Image → Video';
+    }
+
+    /* ===================== Experience type =====================
+       Only two modes exist in V1.1: Image -> Video and Direct QR Video. */
+    const DIRECT_QR_BACKEND_READY = {{ 'true' if direct_qr_supported else 'false' }};
+
+    function experienceType() {
+      return document.getElementById('experienceType').value;
+    }
+
+    function setExperienceType(type) {
+      const value = type === 'direct_qr' ? 'direct_qr' : 'image_video';
+      document.getElementById('experienceType').value = value;
+      document.body.dataset.experienceType = value;
+      document.getElementById('experienceTypeImageVideo').classList.toggle('active', value === 'image_video');
+      document.getElementById('experienceTypeDirectQr').classList.toggle('active', value === 'direct_qr');
+
+      const notice = document.getElementById('directQrNotice');
+      if (notice) notice.style.display = (value === 'direct_qr' && !DIRECT_QR_BACKEND_READY) ? 'block' : 'none';
+
+      // A Direct QR ScanStory has no target photo, so the photo inputs must stop being
+      // required or the browser will block submit on a field nobody can see.
+      document.querySelectorAll('input[type="file"][accept^="image"]').forEach(input => {
+        input.required = value === 'image_video';
+      });
+
+      const contentTitle = document.getElementById('contentStepTitle');
+      if (contentTitle) {
+        contentTitle.innerHTML = value === 'direct_qr'
+          ? '<span class="step-chip">2</span> Add your video'
+          : '<span class="step-chip">2</span> Add your photo &amp; video';
+      }
+      const contentHelp = document.getElementById('contentStepHelp');
+      if (contentHelp) {
+        contentHelp.textContent = value === 'direct_qr'
+          ? 'Add the video that plays as soon as someone scans your QR code.'
+          : 'For each pair: pick the photo people will scan, the video that plays when they scan it, and (optionally) adjust the exact area that triggers it.';
+      }
+
+      updateFormFields();
+      updatePreview();
+      updateWizardChrome();
+    }
+
+    /* ===================== Collapsed pair summaries =====================
+       A finished pair folds down to a thumbnail + filenames row on mobile so screen 2
+       never grows into one very long form with every pair expanded. */
+    function pairIsComplete(pairData) {
+      if (!pairData) return false;
+      if (experienceType() === 'direct_qr') return !!pairData.video;
+      return !!(pairData.image && pairData.video);
+    }
+
+    function updatePairSummary(pairId) {
+      const item = document.getElementById(`pair-${pairId}`);
+      const summary = document.getElementById(`pair-summary-${pairId}`);
+      const pairData = currentFiles[pairId];
+      if (!item || !summary) return;
+
+      const complete = pairIsComplete(pairData);
+      const expanded = item.dataset.expanded === '1';
+      item.classList.toggle('is-collapsed', complete && !expanded);
+      if (!complete) return;
+
+      const thumb = pairData.processedPreviewUrl || pairData.imageUrl;
+      const files = [pairData.image?.name, pairData.video?.name].filter(Boolean).join(' · ');
+      summary.innerHTML = `
+        ${thumb ? `<img src="${thumb}" alt="Target preview">` : ''}
+        <div class="pair-summary-text">
+          <div class="pair-summary-title">Pair ${pairId}</div>
+          <div class="pair-summary-files">${files || 'Video ready'}</div>
+        </div>
+        <div class="pair-summary-actions">
+          <button type="button" class="icon-btn" onclick="expandPair(${pairId})" title="Edit pair" aria-label="Edit pair">
+            <i class="fa-solid fa-pen"></i>
+          </button>
+          ${pairId > 1 ? `
+            <button type="button" class="icon-btn danger" onclick="removePair(${pairId})" title="Remove pair" aria-label="Remove pair">
+              <i class="fa-solid fa-trash"></i>
+            </button>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    function expandPair(pairId) {
+      const item = document.getElementById(`pair-${pairId}`);
+      if (!item) return;
+      item.dataset.expanded = '1';
+      item.classList.remove('is-collapsed');
+    }
+
+    function updateAllPairSummaries() {
+      Object.keys(currentFiles).forEach(id => updatePairSummary(parseInt(id, 10)));
+    }
+
+    /* Local dry run of the finished experience: shows the target the viewer will look for
+       and plays the video that will appear over it. It is a preview of this browser's own
+       selected files — the real camera scan test lives on the project page after create. */
+    function testExperiencePreview() {
+      const pairIds = Object.keys(currentFiles).map(n => parseInt(n, 10)).sort((a, b) => a - b);
+      const ready = pairIds.map(id => currentFiles[id]).find(pairIsComplete);
+      if (!ready) {
+        alert('Add a photo and a video first, then you can test your experience.');
+        return;
+      }
+      const card = document.querySelector('#previewList .preview-card');
+      if (card) card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const video = document.querySelector('#previewList video');
+      if (video) video.play().catch(() => { /* autoplay blocked: the controls are visible */ });
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
+      document.body.dataset.experienceType = 'image_video';
+      updateWizardChrome();
       addPair();
       updateQRPreview();
       updatePairLimit();
+      const badge = document.getElementById('directQrBadge');
+      if (badge) badge.hidden = DIRECT_QR_BACKEND_READY;
 
       // Auto-remove flash messages after 5 seconds
       setTimeout(() => {
@@ -1612,14 +2156,16 @@
 
       const pairHTML = `
         <div class="pair-item" id="pair-${pairId}">
+          <div class="pair-summary" id="pair-summary-${pairId}"></div>
+
           <div class="pair-header">
             <div class="pair-title">
               <span class="pair-number">${pairId}</span>
-              Moment #${pairId}
+              Pair ${pairId}
             </div>
 
             ${pairId > 1 ? `
-              <button type="button" class="icon-btn danger" onclick="removePair(${pairId})" title="Delete Pair" aria-label="Delete Pair">
+              <button type="button" class="icon-btn danger" onclick="removePair(${pairId})" title="Remove pair" aria-label="Remove pair">
                 <i class="fa-solid fa-trash"></i>
               </button>
             ` : ``}
@@ -1627,7 +2173,7 @@
 
           <div class="upload-grid">
             <!-- Image Upload -->
-            <div>
+            <div class="pair-image-block">
             <div class="pair-substep"><span class="step-chip">1</span> Photo to scan</div>
             <div class="upload-area" id="image-area-${pairId}">
               <input type="file"
@@ -1686,7 +2232,7 @@
             <strong>Video status</strong>
             <span>Select a video to inspect upload details.</span>
           </div>
-          <div class="pair-substep"><span class="step-chip">3</span> Marker area (optional adjustment)</div>
+          <div class="pair-substep marker-substep"><span class="step-chip">3</span> Marker area (optional adjustment)</div>
           <div class="marker-tools" id="marker-tools-${pairId}">
             <div class="marker-options">
               <button type="button" class="marker-option active" id="marker-crop-${pairId}" onclick="setCropMode(${pairId})">
@@ -1747,8 +2293,8 @@
         title.childNodes.forEach(n => {
           if (n.nodeType === Node.TEXT_NODE) n.textContent = '';
         });
-        // Keep "Pair #X" text by setting via template (simple)
-        title.insertAdjacentText('beforeend', ` Moment #${newId}`);
+        // Keep "Pair X" text by setting via template (simple)
+        title.insertAdjacentText('beforeend', ` Pair ${newId}`);
 
         // update upload areas ids
         const imageArea = pair.querySelector('#image-area-' + oldId) || pair.querySelector('[id^="image-area-"]');
@@ -1757,6 +2303,8 @@
         if (videoArea) videoArea.id = `video-area-${newId}`;
         const videoMeta = pair.querySelector('#video-meta-' + oldId) || pair.querySelector('[id^="video-meta-"]');
         if (videoMeta) videoMeta.id = `video-meta-${newId}`;
+        const pairSummary = pair.querySelector('#pair-summary-' + oldId) || pair.querySelector('[id^="pair-summary-"]');
+        if (pairSummary) pairSummary.id = `pair-summary-${newId}`;
 
         // update inputs
         const imageInput = pair.querySelector('input[type="file"][accept^="image"]');
@@ -2564,6 +3112,7 @@
         detectVideoMetadata(pairId, file, fileUrl);
       }
 
+      updatePairSummary(pairId);
       updatePreview();
       updateQRPreview();
       updateFormFields();
@@ -2572,11 +3121,16 @@
     function updateFormFields() {
       const submitBtn = document.getElementById('submitBtn');
       const projectName = document.getElementById('projectName').value.trim();
-      const hasFiles = Object.values(currentFiles).some(pair => pair.image && pair.video && pair.crop);
+      const hasFiles = Object.values(currentFiles).some(pairIsComplete);
+      const typeIsPublishable = experienceType() === 'image_video' || DIRECT_QR_BACKEND_READY;
 
-      submitBtn.disabled = !(hasFiles && projectName);
+      submitBtn.disabled = !(hasFiles && projectName && typeIsPublishable);
       submitBtn.style.opacity = submitBtn.disabled ? '0.6' : '1';
       submitBtn.style.cursor = submitBtn.disabled ? 'not-allowed' : 'pointer';
+      const wizardCreate = document.getElementById('wizardCreateBtn');
+      if (wizardCreate) wizardCreate.disabled = submitBtn.disabled;
+      updateAllPairSummaries();
+      updateWizardRecap();
       updatePairLimit();
     }
 
@@ -2588,7 +3142,7 @@
       if (IS_ADMIN || IS_DEV_TEST) {
         if (addPairBtn) {
           addPairBtn.disabled = false;
-          addPairBtn.innerHTML = '<i class="fas fa-plus"></i>&nbsp; Add Another Moment';
+          addPairBtn.innerHTML = '<i class="fas fa-plus"></i>&nbsp; Add another pair';
           addPairBtn.style.cursor = 'pointer';
         }
 
@@ -2606,7 +3160,7 @@
           addPairBtn.style.cursor = 'not-allowed';
         } else {
           addPairBtn.disabled = false;
-          addPairBtn.innerHTML = '<i class="fas fa-plus"></i>&nbsp; Add Another Moment';
+          addPairBtn.innerHTML = '<i class="fas fa-plus"></i>&nbsp; Add another pair';
           addPairBtn.style.cursor = 'pointer';
         }
       }
@@ -2620,11 +3174,12 @@
       const previewList = document.getElementById('previewList');
       previewList.innerHTML = '';
 
+      const directQr = experienceType() === 'direct_qr';
       const hasAny = Object.values(currentFiles).some(pair => pair.image || pair.video);
       if (!hasAny) {
         previewList.innerHTML = `
           <div class="preview-card empty-state">
-            <p><i class="fas fa-cloud-upload-alt"></i><br>Add a moment to see it here</p>
+            <p><i class="fas fa-cloud-upload-alt"></i><br>${directQr ? 'Add a video to see it here' : 'Add a photo and a video to see them here'}</p>
           </div>
         `;
         return;
@@ -2640,9 +3195,9 @@
         const previewHTML = `
           <div class="preview-card" id="preview-card-${pairId}">
             <div class="preview-card-header">
-              <div class="preview-card-title">Moment #${pairId}</div>
+              <div class="preview-card-title">Pair ${pairId}</div>
               <div class="preview-actions">
-                <button type="button" class="action-icon" onclick="replaceFile(${pairId}, 'image')" title="Replace Photo" aria-label="Replace Photo">
+                <button type="button" class="action-icon recap-target" onclick="replaceFile(${pairId}, 'image')" title="Replace photo" aria-label="Replace photo">
                   <i class="fa-solid fa-image"></i>
                 </button>
                 <button type="button" class="action-icon" onclick="replaceFile(${pairId}, 'video')" title="Replace Video" aria-label="Replace Video">
@@ -2657,17 +3212,17 @@
             </div>
 
             <div class="preview-media-grid">
-              <div class="preview-media-item">
+              <div class="preview-media-item recap-target">
                 ${pairData.imageUrl
-            ? `<img src="${pairData.imageUrl}" alt="Image Preview">`
-            : `<div class="media-placeholder"><i class="fas fa-image"></i><div>No Image Yet</div></div>`
+            ? `<img src="${pairData.imageUrl}" alt="Target photo preview">`
+            : `<div class="media-placeholder"><i class="fas fa-image"></i><div>No photo yet</div></div>`
           }
               </div>
 
               <div class="preview-media-item">
                 ${pairData.videoUrl
             ? `<video src="${pairData.videoUrl}" controls></video>`
-            : `<div class="media-placeholder"><i class="fas fa-video"></i><div>No Story</div></div>`
+            : `<div class="media-placeholder"><i class="fas fa-video"></i><div>No video yet</div></div>`
           }
               </div>
             </div>
@@ -3433,7 +3988,7 @@
       if (uploadActive) return;
       const projectName = document.getElementById('projectName').value.trim();
       const pairIds = Object.keys(currentFiles).map(n => parseInt(n, 10)).sort((a, b) => a - b);
-      const readyPairs = pairIds.map(id => ({ id, pair: currentFiles[id] })).filter(item => item.pair.image && item.pair.video);
+      const readyPairs = pairIds.map(id => ({ id, pair: currentFiles[id] })).filter(item => pairIsComplete(item.pair));
       const uploadId = (crypto.randomUUID ? crypto.randomUUID() : `upload-${Date.now()}-${Math.random().toString(16).slice(2)}`);
       const totalStart = performance.now();
       uploadElapsedStartedAt = totalStart;
@@ -3453,13 +4008,24 @@
 
       if (!projectName) {
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: 'Preparing project' });
-        alert('Please enter a Story name.');
+        goToWizardStep(1);
+        showStoryNameError();
+        return;
+      }
+
+      // Direct QR Video needs a server-side experience type to store; until that field
+      // exists the creator must not start an upload it cannot finish.
+      if (experienceType() === 'direct_qr' && !DIRECT_QR_BACKEND_READY) {
+        uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: 'Preparing project' });
+        alert('Direct QR Video cannot be published yet. Switch to Image → Video to create this ScanStory.');
         return;
       }
 
       if (!readyPairs.length) {
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: 'Preparing project' });
-        alert('Please add at least one complete memory with your photo and video.');
+        alert(experienceType() === 'direct_qr'
+          ? 'Please add at least one video.'
+          : 'Please add at least one complete pair with a photo and a video.');
         return;
       }
       uploadClientLog('UPLOAD CLIENT VALIDATION DONE', uploadState, { current_phase: 'Preparing project' });

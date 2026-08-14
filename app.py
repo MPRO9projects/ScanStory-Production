@@ -2316,6 +2316,26 @@ def scanner_diagnostics_enabled():
     return bool(SCANSTORY_TESTING or app.debug or (os.environ.get("FLASK_ENV") or "").strip().lower() == "development")
 
 
+EXPERIENCE_TYPE_IMAGE_VIDEO = "image_video"
+EXPERIENCE_TYPE_DIRECT_QR = "direct_qr"
+
+
+def direct_qr_experience_supported():
+    """True once a project can actually store which experience type it is.
+
+    V1.1 ships the Direct QR Video creator/viewer front end, but the persisted field is
+    owned by the backend workstream. Until `Project.experience_type` exists, the creator
+    keeps the option visible-but-unpublishable instead of starting an upload that could
+    never be replayed correctly, and the viewer keeps defaulting to Image -> Video."""
+    return hasattr(Project, "experience_type")
+
+
+def project_experience_type(project):
+    """Experience type for a project, defaulting to the only type V1 could store."""
+    value = getattr(project, "experience_type", None) or EXPERIENCE_TYPE_IMAGE_VIDEO
+    return EXPERIENCE_TYPE_DIRECT_QR if value == EXPERIENCE_TYPE_DIRECT_QR else EXPERIENCE_TYPE_IMAGE_VIDEO
+
+
 def dev_test_entitlement_enabled():
     return (
         (os.environ.get("FLASK_ENV") or "").strip().lower() == "development"
@@ -5365,6 +5385,7 @@ def user_create_project_page():
         max_pairs_per_project=max_pairs_per_project,
         dev_test_entitled=dev_test_entitled,
         video_upload_warnings=VIDEO_UPLOAD_WARNINGS,
+        direct_qr_supported=direct_qr_experience_supported(),
         crop_debug_enabled=(
             request.args.get("crop_debug") == "1"
             and (app.config.get("TESTING") or os.environ.get("FLASK_ENV") == "development")
@@ -11381,6 +11402,7 @@ def admin_create_project_page():
         max_pairs_per_project=None,
         get_system_config=get_system_config,
         video_upload_warnings=VIDEO_UPLOAD_WARNINGS,
+        direct_qr_supported=direct_qr_experience_supported(),
         crop_debug_enabled=(
             request.args.get("crop_debug") == "1"
             and (app.config.get("TESTING") or os.environ.get("FLASK_ENV") == "development")
