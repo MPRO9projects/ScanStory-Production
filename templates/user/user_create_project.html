@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Create a Memory | SCANSTORY</title>
+  <title>Create ScanStory | SCANSTORY</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
 
   <!-- Icons -->
@@ -1137,7 +1137,7 @@
       line-height: 1.4;
     }
 
-    /* Upload state colouring. The phase line always says what is happening; the tint and
+    /* Upload state coloring. The phase line always says what is happening; the tint and
        the note below say how worried the creator should be about it. */
     .upload-progress[data-upload-state="slow"],
     .upload-progress[data-upload-state="retrying"],
@@ -1754,12 +1754,18 @@
     <!-- Header -->
     <div class="header">
       <div class="brandline">SCAN<span>STORY</span></div>
-      <h1>Create Your Memory</h1>
-      <p>Add a photo and a video — and turn a simple moment into something you can relive.
-        Just scan and watch your memory come alive again.</p>
+      <h1>Create ScanStory</h1>
+      <p>Name your story, add the photo people will scan and the video that plays on it.
+        We turn it into a QR code you can share or print.</p>
     </div>
 
-    <form method="POST" enctype="multipart/form-data" id="projectForm"
+    <!-- novalidate: on mobile the wizard hides the panes the viewer is not on, and a
+         browser refuses to focus (so silently refuses to report) an invalid required
+         control that is display:none — the submit would just do nothing. This form's own
+         submit handler already validates the name and the pairs and keeps the submit
+         button disabled until both are satisfied, so nothing is lost by turning the native
+         pass off. -->
+    <form method="POST" enctype="multipart/form-data" id="projectForm" novalidate
       action="{% if is_admin %}{{ url_for('admin_handle_upload') }}{% else %}{{ url_for('handle_upload') }}{% endif %}">
 
       <!-- Mobile-only step indicator (hidden on desktop, where the whole form is on screen) -->
@@ -1841,11 +1847,11 @@
           <div id="pairsContainer"></div>
           <div class="help-text" id="pairLimitMessage" style="margin-bottom:16px; color:#d1d5db; font-size:0.95rem;">
             {% if is_admin %}
-            Admin mode: unlimited image-video pairs allowed per project.
+            Admin mode: unlimited pairs allowed per ScanStory.
             {% elif dev_test_entitled %}
-            Development test account: unlimited image-video pairs allowed locally.
+            Development test account: unlimited pairs allowed locally.
             {% else %}
-            Your current plan allows up to {{ max_pairs_per_project }} image-video pair(s) per project.
+            Your current plan allows up to {{ max_pairs_per_project }} pair(s) per ScanStory.
             {% endif %}
           </div>
 
@@ -1876,19 +1882,19 @@
             <div class="preview-card empty-state">
               <p>
                 <i class="fas fa-cloud-upload-alt"></i><br />
-                Add your photo and video to see your memory here
+                Add a photo and a video to see them here
               </p>
             </div>
           </div>
 
           <div class="qr-preview-section">
-            <h3><i class="fas fa-qrcode"></i> Your Scan QR </h3>
+            <h3><i class="fas fa-qrcode"></i> Your QR code</h3>
             <div id="qrPreviewContainer">
               <canvas id="qrPreviewCanvas"></canvas>
             </div>
             <p
               style="font-size:11px; color: rgba(255,255,255,.42); margin-top: 12px; letter-spacing:.12em; text-transform:uppercase;">
-              Scan this to relive your memory anytime
+              Share or print this so people can open your ScanStory
             </p>
           </div>
 
@@ -2276,7 +2282,7 @@
     function addPair() {
       const currentCount = document.querySelectorAll('.pair-item').length;
       if (!IS_ADMIN && !IS_DEV_TEST && currentCount >= MAX_PAIRS_PER_PROJECT) {
-        alert(`Your current plan allows up to ${MAX_PAIRS_PER_PROJECT} image-video pair(s) per project.`);
+        alert(`Your current plan allows up to ${MAX_PAIRS_PER_PROJECT} pair(s) per ScanStory.`);
         return;
       }
 
@@ -2314,8 +2320,8 @@
                      required />
               <div class="ua-inner">
                 <div class="ua-icon"><i class="fa-solid fa-image"></i></div>
-                <div class="ua-title">Add Your Photo</div>
-                <div class="ua-sub">This is the moment people will scan</div>
+                <div class="ua-title">Add your photo</div>
+                <div class="ua-sub">This is the photo people will point their camera at</div>
               </div>
 
               <div class="ua-preview" id="image-preview-${pairId}"></div>
@@ -2342,8 +2348,8 @@
                      required />
               <div class="ua-inner">
                 <div class="ua-icon"><i class="fa-solid fa-video"></i></div>
-                <div class="ua-title">Add Your Video</div>
-                <div class="ua-sub">This is the memory that will come to life</div>
+                <div class="ua-title">Add your video</div>
+                <div class="ua-sub">This is the video that plays on the photo</div>
               </div>
 
               <div class="ua-preview" id="video-preview-${pairId}"></div>
@@ -3170,7 +3176,7 @@
       // Validate size
       const maxSize = type === 'image' ? 50 * 1024 * 1024 : 1024 * 1024 * 1024;
       if (file.size > maxSize) {
-        alert(`${type === 'image' ? 'Image' : 'Video'} size exceeds ${Math.round(maxSize / (1024 * 1024))}MB limit!`);
+        alert(`This ${type === 'image' ? 'photo' : 'video'} is larger than the ${Math.round(maxSize / (1024 * 1024))} MB limit. Please choose a smaller file.`);
         input.value = '';
         return;
       }
@@ -3179,12 +3185,12 @@
       const validImageTypes = ['image/jpeg', 'image/png', 'image/jpg'];
       const validVideoTypes = ['video/mp4', 'video/mpeg', 'video/quicktime'];
       if (type === 'image' && !validImageTypes.includes(file.type)) {
-        alert('Invalid image type! Please upload JPG or PNG.');
+        alert('That photo format is not supported. Please choose a JPG or PNG.');
         input.value = '';
         return;
       }
       if (type === 'video' && !validVideoTypes.includes(file.type)) {
-        alert('Invalid video type! Please upload MP4.');
+        alert('That video format is not supported. Please choose an MP4.');
         input.value = '';
         return;
       }
@@ -3276,7 +3282,7 @@
         }
 
         if (pairLimitMessage) {
-          pairLimitMessage.textContent = `${IS_ADMIN ? 'Admin mode' : 'Development test account'}: unlimited image-video pairs allowed per project. Current moments: ${pairCount}.`;
+          pairLimitMessage.textContent = `${IS_ADMIN ? 'Admin mode' : 'Development test account'}: unlimited pairs allowed per ScanStory. Current pairs: ${pairCount}.`;
         }
 
         return;
@@ -3295,7 +3301,7 @@
       }
 
       if (pairLimitMessage) {
-        pairLimitMessage.textContent = `Your current plan allows up to ${MAX_PAIRS_PER_PROJECT} image-video pair(s) per project.`;
+        pairLimitMessage.textContent = `Your current plan allows up to ${MAX_PAIRS_PER_PROJECT} pair(s) per ScanStory.`;
       }
     }
 
@@ -3431,7 +3437,7 @@
     }
 
     function clearAll() {
-      if (!confirm('Are you sure you want to clear all files and settings? This cannot be undone.')) return;
+      if (!confirm('Clear this ScanStory and start again? Your name, photos and videos will be removed.')) return;
       if (!uploadActive) {
         disableUploadNavigationWarning();
       }
@@ -4234,6 +4240,8 @@
       activeUploadId = uploadId;
       uploadRedirected = false;
       submitBtn.disabled = true;
+      const activeWizardCreateBtn = document.getElementById('wizardCreateBtn');
+      if (activeWizardCreateBtn) activeWizardCreateBtn.disabled = true;
       submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing project...';
       setUploadState('');
       startUploadStallWatch();
