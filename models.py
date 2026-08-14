@@ -719,6 +719,9 @@ class Admin(db.Model):
 # ---------------------------------------------------------------------
 # Projects
 # ---------------------------------------------------------------------
+PROJECT_EXPERIENCE_TYPES = {"image_video", "direct_qr"}
+
+
 class Project(db.Model):
     __tablename__ = "projects"
 
@@ -730,6 +733,7 @@ class Project(db.Model):
     owner_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True, index=True)
 
     user_project_index = db.Column(db.Integer, nullable=True)  # Per-user project numbering
+    experience_type = db.Column(db.String(30), nullable=False, default="image_video", server_default="image_video")
 
     scanner_url = db.Column(db.Text, nullable=True)
     qr_code_path = db.Column(db.String(500), nullable=True)
@@ -767,6 +771,10 @@ class Project(db.Model):
     scan_logs = db.relationship("ScanLog", backref="project", lazy=True, cascade="all, delete-orphan")
     scan_events = db.relationship("ScanEvent", backref="project", lazy=True, cascade="all, delete-orphan")
 
+    @validates("experience_type")
+    def validate_experience_type(self, key, value):
+        return _validate_value(value or "image_video", PROJECT_EXPERIENCE_TYPES, key)
+
     def __repr__(self):
         owner = f"user:{self.owner_user_id}" if self.owner_user_id else f"admin:{self.owner_admin_id}"
         return f"<Project '{self.name}' ({owner})>"
@@ -779,7 +787,7 @@ class ProjectPair(db.Model):
     project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
     pair_index = db.Column(db.Integer, nullable=False)
 
-    image_filename = db.Column(db.String(255), nullable=False)
+    image_filename = db.Column(db.String(255), nullable=True)
     video_filename = db.Column(db.String(255), nullable=False)
     image_path = db.Column(db.String(500), nullable=True)
     # image_hash = db.Column(db.String(64), nullable=True, index=True)

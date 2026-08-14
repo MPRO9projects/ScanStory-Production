@@ -55,7 +55,7 @@ from models import (
     UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation,
     RazorpayWebhookEvent, ProcessingJob, UploadSession, get_utc_now,
     ScanEvent, SCAN_EVENT_TYPES, UserConsentEvidence, AddonCatalog,
-    AddonPurchase, EntitlementTransaction
+    AddonPurchase, EntitlementTransaction, PROJECT_EXPERIENCE_TYPES
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
@@ -2257,6 +2257,31 @@ def _parse_marker_meta(index):
     }
 
 
+def _parse_project_experience_type():
+    raw = (request.form.get("experience_type") or "image_video").strip().lower()
+    if raw not in PROJECT_EXPERIENCE_TYPES:
+        raise ValueError("Unsupported experience type")
+    return raw
+
+
+def _direct_qr_marker_meta():
+    return {
+        "mode": "full_image",
+        "crop_x": 0.0,
+        "crop_y": 0.0,
+        "crop_width": 1.0,
+        "crop_height": 1.0,
+        "rotation": 0,
+        "original_width": None,
+        "original_height": None,
+        "processed_width": None,
+        "processed_height": None,
+        "source_size_bytes": None,
+        "processed_size_bytes": None,
+        "display_orientation": "direct_qr",
+    }
+
+
 def get_plan_pairs_limit(user):
     """Return the configured max pairs per project for the user's current plan."""
     if has_dev_test_entitlement(user):
@@ -2427,7 +2452,7 @@ def enforce_subscription(view):
 def _delete_project_files_and_rows(project: Project):
     pairs = ProjectPair.query.filter_by(project_id=project.id).all()
     for pair in pairs:
-        img_path = os.path.join(IMAGES_DIR, pair.image_filename)
+        img_path = os.path.join(IMAGES_DIR, pair.image_filename) if pair.image_filename else None
         vid_path = os.path.join(VIDEOS_DIR, pair.video_filename)
         npz_path = os.path.join(FEATURES_DIR, f"{project.id}_{pair.pair_index}.npz")
         for path in (img_path, vid_path, npz_path):
@@ -5378,9 +5403,15 @@ def handle_upload():
 
     # Get project name and uploaded files
     name = request.form.get("name", "Untitled Project")
+    try:
+        experience_type = _parse_project_experience_type()
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("user_create_project_page"))
     images = request.files.getlist("images")
     videos = request.files.getlist("videos")
-    _upload_log("UPLOAD BODY READY", upload_id, user_id=user.id, pair_count=len(images), duration_ms=round((time.time() - request_start) * 1000))
+    pair_count = len(videos) if experience_type == "direct_qr" else len(images)
+    _upload_log("UPLOAD BODY READY", upload_id, user_id=user.id, pair_count=pair_count, duration_ms=round((time.time() - request_start) * 1000))
     body_ready_at = time.time()
     for i, video_file in enumerate(videos):
         _upload_log(
@@ -5396,9 +5427,12 @@ def handle_upload():
         )
 
     # Validation
-    _upload_log("UPLOAD VALIDATION START", upload_id, user_id=user.id, pair_count=len(images))
-    if not images or not videos or len(images) != len(videos):
+    _upload_log("UPLOAD VALIDATION START", upload_id, user_id=user.id, pair_count=pair_count)
+    if experience_type == "image_video" and (not images or not videos or len(images) != len(videos)):
         flash("Error: Please upload equal number of images and videos", "error")
+        return redirect(url_for("user_create_project_page"))
+    if experience_type == "direct_qr" and not videos:
+        flash("Error: Please upload a video for Direct QR", "error")
         return redirect(url_for("user_create_project_page"))
 
     # Get max pairs based on subscription plan only
@@ -5407,15 +5441,18 @@ def handle_upload():
         flash("Pairs allowed per project is not configured for your current plan. Please contact admin.", "error")
         return redirect(url_for("user_create_project_page"))
 
-    if max_pairs is not None and len(images) > max_pairs:
+    if max_pairs is not None and pair_count > max_pairs:
         flash(f"Your current plan allows maximum {max_pairs} pairs per project.", "error")
         return redirect(url_for("user_create_project_page"))
 
-    try:
-        marker_metadata = [_parse_marker_meta(i) for i in range(len(images))]
-    except ValueError as exc:
-        flash(str(exc), "error")
-        return redirect(url_for("user_create_project_page"))
+    if experience_type == "image_video":
+        try:
+            marker_metadata = [_parse_marker_meta(i) for i in range(len(images))]
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("user_create_project_page"))
+    else:
+        marker_metadata = [_direct_qr_marker_meta() for _ in videos]
 
     # Validate every file from its actual content BEFORE any quota
     # reservation or DB row is created (P0D) - a rejected upload must never
@@ -5423,14 +5460,17 @@ def handle_upload():
     # must validate before any of them are persisted.
     validated_media = []
     try:
-        for i, (image_file, video_file) in enumerate(zip(images, videos)):
-            try:
-                img_temp, img_ext = validate_image(
-                    image_file, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
-                )
-            except UploadValidationError as exc:
-                app.logger.warning(f"Upload rejected (image, pair {i}, upload_id={upload_id}): {exc.detail}")
-                raise
+        for i, video_file in enumerate(videos):
+            image_file = images[i] if experience_type == "image_video" else None
+            img_temp = img_ext = None
+            if image_file is not None:
+                try:
+                    img_temp, img_ext = validate_image(
+                        image_file, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+                    )
+                except UploadValidationError as exc:
+                    app.logger.warning(f"Upload rejected (image, pair {i}, upload_id={upload_id}): {exc.detail}")
+                    raise
             try:
                 vid_temp, vid_ext = validate_video(
                     video_file, TMP_UPLOADS_DIR, MAX_VIDEO_SIZE, MAX_VIDEO_DURATION_SECONDS
@@ -5442,7 +5482,7 @@ def handle_upload():
             validated_media.append({"image_temp": img_temp, "image_ext": img_ext, "video_temp": vid_temp, "video_ext": vid_ext})
     except UploadValidationError as exc:
         for item in validated_media:
-            _safe_remove(item["image_temp"])
+            _safe_remove(item.get("image_temp"))
             _safe_remove(item["video_temp"])
         flash(exc.safe_message, "error")
         return redirect(url_for("user_create_project_page"))
@@ -5470,24 +5510,31 @@ def handle_upload():
                 existing_count = 0
             user_project_index = int(existing_count or 0) + 1
 
-        project = Project(name=name, owner_user_id=user.id, user_project_index=user_project_index)
-        _upload_log("UPLOAD PERSIST START", upload_id, user_id=user.id, pair_count=len(images))
+        project = Project(
+            name=name,
+            owner_user_id=user.id,
+            user_project_index=user_project_index,
+            experience_type=experience_type,
+        )
+        _upload_log("UPLOAD PERSIST START", upload_id, user_id=user.id, pair_count=pair_count)
         db.session.add(project)
         db.session.flush()
 
-        pair_slots_ok, pair_slots_error = _reserve_pair_slots_for_project(project.id, len(images), max_pairs)
+        pair_slots_ok, pair_slots_error = _reserve_pair_slots_for_project(project.id, pair_count, max_pairs)
         if not pair_slots_ok:
             raise ValueError(pair_slots_error)
 
-        for i, (image_file, video_file) in enumerate(zip(images, videos)):
+        for i, video_file in enumerate(videos):
+            image_file = images[i] if experience_type == "image_video" else None
             marker_meta = marker_metadata[i]
             media = validated_media[i]
-            img_filename = f"{project.id}_{i}.jpg"
+            img_filename = f"{project.id}_{i}.jpg" if image_file is not None else None
             vid_filename = f"{project.id}_{i}{media['video_ext']}"
 
-            img_path = os.path.join(IMAGES_DIR, img_filename)
-            os.replace(media["image_temp"], img_path)  # atomic move: already-validated content only
-            saved_paths.append(img_path)
+            if image_file is not None:
+                img_path = os.path.join(IMAGES_DIR, img_filename)
+                os.replace(media["image_temp"], img_path)  # atomic move: already-validated content only
+                saved_paths.append(img_path)
 
             vid_path = os.path.join(VIDEOS_DIR, vid_filename)
             video_persist_start = time.time()
@@ -5524,10 +5571,10 @@ def handle_upload():
                 pair_index=i,
                 image_filename=img_filename,
                 video_filename=vid_filename,
-                image_path=f"/image/{project.id}/{i}",
-                original_image_name=image_file.filename,
+                image_path=f"/image/{project.id}/{i}" if image_file is not None else None,
+                original_image_name=image_file.filename if image_file is not None else None,
                 original_video_name=video_file.filename,
-                image_size=marker_meta["processed_size_bytes"] or image_file.content_length,
+                image_size=(marker_meta["processed_size_bytes"] or image_file.content_length) if image_file is not None else None,
                 video_size=video_size,
                 marker_mode=marker_meta["mode"],
                 marker_crop_x=marker_meta["crop_x"],
@@ -5542,9 +5589,9 @@ def handle_upload():
                 marker_source_size_bytes=marker_meta["source_size_bytes"],
                 marker_processed_size_bytes=marker_meta["processed_size_bytes"],
                 marker_display_orientation=marker_meta["display_orientation"],
-                is_processed=False,
-                processing_status="uploaded",
-                feature_extraction_status="pending",
+                is_processed=experience_type == "direct_qr",
+                processing_status="completed" if experience_type == "direct_qr" else "uploaded",
+                feature_extraction_status="not_required" if experience_type == "direct_qr" else "pending",
                 processing_error=None,
             )
             db.session.add(pair)
@@ -5769,18 +5816,22 @@ def handle_upload():
                     import traceback
                     traceback.print_exc()
         
-        job = _schedule_project_pair_processing(project.id)
-        if not job:
-            project_pairs = ProjectPair.query.filter_by(project_id=project.id).all()
-            for pair in project_pairs:
-                pair.processing_status = "failed"
-                pair.feature_extraction_status = "failed"
-                pair.processing_error = "Processing queue unavailable"
-            db.session.commit()
-            flash("Project was saved, but processing could not start. Please retry processing later.", "error")
-            return redirect(url_for("projects_page"))
-        upload_timing["jobs_scheduled_at"] = time.time()
-        _upload_log("UPLOAD BG SCHEDULED", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), job_id=job.id)
+        if project.experience_type == "image_video":
+            job = _schedule_project_pair_processing(project.id)
+            if not job:
+                project_pairs = ProjectPair.query.filter_by(project_id=project.id).all()
+                for pair in project_pairs:
+                    pair.processing_status = "failed"
+                    pair.feature_extraction_status = "failed"
+                    pair.processing_error = "Processing queue unavailable"
+                db.session.commit()
+                flash("Project was saved, but processing could not start. Please retry processing later.", "error")
+                return redirect(url_for("projects_page"))
+            upload_timing["jobs_scheduled_at"] = time.time()
+            _upload_log("UPLOAD BG SCHEDULED", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), job_id=job.id)
+        else:
+            upload_timing["jobs_scheduled_at"] = time.time()
+            _upload_log("UPLOAD BG SKIPPED", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), experience_type=project.experience_type)
         
         print(f"[UPLOAD] Queued background processing for {len(pairs_data)} pairs")
         
@@ -7972,6 +8023,8 @@ def serve_image(project_id, image_id):
     pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
     if not pair:
         return "Pair not found"
+    if not pair.image_filename:
+        abort(404)
     
     response = send_from_directory(IMAGES_DIR, pair.image_filename)
     return _apply_short_public_cache(response)
@@ -11592,6 +11645,8 @@ def serve_admin_image(project_id, image_id):
         abort(404)
     
     # ✅ ADD THIS CHECK
+    if not pair.image_filename:
+        abort(404)
     file_path = os.path.join(ADMIN_IMAGES_DIR, pair.image_filename)
     if not os.path.exists(file_path):
         print(f"❌ Admin image not found: {file_path}")
