@@ -54,7 +54,7 @@ from models import (
     Project, ProjectPair, PaymentOrder, ScanLog, SystemConfig,
     UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation,
     RazorpayWebhookEvent, ProcessingJob, UploadSession, get_utc_now,
-    ScanEvent, SCAN_EVENT_TYPES
+    ScanEvent, SCAN_EVENT_TYPES, UserConsentEvidence
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
@@ -4013,6 +4013,56 @@ def terms_page():
 def privacy_page():
     return render_template("user/privacy_policy.html")
 
+
+CONSENT_POLICY_ENV = {
+    "TERMS": "SCANSTORY_TERMS_POLICY_VERSION",
+    "PRIVACY": "SCANSTORY_PRIVACY_POLICY_VERSION",
+}
+
+
+def _policy_version(consent_type):
+    consent_type = (consent_type or "").strip().upper()
+    env_key = CONSENT_POLICY_ENV.get(consent_type)
+    if not env_key:
+        raise ValueError("Invalid consent type.")
+    return (os.environ.get(env_key) or "v1").strip() or "v1"
+
+
+def _registration_policy_consent_accepted():
+    value = (request.form.get("terms") or "").strip().lower()
+    return value in {"1", "true", "yes", "on", "accepted"}
+
+
+def _record_registration_consent_evidence(user, accepted_at):
+    metadata = json.dumps(
+        {
+            "route": "register",
+            "form_field": "terms",
+            "legal_consent_only": True,
+        },
+        sort_keys=True,
+    )
+    for consent_type in ("TERMS", "PRIVACY"):
+        policy_version = _policy_version(consent_type)
+        existing = UserConsentEvidence.query.filter_by(
+            user_id=user.id,
+            consent_type=consent_type,
+            policy_version=policy_version,
+            source_context="registration",
+        ).first()
+        if existing:
+            continue
+        db.session.add(
+            UserConsentEvidence(
+                user_id=user.id,
+                consent_type=consent_type,
+                policy_version=policy_version,
+                accepted_at=accepted_at,
+                source_context="registration",
+                evidence_metadata=metadata,
+            )
+        )
+
 _LANDING_VIDEOS = {
     "demo": "demo.mp4",
     "educ": "educ.mp4",
@@ -4885,6 +4935,9 @@ def register():
         if len(password1) < 6:
             flash("Password must be at least 6 characters.", "error")
             return render_template("user/register.html")
+        if not _registration_policy_consent_accepted():
+            flash("Please accept the Terms and Privacy Policy to create an account.", "error")
+            return render_template("user/register.html")
         if User.query.filter_by(email=email).first():
             flash("Email is already registered.", "error")
             return render_template("user/register.html")
@@ -4922,7 +4975,7 @@ def register():
         )
 
         db.session.add(user)
-        db.session.commit()
+        db.session.flush()
 
         # Create trial details
         trial = TrialDetails(
@@ -4934,6 +4987,7 @@ def register():
         )
 
         db.session.add(trial)
+        _record_registration_consent_evidence(user, now)
         db.session.commit()
 
         # Send verification OTP

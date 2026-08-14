@@ -179,6 +179,7 @@ class User(db.Model):
     projects = db.relationship("Project", backref="owner_user", lazy=True, cascade="all, delete-orphan")
     payment_orders = db.relationship("PaymentOrder", backref="user", lazy=True, cascade="all, delete-orphan")
     login_activities = db.relationship("UserLoginActivity", backref="user", lazy=True, cascade="all, delete-orphan")
+    consent_evidence = db.relationship("UserConsentEvidence", backref="user", lazy=True, cascade="all, delete-orphan")
 
     @property
     def full_name(self):
@@ -278,6 +279,45 @@ class User(db.Model):
 
     def __repr__(self):
         return f"<User {self.email} ({self.id})>"
+
+
+# ---------------------------------------------------------------------
+# User consent evidence
+# ---------------------------------------------------------------------
+class UserConsentEvidence(db.Model):
+    __tablename__ = "user_consent_evidence"
+    __table_args__ = (
+        db.UniqueConstraint(
+            "user_id",
+            "consent_type",
+            "policy_version",
+            "source_context",
+            name="uq_user_consent_type_version_source",
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    consent_type = db.Column(db.String(30), nullable=False, index=True)
+    policy_version = db.Column(db.String(80), nullable=False)
+    accepted_at = db.Column(db.DateTime, nullable=False, default=get_utc_now, index=True)
+    source_context = db.Column(db.String(80), nullable=False, default="registration")
+    evidence_metadata = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+
+    @property
+    def metadata_dict(self):
+        try:
+            return json.loads(self.evidence_metadata or "{}")
+        except Exception:
+            return {}
+
+    @validates("consent_type")
+    def validate_consent_type(self, key, consent_type):
+        consent_type = (consent_type or "").strip().upper()
+        if consent_type not in {"TERMS", "PRIVACY"}:
+            raise ValueError("Invalid consent type.")
+        return consent_type
 
 
 # ---------------------------------------------------------------------
