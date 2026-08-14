@@ -85,11 +85,21 @@ Success: `201`
     "purpose": "project_pair",
     "current_offset": 0,
     "expected_total_size": 99000000,
+    "uploaded_bytes": 0,
+    "remaining_bytes": 99000000,
+    "progress_percent": 0,
     "image_size": 123456,
     "video_size": 98765432,
     "project_id": null,
     "pair_id": null,
+    "pair": null,
+    "processing_job": null,
     "failure_code": null,
+    "can_upload_chunks": true,
+    "can_finalize": false,
+    "can_retry_finalize": false,
+    "can_cancel": true,
+    "is_terminal": false,
     "created_at": "...", "updated_at": "...", "expires_at": "...", "completed_at": null
   }
 }
@@ -151,6 +161,22 @@ own last-sent offset is what the server actually has.
 Success: `200`, same `session` object shape as route 1's response
 (never includes a raw filesystem path). `404 NOT_FOUND` if missing or not
 owned by the caller.
+
+Derived recovery fields:
+
+- `uploaded_bytes`, `remaining_bytes`, `progress_percent`: server-authoritative
+  progress; clients should prefer these over local counters after refresh or
+  network failure.
+- `can_upload_chunks`: true only while the session is active and still missing
+  bytes.
+- `can_finalize`: true when the session is ready for finalize, including the
+  `assembled` queue-retry state.
+- `can_retry_finalize`: true only for `assembled`, meaning Project/Pair and
+  quota already exist and the client should retry finalize to enqueue only.
+- `can_cancel`: true only for `active`.
+- `is_terminal`: true for `completed`, `cancelled`, `expired`, or `failed`.
+- `pair`: safe pair processing summary once a pair exists; no filesystem paths.
+- `processing_job`: safe latest processing-job summary once a job exists.
 
 ### 4. Finalize
 

@@ -54,7 +54,8 @@ from models import (
     Project, ProjectPair, PaymentOrder, ScanLog, SystemConfig,
     UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation,
     RazorpayWebhookEvent, ProcessingJob, UploadSession, get_utc_now,
-    ScanEvent, SCAN_EVENT_TYPES, UserConsentEvidence
+    ScanEvent, SCAN_EVENT_TYPES, UserConsentEvidence, AddonCatalog,
+    AddonPurchase, EntitlementTransaction, PROJECT_EXPERIENCE_TYPES
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
@@ -2256,6 +2257,31 @@ def _parse_marker_meta(index):
     }
 
 
+def _parse_project_experience_type():
+    raw = (request.form.get("experience_type") or "image_video").strip().lower()
+    if raw not in PROJECT_EXPERIENCE_TYPES:
+        raise ValueError("Unsupported experience type")
+    return raw
+
+
+def _direct_qr_marker_meta():
+    return {
+        "mode": "full_image",
+        "crop_x": 0.0,
+        "crop_y": 0.0,
+        "crop_width": 1.0,
+        "crop_height": 1.0,
+        "rotation": 0,
+        "original_width": None,
+        "original_height": None,
+        "processed_width": None,
+        "processed_height": None,
+        "source_size_bytes": None,
+        "processed_size_bytes": None,
+        "display_orientation": "direct_qr",
+    }
+
+
 def get_plan_pairs_limit(user):
     """Return the configured max pairs per project for the user's current plan."""
     if has_dev_test_entitlement(user):
@@ -2426,7 +2452,7 @@ def enforce_subscription(view):
 def _delete_project_files_and_rows(project: Project):
     pairs = ProjectPair.query.filter_by(project_id=project.id).all()
     for pair in pairs:
-        img_path = os.path.join(IMAGES_DIR, pair.image_filename)
+        img_path = os.path.join(IMAGES_DIR, pair.image_filename) if pair.image_filename else None
         vid_path = os.path.join(VIDEOS_DIR, pair.video_filename)
         npz_path = os.path.join(FEATURES_DIR, f"{project.id}_{pair.pair_index}.npz")
         for path in (img_path, vid_path, npz_path):
@@ -5377,9 +5403,15 @@ def handle_upload():
 
     # Get project name and uploaded files
     name = request.form.get("name", "Untitled Project")
+    try:
+        experience_type = _parse_project_experience_type()
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("user_create_project_page"))
     images = request.files.getlist("images")
     videos = request.files.getlist("videos")
-    _upload_log("UPLOAD BODY READY", upload_id, user_id=user.id, pair_count=len(images), duration_ms=round((time.time() - request_start) * 1000))
+    pair_count = len(videos) if experience_type == "direct_qr" else len(images)
+    _upload_log("UPLOAD BODY READY", upload_id, user_id=user.id, pair_count=pair_count, duration_ms=round((time.time() - request_start) * 1000))
     body_ready_at = time.time()
     for i, video_file in enumerate(videos):
         _upload_log(
@@ -5395,9 +5427,12 @@ def handle_upload():
         )
 
     # Validation
-    _upload_log("UPLOAD VALIDATION START", upload_id, user_id=user.id, pair_count=len(images))
-    if not images or not videos or len(images) != len(videos):
+    _upload_log("UPLOAD VALIDATION START", upload_id, user_id=user.id, pair_count=pair_count)
+    if experience_type == "image_video" and (not images or not videos or len(images) != len(videos)):
         flash("Error: Please upload equal number of images and videos", "error")
+        return redirect(url_for("user_create_project_page"))
+    if experience_type == "direct_qr" and not videos:
+        flash("Error: Please upload a video for Direct QR", "error")
         return redirect(url_for("user_create_project_page"))
 
     # Get max pairs based on subscription plan only
@@ -5406,15 +5441,18 @@ def handle_upload():
         flash("Pairs allowed per project is not configured for your current plan. Please contact admin.", "error")
         return redirect(url_for("user_create_project_page"))
 
-    if max_pairs is not None and len(images) > max_pairs:
+    if max_pairs is not None and pair_count > max_pairs:
         flash(f"Your current plan allows maximum {max_pairs} pairs per project.", "error")
         return redirect(url_for("user_create_project_page"))
 
-    try:
-        marker_metadata = [_parse_marker_meta(i) for i in range(len(images))]
-    except ValueError as exc:
-        flash(str(exc), "error")
-        return redirect(url_for("user_create_project_page"))
+    if experience_type == "image_video":
+        try:
+            marker_metadata = [_parse_marker_meta(i) for i in range(len(images))]
+        except ValueError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("user_create_project_page"))
+    else:
+        marker_metadata = [_direct_qr_marker_meta() for _ in videos]
 
     # Validate every file from its actual content BEFORE any quota
     # reservation or DB row is created (P0D) - a rejected upload must never
@@ -5422,14 +5460,17 @@ def handle_upload():
     # must validate before any of them are persisted.
     validated_media = []
     try:
-        for i, (image_file, video_file) in enumerate(zip(images, videos)):
-            try:
-                img_temp, img_ext = validate_image(
-                    image_file, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
-                )
-            except UploadValidationError as exc:
-                app.logger.warning(f"Upload rejected (image, pair {i}, upload_id={upload_id}): {exc.detail}")
-                raise
+        for i, video_file in enumerate(videos):
+            image_file = images[i] if experience_type == "image_video" else None
+            img_temp = img_ext = None
+            if image_file is not None:
+                try:
+                    img_temp, img_ext = validate_image(
+                        image_file, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+                    )
+                except UploadValidationError as exc:
+                    app.logger.warning(f"Upload rejected (image, pair {i}, upload_id={upload_id}): {exc.detail}")
+                    raise
             try:
                 vid_temp, vid_ext = validate_video(
                     video_file, TMP_UPLOADS_DIR, MAX_VIDEO_SIZE, MAX_VIDEO_DURATION_SECONDS
@@ -5441,7 +5482,7 @@ def handle_upload():
             validated_media.append({"image_temp": img_temp, "image_ext": img_ext, "video_temp": vid_temp, "video_ext": vid_ext})
     except UploadValidationError as exc:
         for item in validated_media:
-            _safe_remove(item["image_temp"])
+            _safe_remove(item.get("image_temp"))
             _safe_remove(item["video_temp"])
         flash(exc.safe_message, "error")
         return redirect(url_for("user_create_project_page"))
@@ -5469,24 +5510,31 @@ def handle_upload():
                 existing_count = 0
             user_project_index = int(existing_count or 0) + 1
 
-        project = Project(name=name, owner_user_id=user.id, user_project_index=user_project_index)
-        _upload_log("UPLOAD PERSIST START", upload_id, user_id=user.id, pair_count=len(images))
+        project = Project(
+            name=name,
+            owner_user_id=user.id,
+            user_project_index=user_project_index,
+            experience_type=experience_type,
+        )
+        _upload_log("UPLOAD PERSIST START", upload_id, user_id=user.id, pair_count=pair_count)
         db.session.add(project)
         db.session.flush()
 
-        pair_slots_ok, pair_slots_error = _reserve_pair_slots_for_project(project.id, len(images), max_pairs)
+        pair_slots_ok, pair_slots_error = _reserve_pair_slots_for_project(project.id, pair_count, max_pairs)
         if not pair_slots_ok:
             raise ValueError(pair_slots_error)
 
-        for i, (image_file, video_file) in enumerate(zip(images, videos)):
+        for i, video_file in enumerate(videos):
+            image_file = images[i] if experience_type == "image_video" else None
             marker_meta = marker_metadata[i]
             media = validated_media[i]
-            img_filename = f"{project.id}_{i}.jpg"
+            img_filename = f"{project.id}_{i}.jpg" if image_file is not None else None
             vid_filename = f"{project.id}_{i}{media['video_ext']}"
 
-            img_path = os.path.join(IMAGES_DIR, img_filename)
-            os.replace(media["image_temp"], img_path)  # atomic move: already-validated content only
-            saved_paths.append(img_path)
+            if image_file is not None:
+                img_path = os.path.join(IMAGES_DIR, img_filename)
+                os.replace(media["image_temp"], img_path)  # atomic move: already-validated content only
+                saved_paths.append(img_path)
 
             vid_path = os.path.join(VIDEOS_DIR, vid_filename)
             video_persist_start = time.time()
@@ -5523,10 +5571,10 @@ def handle_upload():
                 pair_index=i,
                 image_filename=img_filename,
                 video_filename=vid_filename,
-                image_path=f"/image/{project.id}/{i}",
-                original_image_name=image_file.filename,
+                image_path=f"/image/{project.id}/{i}" if image_file is not None else None,
+                original_image_name=image_file.filename if image_file is not None else None,
                 original_video_name=video_file.filename,
-                image_size=marker_meta["processed_size_bytes"] or image_file.content_length,
+                image_size=(marker_meta["processed_size_bytes"] or image_file.content_length) if image_file is not None else None,
                 video_size=video_size,
                 marker_mode=marker_meta["mode"],
                 marker_crop_x=marker_meta["crop_x"],
@@ -5541,9 +5589,9 @@ def handle_upload():
                 marker_source_size_bytes=marker_meta["source_size_bytes"],
                 marker_processed_size_bytes=marker_meta["processed_size_bytes"],
                 marker_display_orientation=marker_meta["display_orientation"],
-                is_processed=False,
-                processing_status="uploaded",
-                feature_extraction_status="pending",
+                is_processed=experience_type == "direct_qr",
+                processing_status="completed" if experience_type == "direct_qr" else "uploaded",
+                feature_extraction_status="not_required" if experience_type == "direct_qr" else "pending",
                 processing_error=None,
             )
             db.session.add(pair)
@@ -5768,18 +5816,22 @@ def handle_upload():
                     import traceback
                     traceback.print_exc()
         
-        job = _schedule_project_pair_processing(project.id)
-        if not job:
-            project_pairs = ProjectPair.query.filter_by(project_id=project.id).all()
-            for pair in project_pairs:
-                pair.processing_status = "failed"
-                pair.feature_extraction_status = "failed"
-                pair.processing_error = "Processing queue unavailable"
-            db.session.commit()
-            flash("Project was saved, but processing could not start. Please retry processing later.", "error")
-            return redirect(url_for("projects_page"))
-        upload_timing["jobs_scheduled_at"] = time.time()
-        _upload_log("UPLOAD BG SCHEDULED", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), job_id=job.id)
+        if project.experience_type == "image_video":
+            job = _schedule_project_pair_processing(project.id)
+            if not job:
+                project_pairs = ProjectPair.query.filter_by(project_id=project.id).all()
+                for pair in project_pairs:
+                    pair.processing_status = "failed"
+                    pair.feature_extraction_status = "failed"
+                    pair.processing_error = "Processing queue unavailable"
+                db.session.commit()
+                flash("Project was saved, but processing could not start. Please retry processing later.", "error")
+                return redirect(url_for("projects_page"))
+            upload_timing["jobs_scheduled_at"] = time.time()
+            _upload_log("UPLOAD BG SCHEDULED", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), job_id=job.id)
+        else:
+            upload_timing["jobs_scheduled_at"] = time.time()
+            _upload_log("UPLOAD BG SKIPPED", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), experience_type=project.experience_type)
         
         print(f"[UPLOAD] Queued background processing for {len(pairs_data)} pairs")
         
@@ -5896,17 +5948,54 @@ def _lock_upload_session(session_id):
 
 
 def _upload_session_payload(session_row):
+    uploaded_bytes = int(session_row.current_offset or 0)
+    total_bytes = int(session_row.expected_total_size or 0)
+    remaining_bytes = max(0, total_bytes - uploaded_bytes)
+    progress_percent = round((uploaded_bytes / total_bytes) * 100, 2) if total_bytes else 0
+    latest_job = None
+    pair_payload = None
+    if session_row.project_id:
+        latest_job = (
+            ProcessingJob.query
+            .filter_by(project_id=session_row.project_id)
+            .order_by(desc(ProcessingJob.created_at), desc(ProcessingJob.id))
+            .first()
+        )
+    if session_row.pair_id:
+        pair = ProjectPair.query.get(session_row.pair_id)
+        if pair:
+            pair_payload = {
+                "id": pair.id,
+                "pair_index": pair.pair_index,
+                "processing_status": pair.processing_status,
+                "feature_extraction_status": pair.feature_extraction_status,
+                "is_processed": bool(pair.is_processed),
+                "safe_error": safe_error_summary(pair.processing_error) if pair.processing_error else None,
+            }
     return {
         "id": session_row.id,
         "status": session_row.status,
         "purpose": session_row.purpose,
         "current_offset": session_row.current_offset,
         "expected_total_size": session_row.expected_total_size,
+        "uploaded_bytes": uploaded_bytes,
+        "remaining_bytes": remaining_bytes,
+        "progress_percent": progress_percent,
         "image_size": session_row.image_size,
         "video_size": session_row.video_size,
         "project_id": session_row.project_id,
         "pair_id": session_row.pair_id,
+        "pair": pair_payload,
+        "processing_job": processing_job_status_payload(latest_job) if latest_job else None,
         "failure_code": session_row.failure_code,
+        "can_upload_chunks": session_row.status == "active" and uploaded_bytes < total_bytes,
+        "can_finalize": (
+            session_row.status == "assembled"
+            or (session_row.status == "active" and uploaded_bytes == total_bytes and total_bytes > 0)
+        ),
+        "can_retry_finalize": session_row.status == "assembled",
+        "can_cancel": session_row.status == "active",
+        "is_terminal": session_row.status in {"completed", "cancelled", "expired", "failed"},
         "created_at": session_row.created_at.isoformat() if session_row.created_at else None,
         "updated_at": session_row.updated_at.isoformat() if session_row.updated_at else None,
         "expires_at": session_row.expires_at.isoformat() if session_row.expires_at else None,
@@ -6826,6 +6915,261 @@ def admin_set_project_fallback_pair(project_id):
 # --------------------------------------------------------------------------------------------
 # Subscription & Payment Routes
 # --------------------------------------------------------------------------------------------
+ADDON_PURCHASABLE_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION"}
+
+
+def _addon_catalog_payload(item):
+    return {
+        "id": item.id,
+        "code": item.code,
+        "name": item.name,
+        "description": item.description,
+        "addon_type": item.addon_type,
+        "unit_amount": item.unit_amount,
+        "currency": item.currency,
+        "scan_delta": item.scan_delta,
+        "validity_days_delta": item.validity_days_delta,
+        "project_delta": item.project_delta,
+        "is_active": item.is_active,
+        "is_commercially_available": item.is_commercially_available,
+    }
+
+
+def _addon_effect(item, quantity=1):
+    quantity = max(1, int(quantity or 1))
+    if item.addon_type == "EXTRA_SCANS":
+        return "EXTRA_SCANS", int(item.scan_delta or 0) * quantity
+    if item.addon_type == "VALIDITY_EXTENSION":
+        return "VALIDITY_EXTENSION", int(item.validity_days_delta or 0) * quantity
+    if item.addon_type == "PROJECT_CAPACITY":
+        return "PROJECT_CAPACITY", int(item.project_delta or 0) * quantity
+    raise ValueError("Unsupported add-on type.")
+
+
+def _validate_addon_catalog_for_purchase(item):
+    if not item or not item.is_active or not item.is_commercially_available:
+        return False, "ADDON_UNAVAILABLE", "This add-on is not available."
+    if item.addon_type not in ADDON_PURCHASABLE_TYPES:
+        return False, "ADDON_DISABLED", "This add-on type is not commercially available yet."
+    entitlement_type, delta = _addon_effect(item, 1)
+    if delta <= 0:
+        return False, "ADDON_INVALID", "This add-on is not configured correctly."
+    if item.unit_amount <= 0:
+        return False, "ADDON_INVALID", "This add-on price is not configured correctly."
+    return True, None, None
+
+
+def _apply_entitlement_transaction(user, entitlement_type, delta, source_type, source_id, reason, metadata=None):
+    existing = EntitlementTransaction.query.filter_by(
+        source_type=source_type,
+        source_id=source_id,
+        entitlement_type=entitlement_type,
+    ).first()
+    if existing:
+        return existing, True
+
+    now = dt.utcnow()
+    tx = EntitlementTransaction(
+        user_id=user.id,
+        entitlement_type=entitlement_type,
+        delta_value=int(delta),
+        source_type=source_type,
+        source_id=source_id,
+        reason=reason,
+        metadata_json=json.dumps(metadata or {}, sort_keys=True),
+        valid_from=now,
+    )
+    db.session.add(tx)
+
+    if entitlement_type == "EXTRA_SCANS":
+        if user.subscribed_scan_limit not in (None, 0):
+            user.subscribed_scan_limit = int(user.subscribed_scan_limit or 0) + int(delta)
+    elif entitlement_type == "VALIDITY_EXTENSION":
+        base = user.subscription_expires_at if user.subscription_expires_at and user.subscription_expires_at > now else now
+        user.subscription_expires_at = base + timedelta(days=int(delta))
+        if user.subscription_status in ("expired", "limit_reached"):
+            user.subscription_status = "active"
+    elif entitlement_type == "PROJECT_CAPACITY":
+        if user.subscribed_project_limit not in (None, 0):
+            user.subscribed_project_limit = int(user.subscribed_project_limit or 0) + int(delta)
+    else:
+        raise ValueError("Unsupported entitlement type.")
+
+    return tx, False
+
+
+def fulfill_addon_purchase(purchase):
+    """Idempotently fulfill a paid AddonPurchase through the entitlement ledger."""
+    item = AddonCatalog.query.get(purchase.catalog_id)
+    if not item:
+        return {"success": False, "code": "ADDON_NOT_FOUND", "error": "Add-on catalog item not found."}
+    if purchase.status == "fulfilled":
+        return {"success": True, "purchase_id": purchase.id, "replay": True}
+    if purchase.status != "pending":
+        return {"success": False, "code": "PURCHASE_NOT_PENDING", "error": "Add-on purchase is not pending."}
+
+    entitlement_type, delta = _addon_effect(item, purchase.quantity)
+    if delta <= 0:
+        return {"success": False, "code": "ADDON_INVALID", "error": "Add-on entitlement is invalid."}
+
+    user = User.query.get(purchase.user_id)
+    if not user:
+        return {"success": False, "code": "USER_NOT_FOUND", "error": "User not found."}
+
+    try:
+        _tx, replay = _apply_entitlement_transaction(
+            user,
+            entitlement_type,
+            delta,
+            "addon_purchase",
+            purchase.id,
+            f"Self-service add-on purchase {purchase.order_id}",
+            metadata={"catalog_code": item.code, "quantity": purchase.quantity},
+        )
+        now = dt.utcnow()
+        purchase.status = "fulfilled"
+        purchase.paid_at = purchase.paid_at or now
+        purchase.fulfilled_at = purchase.fulfilled_at or now
+        purchase.failure_code = None
+        db.session.commit()
+        return {
+            "success": True,
+            "purchase_id": purchase.id,
+            "entitlement_type": entitlement_type,
+            "delta": delta,
+            "replay": replay,
+        }
+    except IntegrityError:
+        db.session.rollback()
+        existing = EntitlementTransaction.query.filter_by(
+            source_type="addon_purchase",
+            source_id=purchase.id,
+            entitlement_type=entitlement_type,
+        ).first()
+        fresh = AddonPurchase.query.get(purchase.id)
+        if existing and fresh and fresh.status == "fulfilled":
+            return {"success": True, "purchase_id": purchase.id, "replay": True}
+        return {"success": False, "code": "ENTITLEMENT_CONFLICT", "error": "Entitlement was already recorded."}
+
+
+@app.route("/api/addons/catalog", methods=["GET"])
+@login_required
+def addon_catalog():
+    items = (
+        AddonCatalog.query.filter_by(is_active=True, is_commercially_available=True)
+        .filter(AddonCatalog.addon_type.in_(ADDON_PURCHASABLE_TYPES))
+        .order_by(AddonCatalog.id.asc())
+        .all()
+    )
+    return jsonify({"success": True, "addons": [_addon_catalog_payload(item) for item in items]})
+
+
+@app.route("/api/addons/orders", methods=["POST"])
+@login_required
+def create_addon_order():
+    user = current_user()
+    payload = request.get_json(silent=True) or request.form
+    try:
+        catalog_id = int(payload.get("catalog_id"))
+    except (TypeError, ValueError, AttributeError):
+        catalog_id = None
+    try:
+        quantity = int(payload.get("quantity", 1))
+    except (TypeError, ValueError, AttributeError):
+        quantity = 1
+    if quantity < 1 or quantity > 20:
+        return jsonify({"success": False, "code": "INVALID_QUANTITY", "error": "Invalid quantity."}), 400
+    item = AddonCatalog.query.get(catalog_id)
+    ok, code, message = _validate_addon_catalog_for_purchase(item)
+    if not ok:
+        return jsonify({"success": False, "code": code, "error": message}), 400
+    if not razorpay_client:
+        return jsonify({"success": False, "code": "PAYMENT_NOT_CONFIGURED", "error": "Payment gateway not configured."}), 503
+
+    total_amount = round(float(item.unit_amount) * quantity, 2)
+    amount_paise = int(round(total_amount * 100))
+    if amount_paise < 100:
+        amount_paise = 100
+    purchase = AddonPurchase(
+        order_id=f"ADDON_{user.id}_{int(time.time())}_{uuid.uuid4().hex[:8]}",
+        user_id=user.id,
+        catalog_id=item.id,
+        quantity=quantity,
+        amount=item.unit_amount,
+        total_amount=total_amount,
+        currency=item.currency,
+        status="pending",
+    )
+    db.session.add(purchase)
+    db.session.flush()
+    try:
+        razorpay_order = razorpay_client.order.create(data={
+            "amount": amount_paise,
+            "currency": item.currency,
+            "payment_capture": 1,
+            "notes": {
+                "user_id": str(user.id),
+                "addon_purchase_id": str(purchase.id),
+                "addon_code": item.code,
+            },
+        })
+        purchase.razorpay_order_id = razorpay_order["id"]
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return jsonify({"success": False, "code": "ORDER_CREATE_FAILED", "error": "Could not create add-on order."}), 502
+
+    return jsonify({
+        "success": True,
+        "purchase_id": purchase.id,
+        "order_id": purchase.razorpay_order_id,
+        "amount": amount_paise,
+        "currency": purchase.currency,
+        "key": RAZORPAY_KEY_ID,
+        "name": "ScanStory",
+        "description": item.name,
+    }), 201
+
+
+@app.route("/api/addons/purchases/<int:purchase_id>/verify", methods=["POST"])
+@login_required
+def verify_addon_purchase(purchase_id):
+    user = current_user()
+    purchase = AddonPurchase.query.get_or_404(purchase_id)
+    if purchase.user_id != user.id:
+        return jsonify({"success": False, "code": "NOT_FOUND", "error": "Add-on purchase not found."}), 404
+    razorpay_payment_id = request.form.get("razorpay_payment_id")
+    razorpay_order_id = request.form.get("razorpay_order_id")
+    razorpay_signature = request.form.get("razorpay_signature")
+    if not all([razorpay_payment_id, razorpay_order_id, razorpay_signature]):
+        return jsonify({"success": False, "code": "MISSING_PAYMENT_DETAILS", "error": "Missing payment details."}), 400
+    if razorpay_order_id != purchase.razorpay_order_id:
+        return jsonify({"success": False, "code": "ORDER_MISMATCH", "error": "Payment order does not match this add-on purchase."}), 400
+    try:
+        razorpay_client.utility.verify_payment_signature({
+            "razorpay_order_id": razorpay_order_id,
+            "razorpay_payment_id": razorpay_payment_id,
+            "razorpay_signature": razorpay_signature,
+        })
+    except razorpay.errors.SignatureVerificationError:
+        return jsonify({"success": False, "code": "SIGNATURE_INVALID", "error": "Invalid payment signature."}), 400
+
+    if not purchase.razorpay_payment_id:
+        purchase.razorpay_payment_id = razorpay_payment_id
+        purchase.razorpay_signature = razorpay_signature
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return jsonify({"success": False, "code": "PAYMENT_REUSED", "error": "This payment has already been used."}), 409
+    elif purchase.razorpay_payment_id != razorpay_payment_id:
+        return jsonify({"success": False, "code": "PAYMENT_MISMATCH", "error": "Payment does not match this add-on purchase."}), 409
+
+    result = fulfill_addon_purchase(purchase)
+    status = 200 if result.get("success") else 409
+    return jsonify(result), status
+
+
 @app.route("/pricing")
 def pricing_page():
     """Public pricing page — no login required. Passes user=None for guests."""
@@ -7243,7 +7587,7 @@ def _record_webhook_event(idempotency_key, event_type, payment_id, order_id, pay
         return existing, True
 
 
-def _finalize_webhook_event(event, status, failure_code=None, payment_order_id=None):
+def _finalize_webhook_event(event, status, failure_code=None, payment_order_id=None, addon_purchase_id=None):
     updates = {
         RazorpayWebhookEvent.processing_status: status,
         RazorpayWebhookEvent.processed_at: dt.utcnow(),
@@ -7252,10 +7596,49 @@ def _finalize_webhook_event(event, status, failure_code=None, payment_order_id=N
         updates[RazorpayWebhookEvent.failure_code] = failure_code
     if payment_order_id is not None:
         updates[RazorpayWebhookEvent.payment_order_id] = payment_order_id
+    if addon_purchase_id is not None:
+        updates[RazorpayWebhookEvent.addon_purchase_id] = addon_purchase_id
     RazorpayWebhookEvent.query.filter(RazorpayWebhookEvent.id == event.id).update(
         updates, synchronize_session=False
     )
     db.session.commit()
+
+
+def _process_addon_webhook_event(event, entity, payment_id, order_id):
+    purchase = AddonPurchase.query.filter_by(razorpay_order_id=order_id).first()
+    if not purchase:
+        return False
+    try:
+        expected_paise = round(purchase.total_amount * 100)
+        actual_paise = int(entity.get("amount"))
+    except (TypeError, ValueError):
+        _finalize_webhook_event(event, "failed", failure_code="amount_unreadable", addon_purchase_id=purchase.id)
+        return True
+    if actual_paise != expected_paise:
+        _finalize_webhook_event(event, "failed", failure_code="amount_mismatch", addon_purchase_id=purchase.id)
+        return True
+    if (entity.get("currency") or "").upper() != (purchase.currency or "").upper():
+        _finalize_webhook_event(event, "failed", failure_code="currency_mismatch", addon_purchase_id=purchase.id)
+        return True
+    if not purchase.razorpay_payment_id:
+        purchase.razorpay_payment_id = payment_id
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            _finalize_webhook_event(event, "failed", failure_code="payment_id_conflict", addon_purchase_id=purchase.id)
+            return True
+    elif purchase.razorpay_payment_id != payment_id:
+        _finalize_webhook_event(event, "failed", failure_code="payment_id_conflict", addon_purchase_id=purchase.id)
+        return True
+    result = fulfill_addon_purchase(purchase)
+    if not result.get("success"):
+        _finalize_webhook_event(
+            event, "failed", failure_code=result.get("code", "addon_fulfillment_failed"), addon_purchase_id=purchase.id
+        )
+        return True
+    _finalize_webhook_event(event, "processed", addon_purchase_id=purchase.id)
+    return True
 
 
 @app.route("/webhooks/razorpay", methods=["POST"])
@@ -7348,6 +7731,8 @@ def razorpay_webhook():
 
     payment_order = PaymentOrder.query.filter_by(razorpay_order_id=order_id).first()
     if not payment_order:
+        if _process_addon_webhook_event(event, entity, payment_id, order_id):
+            return jsonify({"status": "ok"}), 200
         # Never create an entitlement/order from an unknown external order.
         _finalize_webhook_event(event, "failed", failure_code="unknown_order")
         app.logger.warning(f"razorpay_webhook_failed event_id={event.id} reason=unknown_order")
@@ -7638,6 +8023,8 @@ def serve_image(project_id, image_id):
     pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
     if not pair:
         return "Pair not found"
+    if not pair.image_filename:
+        abort(404)
     
     response = send_from_directory(IMAGES_DIR, pair.image_filename)
     return _apply_short_public_cache(response)
@@ -10777,6 +11164,117 @@ def admin_capacity():
     snapshot = _capacity_state_snapshot()
     return render_template("admin/capacity.html", admin=admin, snapshot=snapshot)
 
+
+def _safe_basename(value):
+    if not value:
+        return "-"
+    return os.path.basename(str(value))
+
+
+def _smtp_diagnostics_payload():
+    errors = []
+    try:
+        port = _smtp_port() if os.environ.get("SMTP_PORT") else None
+    except Exception as exc:
+        port = None
+        errors.append(str(exc))
+    try:
+        security = _smtp_security_mode()
+    except Exception as exc:
+        security = None
+        errors.append(str(exc))
+    try:
+        timeout = _smtp_timeout_seconds()
+    except Exception as exc:
+        timeout = None
+        errors.append(str(exc))
+    return {
+        "configured": all(os.environ.get(key) for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "MAIL_FROM")),
+        "host_configured": bool(os.environ.get("SMTP_HOST")),
+        "port": port,
+        "security": security,
+        "timeout_seconds": timeout,
+        "mail_from_configured": bool(os.environ.get("MAIL_FROM")),
+        "errors": errors,
+    }
+
+
+def _rq_diagnostics_payload():
+    payload = {
+        "available": False,
+        "mode": None,
+        "redis_configured": bool(os.environ.get("REDIS_URL")),
+        "queue_name": None,
+        "timeout_seconds": None,
+        "pending_count": None,
+        "running_count": None,
+        "failed_count": None,
+        "error": None,
+    }
+    try:
+        summary = queue_config_summary()
+        payload.update(summary)
+        payload["available"] = redis_ready_check()
+        if summary["mode"] == "rq" and os.environ.get("REDIS_URL"):
+            from redis import Redis
+            from rq import Queue
+            from rq.registry import FailedJobRegistry, StartedJobRegistry
+
+            conn = Redis.from_url(os.environ["REDIS_URL"])
+            queue = Queue(summary["queue_name"], connection=conn)
+            payload["pending_count"] = queue.count
+            payload["running_count"] = StartedJobRegistry(summary["queue_name"], connection=conn).count
+            payload["failed_count"] = FailedJobRegistry(summary["queue_name"], connection=conn).count
+        else:
+            payload["pending_count"] = ProcessingJob.query.filter(ProcessingJob.status.in_(("queued", "retrying"))).count()
+            payload["running_count"] = ProcessingJob.query.filter(ProcessingJob.status.in_(("processing", "running", "claimed"))).count()
+            payload["failed_count"] = ProcessingJob.query.filter_by(status="failed").count()
+    except Exception as exc:
+        payload["error"] = safe_error_summary(exc)
+    return payload
+
+
+@app.route("/admin/operations", methods=["GET"])
+@require_admin_permission("superadmin.operations.view")
+def admin_operations():
+    return render_template(
+        "admin/operations.html",
+        admin=current_admin(),
+        upload_sessions=(
+            UploadSession.query
+            .order_by(UploadSession.updated_at.desc(), UploadSession.id.desc())
+            .limit(25)
+            .all()
+        ),
+        processing_jobs=(
+            ProcessingJob.query
+            .order_by(ProcessingJob.updated_at.desc(), ProcessingJob.id.desc())
+            .limit(25)
+            .all()
+        ),
+        addon_purchases=(
+            AddonPurchase.query
+            .order_by(AddonPurchase.updated_at.desc(), AddonPurchase.id.desc())
+            .limit(25)
+            .all()
+        ),
+        entitlement_transactions=(
+            EntitlementTransaction.query
+            .order_by(EntitlementTransaction.created_at.desc(), EntitlementTransaction.id.desc())
+            .limit(25)
+            .all()
+        ),
+        entitlement_users=(
+            User.query
+            .order_by(User.updated_at.desc(), User.id.desc())
+            .limit(25)
+            .all()
+        ),
+        rq_diagnostics=_rq_diagnostics_payload(),
+        smtp_diagnostics=_smtp_diagnostics_payload(),
+        safe_basename=_safe_basename,
+    )
+
 # --------------------------------------------------------------------------------------------
 # Admin Routes - Razorpay Webhook Events (read-only). Never displays raw payload,
 # signature, or secrets - only the metadata columns RazorpayWebhookEvent stores.
@@ -11147,6 +11645,8 @@ def serve_admin_image(project_id, image_id):
         abort(404)
     
     # ✅ ADD THIS CHECK
+    if not pair.image_filename:
+        abort(404)
     file_path = os.path.join(ADMIN_IMAGES_DIR, pair.image_filename)
     if not os.path.exists(file_path):
         print(f"❌ Admin image not found: {file_path}")

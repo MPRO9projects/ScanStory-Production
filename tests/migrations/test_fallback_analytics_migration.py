@@ -24,6 +24,7 @@ from models import db as shared_db
 
 MIGRATIONS_DIR = str(Path(__file__).resolve().parents[2] / "migrations")
 PRIOR_HEAD = "44340c16353c"
+FALLBACK_ANALYTICS_REVISION = "0b8fffb4c614"
 
 
 def _current_head_revision():
@@ -103,7 +104,7 @@ def test_repeated_upgrade_is_idempotent(bare_migration_app):
 def test_downgrade_only_drops_what_this_migration_added(bare_migration_app):
     app = bare_migration_app("downgrade_scan_events.db")
     with app.app_context():
-        migrate_upgrade()
+        migrate_upgrade(revision=FALLBACK_ANALYTICS_REVISION)
         tables_before = set(inspect(shared_db.engine).get_table_names())
         cols_before = {c["name"] for c in inspect(shared_db.engine).get_columns("projects")}
 

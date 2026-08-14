@@ -135,8 +135,17 @@ def test_create_session_success(client, login_user):
     assert session["status"] == "active"
     assert session["current_offset"] == 0
     assert session["expected_total_size"] == 3000
+    assert session["uploaded_bytes"] == 0
+    assert session["remaining_bytes"] == 3000
+    assert session["progress_percent"] == 0
+    assert session["can_upload_chunks"] is True
+    assert session["can_finalize"] is False
+    assert session["can_cancel"] is True
+    assert session["is_terminal"] is False
     assert session["project_id"] is None
     assert session["pair_id"] is None
+    assert session["pair"] is None
+    assert session["processing_job"] is None
 
 
 def test_create_session_requires_auth(client):
@@ -176,9 +185,21 @@ def test_sequential_chunks_assemble_correctly(client, app_module, login_user, mo
     status = _status(client, session_id).get_json()["session"]
     assert status["current_offset"] == len(image_bytes) + len(video_bytes)
     assert status["status"] == "active"
+    assert status["uploaded_bytes"] == status["expected_total_size"]
+    assert status["remaining_bytes"] == 0
+    assert status["progress_percent"] == 100
+    assert status["can_upload_chunks"] is False
+    assert status["can_finalize"] is True
 
     resp = _finalize(client, session_id)
     assert resp.status_code == 200, resp.get_json()
+    final_session = resp.get_json()["session"]
+    assert final_session["status"] == "completed"
+    assert final_session["can_finalize"] is False
+    assert final_session["can_cancel"] is False
+    assert final_session["is_terminal"] is True
+    assert final_session["pair"]["processing_status"] == "uploaded"
+    assert final_session["processing_job"]["status"] == "queued"
     pair = app_module.ProjectPair.query.first()
     assert pair is not None
     assert pair.image_size == len(image_bytes)
@@ -543,7 +564,13 @@ def test_finalize_enqueue_failure_leaves_assembled_state(client, app_module, log
     assert app_module.ProjectPair.query.count() == 1
 
     status_resp = _status(client, session_id)
-    assert status_resp.get_json()["session"]["status"] == "assembled"
+    session = status_resp.get_json()["session"]
+    assert session["status"] == "assembled"
+    assert session["can_retry_finalize"] is True
+    assert session["can_finalize"] is True
+    assert session["can_cancel"] is False
+    assert session["project_id"] is not None
+    assert session["pair_id"] is not None
 
 
 def test_finalize_recovers_after_enqueue_failure_via_retry(client, app_module, login_user, monkeypatch):

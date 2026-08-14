@@ -364,6 +364,56 @@ def test_admin_capacity_direct_access_denied_for_admin_without_permission(client
     assert b"Access denied" in followed.data
 
 
+def test_superadmin_can_open_operations_diagnostics(client, login_admin, app_module, db_session, normal_user):
+    upload = app_module.UploadSession(
+        owner_user_id=normal_user.id,
+        purpose="project_pair",
+        project_name="Diagnostics Upload",
+        original_image_name="C:/secret/path/marker.jpg",
+        original_video_name="/private/video.mp4",
+        image_size=10,
+        video_size=20,
+        expected_total_size=30,
+        current_offset=10,
+        status="active",
+        storage_token="11111111-1111-4111-8111-111111111111",
+        expires_at=app_module.get_utc_now() + app_module.timedelta(minutes=10),
+    )
+    job = app_module.ProcessingJob(
+        public_key="job_ops_diag",
+        job_type="process_project_pairs",
+        status="failed",
+        idempotency_key="ops-diag",
+        safe_error_code="QUEUE_UNAVAILABLE",
+        safe_error_summary="Processing queue is unavailable.",
+    )
+    db_session.add_all([upload, job])
+    db_session.commit()
+
+    response = client.get("/admin/operations")
+    assert response.status_code == 200
+    body = response.data
+    assert b"Operations Diagnostics" in body
+    assert b"Recent Upload Sessions" in body
+    assert b"Recent Processing Jobs" in body
+    assert b"Current Entitlement Visibility" in body
+    assert b"Recent Add-on Purchases" in body
+    assert b"Recent Entitlement Ledger" in body
+    assert b"marker.jpg" in body
+    assert b"video.mp4" in body
+    assert b"C:/secret/path" not in body
+    assert b"/private/" not in body
+    assert b"SMTP_PASS" not in body
+
+
+def test_normal_admin_cannot_open_operations_diagnostics(client, secondary_admin):
+    with client.session_transaction() as sess:
+        sess["admin_id"] = secondary_admin.id
+    response = client.get("/admin/operations", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["Location"].rstrip("/").endswith("/admin/dashboard")
+
+
 def test_success_page_contact_support_uses_contact_route(client, login_user, app_module, db_session):
     project = app_module.Project(name="Navigation Success Project", owner_user_id=login_user.id)
     db_session.add(project)
