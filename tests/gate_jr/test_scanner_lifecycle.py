@@ -1605,19 +1605,19 @@ def test_session_end_dedup_guard_flips_before_any_await():
 def test_creator_project_list_exposes_test_scanner():
     html = _dashboard_html()
     assert "url_for('scanner_test_entry', project_id=project.id)" in html
-    assert "Test Scanner" in html
+    assert "Test Experience" in html
 
 
 def test_project_preview_exposes_test_scanner():
     html = _project_preview_html()
     assert "url_for('scanner_test_entry', project_id=project.id)" in html
-    assert "Test Scanner" in html
+    assert "Test Experience" in html
 
 
 def test_success_page_exposes_test_scanner():
     html = _success_html()
     assert "{{ test_scanner_url }}" in html
-    assert "Test Scanner" in html
+    assert "Test Experience" in html
     app_src = _app_py()
     assert "test_scanner_url=url_for(\"scanner_test_entry\", project_id=project.id)" in app_src
 

@@ -512,10 +512,206 @@
       text-transform: uppercase;
       font-weight: 500;
     }
+
+    /* ====== Pre-camera experience intro / target guide ====== */
+    #experienceIntro {
+      position: fixed;
+      inset: 0;
+      z-index: 10000;
+      display: none;
+      overflow-y: auto;
+      padding: 24px 18px calc(24px + env(safe-area-inset-bottom, 0px));
+      background: #050505;
+      font-family: 'Plus Jakarta Sans', Arial, sans-serif;
+      color: #fff;
+    }
+
+    #experienceIntro.is-visible {
+      display: block;
+    }
+
+    #experienceIntroCard {
+      max-width: 520px;
+      margin: 0 auto;
+      text-align: center;
+    }
+
+    .intro-brand {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.42em;
+      color: rgba(255, 255, 255, 0.42);
+      margin-bottom: 14px;
+    }
+
+    #experienceIntroTitle {
+      margin: 0 0 10px;
+      font-size: clamp(20px, 5vw, 28px);
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .intro-lede {
+      margin: 0 0 20px;
+      font-size: 14px;
+      line-height: 1.55;
+      color: rgba(255, 255, 255, 0.66);
+    }
+
+    #targetGuide {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    #targetGuide.gallery,
+    #targetGuide.many {
+      grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    }
+
+    .target-card {
+      margin: 0;
+      border-radius: 16px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .target-card img {
+      display: block;
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      object-fit: cover;
+    }
+
+    #targetGuide.single .target-card img {
+      aspect-ratio: auto;
+      max-height: 46vh;
+      object-fit: contain;
+      background: #0b0b0b;
+    }
+
+    .target-card figcaption {
+      padding: 8px 6px;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    /* 7+ targets: show the first six, the rest are behind "View all targets". */
+    #targetGuide.many .target-extra {
+      display: none;
+    }
+
+    #targetGuide.many.show-all .target-extra {
+      display: block;
+    }
+
+    .intro-link {
+      display: inline-block;
+      margin-bottom: 18px;
+      padding: 0;
+      border: none;
+      background: none;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      color: #00d4ff;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    #playbackModeChoice {
+      display: grid;
+      gap: 10px;
+      margin: 0 0 20px;
+      padding: 14px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 18px;
+      text-align: left;
+    }
+
+    #playbackModeChoice legend {
+      padding: 0 8px;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.42);
+    }
+
+    #playbackModeChoice label {
+      display: grid;
+      grid-template-columns: 20px 1fr;
+      gap: 10px;
+      align-items: start;
+      font-size: 12.5px;
+      line-height: 1.45;
+      color: rgba(255, 255, 255, 0.6);
+      cursor: pointer;
+    }
+
+    #playbackModeChoice strong {
+      display: block;
+      font-size: 13.5px;
+      color: #fff;
+      margin-bottom: 2px;
+    }
+
+    .intro-note {
+      margin: 0 0 16px;
+      font-size: 13px;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.72);
+    }
+
+    #directQrVideo {
+      display: block;
+      width: 100%;
+      max-height: 62vh;
+      margin: 0 0 18px;
+      border-radius: 18px;
+      background: #000;
+    }
+
+    #directQrVideo.is-hidden {
+      display: none;
+    }
+
+    .intro-btn {
+      width: 100%;
+      padding: 17px 20px;
+      border: none;
+      border-radius: 999px;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 800;
+      color: #fff;
+      background: linear-gradient(135deg, #ff007a, #7000ff);
+      cursor: pointer;
+    }
+
+    /* Detect Once (after the one-shot trigger fires) and Direct QR Video both present the
+       video as a plain full-frame player: no marker geometry is involved any more, so the
+       perspective warp is dropped rather than left pointing at a target that may be gone. */
+    #overlayWrap.locked-fullscreen {
+      display: block !important;
+      opacity: 1 !important;
+      transform: none !important;
+    }
+
+    #overlayWrap.locked-fullscreen #overlay {
+      object-fit: contain;
+      background: #000;
+    }
   </style>
 </head>
 
-<body class="ss-user-scope">
+<body class="ss-user-scope"
+      data-experience-type="{{ experience_type | default('image_video') }}"
+      data-target-count="{{ targets | default([]) | length }}">
   <div class="header">
     {# Root-cause fix (round 1): this used to hardcode href="/". Round-2 fix: session.get
        ('user_id')/session.get('admin_id') alone are NOT safe — the public QR link for a
@@ -589,6 +785,68 @@
     <div id="arStageLabel"
       style="font-size:11px;color:rgba(255,255,255,0.28);letter-spacing:0.08em;text-transform:uppercase;font-weight:500;">
       Loading vision engine...</div>
+  </div>
+
+  <!-- PRE-CAMERA EXPERIENCE INTRO ------------------------------------------------------
+       Nothing behind this screen has started yet: for an image-recognition ScanStory the
+       camera is only requested when the viewer presses Start Camera, and for a Direct QR
+       Video neither the camera nor OpenCV is ever touched. This is a preview layer in
+       front of detection, never a filter on it — whichever target the guide happens to
+       highlight, the scanner still detects any valid pair in the project. -->
+  <div id="experienceIntro" role="dialog" aria-labelledby="experienceIntroTitle">
+    <div id="experienceIntroCard">
+      <div class="intro-brand">SCANSTORY</div>
+      <h2 id="experienceIntroTitle">{{ project_name }}</h2>
+
+      {% if experience_type == 'direct_qr' %}
+      <p class="intro-lede">Your video is ready to play. No camera needed.</p>
+      {% if targets %}
+      <video id="directQrVideo" class="is-hidden" controls playsinline preload="metadata"
+             src="{{ targets[0].video_url }}"></video>
+      {% endif %}
+      <button type="button" class="intro-btn" id="directQrPlayBtn">Play video</button>
+      {% else %}
+      <p class="intro-lede" id="targetGuideLede">
+        {% if targets | length == 1 %}
+        Point your camera at this to start the experience.
+        {% else %}
+        Point your camera at any one of these to start the experience.
+        {% endif %}
+      </p>
+
+      <div id="targetGuide"
+           class="{% if targets | length == 1 %}single{% elif targets | length > 6 %}many{% else %}gallery{% endif %}">
+        {% for target in targets %}
+        <figure class="target-card{% if loop.index > 6 %} target-extra{% endif %}">
+          <img src="{{ target.image_url }}" alt="{{ target.label }}" loading="lazy">
+          <figcaption>{{ target.label }}</figcaption>
+        </figure>
+        {% endfor %}
+      </div>
+
+      {% if targets | length > 6 %}
+      <button type="button" class="intro-link" id="viewAllTargetsBtn"
+              aria-expanded="false" aria-controls="targetGuide">View all {{ targets | length }} targets</button>
+      {% endif %}
+
+      <fieldset id="playbackModeChoice">
+        <legend>How should the video play?</legend>
+        <label>
+          <input type="radio" name="playbackMode" value="tracked" checked>
+          <span><strong>Follow the target</strong>The video stays locked onto the target while you hold the camera on it.</span>
+        </label>
+        <label>
+          <input type="radio" name="playbackMode" value="detect_once">
+          <span><strong>Play once detected</strong>Recognize the target once, then keep playing even if you look away.</span>
+        </label>
+      </fieldset>
+
+      <p class="intro-note" id="cameraGuidance">
+        This ScanStory uses your camera to recognize the target shown above.
+      </p>
+      <button type="button" class="intro-btn" id="startCameraBtn">Start Camera</button>
+      {% endif %}
+    </div>
   </div>
 
   <div class="wrap" id="wrap">
@@ -1315,6 +1573,27 @@
       frameGapConfirmedAfterLk: 0,
       preLkFrameGapDrops: 0
     };
+    /* ===================== V1.1 experience type / playback mode =====================
+       Read from data-* attributes on <body> rather than a Jinja expression inside this
+       script, so the inline script stays plain JavaScript that can be executed directly
+       by the Node startup smoke test.
+
+       EXPERIENCE_TYPE decides whether this page is an image-recognition experience at all.
+       For 'direct_qr' the camera is never requested and opencv.js is never fetched — the
+       recognition stack is not entered, not merely hidden. Anything unknown falls back to
+       image recognition, which is the only thing V1 could produce. */
+    const EXPERIENCE_TYPE = (document.body && document.body.dataset && document.body.dataset.experienceType) === 'direct_qr'
+      ? 'direct_qr'
+      : 'image_video';
+    const USES_IMAGE_RECOGNITION = EXPERIENCE_TYPE !== 'direct_qr';
+
+    // 'tracked'     — the V1 behaviour: the overlay follows the marker and stops when it is
+    //                 lost. Still the default, and completely unchanged.
+    // 'detect_once' — recognition is a one-shot trigger: after the first accepted detection
+    //                 playback continues even if the marker is never seen again.
+    let scannerPlaybackMode = 'tracked';
+    let detectOnceLocked = false;
+
     markStartupCheckpoint('scanner_constants_initialized');
 
     function recordRejection(reason) {
@@ -1759,8 +2038,12 @@
     }
 
     if (scannerMode !== 'fallback') {
-      markStartupCheckpoint('opencv_load_requested');
-      loadOpenCV();
+      // Direct QR Video never enters the recognition code path: opencv.js is not requested,
+      // so the wasm is never fetched or instantiated on that route at all.
+      if (USES_IMAGE_RECOGNITION) {
+        markStartupCheckpoint('opencv_load_requested');
+        loadOpenCV();
+      }
     }
 
     // ================================================
@@ -3681,8 +3964,82 @@
       }
     }
 
+    /* ===================== Pre-camera experience intro =====================
+       V1 asked for the camera the instant the page loaded. V1.1 shows the target guide
+       (or, for Direct QR Video, the branded intro) first, so the viewer knows what they
+       are about to point the camera at and why the browser is about to ask for it. The
+       browser's own permission prompt is untouched — this is the step immediately before
+       it, not a replacement for it.
+
+       Only the trigger moved. Once startCameraFromIntro() runs, setupCamera() is the same
+       function doing the same work in the same order as before. */
+    const experienceIntro = document.getElementById('experienceIntro');
+    const startCameraBtn = document.getElementById('startCameraBtn');
+    const directQrPlayBtn = document.getElementById('directQrPlayBtn');
+    const viewAllTargetsBtn = document.getElementById('viewAllTargetsBtn');
+    let experienceIntroDismissed = false;
+
+    function hideExperienceIntro() {
+      experienceIntroDismissed = true;
+      if (experienceIntro) experienceIntro.classList.remove('is-visible');
+    }
+
+    function showExperienceIntro() {
+      if (!experienceIntro) return;
+      experienceIntro.classList.add('is-visible');
+      const arOverlay = document.getElementById('arLoadingOverlay');
+      if (arOverlay) arOverlay.classList.add('hide');
+    }
+
+    function selectedPlaybackMode() {
+      const checked = document.querySelector('input[name="playbackMode"]:checked');
+      return checked && checked.value === 'detect_once' ? 'detect_once' : 'tracked';
+    }
+
+    function startCameraFromIntro() {
+      if (experienceIntroDismissed) return;
+      scannerPlaybackMode = selectedPlaybackMode();
+      scannerDiagnostics.push('experience_intro_start_camera', { playbackMode: scannerPlaybackMode });
+      hideExperienceIntro();
+      setupCamera();
+    }
+
+    /* Direct QR Video: play the project's video in its own player on the intro screen.
+       This branch deliberately never touches the AR overlay element, the camera, or the
+       detection loop — no getUserMedia call, no opencv.js, no scanner runtime work. The
+       source is server-rendered onto the element, so there is no client-side media
+       plumbing here either. */
+    function startDirectQrPlayback() {
+      const player = document.getElementById('directQrVideo');
+      if (!player) {
+        const lede = experienceIntro && experienceIntro.querySelector('.intro-lede');
+        if (lede) lede.textContent = 'This ScanStory has no video to play yet.';
+        return;
+      }
+      player.classList.remove('is-hidden');
+      if (directQrPlayBtn) directQrPlayBtn.style.display = 'none';
+      player.play().catch(() => { /* autoplay blocked: the player's own controls are visible */ });
+    }
+
+    if (startCameraBtn) startCameraBtn.addEventListener('click', startCameraFromIntro);
+    if (directQrPlayBtn) directQrPlayBtn.addEventListener('click', startDirectQrPlayback);
+    if (viewAllTargetsBtn) {
+      viewAllTargetsBtn.addEventListener('click', () => {
+        const guide = document.getElementById('targetGuide');
+        if (!guide) return;
+        const expanded = guide.classList.toggle('show-all');
+        viewAllTargetsBtn.setAttribute('aria-expanded', String(expanded));
+        viewAllTargetsBtn.textContent = expanded ? 'Show fewer targets' : viewAllTargetsBtn.dataset.moreLabel || 'View all targets';
+      });
+      viewAllTargetsBtn.dataset.moreLabel = viewAllTargetsBtn.textContent;
+    }
+
+    // Startup reached the camera stage with no uncaught error — which is exactly what this
+    // checkpoint has always been for (it is the tripwire for the top-level temporal-dead-
+    // zone regression). The getUserMedia call itself now happens in startCameraFromIntro,
+    // when the viewer presses Start Camera.
     markStartupCheckpoint('camera_setup_requested');
-    setupCamera();
+    showExperienceIntro();
 
     async function tryAutoEnableAudio() {
       try {
@@ -3775,7 +4132,39 @@
       }, extra || {}));
     }
 
+    /* ===================== Detect Once =====================
+       In 'detect_once' mode recognition is a trigger, not a continuous requirement: the
+       first accepted detection locks the experience and playback then runs to the end
+       regardless of what tracking does afterwards.
+
+       This is purely a lifecycle change. Nothing about how a detection is decided moves —
+       the same server detection, the same homography acceptance, the same thresholds. All
+       that changes is what happens after one succeeds. The two functions that could stop
+       playback (stopOverlayImmediate, requestPoseHold) become no-ops once locked, which
+       also neutralises any hold timer or in-flight tracking callback that was already
+       scheduled when the lock happened. 'tracked' mode never reaches any of this. */
+    function lockDetectOnceExperience(reason) {
+      if (scannerPlaybackMode !== 'detect_once' || detectOnceLocked) return;
+      detectOnceLocked = true;
+      scannerDiagnostics.push('detect_once_locked', { reason, generation: scannerGeneration });
+      // The marker is no longer being followed, so the perspective warp is dropped and the
+      // video becomes a plain full-frame player.
+      overlayWrap.classList.add('locked-fullscreen');
+      overlayWrap.style.transform = "";
+      overlayState = 'tracking';
+      playOverlay();
+      // Recognition already did its one job; keep no loop running against a target that
+      // does not need to be found again.
+      stopDetectLoop();
+      stopTrackingLoop();
+      stopWatchdog();
+      stopScannerStatusCycle();
+      // UI state and guidance were already set to the matched/tracking pair by the accept
+      // path that called this; there is nothing further to announce.
+    }
+
     function stopOverlayImmediate() {
+      if (detectOnceLocked) return;
       if (poseHoldTimer) { clearTimeout(poseHoldTimer); poseHoldTimer = null; }
       poseHoldUntil = 0;
       overlayState = 'hidden';
@@ -3788,6 +4177,7 @@
     }
 
     function requestPoseHold(reason) {
+      if (detectOnceLocked) return;
       if (overlayWrap.style.display !== "block" || !overlay.src) {
         stopOverlayImmediate();
         return;
@@ -6271,6 +6661,10 @@
 
         statusDiv.textContent = `🎬 Tracking Pair #${newPairId + 1}`;
         statusDiv.className = "status track";
+
+        // Detect Once: this accepted detection was the trigger. Everything above ran
+        // identically to tracked mode - only what happens from here differs.
+        lockDetectOnceExperience('first_accepted_detection');
 
       } catch (e) {
         console.error("Detection error:", e);
