@@ -33,6 +33,7 @@ def _fresh_import_app(monkeypatch, tmp_path, **env):
         "SMTP_PASS",
         "MAIL_FROM",
         "SMTP_TIMEOUT_SECONDS",
+        "SMTP_SECURITY",
     ):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
@@ -299,6 +300,30 @@ def test_malformed_smtp_timeout_fails_config_validation(monkeypatch, tmp_path):
         )
 
 
+def test_malformed_smtp_port_fails_config_validation(monkeypatch, tmp_path):
+    with pytest.raises(RuntimeError, match="SMTP_PORT"):
+        _fresh_import_app(
+            monkeypatch,
+            tmp_path,
+            FLASK_SECRET_KEY="hardening-test-secret",
+            SCANSTORY_TESTING="1",
+            TEST_DATABASE_URL=f"sqlite:///{(tmp_path / 'bad-port.db').as_posix()}",
+            SMTP_PORT="not-a-port",
+        )
+
+
+def test_malformed_smtp_security_fails_config_validation(monkeypatch, tmp_path):
+    with pytest.raises(RuntimeError, match="SMTP_SECURITY"):
+        _fresh_import_app(
+            monkeypatch,
+            tmp_path,
+            FLASK_SECRET_KEY="hardening-test-secret",
+            SCANSTORY_TESTING="1",
+            TEST_DATABASE_URL=f"sqlite:///{(tmp_path / 'bad-security.db').as_posix()}",
+            SMTP_SECURITY="opportunistic-magic",
+        )
+
+
 def test_send_email_smtp_passes_configured_timeout(monkeypatch, tmp_path):
     captured = {}
 
@@ -355,8 +380,113 @@ def test_send_email_smtp_passes_configured_timeout(monkeypatch, tmp_path):
     assert captured["host"] == "smtp.example.com"
     assert captured["port"] == 587
     assert captured["timeout"] == 6.0
+    assert captured["starttls"] is True
     assert captured["username"] == "smtp-user"
     assert captured["password"] == "smtp-pass"
+
+
+def test_send_email_smtp_uses_implicit_ssl_when_configured(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            captured["client"] = "plain"
+
+    class FakeSMTPSSL:
+        def __init__(self, host, port, timeout=None):
+            captured["client"] = "ssl"
+            captured["host"] = host
+            captured["port"] = port
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def ehlo(self):
+            captured["ehlo"] = captured.get("ehlo", 0) + 1
+
+        def starttls(self, context=None):
+            captured["starttls"] = True
+
+        def login(self, username, password):
+            captured["username"] = username
+
+        def sendmail(self, mail_from, to_email, message):
+            captured["sent"] = True
+
+    app_module = _fresh_import_app(
+        monkeypatch,
+        tmp_path,
+        FLASK_SECRET_KEY="hardening-test-secret",
+        SCANSTORY_TESTING="1",
+        TEST_DATABASE_URL=f"sqlite:///{(tmp_path / 'smtp-ssl.db').as_posix()}",
+        SMTP_HOST="smtp.example.com",
+        SMTP_PORT="465",
+        SMTP_USER="smtp-user",
+        SMTP_PASS="smtp-pass",
+        MAIL_FROM="no-reply@example.com",
+        SMTP_SECURITY="ssl",
+    )
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(smtplib, "SMTP_SSL", FakeSMTPSSL)
+
+    app_module.send_email_smtp("user@example.com", "Subject", "<p>Hello</p>")
+
+    assert captured["client"] == "ssl"
+    assert captured["port"] == 465
+    assert "starttls" not in captured
+    assert captured["sent"] is True
+
+
+def test_send_email_smtp_can_disable_transport_upgrade_when_configured(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=None):
+            captured["host"] = host
+            captured["port"] = port
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def ehlo(self):
+            captured["ehlo"] = captured.get("ehlo", 0) + 1
+
+        def starttls(self, context=None):
+            captured["starttls"] = True
+
+        def login(self, username, password):
+            captured["username"] = username
+
+        def sendmail(self, mail_from, to_email, message):
+            captured["sent"] = True
+
+    app_module = _fresh_import_app(
+        monkeypatch,
+        tmp_path,
+        FLASK_SECRET_KEY="hardening-test-secret",
+        SCANSTORY_TESTING="1",
+        TEST_DATABASE_URL=f"sqlite:///{(tmp_path / 'smtp-none.db').as_posix()}",
+        SMTP_HOST="localhost",
+        SMTP_PORT="2525",
+        SMTP_USER="smtp-user",
+        SMTP_PASS="smtp-pass",
+        MAIL_FROM="no-reply@example.com",
+        SMTP_SECURITY="none",
+    )
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+
+    app_module.send_email_smtp("user@example.com", "Subject", "<p>Hello</p>")
+
+    assert captured["port"] == 2525
+    assert "starttls" not in captured
+    assert captured["sent"] is True
 
 
 # ---------------------------------------------------------------------------

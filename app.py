@@ -125,6 +125,35 @@ def _smtp_timeout_seconds():
     return timeout
 
 
+def _smtp_port():
+    raw = (os.environ.get("SMTP_PORT") or "").strip()
+    if not raw:
+        raise RuntimeError("SMTP_PORT must be a positive integer.")
+    try:
+        port = int(raw)
+    except ValueError as exc:
+        raise RuntimeError("SMTP_PORT must be a positive integer.") from exc
+    if port <= 0 or port > 65535:
+        raise RuntimeError("SMTP_PORT must be a positive integer.")
+    return port
+
+
+def _smtp_security_mode():
+    mode = (os.environ.get("SMTP_SECURITY") or "starttls").strip().lower()
+    aliases = {
+        "tls": "starttls",
+        "start_tls": "starttls",
+        "starttls": "starttls",
+        "ssl": "ssl",
+        "smtps": "ssl",
+        "none": "none",
+        "plain": "none",
+    }
+    if mode not in aliases:
+        raise RuntimeError("SMTP_SECURITY must be one of: starttls, ssl, none.")
+    return aliases[mode]
+
+
 def _database_backend_name(database_url):
     try:
         return make_url(database_url).get_backend_name()
@@ -162,8 +191,11 @@ def _validate_required_runtime_config():
         if not _env_flag("SESSION_COOKIE_SECURE", default=False):
             missing.append("SESSION_COOKIE_SECURE=true")
         if os.environ.get("SCANSTORY_DEV_TESTING") == "1":
-            missing.append("SCANSTORY_DEV_TESTING=0")
+                missing.append("SCANSTORY_DEV_TESTING=0")
     _smtp_timeout_seconds()
+    if os.environ.get("SMTP_PORT"):
+        _smtp_port()
+    _smtp_security_mode()
     if missing:
         raise RuntimeError(
             "Missing required environment variable(s): " + ", ".join(missing) +
@@ -1786,11 +1818,12 @@ from email.mime.multipart import MIMEMultipart
 
 def send_email_smtp(to_email: str, subject: str, html_body: str):
     host = os.environ.get("SMTP_HOST")
-    port = int(os.environ.get("SMTP_PORT", "587"))
+    port = _smtp_port()
     username = os.environ.get("SMTP_USER")
     password = os.environ.get("SMTP_PASS")
     mail_from = os.environ.get("MAIL_FROM", username)
     timeout = _smtp_timeout_seconds()
+    security = _smtp_security_mode()
     
     if not all([host, port, username, password, mail_from]):
         raise RuntimeError("SMTP env vars missing.")
@@ -1802,10 +1835,12 @@ def send_email_smtp(to_email: str, subject: str, html_body: str):
     msg.attach(MIMEText(html_body, "html"))
     
     context = ssl.create_default_context()
-    with smtplib.SMTP(host, port, timeout=timeout) as server:
+    smtp_client = smtplib.SMTP_SSL if security == "ssl" else smtplib.SMTP
+    with smtp_client(host, port, timeout=timeout) as server:
         server.ehlo()
-        server.starttls(context=context)
-        server.ehlo()
+        if security == "starttls":
+            server.starttls(context=context)
+            server.ehlo()
         server.login(username, password)
         server.sendmail(mail_from, to_email, msg.as_string())
 
