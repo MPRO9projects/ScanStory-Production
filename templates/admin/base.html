@@ -298,7 +298,7 @@
                             </li>
                             
                             <li class="nav-item mb-2">
-                                <a class="nav-link {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_user_profiles') %}active{% endif %}" {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_user_profiles') %}aria-current="page"{% endif %} href="{{ url_for('admin_users') }}">
+                                <a class="nav-link {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_user_profiles', 'admin_view_user_dashboard') %}active{% endif %}" {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_user_profiles', 'admin_view_user_dashboard') %}aria-current="page"{% endif %} href="{{ url_for('admin_users') }}">
                                     <i class="fas fa-users"></i> Users
                                 </a>
                             </li>

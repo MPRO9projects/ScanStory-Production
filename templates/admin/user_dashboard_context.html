@@ -1,0 +1,139 @@
+{% extends "admin/base.html" %}
+
+{% block title %}User Dashboard Context{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
+    <div>
+        <h1 class="h3 mb-1">User Dashboard Context</h1>
+        <p class="text-muted mb-0">
+            Read-only operational view for {{ user.full_name }} ({{ user.email }}).
+        </p>
+    </div>
+    <a href="{{ url_for('admin_return_from_user_dashboard', user_id=user.id) }}" class="btn btn-outline-light">
+        <i class="fas fa-arrow-left me-2" aria-hidden="true"></i>Return to Super Admin
+    </a>
+</div>
+
+<div class="alert alert-info border-info" role="status">
+    <strong>Admin view:</strong> you are not impersonating this user. No creator session or user authentication state is changed.
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Plan</div>
+                <div class="fs-5 fw-bold">{{ user.current_plan_name }}</div>
+                <div class="small">{{ user.subscription_status|title }}</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Projects</div>
+                <div class="fs-5 fw-bold">{{ total_projects }}</div>
+                <div class="small">{{ user.projects_used or 0 }} counted usage</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Pairs</div>
+                <div class="fs-5 fw-bold">{{ total_pairs }}</div>
+                <div class="small">Across owned projects</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card h-100">
+            <div class="card-body">
+                <div class="text-muted small">Scans</div>
+                <div class="fs-5 fw-bold">{{ total_scans }}</div>
+                <div class="small">{{ successful_scans }} success / {{ failed_scans }} failed</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-4">
+    <div class="col-lg-7">
+        <div class="card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span>Recent Projects</span>
+                <a href="{{ url_for('admin_view_user', user_id=user.id) }}" class="btn btn-sm btn-outline-light">Full profile</a>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Global ID</th>
+                                <th>Name</th>
+                                <th>Pairs</th>
+                                <th>Scans</th>
+                                <th>Status</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for project in recent_projects %}
+                            <tr>
+                                <td>{{ project.id }}</td>
+                                <td>{{ project.name }}</td>
+                                <td>{{ project.pairs_count }}</td>
+                                <td>{{ project.scan_count }}</td>
+                                <td>{{ "Active" if project.is_active else "Suspended" }}</td>
+                                <td class="text-end">
+                                    <a href="{{ url_for('admin_view_project', project_id=project.id) }}" class="btn btn-sm btn-outline-info">Details</a>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="6" class="text-center text-muted py-4">No projects found.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card h-100">
+            <div class="card-header">Recent Scan Activity</div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Scan ID</th>
+                                <th>Project</th>
+                                <th>Result</th>
+                                <th>Created</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for scan in recent_scans %}
+                            <tr>
+                                <td>{{ scan.id }}</td>
+                                <td>{{ scan.project_id }}</td>
+                                <td>{{ "Success" if scan.is_successful else "Failed" }}</td>
+                                <td>{{ scan.created_at.strftime('%d %b %Y %H:%M') if scan.created_at else "-" }}</td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="4" class="text-center text-muted py-4">No scan activity found.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

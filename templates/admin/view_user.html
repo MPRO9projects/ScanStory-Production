@@ -713,7 +713,7 @@
             
             <!-- Quick Actions -->
             <div class="action-buttons">
-                <a href="{{ url_for('dashboard', user_id=user.id, admin_view='true') }}" class="btn btn-primary" title="View selected user's dashboard without impersonating">
+                <a href="{{ url_for('admin_view_user_dashboard', user_id=user.id) }}" class="btn btn-primary" title="View selected user's dashboard context without impersonating">
                     View User Dashboard
                 </a>
                 {% if user.is_blocked %}

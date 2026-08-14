@@ -9410,6 +9410,72 @@ def admin_view_user(user_id):
                          scan_history=scan_history,
                          trial=trial)
 
+@app.route("/admin/users/<int:user_id>/dashboard", methods=["GET"])
+@require_admin_permission("admin.users.view")
+def admin_view_user_dashboard(user_id):
+    admin = current_admin()
+    user = User.query.get_or_404(user_id)
+    trial = TrialDetails.query.filter_by(user_id=user.id).first()
+    total_projects = Project.query.filter_by(owner_user_id=user.id).count()
+    total_pairs = (
+        db.session.query(func.count(ProjectPair.id))
+        .join(Project, ProjectPair.project_id == Project.id)
+        .filter(Project.owner_user_id == user.id)
+        .scalar()
+        or 0
+    )
+    total_scans = ScanLog.query.filter_by(user_id=user.id).count()
+    successful_scans = ScanLog.query.filter_by(user_id=user.id, is_successful=True).count()
+    failed_scans = ScanLog.query.filter_by(user_id=user.id, is_successful=False).count()
+    recent_projects = (
+        Project.query.filter_by(owner_user_id=user.id)
+        .order_by(Project.created_at.desc(), Project.id.desc())
+        .limit(10)
+        .all()
+    )
+    recent_scans = (
+        ScanLog.query.filter_by(user_id=user.id)
+        .order_by(ScanLog.created_at.desc(), ScanLog.id.desc())
+        .limit(10)
+        .all()
+    )
+
+    for project in recent_projects:
+        project.pairs_count = ProjectPair.query.filter_by(project_id=project.id).count()
+        project.scan_count = ScanLog.query.filter_by(project_id=project.id).count()
+
+    log_admin_activity(
+        admin.id,
+        "view_user_dashboard",
+        f"Viewed read-only dashboard context for user: {user.email}",
+    )
+    return render_template(
+        "admin/user_dashboard_context.html",
+        admin=admin,
+        user=user,
+        trial=trial,
+        total_projects=total_projects,
+        total_pairs=total_pairs,
+        total_scans=total_scans,
+        successful_scans=successful_scans,
+        failed_scans=failed_scans,
+        recent_projects=recent_projects,
+        recent_scans=recent_scans,
+    )
+
+
+@app.route("/admin/users/<int:user_id>/dashboard/return", methods=["GET"])
+@require_admin_permission("admin.users.view")
+def admin_return_from_user_dashboard(user_id):
+    admin = current_admin()
+    user = User.query.get_or_404(user_id)
+    log_admin_activity(
+        admin.id,
+        "exit_user_dashboard",
+        f"Returned from read-only dashboard context for user: {user.email}",
+    )
+    return redirect(url_for("admin_view_user", user_id=user.id))
+
 @app.route("/admin/users/<int:user_id>/toggle-block", methods=["POST"])
 @require_admin_permission("admin.users.manage")
 def admin_toggle_block_user(user_id):
