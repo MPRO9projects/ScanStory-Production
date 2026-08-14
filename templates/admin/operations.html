@@ -1,0 +1,178 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Operations Diagnostics{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
+    <div>
+        <h1 class="h3 mb-1">Operations Diagnostics</h1>
+        <p class="text-muted mb-0">Safe runtime visibility for uploads, processing, SMTP, and entitlements.</p>
+    </div>
+    <a href="{{ url_for('admin_activity_logs') }}" class="btn btn-outline-light">
+        <i class="fas fa-clipboard-list me-2" aria-hidden="true"></i>Activity Logs
+    </a>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header">RQ / Worker</div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-5">Available</dt><dd class="col-sm-7">{{ "Yes" if rq_diagnostics.available else "No" }}</dd>
+                    <dt class="col-sm-5">Mode</dt><dd class="col-sm-7">{{ rq_diagnostics.mode or "-" }}</dd>
+                    <dt class="col-sm-5">Redis configured</dt><dd class="col-sm-7">{{ "Yes" if rq_diagnostics.redis_configured else "No" }}</dd>
+                    <dt class="col-sm-5">Queue</dt><dd class="col-sm-7">{{ rq_diagnostics.queue_name or "-" }}</dd>
+                    <dt class="col-sm-5">Pending</dt><dd class="col-sm-7">{{ rq_diagnostics.pending_count if rq_diagnostics.pending_count is not none else "-" }}</dd>
+                    <dt class="col-sm-5">Running</dt><dd class="col-sm-7">{{ rq_diagnostics.running_count if rq_diagnostics.running_count is not none else "-" }}</dd>
+                    <dt class="col-sm-5">Failed</dt><dd class="col-sm-7">{{ rq_diagnostics.failed_count if rq_diagnostics.failed_count is not none else "-" }}</dd>
+                    {% if rq_diagnostics.error %}
+                    <dt class="col-sm-5">Safe error</dt><dd class="col-sm-7 text-warning">{{ rq_diagnostics.error }}</dd>
+                    {% endif %}
+                </dl>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header">SMTP</div>
+            <div class="card-body">
+                <dl class="row mb-0">
+                    <dt class="col-sm-5">Configured</dt><dd class="col-sm-7">{{ "Yes" if smtp_diagnostics.configured else "No" }}</dd>
+                    <dt class="col-sm-5">Host configured</dt><dd class="col-sm-7">{{ "Yes" if smtp_diagnostics.host_configured else "No" }}</dd>
+                    <dt class="col-sm-5">Port</dt><dd class="col-sm-7">{{ smtp_diagnostics.port or "-" }}</dd>
+                    <dt class="col-sm-5">Security</dt><dd class="col-sm-7">{{ smtp_diagnostics.security or "-" }}</dd>
+                    <dt class="col-sm-5">Timeout</dt><dd class="col-sm-7">{{ smtp_diagnostics.timeout_seconds or "-" }}s</dd>
+                    <dt class="col-sm-5">From configured</dt><dd class="col-sm-7">{{ "Yes" if smtp_diagnostics.mail_from_configured else "No" }}</dd>
+                    {% for error in smtp_diagnostics.errors %}
+                    <dt class="col-sm-5">Config warning</dt><dd class="col-sm-7 text-warning">{{ error }}</dd>
+                    {% endfor %}
+                </dl>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">Recent Upload Sessions</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-dark table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Owner</th>
+                        <th>Project</th>
+                        <th>Status</th>
+                        <th>Bytes</th>
+                        <th>Media</th>
+                        <th>Failure</th>
+                        <th>Updated</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for session in upload_sessions %}
+                    <tr>
+                        <td>{{ session.id }}</td>
+                        <td>
+                            {% if session.owner_user %}
+                            User #{{ session.owner_user_id }}<br><small>{{ session.owner_user.email }}</small>
+                            {% elif session.owner_admin %}
+                            Admin #{{ session.owner_admin_id }}
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>{{ session.project_id or "-" }}</td>
+                        <td>{{ session.status }}</td>
+                        <td>{{ session.current_offset }} / {{ session.expected_total_size }}</td>
+                        <td>
+                            Image: {{ safe_basename(session.original_image_name) }}<br>
+                            Video: {{ safe_basename(session.original_video_name) }}
+                        </td>
+                        <td>{{ session.failure_code or "-" }}</td>
+                        <td>{{ session.updated_at.strftime('%d %b %Y %H:%M') if session.updated_at else "-" }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="8" class="text-center text-muted py-4">No upload sessions found.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">Recent Processing Jobs</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-dark table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Queue ID</th>
+                        <th>Project</th>
+                        <th>Status</th>
+                        <th>Attempts</th>
+                        <th>Queued</th>
+                        <th>Started</th>
+                        <th>Finished</th>
+                        <th>Safe failure</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for job in processing_jobs %}
+                    <tr>
+                        <td>{{ job.id }}</td>
+                        <td>{{ job.queue_job_id or "-" }}</td>
+                        <td>{{ job.project_id or "-" }}</td>
+                        <td>{{ job.status }}</td>
+                        <td>{{ job.attempt_count }} / {{ job.max_attempts }}</td>
+                        <td>{{ job.queued_at.strftime('%d %b %Y %H:%M') if job.queued_at else "-" }}</td>
+                        <td>{{ job.started_at.strftime('%d %b %Y %H:%M') if job.started_at else "-" }}</td>
+                        <td>{{ (job.completed_at or job.failed_at).strftime('%d %b %Y %H:%M') if (job.completed_at or job.failed_at) else "-" }}</td>
+                        <td>{{ job.safe_error_code or "-" }}{% if job.safe_error_summary %}<br><small>{{ job.safe_error_summary }}</small>{% endif %}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="9" class="text-center text-muted py-4">No processing jobs found.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">Current Entitlement Visibility</div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-dark table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>User</th>
+                        <th>Plan</th>
+                        <th>Status</th>
+                        <th>Projects</th>
+                        <th>Scans</th>
+                        <th>Valid until</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in entitlement_users %}
+                    <tr>
+                        <td>#{{ user.id }}<br><small>{{ user.email }}</small></td>
+                        <td>{{ user.current_plan_name }}</td>
+                        <td>{{ user.subscription_status }}</td>
+                        <td>{{ user.projects_used or 0 }} / {{ user.subscribed_project_limit if user.subscribed_project_limit not in (none, 0) else "Unlimited" }}</td>
+                        <td>{{ user.scans_used or 0 }} / {{ user.subscribed_scan_limit if user.subscribed_scan_limit not in (none, 0) else "Unlimited" }}</td>
+                        <td>{{ user.subscription_expires_at.strftime('%d %b %Y') if user.subscription_expires_at else "-" }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="6" class="text-center text-muted py-4">No users found.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

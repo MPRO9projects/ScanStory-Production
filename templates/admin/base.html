@@ -357,6 +357,14 @@
                                 </li>
                             {% endif %}
 
+                            {% if admin_can('superadmin.operations.view') %}
+                                <li class="nav-item mb-2">
+                                    <a class="nav-link {% if 'admin_operations' in request.endpoint %}active{% endif %}" {% if 'admin_operations' in request.endpoint %}aria-current="page"{% endif %} href="{{ url_for('admin_operations') }}">
+                                        <i class="fas fa-heart-pulse"></i> Operations
+                                    </a>
+                                </li>
+                            {% endif %}
+
 
                             {% if admin_can('superadmin.settings.manage') %}
                                 <li class="nav-item mb-2">

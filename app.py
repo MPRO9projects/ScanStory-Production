@@ -10777,6 +10777,105 @@ def admin_capacity():
     snapshot = _capacity_state_snapshot()
     return render_template("admin/capacity.html", admin=admin, snapshot=snapshot)
 
+
+def _safe_basename(value):
+    if not value:
+        return "-"
+    return os.path.basename(str(value))
+
+
+def _smtp_diagnostics_payload():
+    errors = []
+    try:
+        port = _smtp_port() if os.environ.get("SMTP_PORT") else None
+    except Exception as exc:
+        port = None
+        errors.append(str(exc))
+    try:
+        security = _smtp_security_mode()
+    except Exception as exc:
+        security = None
+        errors.append(str(exc))
+    try:
+        timeout = _smtp_timeout_seconds()
+    except Exception as exc:
+        timeout = None
+        errors.append(str(exc))
+    return {
+        "configured": all(os.environ.get(key) for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "MAIL_FROM")),
+        "host_configured": bool(os.environ.get("SMTP_HOST")),
+        "port": port,
+        "security": security,
+        "timeout_seconds": timeout,
+        "mail_from_configured": bool(os.environ.get("MAIL_FROM")),
+        "errors": errors,
+    }
+
+
+def _rq_diagnostics_payload():
+    payload = {
+        "available": False,
+        "mode": None,
+        "redis_configured": bool(os.environ.get("REDIS_URL")),
+        "queue_name": None,
+        "timeout_seconds": None,
+        "pending_count": None,
+        "running_count": None,
+        "failed_count": None,
+        "error": None,
+    }
+    try:
+        summary = queue_config_summary()
+        payload.update(summary)
+        payload["available"] = redis_ready_check()
+        if summary["mode"] == "rq" and os.environ.get("REDIS_URL"):
+            from redis import Redis
+            from rq import Queue
+            from rq.registry import FailedJobRegistry, StartedJobRegistry
+
+            conn = Redis.from_url(os.environ["REDIS_URL"])
+            queue = Queue(summary["queue_name"], connection=conn)
+            payload["pending_count"] = queue.count
+            payload["running_count"] = StartedJobRegistry(summary["queue_name"], connection=conn).count
+            payload["failed_count"] = FailedJobRegistry(summary["queue_name"], connection=conn).count
+        else:
+            payload["pending_count"] = ProcessingJob.query.filter(ProcessingJob.status.in_(("queued", "retrying"))).count()
+            payload["running_count"] = ProcessingJob.query.filter(ProcessingJob.status.in_(("processing", "running", "claimed"))).count()
+            payload["failed_count"] = ProcessingJob.query.filter_by(status="failed").count()
+    except Exception as exc:
+        payload["error"] = safe_error_summary(exc)
+    return payload
+
+
+@app.route("/admin/operations", methods=["GET"])
+@require_admin_permission("superadmin.operations.view")
+def admin_operations():
+    return render_template(
+        "admin/operations.html",
+        admin=current_admin(),
+        upload_sessions=(
+            UploadSession.query
+            .order_by(UploadSession.updated_at.desc(), UploadSession.id.desc())
+            .limit(25)
+            .all()
+        ),
+        processing_jobs=(
+            ProcessingJob.query
+            .order_by(ProcessingJob.updated_at.desc(), ProcessingJob.id.desc())
+            .limit(25)
+            .all()
+        ),
+        entitlement_users=(
+            User.query
+            .order_by(User.updated_at.desc(), User.id.desc())
+            .limit(25)
+            .all()
+        ),
+        rq_diagnostics=_rq_diagnostics_payload(),
+        smtp_diagnostics=_smtp_diagnostics_payload(),
+        safe_basename=_safe_basename,
+    )
+
 # --------------------------------------------------------------------------------------------
 # Admin Routes - Razorpay Webhook Events (read-only). Never displays raw payload,
 # signature, or secrets - only the metadata columns RazorpayWebhookEvent stores.
