@@ -1137,6 +1137,51 @@
       line-height: 1.4;
     }
 
+    /* Upload state colouring. The phase line always says what is happening; the tint and
+       the note below say how worried the creator should be about it. */
+    .upload-progress[data-upload-state="slow"],
+    .upload-progress[data-upload-state="retrying"],
+    .upload-progress[data-upload-state="interrupted"],
+    .upload-progress[data-upload-state="resuming"] {
+      border-color: rgba(255, 207, 107, .38);
+      background: rgba(255, 207, 107, .10);
+    }
+
+    .upload-progress[data-upload-state="failed"] {
+      border-color: rgba(255, 0, 122, .45);
+      background: rgba(255, 0, 122, .10);
+    }
+
+    .upload-progress[data-upload-state="ready"] {
+      border-color: rgba(64, 220, 150, .40);
+      background: rgba(64, 220, 150, .10);
+    }
+
+    .upload-state-note {
+      display: none;
+      margin: -6px 0 14px;
+      padding: 10px 14px;
+      border-radius: 14px;
+      font-size: 12px;
+      line-height: 1.45;
+      font-weight: 700;
+      color: #ffdf9e;
+      background: rgba(255, 207, 107, .09);
+      border: 1px solid rgba(255, 207, 107, .28);
+    }
+
+    .upload-state-note[data-upload-state="failed"] {
+      color: #ff9db8;
+      background: rgba(255, 0, 122, .09);
+      border-color: rgba(255, 0, 122, .30);
+    }
+
+    .upload-state-note[data-upload-state="ready"] {
+      color: #8ef0c0;
+      background: rgba(64, 220, 150, .09);
+      border-color: rgba(64, 220, 150, .30);
+    }
+
     @media (max-width: 640px) {
       .upload-progress {
         margin-bottom: 12px;
@@ -1853,6 +1898,8 @@
             <div class="upload-progress-detail" id="uploadProgressDetail"></div>
             <div class="upload-progress-bar" aria-hidden="true"><span id="uploadProgressFill"></span></div>
           </div>
+
+          <div class="upload-state-note" id="uploadStateNote" aria-live="polite"></div>
 
           <div class="action-buttons">
             <button type="button" class="action-btn clear-btn" id="testExperienceBtn" onclick="testExperiencePreview()">
@@ -3446,7 +3493,71 @@
       console.log('[UPLOAD CLIENT DOM UPDATE]', { ts: isoNow(), phase, ...uploadProgressDomSnapshot(selector) });
     }
 
-    function setUploadProgress(text, pct, detail = '', amount = '') {
+    /* ===================== Upload states =====================
+       Nine visible states, all driven off work the uploader was already doing:
+       preparing / uploading / slow / retrying / interrupted / resuming / uploaded
+       (bytes are across, server is assembling) / processing / ready / failed.
+
+       "Slow" is deliberately qualitative. We never quote a required bandwidth, because
+       any number we printed would be wrong for somebody. */
+    const UPLOAD_SLOW_ETA_SECONDS = 180;
+    const UPLOAD_STALL_MS = 12000;
+    const UPLOAD_STATE_NOTES = {
+      slow: 'Slow connection detected. This is taking a while, but the upload is still going — you can leave this tab open.',
+      retrying: 'Retrying the last step. Nothing you already uploaded is lost.',
+      interrupted: 'Upload interrupted. Waiting for your connection to come back — it will pick up where it stopped.',
+      resuming: 'Connection is back. Resuming from where the upload stopped.',
+      failed: 'Upload failed. You can start it again — your files are still selected.',
+      ready: 'Your ScanStory is ready.'
+    };
+    const UPLOAD_TRANSFER_STATES = new Set(['uploading', 'slow', 'retrying', 'resuming', 'interrupted']);
+    let uploadLastProgressAt = null;
+    let uploadStallTimer = null;
+
+    function setUploadState(state) {
+      const progress = document.getElementById('uploadProgress');
+      const note = document.getElementById('uploadStateNote');
+      if (progress) progress.dataset.uploadState = state || '';
+      if (!note) return;
+      const message = UPLOAD_STATE_NOTES[state] || '';
+      note.textContent = message;
+      note.dataset.uploadState = state || '';
+      note.style.display = message ? 'block' : 'none';
+    }
+
+    function uploadTransferState(etaSeconds) {
+      return (Number.isFinite(etaSeconds) && etaSeconds > UPLOAD_SLOW_ETA_SECONDS) ? 'slow' : 'uploading';
+    }
+
+    function noteUploadProgressTick() {
+      uploadLastProgressAt = performance.now();
+    }
+
+    function startUploadStallWatch() {
+      stopUploadStallWatch();
+      noteUploadProgressTick();
+      uploadStallTimer = setInterval(() => {
+        if (!uploadActive || uploadLastProgressAt === null) return;
+        // Only a stalled *transfer* is an interruption. Marker rendering and server-side
+        // finalization are legitimately quiet for a while and must not be flagged.
+        const current = document.getElementById('uploadProgress')?.dataset.uploadState;
+        if (!UPLOAD_TRANSFER_STATES.has(current)) return;
+        if (performance.now() - uploadLastProgressAt > UPLOAD_STALL_MS) setUploadState('interrupted');
+      }, 4000);
+    }
+
+    function stopUploadStallWatch() {
+      if (uploadStallTimer) clearInterval(uploadStallTimer);
+      uploadStallTimer = null;
+      uploadLastProgressAt = null;
+    }
+
+    // The browser already knows when the network went away; no polling needed for this half.
+    window.addEventListener('offline', () => { if (uploadActive) setUploadState('interrupted'); });
+    window.addEventListener('online', () => { if (uploadActive) setUploadState('resuming'); });
+
+    function setUploadProgress(text, pct, detail = '', amount = '', state = null) {
+      if (state !== null) setUploadState(state);
       const selector = '#uploadProgress';
       const progress = document.querySelector(selector);
       const phase = document.querySelector('#uploadProgressText');
@@ -3497,6 +3608,7 @@
     }
 
     function resetUploadSubmit(submitBtn) {
+      stopUploadStallWatch();
       uploadActive = false;
       activeUploadXhr = null;
       activeUploadId = null;
@@ -3531,6 +3643,7 @@
     }
 
     function markResumableUploadCompleteForRedirect() {
+      stopUploadStallWatch();
       uploadActive = false;
       activeResumableUpload = null;
       activeUploadId = null;
@@ -3778,9 +3891,9 @@
         // is no separate backend signal for "optimizing media" vs "preparing recognition", so we
         // don't invent one here.
         if (status === 'processing') {
-          setUploadProgress('Preparing your project', 99, 'Optimizing your media for scanning. This can continue in the background.');
+          setUploadProgress('Preparing your project', 99, 'Optimizing your media for scanning. This can continue in the background.', '', 'processing');
         } else {
-          setUploadProgress('Processing queued', 98, 'Your marker is queued for processing.');
+          setUploadProgress('Processing queued', 98, 'Your marker is queued for processing.', '', 'processing');
         }
         await new Promise(resolve => setTimeout(resolve, delay));
         delay = Math.min(delay * 1.6, 6000);
@@ -3802,7 +3915,7 @@
         clearResumableUploadState();
       }
       if (activeUploadXhr) activeUploadXhr.abort();
-      setUploadProgress('Upload cancelled', 0, 'The upload was cancelled safely.');
+      setUploadProgress('Upload cancelled', 0, 'The upload was cancelled safely.', '', '');
       resetUploadSubmit(document.getElementById('submitBtn'));
     }
 
@@ -3842,11 +3955,13 @@
             expected_total_size: expectedTotal,
             duplicate_chunk: response.note === 'duplicate_chunk_ignored'
           });
+          noteUploadProgressTick();
           setUploadProgress(
             `Uploading video — ${Math.round(percent)}%`,
             Math.min(90, 10 + percent * 0.8),
             `${formatRate(avgBytesPerSecond)} · ${etaText}`,
-            `${formatBytes(offset)} of ${formatBytes(expectedTotal)}`
+            `${formatBytes(offset)} of ${formatBytes(expectedTotal)}`,
+            uploadTransferState(etaSeconds)
           );
           resumeAttempts = 0;
         } catch (err) {
@@ -3854,11 +3969,12 @@
           if (err.code === 'OFFSET_MISMATCH' || err.status === 0 || err.name === 'TypeError') {
             resumeAttempts += 1;
             if (resumeAttempts > 5) throw err;
+            setUploadState('retrying');
             const statusPayload = await getUploadSessionStatus(sessionId, activeResumableUpload.controller.signal);
             offset = statusPayload.session.current_offset;
             activeResumableUpload.currentOffset = offset;
             saveResumableUploadState({ ...activeResumableUpload, currentOffset: offset, expectedTotalSize: expectedTotal });
-            setUploadProgress('Uploading video', Math.min(90, 10 + (offset / expectedTotal) * 80), 'Connection recovered. Resuming from the server offset.', `${formatBytes(offset)} of ${formatBytes(expectedTotal)}`);
+            setUploadProgress('Uploading video', Math.min(90, 10 + (offset / expectedTotal) * 80), 'Connection recovered. Resuming from the server offset.', `${formatBytes(offset)} of ${formatBytes(expectedTotal)}`, 'resuming');
             logClientStage('RESUMABLE CLIENT RESUME', {
               upload_id: uploadState.uploadId,
               session_id: sessionId,
@@ -3914,6 +4030,7 @@
             throw err;
           }
           if (err.code !== 'QUEUE_ENQUEUE_FAILED' || attempt === 2) throw err;
+          setUploadState('retrying');
           uploadClientLog('UPLOAD CLIENT FINALIZE RETRY', uploadState, { http_status: err.status, current_phase: 'Finalizing' });
           await new Promise(resolve => setTimeout(resolve, delay));
           delay *= 2;
@@ -3934,7 +4051,7 @@
       try {
         uploadState.phase = 'Preparing marker';
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing marker...';
-        setUploadProgress('Preparing marker', 8, 'Creating the scannable marker image.');
+        setUploadProgress('Preparing marker', 8, 'Creating the scannable marker image.', '', 'preparing');
         if (pair.markerMode === 'full_image') pair.crop = { x: 0, y: 0, width: 1, height: 1 };
         const markerFile = await renderMarkerBlob(item.id, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
         const resumableMarkerFile = new File([markerFile], markerFile.name || 'marker-0.jpg', { type: markerFile.type || 'image/jpeg' });
@@ -3953,7 +4070,7 @@
                 session_id: stored.sessionId,
                 current_phase: 'Project ready'
               });
-              setUploadProgress('Project ready', 100, 'Recovered the completed upload. Opening your project page.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
+              setUploadProgress('Project ready', 100, 'Recovered the completed upload. Opening your project page.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'ready');
               window.setTimeout(() => {
                 markResumableUploadCompleteForRedirect();
                 window.location.href = `/success/${sessionPayload.session.project_id}`;
@@ -3973,7 +4090,7 @@
               });
             } else if (RESUMABLE_TERMINAL_STATUSES.has(sessionPayload.session.status)) {
               clearResumableUploadState();
-              setUploadProgress('Upload failed', 0, safeUploadErrorMessage(sessionPayload.session.failure_code || 'SESSION_FAILED'));
+              setUploadProgress('Upload failed', 0, safeUploadErrorMessage(sessionPayload.session.failure_code || 'SESSION_FAILED'), '', 'failed');
               sessionPayload = null;
             }
           } catch (_err) {
@@ -3983,7 +4100,7 @@
 
         if (!sessionPayload) {
           uploadState.phase = 'Creating upload session';
-          setUploadProgress('Creating upload session', 10, 'Preparing a resumable upload session with the server.', `0 B of ${formatBytes(totalBytes)}`);
+          setUploadProgress('Creating upload session', 10, 'Preparing a resumable upload session with the server.', `0 B of ${formatBytes(totalBytes)}`, 'preparing');
           sessionPayload = await createResumableSession(resumableMarkerFile, pair.video, projectName, controller.signal);
         }
 
@@ -4006,16 +4123,16 @@
         uploadState.phase = 'Uploading video';
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
         if (session.status === 'assembled') {
-          setUploadProgress('Finalizing upload', 94, 'Upload bytes were already assembled. Retrying finalization.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
+          setUploadProgress('Finalizing upload', 94, 'Upload bytes were already assembled. Retrying finalization.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'retrying');
         } else {
           await uploadResumableStream(session, resumableMarkerFile, pair.video, uploadState);
           uploadState.phase = 'Upload complete';
-          setUploadProgress('Upload complete', 92, 'All bytes received. Confirming with the server before finalizing.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
+          setUploadProgress('Upload complete', 92, 'All bytes received. Confirming with the server before finalizing.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'uploaded');
         }
 
         uploadState.phase = 'Finalizing';
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finalizing...';
-        setUploadProgress('Finalizing upload', 94, 'Saving and validating your project.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
+        setUploadProgress('Finalizing upload', 94, 'Saving and validating your project.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'uploaded');
         let finalized = await finalizeResumableWithBoundedRetry(session.id, uploadState);
         if (finalized.session?.status === 'active') {
           await uploadResumableStream(finalized.session, resumableMarkerFile, pair.video, uploadState);
@@ -4030,22 +4147,22 @@
 
         uploadState.phase = 'Processing queued';
         const jobId = finalized.processing_job?.id || finalized.job?.id || finalized.job_id || null;
-        setUploadProgress('Processing queued', 98, 'Your marker is queued for processing.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
+        setUploadProgress('Processing queued', 98, 'Your marker is queued for processing.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'processing');
         await pollProcessingJobIfAvailable(jobId, controller.signal);
         clearResumableUploadState();
         uploadClientLog('UPLOAD CLIENT COMPLETE', uploadState, { current_phase: 'Project ready' });
-        setUploadProgress('Project ready', 100, 'Opening your project page.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`);
+        setUploadProgress('Project ready', 100, 'Opening your project page.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'ready');
         window.setTimeout(() => {
           markResumableUploadCompleteForRedirect();
           window.location.href = finalSession.project_id ? `/success/${finalSession.project_id}` : '/dashboard';
         }, 250);
       } catch (err) {
         if (err.code === 'SESSION_CANCELLED') {
-          setUploadProgress('Upload cancelled', 0, 'The upload was cancelled safely.');
+          setUploadProgress('Upload cancelled', 0, 'The upload was cancelled safely.', '', '');
         } else {
           const message = safeUploadErrorMessage(err.code);
           uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { http_status: err.status, current_phase: uploadState.phase });
-          setUploadProgress('Upload failed', 0, message);
+          setUploadProgress('Upload failed', 0, message, '', 'failed');
           if (['SESSION_EXPIRED', 'SESSION_FAILED', 'STORAGE_INCONSISTENT', 'IMAGE_VALIDATION_FAILED', 'VIDEO_VALIDATION_FAILED', 'CHECKSUM_MISMATCH', 'PROJECT_CREATION_FAILED'].includes(err.code)) {
             clearResumableUploadState();
           }
@@ -4118,7 +4235,9 @@
       uploadRedirected = false;
       submitBtn.disabled = true;
       submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing project...';
-      setUploadProgress('Preparing project', 2, 'Checking files before upload.');
+      setUploadState('');
+      startUploadStallWatch();
+      setUploadProgress('Preparing project', 2, 'Checking files before upload.', '', 'preparing');
 
       const fd = new FormData();
       fd.append('name', projectName);
@@ -4148,7 +4267,7 @@
         return;
       }
 
-      setUploadProgress('Preparing upload', 5, 'Using the legacy uploader for multi-pair projects.');
+      setUploadProgress('Preparing upload', 5, 'Using the legacy uploader for multi-pair projects.', '', 'preparing');
 
       try {
         for (let index = 0; index < readyPairs.length; index++) {
@@ -4178,7 +4297,7 @@
       } catch (err) {
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: uploadState.phase });
         resetUploadSubmit(submitBtn);
-        setUploadProgress('Upload failed', 0, 'Marker preparation failed. Please retry.');
+        setUploadProgress('Upload failed', 0, 'Marker preparation failed. Please retry.', '', 'failed');
         alert('Marker preparation failed. Please retry.');
         return;
       }
@@ -4186,7 +4305,7 @@
       uploadState.totalBytes = optimizedBytes + videoBytes;
       uploadState.phase = 'Uploading video';
       uploadClientLog('UPLOAD CLIENT FORM DATA READY', uploadState, { current_phase: 'Uploading video' });
-      setUploadProgress('Uploading video', 35, 'Waiting for upload progress...', `0 B of ${formatBytes(uploadState.totalBytes)}`);
+      setUploadProgress('Uploading video', 35, 'Waiting for upload progress...', `0 B of ${formatBytes(uploadState.totalBytes)}`, 'uploading');
       const uploadStart = performance.now();
       const uploadItems = buildUploadItems(readyPairs);
       const videoSummaries = readyPairs.map(({ pair }, index) => ({
@@ -4244,11 +4363,13 @@
             length_computable: event.lengthComputable
           });
         }
+        noteUploadProgressTick();
         setUploadProgress(
           `Uploading video — ${Math.round(percent)}%`,
           pct,
           `${formatRate(avgBytesPerSecond)} · ${etaText}`,
-          `${formatBytes(event.loaded)} of ${formatBytes(event.total)}`
+          `${formatBytes(event.loaded)} of ${formatBytes(event.total)}`,
+          uploadTransferState(etaSeconds)
         );
         const progressPayload = {
           upload_id: uploadId,
@@ -4289,7 +4410,7 @@
         uploadState.lastLoaded = uploadState.totalBytes;
         uploadState.phase = 'Saving project';
         uploadClientLog('UPLOAD CLIENT TRANSFER COMPLETE', uploadState, { bytes_uploaded: uploadState.totalBytes, current_phase: 'Saving project' });
-        setUploadProgress('Saving project...', 92, 'Upload transfer complete. Waiting for server response.', `${formatBytes(uploadState.totalBytes)} of ${formatBytes(uploadState.totalBytes)}`);
+        setUploadProgress('Saving project...', 92, 'Upload transfer complete. Waiting for server response.', `${formatBytes(uploadState.totalBytes)} of ${formatBytes(uploadState.totalBytes)}`, 'uploaded');
       };
       xhr.onload = () => {
         disableUploadNavigationWarning();
@@ -4308,13 +4429,13 @@
         logClientStage('CLIENT UPLOAD RESPONSE', responsePayload);
         logClientStage('VIDEO CLIENT UPLOAD RESPONSE', responsePayload);
         if (xhr.status >= 200 && xhr.status < 400) {
-          setUploadProgress('Processing marker...', 98, 'Project saved. Opening the ready page.', `${formatBytes(uploadState.totalBytes)} of ${formatBytes(uploadState.totalBytes)}`);
+          setUploadProgress('Processing marker...', 98, 'Project saved. Opening the ready page.', `${formatBytes(uploadState.totalBytes)} of ${formatBytes(uploadState.totalBytes)}`, 'processing');
           if (!uploadRedirected) {
             uploadRedirected = true;
             uploadClientLog('UPLOAD CLIENT REDIRECT', uploadState, { http_status: xhr.status, current_phase: 'Project ready' });
             uploadClientLog('UPLOAD CLIENT COMPLETE', uploadState, { http_status: xhr.status, current_phase: 'Project ready' });
             window.setTimeout(() => {
-              setUploadProgress('Project ready', 100, 'Redirecting to your project.', `${formatBytes(uploadState.totalBytes)} of ${formatBytes(uploadState.totalBytes)}`);
+              setUploadProgress('Project ready', 100, 'Redirecting to your project.', `${formatBytes(uploadState.totalBytes)} of ${formatBytes(uploadState.totalBytes)}`, 'ready');
               window.setTimeout(() => {
                 window.location.href = xhr.responseURL || '/dashboard';
               }, 180);
@@ -4323,20 +4444,20 @@
         } else {
           uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { http_status: xhr.status, current_phase: uploadState.phase });
           resetUploadSubmit(submitBtn);
-          setUploadProgress('Upload failed', 0, 'Server rejected the upload. Please retry.');
+          setUploadProgress('Upload failed', 0, 'Server rejected the upload. Please retry.', '', 'failed');
           alert('Upload failed. Please try again.');
         }
       };
       xhr.onerror = () => {
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: uploadState.phase });
         resetUploadSubmit(submitBtn);
-        setUploadProgress('Upload failed', 0, 'Network upload failed. Please retry.');
+        setUploadProgress('Upload failed', 0, 'Network upload failed. Please retry.', '', 'failed');
         alert('Network upload failed. Please retry.');
       };
       xhr.onabort = () => {
         uploadClientLog('UPLOAD CLIENT ABORTED', uploadState, { current_phase: uploadState.phase });
         resetUploadSubmit(submitBtn);
-        setUploadProgress('Upload aborted', 0, 'The upload was canceled before completion.');
+        setUploadProgress('Upload aborted', 0, 'The upload was cancelled before completion.', '', '');
         alert('Upload aborted before completion.');
       };
       enableUploadNavigationWarning();

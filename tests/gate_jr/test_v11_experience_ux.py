@@ -132,6 +132,27 @@ def test_creator_test_control_is_named_test_experience_everywhere():
         assert "AR Test Scanner" not in html, path
 
 
+def test_upload_exposes_every_slow_connection_state():
+    html = creator_html()
+    assert 'id="uploadStateNote"' in html
+    assert "function setUploadState(state)" in html
+    for state in ("preparing", "uploading", "slow", "retrying", "interrupted", "resuming", "uploaded", "processing", "ready", "failed"):
+        assert f"'{state}'" in html, state
+    # Resume is real, not a placeholder: it is driven by the existing chunked session API.
+    assert "getUploadSessionStatus(sessionId" in html
+    assert "RESUMABLE CLIENT RESUME" in html
+    # The browser's own connectivity events drive interrupted/resuming, no polling.
+    assert "window.addEventListener('offline'" in html
+    assert "window.addEventListener('online'" in html
+
+
+def test_slow_connection_copy_never_claims_a_bandwidth_number():
+    html = creator_html()
+    assert "Slow connection detected." in html
+    for claim in ("Mbps", "mbps", "Kbps", "kbps", "Mb/s", "kb/s"):
+        assert claim not in html, claim
+
+
 def test_completed_pairs_collapse_into_summary_rows():
     html = creator_html()
     assert 'id="pair-summary-${pairId}"' in html
