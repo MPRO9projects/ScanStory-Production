@@ -7,7 +7,6 @@ import threading
 import json
 import uuid
 import razorpay
-import math
 from functools import lru_cache, wraps
 from datetime import datetime as dt, timedelta
 from flask import (
@@ -38,8 +37,16 @@ import click
 
 from sqlalchemy import or_, desc, func, and_, case, text, inspect
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.engine import make_url
 from sqlalchemy.orm import aliased
+
+from core.config import (
+    database_backend_name as _database_backend_name,
+    env_flag as _env_flag,
+    runtime_production_mode_flag_active as _runtime_production_mode_flag_active,
+    smtp_port as _smtp_port,
+    smtp_security_mode as _smtp_security_mode,
+    smtp_timeout_seconds as _smtp_timeout_seconds,
+)
 
 # ✅ Import models
 from models import (
@@ -94,71 +101,6 @@ app.logger.disabled = False
 app.config['WTF_CSRF_ENABLED'] = True
 app.config['WTF_CSRF_CHECK_DEFAULT'] = True
 app.config['WTF_CSRF_HEADERS'] = ["X-CSRFToken", "X-CSRF-Token"]
-
-
-def _env_flag(name, default=False):
-    """Parse a boolean-ish environment variable. Missing/blank -> default."""
-    raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _runtime_production_mode_flag_active():
-    for key in ("SCANSTORY_PRODUCTION", "APP_ENV", "ENV"):
-        value = (os.environ.get(key) or "").strip().lower()
-        if value in ("1", "true", "yes", "production", "prod"):
-            return True
-    return (os.environ.get("FLASK_ENV") or "").strip().lower() in ("production", "prod")
-
-
-def _smtp_timeout_seconds():
-    raw = (os.environ.get("SMTP_TIMEOUT_SECONDS") or "").strip()
-    if not raw:
-        return 10.0
-    try:
-        timeout = float(raw)
-    except ValueError as exc:
-        raise RuntimeError("SMTP_TIMEOUT_SECONDS must be a positive finite number.") from exc
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise RuntimeError("SMTP_TIMEOUT_SECONDS must be a positive finite number.")
-    return timeout
-
-
-def _smtp_port():
-    raw = (os.environ.get("SMTP_PORT") or "").strip()
-    if not raw:
-        raise RuntimeError("SMTP_PORT must be a positive integer.")
-    try:
-        port = int(raw)
-    except ValueError as exc:
-        raise RuntimeError("SMTP_PORT must be a positive integer.") from exc
-    if port <= 0 or port > 65535:
-        raise RuntimeError("SMTP_PORT must be a positive integer.")
-    return port
-
-
-def _smtp_security_mode():
-    mode = (os.environ.get("SMTP_SECURITY") or "starttls").strip().lower()
-    aliases = {
-        "tls": "starttls",
-        "start_tls": "starttls",
-        "starttls": "starttls",
-        "ssl": "ssl",
-        "smtps": "ssl",
-        "none": "none",
-        "plain": "none",
-    }
-    if mode not in aliases:
-        raise RuntimeError("SMTP_SECURITY must be one of: starttls, ssl, none.")
-    return aliases[mode]
-
-
-def _database_backend_name(database_url):
-    try:
-        return make_url(database_url).get_backend_name()
-    except Exception as exc:
-        raise RuntimeError("DATABASE_URL must be a valid SQLAlchemy database URL.") from exc
 
 
 def _validate_required_runtime_config():
