@@ -1161,6 +1161,70 @@
       display: none;
     }
 
+    /* ====== First-run product explainer ====== */
+    .ss-explainer {
+      margin-bottom: 24px;
+      padding: 16px 18px;
+      border-radius: var(--radius-md);
+      background: rgba(0, 212, 255, 0.06);
+      border: 1px solid rgba(0, 212, 255, 0.22);
+    }
+
+    .ss-explainer summary {
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    .ss-explainer-lede {
+      margin: 12px 0 14px;
+      font-size: 13px;
+      line-height: 1.6;
+      color: rgba(255, 255, 255, 0.82);
+    }
+
+    .ss-explainer-steps {
+      list-style: none;
+      counter-reset: ss-step;
+      display: grid;
+      gap: 10px;
+    }
+
+    .ss-explainer-steps li {
+      counter-increment: ss-step;
+      display: grid;
+      grid-template-columns: 22px 20px 1fr;
+      align-items: center;
+      gap: 10px;
+      font-size: 12.5px;
+      line-height: 1.45;
+      color: rgba(255, 255, 255, 0.7);
+    }
+
+    .ss-explainer-steps li::before {
+      content: counter(ss-step);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: rgba(0, 212, 255, 0.14);
+      border: 1px solid rgba(0, 212, 255, 0.35);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 900;
+    }
+
+    .ss-explainer-steps i {
+      color: var(--accent);
+      font-size: 14px;
+      text-align: center;
+    }
+
     /* Transparent on desktop so the .panel elements stay direct children of the grid and
        the two-column layout is byte-for-byte what it was. */
     .wizard-pane-wrap {
@@ -1676,6 +1740,24 @@
         <div class="panel">
           <div data-wizard-pane="1">
             <div class="panel-title"><span class="step-chip">1</span> Create ScanStory</div>
+
+            <!-- First-run explainer. <details> is used on purpose: it opens by default for
+                 a first-time creator, collapses with no JavaScript, and stays keyboard and
+                 screen-reader accessible. -->
+            <details class="ss-explainer" id="scanStoryExplainer" open>
+              <summary>How ScanStory works</summary>
+              <p class="ss-explainer-lede">
+                ScanStory connects real-world images to digital video experiences through QR and visual recognition.
+              </p>
+              <ol class="ss-explainer-steps">
+                <li><i class="fas fa-image"></i><span>Choose the target photo people will point their camera at.</span></li>
+                <li><i class="fas fa-video"></i><span>Add the video that should play on that target.</span></li>
+                <li><i class="fas fa-qrcode"></i><span>We generate a QR code for you to print or share.</span></li>
+                <li><i class="fas fa-mobile-screen"></i><span>Your viewer scans the QR code on their phone.</span></li>
+                <li><i class="fas fa-crosshairs"></i><span>Your viewer points the camera at the target.</span></li>
+                <li><i class="fas fa-play"></i><span>The video plays over the target. That is the ScanStory.</span></li>
+              </ol>
+            </details>
 
             <div class="project-name-group">
               <label class="input-label" for="projectName">Story Name<span class="wizard-name-required">*</span></label>

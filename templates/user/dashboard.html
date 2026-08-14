@@ -720,14 +720,14 @@
                         class="ss-btn ss-btn-primary ss-btn-sm" style="flex:1;">
                         <i class="fas fa-eye" aria-hidden="true"></i> View
                     </a>
-                    {# Test Scanner: signed, ownership-verified entry point (scanner_test_entry in
+                    {# Test Experience: signed, ownership-verified entry point (scanner_test_entry in
                        app.py) — distinct from "Scan Code" below, which downloads the PUBLIC QR
                        for sharing. Omitted in admin_view (support-viewing-another-user's-
                        dashboard) since the current session isn't that project owner's own. #}
                     {% if not admin_view %}
                     <a href="{{ url_for('scanner_test_entry', project_id=project.id) }}" target="_blank"
                         class="ss-btn ss-btn-secondary ss-btn-sm" style="flex:1;">
-                        <i class="fas fa-vial" aria-hidden="true"></i> Test
+                        <i class="fas fa-vial" aria-hidden="true"></i> Test Experience
                     </a>
                     {% endif %}
                     <a href="{{ url_for('download_project_qr', project_id=project.id) }}"

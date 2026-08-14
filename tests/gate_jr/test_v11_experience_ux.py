@@ -105,6 +105,33 @@ def test_only_two_experience_types_exist_and_direct_qr_hides_the_target_upload()
     assert "input.required = value === 'image_video'" in html
 
 
+def test_creator_explains_what_scanstory_is_and_how_it_works():
+    html = creator_html()
+    assert "ScanStory connects real-world images to digital video experiences through QR and visual recognition." in html
+    assert 'id="scanStoryExplainer"' in html
+    for step in (
+        "Choose the target photo",
+        "Add the video",
+        "We generate a QR code",
+        "scans the QR code",
+        "points the camera at the target",
+        "The video plays over the target",
+    ):
+        assert step in html, step
+
+
+def test_creator_test_control_is_named_test_experience_everywhere():
+    for path in (
+        "templates/user/user_create_project.html",
+        "templates/user/project_preview.html",
+        "templates/user/success.html",
+        "templates/user/dashboard.html",
+    ):
+        html = Path(path).read_text(encoding="utf-8", errors="ignore")
+        assert "Test Experience" in html, path
+        assert "AR Test Scanner" not in html, path
+
+
 def test_completed_pairs_collapse_into_summary_rows():
     html = creator_html()
     assert 'id="pair-summary-${pairId}"' in html
