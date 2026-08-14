@@ -175,4 +175,77 @@
         </div>
     </div>
 </div>
+
+<div class="row g-4 mt-1">
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header">Recent Add-on Purchases</div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>User</th>
+                                <th>Catalog</th>
+                                <th>Status</th>
+                                <th>Total</th>
+                                <th>Fulfilled</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for purchase in addon_purchases %}
+                            <tr>
+                                <td>{{ purchase.id }}</td>
+                                <td>#{{ purchase.user_id }}</td>
+                                <td>{{ purchase.catalog_item.code if purchase.catalog_item else purchase.catalog_id }}</td>
+                                <td>{{ purchase.status }}</td>
+                                <td>{{ purchase.currency }} {{ purchase.total_amount }}</td>
+                                <td>{{ purchase.fulfilled_at.strftime('%d %b %Y %H:%M') if purchase.fulfilled_at else "-" }}</td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="6" class="text-center text-muted py-4">No add-on purchases found.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card h-100">
+            <div class="card-header">Recent Entitlement Ledger</div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-dark table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>User</th>
+                                <th>Type</th>
+                                <th>Delta</th>
+                                <th>Source</th>
+                                <th>Created</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for tx in entitlement_transactions %}
+                            <tr>
+                                <td>{{ tx.id }}</td>
+                                <td>#{{ tx.user_id }}</td>
+                                <td>{{ tx.entitlement_type }}</td>
+                                <td>{{ tx.delta_value }}</td>
+                                <td>{{ tx.source_type }} #{{ tx.source_id }}</td>
+                                <td>{{ tx.created_at.strftime('%d %b %Y %H:%M') if tx.created_at else "-" }}</td>
+                            </tr>
+                            {% else %}
+                            <tr><td colspan="6" class="text-center text-muted py-4">No entitlement transactions found.</td></tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}

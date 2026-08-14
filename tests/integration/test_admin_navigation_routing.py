@@ -397,6 +397,8 @@ def test_superadmin_can_open_operations_diagnostics(client, login_admin, app_mod
     assert b"Recent Upload Sessions" in body
     assert b"Recent Processing Jobs" in body
     assert b"Current Entitlement Visibility" in body
+    assert b"Recent Add-on Purchases" in body
+    assert b"Recent Entitlement Ledger" in body
     assert b"marker.jpg" in body
     assert b"video.mp4" in body
     assert b"C:/secret/path" not in body

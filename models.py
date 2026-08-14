@@ -509,6 +509,7 @@ class RazorpayWebhookEvent(db.Model):
     # received -> processed | ignored | failed
     processing_status = db.Column(db.String(20), nullable=False, default="received")
     payment_order_id = db.Column(db.Integer, db.ForeignKey("payment_orders.id"), nullable=True, index=True)
+    addon_purchase_id = db.Column(db.Integer, db.ForeignKey("addon_purchases.id"), nullable=True, index=True)
     failure_code = db.Column(db.String(50), nullable=True)
     attempt_count = db.Column(db.Integer, nullable=False, default=1)
 
@@ -516,9 +517,103 @@ class RazorpayWebhookEvent(db.Model):
     processed_at = db.Column(db.DateTime, nullable=True)
 
     payment_order = db.relationship("PaymentOrder", lazy=True)
+    addon_purchase = db.relationship("AddonPurchase", lazy=True)
 
     def __repr__(self):
         return f"<RazorpayWebhookEvent {self.event_type} status={self.processing_status}>"
+
+
+# ---------------------------------------------------------------------
+# Self-service add-ons and entitlement ledger
+# ---------------------------------------------------------------------
+ADDON_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY"}
+ADDON_PURCHASE_STATUSES = {"pending", "fulfilled", "failed", "cancelled", "refunded"}
+ENTITLEMENT_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY"}
+
+
+class AddonCatalog(db.Model):
+    __tablename__ = "addon_catalog"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    code = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    name = db.Column(db.String(120), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    addon_type = db.Column(db.String(40), nullable=False, index=True)
+    unit_amount = db.Column(db.Float, nullable=False)
+    currency = db.Column(db.String(3), default="INR", nullable=False)
+    scan_delta = db.Column(db.Integer, nullable=True)
+    validity_days_delta = db.Column(db.Integer, nullable=True)
+    project_delta = db.Column(db.Integer, nullable=True)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    is_commercially_available = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    purchases = db.relationship("AddonPurchase", backref="catalog_item", lazy=True)
+
+    @validates("addon_type")
+    def validate_addon_type(self, key, value):
+        return _validate_value(value, ADDON_TYPES, key)
+
+
+class AddonPurchase(db.Model):
+    __tablename__ = "addon_purchases"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    order_id = db.Column(db.String(100), unique=True, nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    catalog_id = db.Column(db.Integer, db.ForeignKey("addon_catalog.id"), nullable=False, index=True)
+    quantity = db.Column(db.Integer, nullable=False, default=1)
+    amount = db.Column(db.Float, nullable=False)
+    total_amount = db.Column(db.Float, nullable=False)
+    currency = db.Column(db.String(3), default="INR", nullable=False)
+    status = db.Column(db.String(20), nullable=False, default="pending", index=True)
+    razorpay_order_id = db.Column(db.String(255), unique=True, nullable=True, index=True)
+    razorpay_payment_id = db.Column(db.String(255), unique=True, nullable=True, index=True)
+    razorpay_signature = db.Column(db.String(512), nullable=True)
+    failure_code = db.Column(db.String(80), nullable=True)
+    paid_at = db.Column(db.DateTime, nullable=True)
+    fulfilled_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    user = db.relationship("User", backref="addon_purchases", lazy=True)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value(value, ADDON_PURCHASE_STATUSES, key)
+
+
+class EntitlementTransaction(db.Model):
+    __tablename__ = "entitlement_transactions"
+    __table_args__ = (
+        db.UniqueConstraint("source_type", "source_id", "entitlement_type", name="uq_entitlement_source_type_id_type"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    entitlement_type = db.Column(db.String(40), nullable=False, index=True)
+    delta_value = db.Column(db.Integer, nullable=False)
+    source_type = db.Column(db.String(40), nullable=False, index=True)
+    source_id = db.Column(db.Integer, nullable=False, index=True)
+    reason = db.Column(db.String(200), nullable=True)
+    metadata_json = db.Column(db.Text, nullable=True)
+    valid_from = db.Column(db.DateTime, nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+
+    user = db.relationship("User", backref="entitlement_transactions", lazy=True)
+
+    @property
+    def metadata_dict(self):
+        try:
+            return json.loads(self.metadata_json or "{}")
+        except Exception:
+            return {}
+
+    @validates("entitlement_type")
+    def validate_entitlement_type(self, key, value):
+        return _validate_value(value, ENTITLEMENT_TYPES, key)
 
 
 # ---------------------------------------------------------------------
