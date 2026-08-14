@@ -160,3 +160,134 @@ def test_completed_pairs_collapse_into_summary_rows():
     assert "item.classList.toggle('is-collapsed', complete && !expanded)" in html
     assert "function expandPair(pairId)" in html
     assert ".pair-item.is-collapsed .upload-grid," in html
+
+
+# --- Viewer: target guide, camera guidance, detect once, direct QR ---------------------
+
+
+def render_scanner(app_module, **overrides):
+    """Render scanner.html directly. Direct QR Video cannot be reached through /scanner yet
+    (no persisted experience type), so the template is the only place its branch can be
+    exercised today."""
+    context = {
+        "project_id": 1,
+        "project_name": "Demo Story",
+        "qr_code_url": "qr.png",
+        "creator_type": "user",
+        "creator_name": "Creator",
+        "scanner_diagnostics_enabled": False,
+        "scanner_entry_context": "public_viewer",
+        "resolved_back_destination": "/",
+        "back_destination_reason": "public_viewer",
+        "entry_route_type": "public_scanner_route",
+        "entry_authorization_result": "n/a_public",
+        "experience_type": "image_video",
+        "targets": [
+            {"index": i, "image_url": f"/image/1/{i}", "video_url": f"/video/1/{i}", "label": f"Target {i + 1}"}
+            for i in range(1)
+        ],
+    }
+    context.update(overrides)
+    # A request context (not just an app context) so url_for in the template can build.
+    with app_module.app.test_request_context("/scanner/1"):
+        return app_module.app.jinja_env.get_template("user/scanner.html").render(**context)
+
+
+def test_camera_is_not_requested_until_the_viewer_presses_start_camera():
+    html = scanner_html()
+    # The only top-level thing that happens now is showing the guide.
+    assert "markStartupCheckpoint('camera_setup_requested');\n    showExperienceIntro();" in html
+    assert "\n    setupCamera();\n" not in html
+    assert "function startCameraFromIntro()" in html
+    assert "startCameraBtn.addEventListener('click', startCameraFromIntro)" in html
+
+
+def test_target_guide_explains_the_target_and_the_camera_before_starting():
+    html = scanner_html()
+    assert 'id="targetGuide"' in html
+    assert "This ScanStory uses your camera to recognize the target shown above." in html
+    assert 'id="startCameraBtn">Start Camera</button>' in html
+    # 1 / 2-6 / 7+ layouts.
+    assert "{% if targets | length == 1 %}single{% elif targets | length > 6 %}many{% else %}gallery{% endif %}" in html
+    assert 'id="viewAllTargetsBtn"' in html
+    assert "#targetGuide.many .target-extra" in html
+
+
+def test_target_guide_is_a_preview_layer_and_never_filters_detection(app_module):
+    """The guide only renders images. It must not pass a chosen target into detection."""
+    html = scanner_html()
+    intro_start = html.index('<div id="experienceIntro"')
+    intro_end = html.index('<div class="wrap" id="wrap">')
+    intro = html[intro_start:intro_end]
+    for forbidden in ("pair_index", "detect_init", "expected_pair", "target_index"):
+        assert forbidden not in intro, forbidden
+
+
+def test_detect_once_is_a_lifecycle_change_not_a_detection_change():
+    html = scanner_html()
+    assert "function lockDetectOnceExperience(reason)" in html
+    assert "let scannerPlaybackMode = 'tracked';" in html
+    # Tracked overlay stays the default and keeps its own path.
+    assert 'value="tracked" checked' in html
+    assert 'value="detect_once"' in html
+    # The lock only suppresses the two functions that could stop playback.
+    assert "function stopOverlayImmediate() {\n      if (detectOnceLocked) return;" in html
+    assert "function requestPoseHold(reason) {\n      if (detectOnceLocked) return;" in html
+    # It must not reach into recognition at all.
+    lock_start = html.index("function lockDetectOnceExperience(reason)")
+    lock_end = html.index("function stopOverlayImmediate()")
+    lock_body = html[lock_start:lock_end]
+    for forbidden in ("detect_init", "setupCamera(", "recoverScanner(", "MIN_", "RATIO", "THRESHOLD"):
+        assert forbidden not in lock_body, forbidden
+
+
+def test_direct_qr_never_loads_opencv_or_asks_for_the_camera(app_module):
+    html = render_scanner(app_module, experience_type="direct_qr")
+    # No recognition entry points are rendered at all on this branch.
+    assert 'id="startCameraBtn"' not in html
+    assert 'id="targetGuide"' not in html
+    assert 'id="directQrVideo"' in html
+    assert 'id="directQrPlayBtn"' in html
+    assert 'data-experience-type="direct_qr"' in html
+    # opencv.js is still referenced in the loader source, but the call is gated.
+    assert "if (USES_IMAGE_RECOGNITION) {\n        markStartupCheckpoint('opencv_load_requested');\n        loadOpenCV();\n      }" in html
+    # startCameraFromIntro is the only caller of setupCamera outside camera recovery, and
+    # its button does not exist in this branch, so getUserMedia is unreachable here.
+    assert "if (startCameraBtn) startCameraBtn.addEventListener('click', startCameraFromIntro);" in html
+
+
+def test_direct_qr_player_is_separate_from_the_ar_overlay_element(app_module):
+    html = render_scanner(app_module, experience_type="direct_qr")
+    direct_start = html.index("function startDirectQrPlayback()")
+    direct_end = html.index("if (startCameraBtn)", direct_start)
+    body = html[direct_start:direct_end]
+    assert "overlay." not in body
+    assert "overlayWrap" not in body
+    assert "getElementById('directQrVideo')" in body
+
+
+def test_image_video_scanner_page_renders_the_guide(app_module):
+    html = render_scanner(app_module)
+    assert 'data-experience-type="image_video"' in html
+    assert 'id="targetGuide"' in html and 'class="single"' in html
+    assert "Point your camera at this to start the experience." in html
+    assert 'id="directQrVideo"' not in html
+
+
+def test_scanner_markup_is_balanced_in_both_experience_types(app_module):
+    for experience_type in ("image_video", "direct_qr"):
+        parser = TagBalance()
+        parser.feed(render_scanner(app_module, experience_type=experience_type))
+        assert not parser.errors, (experience_type, parser.errors[:5])
+        assert not [tag for tag, _pos in parser.stack if tag not in {"html", "body"}], experience_type
+
+
+def test_many_targets_collapse_behind_view_all(app_module):
+    targets = [
+        {"index": i, "image_url": f"/image/1/{i}", "video_url": f"/video/1/{i}", "label": f"Target {i + 1}"}
+        for i in range(9)
+    ]
+    html = render_scanner(app_module, targets=targets)
+    assert 'id="targetGuide"' in html and 'class="many"' in html
+    assert html.count("target-card target-extra") == 3
+    assert "View all 9 targets" in html

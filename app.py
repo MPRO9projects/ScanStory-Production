@@ -8248,6 +8248,25 @@ def scanner(project_id):
         creator_type = "admin"
         creator_name = project.owner_admin.name if project.owner_admin else "Admin"
 
+    # V1.1 viewer: the target guide needs to show what the viewer should point the camera
+    # at, and Direct QR Video needs a video to play without any camera at all. Both are
+    # read-only projections of pairs that are already public via /image and /video.
+    experience_type = project_experience_type(project)
+    pairs = (
+        ProjectPair.query.filter_by(project_id=project.id)
+        .order_by(ProjectPair.pair_index)
+        .all()
+    )
+    targets = [
+        {
+            "index": pair.pair_index,
+            "image_url": url_for("serve_image", project_id=project.id, image_id=pair.pair_index),
+            "video_url": url_for("serve_video", project_id=project.id, image_id=pair.pair_index),
+            "label": "Target {}".format(pair.pair_index + 1),
+        }
+        for pair in pairs
+    ]
+
     return render_template(
         "user/scanner.html",
         project_id=project_id,
@@ -8255,6 +8274,8 @@ def scanner(project_id):
         qr_code_url=project.qr_code_path,
         creator_type=creator_type,
         creator_name=creator_name,
+        experience_type=experience_type,
+        targets=targets,
         scanner_diagnostics_enabled=scanner_diagnostics_enabled(),
         scanner_entry_context=entry["context"],
         resolved_back_destination=entry["back_url"],
