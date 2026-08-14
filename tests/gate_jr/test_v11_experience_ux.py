@@ -162,6 +162,38 @@ def test_completed_pairs_collapse_into_summary_rows():
     assert ".pair-item.is-collapsed .upload-grid," in html
 
 
+def test_creator_calls_the_thing_a_scanstory_made_of_pairs():
+    """The creator used to call one thing four names on one screen: a Memory in the title,
+    a moment on the upload tiles, a project in the plan messages and a Story in the name
+    field. A first-time user has to be able to tell they are all the same thing."""
+    html = creator_html()
+    assert "<title>Create ScanStory | SCANSTORY</title>" in html
+    assert "<h1>Create ScanStory</h1>" in html
+    for stale in ("Create Your Memory", "Create a Memory", "Moment #", "Add Another Moment", "memoty"):
+        assert stale not in html, stale
+    # Plan/limit messaging talks about pairs in a ScanStory, not pairs in a project.
+    assert "image-video pair(s) per project" not in html
+    assert "pair(s) per ScanStory" in html
+
+
+def test_creator_errors_say_what_to_do_next():
+    html = creator_html()
+    for shouty in ("Invalid image type!", "Invalid video type!", "size exceeds"):
+        assert shouty not in html, shouty
+    assert "That photo format is not supported. Please choose a JPG or PNG." in html
+    assert "That video format is not supported. Please choose an MP4." in html
+    # One recovery phrasing, not "retry" in some places and "try again" in others.
+    assert "Please retry." not in html
+
+
+def test_mobile_wizard_submit_is_not_blocked_by_hidden_required_fields():
+    """A browser silently refuses to report an invalid required control it cannot focus,
+    and the wizard hides two of its three panes on mobile."""
+    html = creator_html()
+    assert 'id="projectForm" novalidate' in html
+    assert "if (activeWizardCreateBtn) activeWizardCreateBtn.disabled = true;" in html
+
+
 # --- Viewer: target guide, camera guidance, detect once, direct QR ---------------------
 
 

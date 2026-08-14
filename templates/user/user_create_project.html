@@ -3726,20 +3726,20 @@
         TOTAL_TOO_LARGE: 'The combined upload is too large.',
         INVALID_CHECKSUM: 'The upload checksum is invalid.',
         ACCOUNT_BLOCKED: 'This account cannot upload right now.',
-        PROJECT_LIMIT_REACHED: 'Your project limit has been reached.',
+        PROJECT_LIMIT_REACHED: 'You have reached the ScanStory limit on your plan.',
         PLAN_NOT_CONFIGURED: 'Your plan is not configured for uploads.',
-        SUBSCRIPTION_LIMIT: 'Your current plan cannot create this project.',
+        SUBSCRIPTION_LIMIT: 'Your current plan cannot create this ScanStory.',
         SESSION_EXPIRED: 'This upload session expired. Please start again.',
         SESSION_CANCELLED: 'This upload was cancelled.',
         SESSION_FAILED: 'This upload session failed. Please start again.',
         IMAGE_VALIDATION_FAILED: 'The marker image could not be validated.',
         VIDEO_VALIDATION_FAILED: 'The video could not be validated.',
         CHECKSUM_MISMATCH: 'The uploaded bytes did not match the expected checksum.',
-        PROJECT_CREATION_FAILED: 'The project could not be created. Please retry.',
-        QUEUE_ENQUEUE_FAILED: 'The project was saved, but processing could not be queued. Retry in a moment.',
+        PROJECT_CREATION_FAILED: 'Your ScanStory could not be created. Please try again.',
+        QUEUE_ENQUEUE_FAILED: 'Your ScanStory was saved, but processing could not be queued. Please try again in a moment.',
         INCOMPLETE_UPLOAD: 'The upload is incomplete. Resuming from the server offset.',
         OFFSET_MISMATCH: 'The server and browser upload offsets differed. Resynchronizing.',
-        STORAGE_INCONSISTENT: 'Upload storage became inconsistent. Please cancel and retry.'
+        STORAGE_INCONSISTENT: 'Upload storage became inconsistent. Please cancel and try again.'
       };
       return messages[code] || 'Upload failed. Please try again.';
     }
@@ -4305,8 +4305,8 @@
       } catch (err) {
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: uploadState.phase });
         resetUploadSubmit(submitBtn);
-        setUploadProgress('Upload failed', 0, 'Marker preparation failed. Please retry.', '', 'failed');
-        alert('Marker preparation failed. Please retry.');
+        setUploadProgress('Upload failed', 0, 'The marker could not be prepared. Please try again.', '', 'failed');
+        alert('The marker could not be prepared. Please try again.');
         return;
       }
 
@@ -4452,15 +4452,15 @@
         } else {
           uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { http_status: xhr.status, current_phase: uploadState.phase });
           resetUploadSubmit(submitBtn);
-          setUploadProgress('Upload failed', 0, 'Server rejected the upload. Please retry.', '', 'failed');
+          setUploadProgress('Upload failed', 0, 'The server rejected the upload. Please try again.', '', 'failed');
           alert('Upload failed. Please try again.');
         }
       };
       xhr.onerror = () => {
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: uploadState.phase });
         resetUploadSubmit(submitBtn);
-        setUploadProgress('Upload failed', 0, 'Network upload failed. Please retry.', '', 'failed');
-        alert('Network upload failed. Please retry.');
+        setUploadProgress('Upload failed', 0, 'The upload could not reach the server. Please try again.', '', 'failed');
+        alert('The upload could not reach the server. Please try again.');
       };
       xhr.onabort = () => {
         uploadClientLog('UPLOAD CLIENT ABORTED', uploadState, { current_phase: uploadState.phase });
