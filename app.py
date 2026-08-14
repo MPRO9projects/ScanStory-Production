@@ -5897,17 +5897,54 @@ def _lock_upload_session(session_id):
 
 
 def _upload_session_payload(session_row):
+    uploaded_bytes = int(session_row.current_offset or 0)
+    total_bytes = int(session_row.expected_total_size or 0)
+    remaining_bytes = max(0, total_bytes - uploaded_bytes)
+    progress_percent = round((uploaded_bytes / total_bytes) * 100, 2) if total_bytes else 0
+    latest_job = None
+    pair_payload = None
+    if session_row.project_id:
+        latest_job = (
+            ProcessingJob.query
+            .filter_by(project_id=session_row.project_id)
+            .order_by(desc(ProcessingJob.created_at), desc(ProcessingJob.id))
+            .first()
+        )
+    if session_row.pair_id:
+        pair = ProjectPair.query.get(session_row.pair_id)
+        if pair:
+            pair_payload = {
+                "id": pair.id,
+                "pair_index": pair.pair_index,
+                "processing_status": pair.processing_status,
+                "feature_extraction_status": pair.feature_extraction_status,
+                "is_processed": bool(pair.is_processed),
+                "safe_error": safe_error_summary(pair.processing_error) if pair.processing_error else None,
+            }
     return {
         "id": session_row.id,
         "status": session_row.status,
         "purpose": session_row.purpose,
         "current_offset": session_row.current_offset,
         "expected_total_size": session_row.expected_total_size,
+        "uploaded_bytes": uploaded_bytes,
+        "remaining_bytes": remaining_bytes,
+        "progress_percent": progress_percent,
         "image_size": session_row.image_size,
         "video_size": session_row.video_size,
         "project_id": session_row.project_id,
         "pair_id": session_row.pair_id,
+        "pair": pair_payload,
+        "processing_job": processing_job_status_payload(latest_job) if latest_job else None,
         "failure_code": session_row.failure_code,
+        "can_upload_chunks": session_row.status == "active" and uploaded_bytes < total_bytes,
+        "can_finalize": (
+            session_row.status == "assembled"
+            or (session_row.status == "active" and uploaded_bytes == total_bytes and total_bytes > 0)
+        ),
+        "can_retry_finalize": session_row.status == "assembled",
+        "can_cancel": session_row.status == "active",
+        "is_terminal": session_row.status in {"completed", "cancelled", "expired", "failed"},
         "created_at": session_row.created_at.isoformat() if session_row.created_at else None,
         "updated_at": session_row.updated_at.isoformat() if session_row.updated_at else None,
         "expires_at": session_row.expires_at.isoformat() if session_row.expires_at else None,
