@@ -80,16 +80,25 @@ def test_admin_session_hitting_generic_dashboard_goes_to_admin_dashboard_not_log
     assert response.headers["Location"].rstrip("/").endswith("/admin/dashboard")
 
 
-def test_admin_can_open_selected_user_dashboard_without_impersonation(client, login_admin, normal_user):
-    response = client.get(
-        f"/dashboard?user_id={normal_user.id}&admin_view=true",
-        follow_redirects=False,
-    )
+def test_admin_can_open_selected_user_dashboard_context_without_impersonation(client, login_admin, normal_user):
+    response = client.get(f"/admin/users/{normal_user.id}/dashboard")
     assert response.status_code == 200
-    assert b"Recent Stories" in response.data
+    assert b"User Dashboard Context" in response.data
+    assert b"you are not impersonating this user" in response.data
+    assert normal_user.email.encode() in response.data
     with client.session_transaction() as sess:
         assert sess.get("admin_id") == login_admin.id
         assert sess.get("user_id") is None
+
+
+def test_admin_user_dashboard_context_return_is_audited(client, login_admin, normal_user, app_module):
+    response = client.get(f"/admin/users/{normal_user.id}/dashboard/return", follow_redirects=False)
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(f"/admin/users/{normal_user.id}")
+    assert app_module.AdminActivity.query.filter_by(
+        admin_id=login_admin.id,
+        activity_type="exit_user_dashboard",
+    ).count() == 1
 
 
 def test_admin_session_visiting_user_login_page_is_redirected_away(client, login_admin):
@@ -179,7 +188,7 @@ def test_view_user_detail_exposes_view_user_dashboard_action(client, login_admin
     response = client.get(f"/admin/users/{normal_user.id}")
     assert response.status_code == 200
     assert b"View User Dashboard" in response.data
-    assert f"/dashboard?user_id={normal_user.id}&amp;admin_view=true".encode() in response.data
+    assert f"/admin/users/{normal_user.id}/dashboard".encode() in response.data
 
 
 def test_user_scans_links_use_existing_route_and_delete_is_disabled(client, login_admin, normal_user):

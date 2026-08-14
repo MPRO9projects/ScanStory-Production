@@ -53,10 +53,30 @@ def test_production_rejects_sqlite_database(monkeypatch):
         _import_app_with_env(monkeypatch, DATABASE_URL="sqlite:///instance/prod.db")
 
 
+def test_development_runtime_rejects_sqlite_database(monkeypatch):
+    with pytest.raises(RuntimeError, match="DATABASE_URL=postgresql"):
+        _import_app_with_env(
+            monkeypatch,
+            SCANSTORY_PRODUCTION="0",
+            FLASK_ENV="development",
+            DATABASE_URL="sqlite:///instance/dev.db",
+        )
+
+
 def test_production_accepts_postgresql_and_rq(monkeypatch):
     app_module = _import_app_with_env(monkeypatch)
     assert app_module.app.config["SQLALCHEMY_DATABASE_URI"].startswith("postgresql")
     assert app_module.queue_mode() == "rq"
+
+
+def test_runtime_startup_bootstrap_create_all_is_test_only(monkeypatch):
+    with pytest.raises(RuntimeError, match="Runtime db.create_all\\(\\) bootstrap is disabled outside tests"):
+        _import_app_with_env(
+            monkeypatch,
+            SCANSTORY_PRODUCTION="0",
+            FLASK_ENV="development",
+            SCANSTORY_SKIP_STARTUP_BOOTSTRAP="0",
+        )
 
 
 def test_development_testing_sqlite_and_fake_queue_remain_supported(monkeypatch, tmp_path):
@@ -123,6 +143,8 @@ def test_env_example_documents_runtime_and_testing_contract():
     ):
         assert key in env
     assert "must remain 0 in production" in env
+    assert "SQLite is supported only for isolated tests" in env
+    assert "DATABASE_URL=postgresql+psycopg://" in env
     assert "Production startup rejects fake/inline" in env
     assert "fake" in env and "inline" in env and "rq" in env
 

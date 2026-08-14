@@ -20,6 +20,7 @@ def test_valid_registration_creates_user_trial_and_otp(client, app_module, isola
             "phone": "123",
             "password1": "password123",
             "password2": "password123",
+            "terms": "accepted",
         },
         follow_redirects=False,
     )
@@ -47,6 +48,7 @@ def test_registration_unexpected_error_is_sanitized(client, app_module, monkeypa
                 "phone": "123",
                 "password1": "password123",
                 "password2": "password123",
+                "terms": "accepted",
             },
         )
 
@@ -61,7 +63,7 @@ def test_registration_unexpected_error_is_sanitized(client, app_module, monkeypa
 def test_duplicate_registration_stays_on_register(client, normal_user):
     response = client.post(
         "/register",
-        data={"email": normal_user.email, "password1": "password123", "password2": "password123"},
+        data={"email": normal_user.email, "password1": "password123", "password2": "password123", "terms": "accepted"},
     )
     assert response.status_code == 200
     assert b"Email is already registered" in response.data

@@ -7,7 +7,6 @@ import threading
 import json
 import uuid
 import razorpay
-import math
 from functools import lru_cache, wraps
 from datetime import datetime as dt, timedelta
 from flask import (
@@ -38,8 +37,16 @@ import click
 
 from sqlalchemy import or_, desc, func, and_, case, text, inspect
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.engine import make_url
 from sqlalchemy.orm import aliased
+
+from core.config import (
+    database_backend_name as _database_backend_name,
+    env_flag as _env_flag,
+    runtime_production_mode_flag_active as _runtime_production_mode_flag_active,
+    smtp_port as _smtp_port,
+    smtp_security_mode as _smtp_security_mode,
+    smtp_timeout_seconds as _smtp_timeout_seconds,
+)
 
 # ✅ Import models
 from models import (
@@ -47,7 +54,7 @@ from models import (
     Project, ProjectPair, PaymentOrder, ScanLog, SystemConfig,
     UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation,
     RazorpayWebhookEvent, ProcessingJob, UploadSession, get_utc_now,
-    ScanEvent, SCAN_EVENT_TYPES
+    ScanEvent, SCAN_EVENT_TYPES, UserConsentEvidence
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
@@ -96,42 +103,6 @@ app.config['WTF_CSRF_CHECK_DEFAULT'] = True
 app.config['WTF_CSRF_HEADERS'] = ["X-CSRFToken", "X-CSRF-Token"]
 
 
-def _env_flag(name, default=False):
-    """Parse a boolean-ish environment variable. Missing/blank -> default."""
-    raw = os.environ.get(name)
-    if raw is None or raw.strip() == "":
-        return default
-    return raw.strip().lower() in ("1", "true", "yes", "on")
-
-
-def _runtime_production_mode_flag_active():
-    for key in ("SCANSTORY_PRODUCTION", "APP_ENV", "ENV"):
-        value = (os.environ.get(key) or "").strip().lower()
-        if value in ("1", "true", "yes", "production", "prod"):
-            return True
-    return (os.environ.get("FLASK_ENV") or "").strip().lower() in ("production", "prod")
-
-
-def _smtp_timeout_seconds():
-    raw = (os.environ.get("SMTP_TIMEOUT_SECONDS") or "").strip()
-    if not raw:
-        return 10.0
-    try:
-        timeout = float(raw)
-    except ValueError as exc:
-        raise RuntimeError("SMTP_TIMEOUT_SECONDS must be a positive finite number.") from exc
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise RuntimeError("SMTP_TIMEOUT_SECONDS must be a positive finite number.")
-    return timeout
-
-
-def _database_backend_name(database_url):
-    try:
-        return make_url(database_url).get_backend_name()
-    except Exception as exc:
-        raise RuntimeError("DATABASE_URL must be a valid SQLAlchemy database URL.") from exc
-
-
 def _validate_required_runtime_config():
     """Fail fast on missing required runtime-security configuration.
 
@@ -141,12 +112,13 @@ def _validate_required_runtime_config():
     missing = []
     if not os.environ.get("FLASK_SECRET_KEY"):
         missing.append("FLASK_SECRET_KEY")
-    if _runtime_production_mode_flag_active():
-        database_url = os.environ.get("DATABASE_URL")
+    database_url = os.environ.get("DATABASE_URL")
+    if not SCANSTORY_TESTING:
         if not database_url:
             missing.append("DATABASE_URL")
         elif _database_backend_name(database_url) != "postgresql":
             missing.append("DATABASE_URL=postgresql")
+    if _runtime_production_mode_flag_active():
         for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "MAIL_FROM"):
             if not os.environ.get(key):
                 missing.append(key)
@@ -161,8 +133,11 @@ def _validate_required_runtime_config():
         if not _env_flag("SESSION_COOKIE_SECURE", default=False):
             missing.append("SESSION_COOKIE_SECURE=true")
         if os.environ.get("SCANSTORY_DEV_TESTING") == "1":
-            missing.append("SCANSTORY_DEV_TESTING=0")
+                missing.append("SCANSTORY_DEV_TESTING=0")
     _smtp_timeout_seconds()
+    if os.environ.get("SMTP_PORT"):
+        _smtp_port()
+    _smtp_security_mode()
     if missing:
         raise RuntimeError(
             "Missing required environment variable(s): " + ", ".join(missing) +
@@ -190,7 +165,8 @@ SESSION_COOKIE_SECURE_ENABLED = _env_flag("SESSION_COOKIE_SECURE", default=False
 # ✅ ADD DATABASE CONFIGURATION HERE
 database_uri = os.environ.get("TEST_DATABASE_URL") if SCANSTORY_TESTING else os.environ.get("DATABASE_URL", "")
 engine_options = {}
-if database_uri and not database_uri.startswith("sqlite"):
+database_backend = _database_backend_name(database_uri) if database_uri else ""
+if database_uri and database_backend != "sqlite":
     connect_args = {
         'connect_timeout': 10,
     }
@@ -982,11 +958,16 @@ def _maybe_create_bootstrap_admin():
 # tables or inserting startup/bootstrap data.
 SCANSTORY_SKIP_STARTUP_BOOTSTRAP = _env_flag(
     "SCANSTORY_SKIP_STARTUP_BOOTSTRAP",
-    default=False,
+    default=not SCANSTORY_TESTING,
 )
 
 with app.app_context():
     if not SCANSTORY_SKIP_STARTUP_BOOTSTRAP:
+        if not SCANSTORY_TESTING:
+            raise RuntimeError(
+                "Runtime db.create_all() bootstrap is disabled outside tests. "
+                "Run Alembic migrations with `flask --app app db upgrade` and seed data explicitly."
+            )
         db.create_all()
         ensure_marker_schema()
     
@@ -1779,11 +1760,12 @@ from email.mime.multipart import MIMEMultipart
 
 def send_email_smtp(to_email: str, subject: str, html_body: str):
     host = os.environ.get("SMTP_HOST")
-    port = int(os.environ.get("SMTP_PORT", "587"))
+    port = _smtp_port()
     username = os.environ.get("SMTP_USER")
     password = os.environ.get("SMTP_PASS")
     mail_from = os.environ.get("MAIL_FROM", username)
     timeout = _smtp_timeout_seconds()
+    security = _smtp_security_mode()
     
     if not all([host, port, username, password, mail_from]):
         raise RuntimeError("SMTP env vars missing.")
@@ -1795,10 +1777,12 @@ def send_email_smtp(to_email: str, subject: str, html_body: str):
     msg.attach(MIMEText(html_body, "html"))
     
     context = ssl.create_default_context()
-    with smtplib.SMTP(host, port, timeout=timeout) as server:
+    smtp_client = smtplib.SMTP_SSL if security == "ssl" else smtplib.SMTP
+    with smtp_client(host, port, timeout=timeout) as server:
         server.ehlo()
-        server.starttls(context=context)
-        server.ehlo()
+        if security == "starttls":
+            server.starttls(context=context)
+            server.ehlo()
         server.login(username, password)
         server.sendmail(mail_from, to_email, msg.as_string())
 
@@ -4029,6 +4013,56 @@ def terms_page():
 def privacy_page():
     return render_template("user/privacy_policy.html")
 
+
+CONSENT_POLICY_ENV = {
+    "TERMS": "SCANSTORY_TERMS_POLICY_VERSION",
+    "PRIVACY": "SCANSTORY_PRIVACY_POLICY_VERSION",
+}
+
+
+def _policy_version(consent_type):
+    consent_type = (consent_type or "").strip().upper()
+    env_key = CONSENT_POLICY_ENV.get(consent_type)
+    if not env_key:
+        raise ValueError("Invalid consent type.")
+    return (os.environ.get(env_key) or "v1").strip() or "v1"
+
+
+def _registration_policy_consent_accepted():
+    value = (request.form.get("terms") or "").strip().lower()
+    return value in {"1", "true", "yes", "on", "accepted"}
+
+
+def _record_registration_consent_evidence(user, accepted_at):
+    metadata = json.dumps(
+        {
+            "route": "register",
+            "form_field": "terms",
+            "legal_consent_only": True,
+        },
+        sort_keys=True,
+    )
+    for consent_type in ("TERMS", "PRIVACY"):
+        policy_version = _policy_version(consent_type)
+        existing = UserConsentEvidence.query.filter_by(
+            user_id=user.id,
+            consent_type=consent_type,
+            policy_version=policy_version,
+            source_context="registration",
+        ).first()
+        if existing:
+            continue
+        db.session.add(
+            UserConsentEvidence(
+                user_id=user.id,
+                consent_type=consent_type,
+                policy_version=policy_version,
+                accepted_at=accepted_at,
+                source_context="registration",
+                evidence_metadata=metadata,
+            )
+        )
+
 _LANDING_VIDEOS = {
     "demo": "demo.mp4",
     "educ": "educ.mp4",
@@ -4901,6 +4935,9 @@ def register():
         if len(password1) < 6:
             flash("Password must be at least 6 characters.", "error")
             return render_template("user/register.html")
+        if not _registration_policy_consent_accepted():
+            flash("Please accept the Terms and Privacy Policy to create an account.", "error")
+            return render_template("user/register.html")
         if User.query.filter_by(email=email).first():
             flash("Email is already registered.", "error")
             return render_template("user/register.html")
@@ -4938,7 +4975,7 @@ def register():
         )
 
         db.session.add(user)
-        db.session.commit()
+        db.session.flush()
 
         # Create trial details
         trial = TrialDetails(
@@ -4950,6 +4987,7 @@ def register():
         )
 
         db.session.add(trial)
+        _record_registration_consent_evidence(user, now)
         db.session.commit()
 
         # Send verification OTP
@@ -9426,6 +9464,72 @@ def admin_view_user(user_id):
                          scan_history=scan_history,
                          trial=trial)
 
+@app.route("/admin/users/<int:user_id>/dashboard", methods=["GET"])
+@require_admin_permission("admin.users.view")
+def admin_view_user_dashboard(user_id):
+    admin = current_admin()
+    user = User.query.get_or_404(user_id)
+    trial = TrialDetails.query.filter_by(user_id=user.id).first()
+    total_projects = Project.query.filter_by(owner_user_id=user.id).count()
+    total_pairs = (
+        db.session.query(func.count(ProjectPair.id))
+        .join(Project, ProjectPair.project_id == Project.id)
+        .filter(Project.owner_user_id == user.id)
+        .scalar()
+        or 0
+    )
+    total_scans = ScanLog.query.filter_by(user_id=user.id).count()
+    successful_scans = ScanLog.query.filter_by(user_id=user.id, is_successful=True).count()
+    failed_scans = ScanLog.query.filter_by(user_id=user.id, is_successful=False).count()
+    recent_projects = (
+        Project.query.filter_by(owner_user_id=user.id)
+        .order_by(Project.created_at.desc(), Project.id.desc())
+        .limit(10)
+        .all()
+    )
+    recent_scans = (
+        ScanLog.query.filter_by(user_id=user.id)
+        .order_by(ScanLog.created_at.desc(), ScanLog.id.desc())
+        .limit(10)
+        .all()
+    )
+
+    for project in recent_projects:
+        project.pairs_count = ProjectPair.query.filter_by(project_id=project.id).count()
+        project.scan_count = ScanLog.query.filter_by(project_id=project.id).count()
+
+    log_admin_activity(
+        admin.id,
+        "view_user_dashboard",
+        f"Viewed read-only dashboard context for user: {user.email}",
+    )
+    return render_template(
+        "admin/user_dashboard_context.html",
+        admin=admin,
+        user=user,
+        trial=trial,
+        total_projects=total_projects,
+        total_pairs=total_pairs,
+        total_scans=total_scans,
+        successful_scans=successful_scans,
+        failed_scans=failed_scans,
+        recent_projects=recent_projects,
+        recent_scans=recent_scans,
+    )
+
+
+@app.route("/admin/users/<int:user_id>/dashboard/return", methods=["GET"])
+@require_admin_permission("admin.users.view")
+def admin_return_from_user_dashboard(user_id):
+    admin = current_admin()
+    user = User.query.get_or_404(user_id)
+    log_admin_activity(
+        admin.id,
+        "exit_user_dashboard",
+        f"Returned from read-only dashboard context for user: {user.email}",
+    )
+    return redirect(url_for("admin_view_user", user_id=user.id))
+
 @app.route("/admin/users/<int:user_id>/toggle-block", methods=["POST"])
 @require_admin_permission("admin.users.manage")
 def admin_toggle_block_user(user_id):
@@ -11232,18 +11336,11 @@ def faqs_page():
 # Main Application Entry Point
 # --------------------------------------------------------------------------------------------
 if __name__ == "__main__":
-    # Create application context and bootstrap database
-    with app.app_context():
-        # Create all tables first
-        db.create_all()
-        ensure_marker_schema()
-        
-        # Then populate with default data
-        bootstrap_database()
-    
     # Run the app.
     # NOTE: this is the Werkzeug development server. Production deployments
     # must run behind a real WSGI server (gunicorn, waitress, etc.) - never
-    # via `python app.py`. debug/use_reloader only activate when FLASK_DEBUG=1
-    # is explicitly set (and are always off when SCANSTORY_TESTING=1).
+    # via `python app.py`. Apply schema first with `flask --app app db upgrade`;
+    # this entry point never creates tables. debug/use_reloader only activate
+    # when FLASK_DEBUG=1 is explicitly set (and are always off when
+    # SCANSTORY_TESTING=1).
     app.run(host="0.0.0.0", port=5000, debug=FLASK_DEBUG_ENABLED, use_reloader=FLASK_DEBUG_ENABLED)
