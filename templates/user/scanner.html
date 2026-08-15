@@ -36,6 +36,60 @@
       transform: scaleX(1);
     }
 
+    /* In-lens recovery surfaces (V1.1 Part D).
+       #fallbackPanel and #recognitionHelpPanel used to be siblings of .wrap rendered
+       below #soundGate/#infoBadge/#status/#scannerGuidance — roughly 250px under the fold
+       on a 375x667 phone with a portrait stream, so "Watch video instead" could only be
+       found by scrolling. They are now children of .wrap, anchored to the bottom of the
+       camera viewport, so every recovery action is on screen without scrolling.
+       Presentation only: nothing here touches #overlayWrap, its transform, or the
+       .wrap/#overlayWrap pixel heights that resizeScannerSurfaces() owns. */
+    .ss-lens-panel {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      z-index: 55;
+      /* .wrap is overflow:hidden and its height is the camera image height, so a dead
+         camera can collapse it. Bounding to the lens + internal scroll keeps the actions
+         reachable in that case too, instead of being clipped away. */
+      max-height: calc(100% - 16px);
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding: 14px;
+      border-radius: 14px;
+      text-align: center;
+      -webkit-backdrop-filter: blur(6px);
+      backdrop-filter: blur(6px);
+    }
+
+    /* Compact inside the lens: the recovery actions sit on one wrapping row rather than
+       the ~250px-tall column .ss-scan-actions uses at page level. */
+    .ss-lens-panel .ss-scan-actions {
+      flex-direction: row;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+
+    .ss-lens-panel .ss-scan-btn {
+      flex: 1 1 auto;
+      min-width: 132px;
+    }
+
+    /* Fallback player: a plain responsive <video> with native controls. Pinned to the
+       viewport so it is reachable from the in-lens "Watch video instead" without
+       scrolling. JS still toggles inline display:none/block exactly as before. */
+    #fallbackVideoPanel {
+      position: fixed;
+      left: 12px;
+      right: 12px;
+      bottom: max(12px, env(safe-area-inset-bottom));
+      z-index: 70;
+      max-height: calc(100vh - 24px);
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
     #overlayWrap {
       position: absolute;
       left: 0;
@@ -793,7 +847,7 @@
        Video neither the camera nor OpenCV is ever touched. This is a preview layer in
        front of detection, never a filter on it — whichever target the guide happens to
        highlight, the scanner still detects any valid pair in the project. -->
-  <div id="experienceIntro" role="dialog" aria-labelledby="experienceIntroTitle">
+  <div id="experienceIntro" role="dialog" aria-modal="true" aria-labelledby="experienceIntroTitle">
     <div id="experienceIntroCard">
       <div class="intro-brand">SCANSTORY</div>
       <h2 id="experienceIntroTitle">{{ project_name }}</h2>
@@ -875,6 +929,54 @@
         <div id="scannerStatusLabel">Scanning for AR markers...</div>
       </div>
     </div>
+
+    <!-- Real fallback UI (Part D): "Fallback available" must never appear without a
+         visible action. This panel is the only thing shown when the scanner state machine
+         reaches 'fallback'. It lives INSIDE .wrap so a hard camera/OpenCV failure offers
+         its recovery actions inside the lens, never below the fold — see .ss-lens-panel. -->
+    <div id="fallbackPanel" class="ss-lens-panel" role="region" aria-live="polite" aria-labelledby="fallbackMessage" style="display:none;background:rgba(20,10,10,0.92);border:1px solid rgba(255,90,90,0.3);">
+      <div id="fallbackMessage" style="color:#ff9090;font-weight:700;margin-bottom:12px;font-size:14px;"></div>
+      <div class="ss-scan-actions">
+        <button type="button" id="fallbackRetryBtn" class="ss-scan-btn ss-scan-btn-primary">
+          <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
+          Retry Camera
+        </button>
+        <button type="button" id="fallbackWatchBtn" class="ss-scan-btn ss-scan-btn-secondary" aria-label="Watch video instead" style="display:none;">
+          <i class="fa-solid fa-play" aria-hidden="true"></i>
+          Watch video instead
+        </button>
+        {# Same server-resolved destination as Back — see resolve_scanner_entry_context() in
+           app.py. Both controls must always agree on where "away from the scanner" goes. #}
+        <a id="fallbackReturnBtn" href="{{ resolved_back_destination }}" class="ss-scan-btn ss-scan-btn-tertiary">
+          Return to Project
+        </a>
+      </div>
+    </div>
+
+    <!-- Recognition-timeout help (distinct from camera failure): a healthy camera that just
+         hasn't found a marker after repeated tries. Deliberately styled and worded
+         differently from #fallbackPanel — "Continue Scanning" never touches the camera or
+         loops, unlike "Retry Camera" above, which calls the guarded recovery path.
+         Also in-lens: this is the panel prolonged/repeated tracking loss raises, and its
+         "Watch video instead" is the action that used to need a scroll to reach. -->
+    <div id="recognitionHelpPanel" class="ss-lens-panel" role="region" aria-live="polite" aria-labelledby="recognitionHelpMessage" style="display:none;background:rgba(8,16,20,0.92);border:1px solid rgba(0,212,255,0.25);">
+      <div id="recognitionHelpMessage" style="color:#00d4ff;font-weight:700;margin-bottom:12px;font-size:14px;">
+        Recognition is taking too long. Try moving closer or improving lighting.
+      </div>
+      <div class="ss-scan-actions">
+        <button type="button" id="recognitionContinueBtn" class="ss-scan-btn ss-scan-btn-primary">
+          <i class="fa-solid fa-camera" aria-hidden="true"></i>
+          Continue Scanning
+        </button>
+        <button type="button" id="recognitionWatchBtn" class="ss-scan-btn ss-scan-btn-secondary" aria-label="Watch video instead" style="display:none;">
+          <i class="fa-solid fa-play" aria-hidden="true"></i>
+          Watch video instead
+        </button>
+        <a id="recognitionReturnBtn" href="{{ resolved_back_destination }}" class="ss-scan-btn ss-scan-btn-tertiary">
+          Return
+        </a>
+      </div>
+    </div>
   </div>
 
   <div id="soundGate"></div>
@@ -898,58 +1000,16 @@
     Looking for image…
   </div>
 
-  <!-- Real fallback UI (Part D): "Fallback available" must never appear without a visible
-       action. This panel is the only thing shown when the scanner state machine reaches
-       'fallback' — no non-AR video-playback fallback exists in this codebase for a project
-       with multiple image/video pairs (there is no single "the" video to play), so this
-       is a recovery-failed state with two real actions, not a fake claim of a fallback
-       flow that isn't actually wired up. -->
-  <div id="fallbackPanel" role="region" aria-live="polite" aria-labelledby="fallbackMessage" style="display:none;margin:12px auto 0;max-width:420px;padding:20px;border-radius:16px;background:rgba(20,10,10,0.92);border:1px solid rgba(255,90,90,0.3);text-align:center;">
-    <div id="fallbackMessage" style="color:#ff9090;font-weight:700;margin-bottom:16px;font-size:14px;"></div>
-    <div class="ss-scan-actions">
-      <button type="button" id="fallbackRetryBtn" class="ss-scan-btn ss-scan-btn-primary">
-        <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
-        Retry Camera
-      </button>
-      <button type="button" id="fallbackWatchBtn" class="ss-scan-btn ss-scan-btn-secondary" aria-label="Watch video instead" style="display:none;">
-        <i class="fa-solid fa-play" aria-hidden="true"></i>
-        Watch video instead
-      </button>
-      {# Same server-resolved destination as Back — see resolve_scanner_entry_context() in
-         app.py. Both controls must always agree on where "away from the scanner" goes. #}
-      <a id="fallbackReturnBtn" href="{{ resolved_back_destination }}" class="ss-scan-btn ss-scan-btn-tertiary">
-        Return to Project
-      </a>
-    </div>
-  </div>
-
-  <!-- Recognition-timeout help (distinct from camera failure): a healthy camera that just
-       hasn't found a marker after repeated tries. Deliberately styled and worded
-       differently from #fallbackPanel — "Continue Scanning" never touches the camera or
-       loops, unlike "Retry Camera" above, which calls the guarded recovery path. -->
-  <div id="recognitionHelpPanel" role="region" aria-live="polite" aria-labelledby="recognitionHelpMessage" style="display:none;margin:12px auto 0;max-width:420px;padding:20px;border-radius:16px;background:rgba(8,16,20,0.92);border:1px solid rgba(0,212,255,0.25);text-align:center;">
-    <div id="recognitionHelpMessage" style="color:#00d4ff;font-weight:700;margin-bottom:16px;font-size:14px;">
-      Recognition is taking too long. Try moving closer or improving lighting.
-    </div>
-    <div class="ss-scan-actions">
-      <button type="button" id="recognitionContinueBtn" class="ss-scan-btn ss-scan-btn-primary">
-        <i class="fa-solid fa-camera" aria-hidden="true"></i>
-        Continue Scanning
-      </button>
-      <button type="button" id="recognitionWatchBtn" class="ss-scan-btn ss-scan-btn-secondary" aria-label="Watch video instead" style="display:none;">
-        <i class="fa-solid fa-play" aria-hidden="true"></i>
-        Watch video instead
-      </button>
-      <a id="recognitionReturnBtn" href="{{ resolved_back_destination }}" class="ss-scan-btn ss-scan-btn-tertiary">
-        Return
-      </a>
-    </div>
-  </div>
-
   <div id="fallbackVideoPanel" role="region" aria-live="polite" aria-labelledby="fallbackVideoTitle" style="display:none;margin:12px auto 0;max-width:520px;padding:16px;border-radius:16px;background:rgba(10,10,14,0.94);border:1px solid var(--ss-border-strong, rgba(255,255,255,0.18));text-align:center;">
     <div id="fallbackVideoTitle" style="color:#fff;font-weight:700;margin-bottom:12px;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;">Watching fallback video</div>
     <video id="fallbackVideo" controls playsinline preload="metadata" aria-label="Fallback video" style="width:100%;max-height:60vh;background:#000;border-radius:10px;"></video>
     <div id="fallbackVideoStatus" style="margin-top:10px;color:rgba(255,255,255,0.65);font-size:12px;">Use the player controls to watch the video.</div>
+    {# The panel used to have no user-operable exit at all: closeFallbackVideoPanel()'s
+       only caller was the camera-retry-success path, so a viewer who chose "Watch video
+       instead" could not get back to the scanner. #}
+    <button type="button" id="fallbackVideoCloseBtn" class="ss-scan-btn ss-scan-btn-tertiary" style="margin-top:10px;">
+      Back to scanner
+    </button>
   </div>
 
   {% if scanner_diagnostics_enabled %}
@@ -2080,6 +2140,7 @@
     const fallbackVideoPanelEl = document.getElementById("fallbackVideoPanel");
     const fallbackVideoEl = document.getElementById("fallbackVideo");
     const fallbackVideoStatusEl = document.getElementById("fallbackVideoStatus");
+    const fallbackVideoCloseBtn = document.getElementById("fallbackVideoCloseBtn");
     let fallbackCandidate = null;
     let fallbackWatchInProgress = false;
     let fallbackDiscoveryInFlight = false;
@@ -2247,6 +2308,19 @@
       scannerDiagnostics.push('fallback_video_closed', { reason: reason || null, generation: scannerGeneration });
     }
 
+    // Presentation-only handoff to the fallback player. stopOverlayImmediate() is a
+    // deliberate no-op once Detect Once has locked, so the overlay element is also paused
+    // and hidden directly here — otherwise a locked overlay would keep playing its audio
+    // underneath the fallback player. Nothing about the experience is renegotiated: no
+    // playback mode is written (none is persisted yet — see selectedPlaybackMode()), no
+    // new recognition is required, and the matched pair/project identity is untouched.
+    function stopTrackedOverlayForFallback() {
+      if (typeof stopOverlayImmediate === 'function') stopOverlayImmediate();
+      try { overlay.pause(); } catch (_) {}
+      overlayWrap.style.display = 'none';
+      overlayWrap.style.opacity = '0';
+    }
+
     async function showFallbackVideoFromCandidate(source) {
       if (fallbackWatchInProgress) return;
       fallbackWatchInProgress = true;
@@ -2261,6 +2335,7 @@
       try {
         const eventType = candidate.kind === 'pair' ? 'pair_fallback_view' : 'project_fallback_view';
         const viewKey = `${eventType}:${scannerSessionId || 'no_session'}:${candidate.pairIndex != null ? candidate.pairIndex : 'project'}`;
+        stopTrackedOverlayForFallback();
         setScannerUiState('fallback_playing', source || 'watch_clicked');
         fallbackVideoEl.src = candidate.videoUrl;
         fallbackVideoPanelEl.style.display = 'block';
@@ -2335,6 +2410,24 @@
     }
 
     recognitionContinueBtn.addEventListener('click', continueScanningFromRecognitionHelp);
+    // The only user-operable way back out of the fallback player. The scanner itself is
+    // never restarted from here — whichever in-lens recovery panel raised the player is
+    // still on screen behind it with its own actions, so this just puts the status chrome
+    // back on that panel.
+    fallbackVideoCloseBtn.addEventListener('click', function () {
+      closeFallbackVideoPanel('user_closed');
+      if (fallbackPanelEl.style.display !== 'none') {
+        const code = diagState.fallbackReason;
+        setScannerUiState(
+          code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' ? 'camera_unavailable' : 'fallback_available',
+          'fallback_video_closed'
+        );
+      } else if (recognitionHelpPanelEl.style.display !== 'none') {
+        setScannerUiState('recognition_timeout', 'fallback_video_closed');
+      } else {
+        setScannerUiState('scanning', 'fallback_video_closed');
+      }
+    });
     fallbackWatchBtn.addEventListener('click', () => showFallbackVideoFromCandidate('camera_fallback'));
     recognitionWatchBtn.addEventListener('click', () => showFallbackVideoFromCandidate('recognition_timeout'));
     markStartupCheckpoint('scanner_dom_initialized');
@@ -3752,6 +3845,16 @@
     const CAMERA_RECOVERY_RETRY_DELAY_MS = 600;
 
     function recoverScanner(reason, restartCamera) {
+      // Detect Once deliberately released the camera after locking, so isStreamDead() is
+      // permanently true from then on. Without this guard every caller that passes
+      // restartCamera=isStreamDead() (visibilitychange, orientation/resize debounce,
+      // pageshow-from-bfcache) would re-open the camera and restart the detect/tracking
+      // loops against a target that never needs to be found again — the exact reacquire
+      // loop the locked mode exists to avoid. One guard here covers all four callers.
+      if (detectOnceLocked) {
+        scannerDiagnostics.push('recover_skipped_detect_once_locked', { reason, generation: scannerGeneration });
+        return Promise.resolve();
+      }
       if (recoverScannerPromise) return recoverScannerPromise;
       recoverScannerPromise = recoverScannerInner(reason, restartCamera).finally(() => { recoverScannerPromise = null; });
       return recoverScannerPromise;
@@ -4159,6 +4262,11 @@
       stopTrackingLoop();
       stopWatchdog();
       stopScannerStatusCycle();
+      // ...and stop holding the camera open. Nothing reads frames after this point, so the
+      // stream was pure battery/privacy cost. Safe for the video: stopCameraStream() only
+      // touches cameraStream's tracks and cam.srcObject — #overlay is an independent
+      // element with its own src and keeps playing to the end.
+      stopCameraStream('detect_once_locked');
       // UI state and guidance were already set to the matched/tracking pair by the accept
       // path that called this; there is nothing further to announce.
     }
