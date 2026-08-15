@@ -100,6 +100,10 @@
       display: inline-flex;
       align-items: center;
       gap: 10px;
+      /* 10px uppercase text in 11px padding measured ~33px tall — under the 44px minimum
+         touch target. min-height grows the pill without touching padding, so the mobile
+         override below (which only shrinks padding/font) still lands on 44px. */
+      min-height: 44px;
       padding: 11px 18px;
       border-radius: 999px;
       text-decoration: none;
@@ -1307,10 +1311,27 @@
       color: rgba(255, 255, 255, 0.58);
     }
 
-    .wizard-type-option.active {
+    .wizard-type-option.active,
+    .wizard-type-option:has(input[type="radio"]:checked) {
       border-color: rgba(0, 212, 255, 0.55);
       background: rgba(0, 212, 255, 0.10);
       box-shadow: 0 0 20px rgba(0, 212, 255, 0.14);
+    }
+
+    /* Playback Style reuses the experience-type card look, but is a native radio group so
+       the browser supplies arrow-key navigation, group semantics and form submission for
+       free. The grid keeps the radio in its own column beside the two block children. */
+    .playback-option {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      column-gap: 10px;
+      align-items: start;
+    }
+
+    .playback-option input[type="radio"] {
+      grid-row: 1 / 3;
+      margin: 3px 0 0;
+      accent-color: #00d4ff;
     }
 
     .wizard-type-option .type-badge {
@@ -1352,6 +1373,7 @@
     body[data-experience-type="direct_qr"] .pair-image-block,
     body[data-experience-type="direct_qr"] .marker-tools,
     body[data-experience-type="direct_qr"] .marker-substep,
+    body[data-experience-type="direct_qr"] #playbackModeGroup,
     body[data-experience-type="direct_qr"] .recap-target {
       display: none !important;
     }
@@ -1862,6 +1884,30 @@
               Direct QR Video is not ready to publish yet, so this ScanStory cannot be created with it selected.
               Switch back to Image &rarr; Video to continue.
             </p>
+
+            <!-- Playback Style only exists for Image -> Video: Direct QR has exactly one way
+                 to play, so the group is hidden AND its radios disabled for that type. A
+                 disabled control is not submitted, so the server sees no playback_mode and
+                 applies its own default ('direct') — the invalid combinations are therefore
+                 unreachable from this form rather than merely discouraged. The server-side
+                 check in _validate_project_experience_playback() stays the real authority. -->
+            <div id="playbackModeGroup">
+              <label class="input-label" id="playbackModeLabel">Choose Playback Style</label>
+              <div class="wizard-type-options" id="playbackModeOptions" role="radiogroup" aria-labelledby="playbackModeLabel">
+                <label class="wizard-type-option playback-option">
+                  <input type="radio" name="playback_mode" value="tracked_overlay" checked
+                    onchange="updateWizardRecap()" />
+                  <strong>Tracked Overlay</strong>
+                  <span>The video stays attached to your photo and keeps following it while the camera tracks it.</span>
+                </label>
+                <label class="wizard-type-option playback-option">
+                  <input type="radio" name="playback_mode" value="detect_once"
+                    onchange="updateWizardRecap()" />
+                  <strong>Detect Once</strong>
+                  <span>Recognize your photo once, then the video plays uninterrupted even if the camera looks away.</span>
+                </label>
+              </div>
+            </div>
           </div>
 
           <div data-wizard-pane="2">
@@ -1902,6 +1948,10 @@
               <dt>Experience type</dt>
               <dd id="recapExperienceType">Image &rarr; Video</dd>
             </div>
+            <div class="wizard-recap-row">
+              <dt>Playback style</dt>
+              <dd id="recapPlaybackMode">Tracked Overlay</dd>
+            </div>
           </dl>
 
           <div class="preview-list" id="previewList">
@@ -1938,7 +1988,7 @@
               <i class="fas fa-play"></i> Test Experience
             </button>
             <button type="submit" class="action-btn upload-btn" id="submitBtn" disabled>
-              <i class="fas fa-qrcode"></i> Get My Scan Code
+              <i class="fas fa-qrcode"></i> Create ScanStory
             </button>
             <button type="button" class="action-btn clear-btn" id="cancelUploadBtn" onclick="cancelActiveUpload()" style="display:none;">
               <i class="fas fa-ban"></i> Cancel Upload
@@ -2177,9 +2227,20 @@
       const name = document.getElementById('projectName').value.trim();
       const recapName = document.getElementById('recapStoryName');
       const recapType = document.getElementById('recapExperienceType');
+      const recapPlayback = document.getElementById('recapPlaybackMode');
       if (recapName) recapName.textContent = name || 'Not set yet';
       if (recapType) recapType.textContent = experienceType() === 'direct_qr' ? 'Direct QR Video' : 'Image → Video';
+      if (recapPlayback) recapPlayback.textContent = playbackModeLabel();
       updateWizardCreateHint();
+    }
+
+    /* Reads the same radios the form submits, so the review step can never disagree with
+       what is actually posted. Direct QR has no radio to read: it always plays straight
+       away, which is what the server stores as 'direct'. */
+    function playbackModeLabel() {
+      if (experienceType() === 'direct_qr') return 'Plays instantly on scan';
+      const checked = document.querySelector('input[name="playback_mode"]:checked');
+      return checked && checked.value === 'detect_once' ? 'Detect Once' : 'Tracked Overlay';
     }
 
     // validateWizardStep() only guards step 1, so nothing used to tell a viewer sitting on
@@ -2231,6 +2292,13 @@
       // required or the browser will block submit on a field nobody can see.
       document.querySelectorAll('input[type="file"][accept^="image"]').forEach(input => {
         input.required = value === 'image_video';
+      });
+
+      // Disabled radios are not submitted, so Direct QR posts no playback_mode at all and
+      // the server applies 'direct'. This is what makes direct_qr + tracked_overlay (and
+      // image_video + direct) impossible to send from this form.
+      document.querySelectorAll('input[name="playback_mode"]').forEach(input => {
+        input.disabled = value !== 'image_video';
       });
 
       const contentTitle = document.getElementById('contentStepTitle');
@@ -3684,7 +3752,7 @@
       disableUploadNavigationWarning();
       if (submitBtn) {
         submitBtn.disabled = false;
-        submitBtn.innerHTML = '<i class="fas fa-qrcode"></i> Get My Scan Code';
+        submitBtn.innerHTML = '<i class="fas fa-qrcode"></i> Create ScanStory';
       }
       updateFormFields();
     }

@@ -687,24 +687,14 @@
       text-align: left;
     }
 
-    #playbackModeChoice legend {
-      padding: 0 8px;
-      font-size: 10px;
-      font-weight: 800;
-      letter-spacing: 0.2em;
-      text-transform: uppercase;
-      color: rgba(255, 255, 255, 0.42);
-    }
-
-    #playbackModeChoice label {
-      display: grid;
-      grid-template-columns: 20px 1fr;
-      gap: 10px;
-      align-items: start;
+    /* #playbackModeChoice is a read-only statement of the creator's persisted choice, not a
+       control: the <legend>/<label> rules that styled the old viewer-facing radio fieldset
+       are gone with it. */
+    #playbackModeChoice span {
+      display: block;
       font-size: 12.5px;
       line-height: 1.45;
       color: rgba(255, 255, 255, 0.6);
-      cursor: pointer;
     }
 
     #playbackModeChoice strong {
@@ -1646,13 +1636,28 @@
       : 'image_video';
     const USES_IMAGE_RECOGNITION = EXPERIENCE_TYPE !== 'direct_qr';
 
-    // 'tracked'     — the V1 behaviour: the overlay follows the marker and stops when it is
-    //                 lost. Still the default, and completely unchanged.
-    // 'detect_once' — recognition is a one-shot trigger: after the first accepted detection
-    //                 playback continues even if the marker is never seen again.
-    const SERVER_PLAYBACK_MODE = document.body && document.body.dataset
-      ? document.body.dataset.playbackMode
-      : 'tracked_overlay';
+    // The persisted Project.playback_mode is the ONLY source of truth for how this viewer
+    // behaves. There is no viewer-facing chooser, and deliberately no query-param or
+    // localStorage override — the creator decided this when the project was created.
+    //
+    // 'tracked_overlay' — the V1 behaviour: the overlay follows the marker and stops when
+    //                     it is lost. Still the default, and completely unchanged.
+    // 'detect_once'     — recognition is a one-shot trigger: after the first accepted
+    //                     detection playback continues even if the marker is never seen again.
+    // 'direct'          — Direct QR, which plays through #directQrVideo and never runs the
+    //                     tracking lifecycle at all.
+    //
+    // An unrecognized value means the server sent something this build does not understand.
+    // Fail safe to the generic default and say so; never recover by offering the viewer a
+    // choice, which is exactly the authority we just took away.
+    const PLAYBACK_MODES = ['tracked_overlay', 'detect_once', 'direct'];
+    const RAW_PLAYBACK_MODE = (document.body && document.body.dataset && document.body.dataset.playbackMode) || '';
+    if (PLAYBACK_MODES.indexOf(RAW_PLAYBACK_MODE) === -1) {
+      console.warn('[scanner] unrecognized persisted playback mode', RAW_PLAYBACK_MODE, '- falling back to tracked_overlay');
+    }
+    const SERVER_PLAYBACK_MODE = PLAYBACK_MODES.indexOf(RAW_PLAYBACK_MODE) === -1 ? 'tracked_overlay' : RAW_PLAYBACK_MODE;
+    // 'direct' collapses into the tracked-overlay branch below without ever exercising it,
+    // because a Direct QR project never starts the camera or the tracking loops.
     let scannerPlaybackMode = SERVER_PLAYBACK_MODE === 'detect_once' ? 'detect_once' : 'tracked_overlay';
     let detectOnceLocked = false;
 
@@ -2313,9 +2318,12 @@
     // Presentation-only handoff to the fallback player. stopOverlayImmediate() is a
     // deliberate no-op once Detect Once has locked, so the overlay element is also paused
     // and hidden directly here — otherwise a locked overlay would keep playing its audio
-    // underneath the fallback player. Nothing about the experience is renegotiated: no
-    // playback mode is written (none is persisted yet — see selectedPlaybackMode()), no
-    // new recognition is required, and the matched pair/project identity is untouched.
+    // underneath the fallback player. Nothing about the experience is renegotiated: the
+    // fallback is presentation-only and never writes playback_mode. That field is now a
+    // real persisted column (Project.playback_mode) owned by the creator, so a fallback
+    // must not mutate it — it is read once at load into SERVER_PLAYBACK_MODE and nothing
+    // on this page writes it back. No new recognition is required either, and the matched
+    // pair/project identity is untouched.
     function stopTrackedOverlayForFallback() {
       if (typeof stopOverlayImmediate === 'function') stopOverlayImmediate();
       try { overlay.pause(); } catch (_) {}

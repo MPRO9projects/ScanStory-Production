@@ -180,7 +180,7 @@ def test_upload_failure_and_abort_restore_controls():
     assert "UPLOAD CLIENT FAILED" in html
     assert "UPLOAD CLIENT ABORTED" in html
     assert "resetUploadSubmit(submitBtn)" in html
-    assert "submitBtn.innerHTML = '<i class=\"fas fa-qrcode\"></i> Get My Scan Code'" in html
+    assert "submitBtn.innerHTML = '<i class=\"fas fa-qrcode\"></i> Create ScanStory'" in html
 
 
 def test_beforeunload_only_active_during_upload_and_removed_after_completion():
