@@ -461,6 +461,14 @@
                 Development Test Account
             </div>
             {% endif %}
+            {# V1.1: lightweight vendor identity. One account, one person - deliberately
+               not an organisation, workspace, team or shared billing surface. #}
+            {% if account_type_label(user) == 'Business / Vendor' %}
+            <div class="inline-flex items-center gap-2 mt-4 px-3 py-1 rounded-full border border-purple-400/30 bg-purple-400/10 text-purple-200 text-xs font-bold uppercase tracking-widest">
+                <i class="fas fa-briefcase" aria-hidden="true"></i>
+                Business / Vendor Account
+            </div>
+            {% endif %}
             <p class="text-slate-500 mt-4 max-w-2xl">
                 Bring your memories to life. Start by adding a photo and the moment behind it.
             </p>

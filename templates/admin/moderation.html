@@ -1,0 +1,294 @@
+{% extends "admin/base.html" %}
+{% block title %}Content Reports{% endblock %}
+
+{#
+  Server-rendered shell over the existing JSON moderation API
+  (/admin/reports, /admin/reports/<id>, /admin/reports/<id>/review). No new
+  moderation capability is introduced here: the only actions offered are the
+  three transitions that route already accepts, and PROJECT_SUSPENDED is the
+  only one that changes anything about a project (it sets is_active = False
+  and nothing else). There is no delete-content, no ban-creator and no refund
+  action anywhere on this page, because no such backend action exists.
+#}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
+  <h1 class="h3 mb-0">Content Reports</h1>
+  <form method="GET" class="d-flex gap-2 flex-wrap" action="{{ url_for('admin_moderation_page') }}">
+    <label class="visually-hidden" for="statusFilter">Filter by status</label>
+    <select class="form-select form-select-sm" id="statusFilter" name="status" style="min-width:180px;">
+      <option value="">All statuses</option>
+      {% for code in report_statuses %}
+      <option value="{{ code }}" {% if status_filter == code %}selected{% endif %}>
+        {{ CONTENT_REPORT_STATUS_LABELS.get(code, code) }}
+      </option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-sm btn-primary">Filter</button>
+  </form>
+</div>
+
+{% if not admin_can('admin.reports.manage') %}
+<div class="alert alert-info">
+  You have read-only access to content reports. Moderation actions require the
+  reports-manage permission.
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <caption class="visually-hidden">Content reports queue</caption>
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">ScanStory</th>
+            <th scope="col">Reason</th>
+            <th scope="col">Reported</th>
+            <th scope="col">Reporter</th>
+            <th scope="col">Status</th>
+            <th scope="col">Resolution</th>
+            <th scope="col" class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="reportRows">
+          <tr id="reportsLoadingRow">
+            <td colspan="8" class="text-center text-muted py-4">Loading reports&hellip;</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- Review modal. One modal for all three transitions; the confirmation copy
+     changes with the chosen action. -->
+<div class="modal fade" id="reviewModal" tabindex="-1" aria-labelledby="reviewModalTitle" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="reviewModalTitle">Review report</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <dl class="row mb-3 small">
+          <dt class="col-4">ScanStory</dt><dd class="col-8" id="reviewProject">-</dd>
+          <dt class="col-4">Reason</dt><dd class="col-8" id="reviewReason">-</dd>
+          <dt class="col-4">Details</dt><dd class="col-8" id="reviewDetails">-</dd>
+        </dl>
+
+        <div class="mb-3">
+          <label class="form-label" for="reviewStatus">New status</label>
+          <select class="form-select" id="reviewStatus">
+            {% for code in report_statuses %}
+            {% if code != 'OPEN' %}
+            <option value="{{ code }}">{{ CONTENT_REPORT_STATUS_LABELS.get(code, code) }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="mb-3" id="reviewActionWrap">
+          <label class="form-label" for="reviewAction">Resolution</label>
+          <select class="form-select" id="reviewAction">
+            {% for code in report_actions %}
+            <option value="{{ code }}">{{ CONTENT_REPORT_ACTION_LABELS.get(code, code) }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label" for="reviewReasonText">Reason / notes</label>
+          <textarea class="form-control" id="reviewReasonText" rows="3"
+                    placeholder="Why this decision was made"></textarea>
+        </div>
+
+        <div class="alert alert-warning d-none" id="suspendWarning">
+          <strong>Suspending this ScanStory</strong>
+          <ul class="mb-0 ps-3 small">
+            <li>It becomes publicly unavailable &mdash; scans and media stop resolving.</li>
+            <li>The project, its images and its videos are <strong>not</strong> deleted.</li>
+            <li>The QR code and project identity stay intact.</li>
+            <li>Any paid coverage stays recorded and is not refunded or cancelled.</li>
+            <li>This action is written to the admin activity log.</li>
+          </ul>
+        </div>
+
+        <p class="text-danger small mb-0 d-none" id="reviewError" role="alert"></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-primary" id="reviewSubmit">Save decision</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  (function () {
+    const CSRF = "{{ csrf_token() }}";
+    const CAN_MANAGE = {{ 'true' if admin_can('admin.reports.manage') else 'false' }};
+    const STATUS_FILTER = {{ status_filter|tojson }};
+    const REASON_LABELS = {{ CONTENT_REPORT_REASON_LABELS|tojson }};
+    const STATUS_LABELS = {{ CONTENT_REPORT_STATUS_LABELS|tojson }};
+    const ACTION_LABELS = {{ CONTENT_REPORT_ACTION_LABELS|tojson }};
+
+    const rows = document.getElementById('reportRows');
+    const modalEl = document.getElementById('reviewModal');
+    const modal = new bootstrap.Modal(modalEl);
+    const statusSelect = document.getElementById('reviewStatus');
+    const actionSelect = document.getElementById('reviewAction');
+    const actionWrap = document.getElementById('reviewActionWrap');
+    const reasonText = document.getElementById('reviewReasonText');
+    const suspendWarning = document.getElementById('suspendWarning');
+    const errorBox = document.getElementById('reviewError');
+    const submitBtn = document.getElementById('reviewSubmit');
+    let activeReportId = null;
+
+    function esc(value) {
+      const node = document.createElement('span');
+      node.textContent = value == null ? '' : String(value);
+      return node.innerHTML;
+    }
+
+    function statusBadge(status) {
+      const tone = status === 'OPEN' ? 'bg-danger'
+        : status === 'UNDER_REVIEW' ? 'bg-warning text-dark'
+        : status === 'ACTION_TAKEN' ? 'bg-primary'
+        : 'bg-secondary';
+      return '<span class="badge ' + tone + '">' + esc(STATUS_LABELS[status] || status) + '</span>';
+    }
+
+    function emptyRow(message) {
+      return '<tr><td colspan="8" class="text-center text-muted py-4">' + esc(message) + '</td></tr>';
+    }
+
+    function load() {
+      rows.innerHTML = emptyRow('Loading reports…');
+      const url = '{{ url_for("admin_content_reports") }}' + (STATUS_FILTER ? '?status=' + encodeURIComponent(STATUS_FILTER) : '');
+      fetch(url, { headers: { Accept: 'application/json' } })
+        .then(async function (response) {
+          let payload = null;
+          try { payload = await response.json(); } catch (e) { /* redirect / error page */ }
+          if (!response.ok || !payload || !payload.success) {
+            // A denied admin route answers with an HTML redirect, not JSON, so
+            // there is nothing to parse - say so plainly instead of blanking.
+            rows.innerHTML = emptyRow('Could not load reports. Your session may have expired — reload the page.');
+            return;
+          }
+          render(payload.reports || []);
+        })
+        .catch(function () {
+          rows.innerHTML = emptyRow('Network error while loading reports.');
+        });
+    }
+
+    function render(reports) {
+      if (!reports.length) {
+        rows.innerHTML = emptyRow('No reports match this filter.');
+        return;
+      }
+      rows.innerHTML = reports.map(function (report) {
+        const projectCell = report.project_name
+          ? '<a href="/admin/projects/' + report.project_id + '">' + esc(report.project_name) + '</a>'
+          : '<a href="/admin/projects/' + report.project_id + '">Project ' + report.project_id + '</a>';
+        const reporter = report.reporter_user_id
+          ? 'User ' + report.reporter_user_id
+          : (report.has_reporter_contact ? 'Contact provided' : 'Anonymous');
+        const resolution = report.resolution_action
+          ? esc(ACTION_LABELS[report.resolution_action] || report.resolution_action)
+          : '<span class="text-muted">-</span>';
+        const actionCell = CAN_MANAGE
+          ? '<button type="button" class="btn btn-sm btn-outline-primary" data-review="' + report.id + '">Review</button>'
+          : '<span class="text-muted small">View only</span>';
+        return '<tr>'
+          + '<td>' + report.id + '</td>'
+          + '<td>' + projectCell + '</td>'
+          + '<td>' + esc(REASON_LABELS[report.reason] || report.reason) + '</td>'
+          + '<td class="small">' + esc((report.created_at || '').slice(0, 10)) + '</td>'
+          + '<td class="small">' + esc(reporter) + '</td>'
+          + '<td>' + statusBadge(report.status) + '</td>'
+          + '<td class="small">' + resolution + '</td>'
+          + '<td class="text-end">' + actionCell + '</td>'
+          + '</tr>';
+      }).join('');
+
+      rows.querySelectorAll('[data-review]').forEach(function (button) {
+        button.addEventListener('click', function () {
+          openReview(reports.find(function (r) { return String(r.id) === button.dataset.review; }));
+        });
+      });
+    }
+
+    function openReview(report) {
+      if (!report) return;
+      activeReportId = report.id;
+      document.getElementById('reviewProject').textContent = report.project_name || ('Project ' + report.project_id);
+      document.getElementById('reviewReason').textContent = REASON_LABELS[report.reason] || report.reason;
+      document.getElementById('reviewDetails').textContent = report.details || '-';
+      statusSelect.value = 'UNDER_REVIEW';
+      actionSelect.value = 'NONE';
+      reasonText.value = '';
+      errorBox.classList.add('d-none');
+      syncActionVisibility();
+      modal.show();
+    }
+
+    function syncActionVisibility() {
+      // The backend only requires (and only accepts) a resolution action when
+      // the status becomes ACTION_TAKEN.
+      const isAction = statusSelect.value === 'ACTION_TAKEN';
+      actionWrap.classList.toggle('d-none', !isAction);
+      suspendWarning.classList.toggle('d-none', !(isAction && actionSelect.value === 'PROJECT_SUSPENDED'));
+    }
+
+    statusSelect.addEventListener('change', syncActionVisibility);
+    actionSelect.addEventListener('change', syncActionVisibility);
+
+    submitBtn.addEventListener('click', function () {
+      if (!activeReportId) return;
+      const status = statusSelect.value;
+      const action = status === 'ACTION_TAKEN' ? actionSelect.value : null;
+
+      if (action === 'PROJECT_SUSPENDED'
+          && !window.confirm('Suspend this ScanStory? It becomes publicly unavailable. Nothing is deleted and the QR code stays valid.')) {
+        return;
+      }
+
+      submitBtn.disabled = true;
+      errorBox.classList.add('d-none');
+      fetch('/admin/reports/' + activeReportId + '/review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF },
+        body: JSON.stringify({
+          status: status,
+          resolution_action: action,
+          resolution_reason: reasonText.value.trim()
+        })
+      })
+        .then(async function (response) {
+          submitBtn.disabled = false;
+          let payload = null;
+          try { payload = await response.json(); } catch (e) { /* not JSON */ }
+          if (!response.ok || !payload || !payload.success) {
+            errorBox.textContent = (payload && payload.error) || 'Could not save this decision.';
+            errorBox.classList.remove('d-none');
+            return;
+          }
+          modal.hide();
+          load();
+        })
+        .catch(function () {
+          submitBtn.disabled = false;
+          errorBox.textContent = 'Network error. The decision was not saved.';
+          errorBox.classList.remove('d-none');
+        });
+    });
+
+    load();
+  })();
+</script>
+{% endblock %}

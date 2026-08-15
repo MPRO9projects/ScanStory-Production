@@ -731,11 +731,7 @@
                     </button>
                     {% endif %}
 
-                    {% if payment.status == 'success' and payment.razorpay_payment_id %}
-                    <button class="btn btn-secondary" type="button" disabled title="Refund processing is not available in this admin package.">
-                        Refund unavailable
-                    </button>
-                    {% endif %}
+                    <a href="#refundCard" class="btn btn-secondary">Refund details</a>
 
                     <button class="btn btn-secondary" type="button" disabled title="Receipt resend is not available in this admin package.">
                         Receipt resend unavailable
@@ -750,6 +746,114 @@
                     </a>
                 </div>
             </div>
+        </div>
+
+        <!-- V1.1 admin refund. Full refunds only; there is no partial-amount
+             input here because the backend accepts no amount field at all. -->
+        <div class="card" id="refundCard">
+            <h3 style="margin-bottom: 15px;">Refund</h3>
+
+            <div class="info-section">
+                <div class="info-row">
+                    <span class="info-label">Original amount</span>
+                    <span class="info-value">{{ payment.currency }} {{ "%.2f"|format(payment.total_amount) }}</span>
+                </div>
+
+                {% if refund %}
+                <!-- Two separate facts, always both on screen. A refund that the
+                     provider completed is still shown as needing reconciliation
+                     when the entitlement side is not settled. -->
+                <div class="info-row">
+                    <span class="info-label">Refund status</span>
+                    <span class="info-value" data-refund-status="{{ refund.status }}">
+                        {{ REFUND_STATUS_LABELS.get(refund.status, refund.status) }}
+                    </span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Entitlement reconciliation</span>
+                    <span class="info-value" data-reconciliation-status="{{ refund.reconciliation_status }}">
+                        {{ REFUND_RECONCILIATION_LABELS.get(refund.reconciliation_status, refund.reconciliation_status) }}
+                    </span>
+                </div>
+                {% if refund.reconciliation_message_safe %}
+                <div class="alert alert-info" style="margin-top: 12px;">{{ refund.reconciliation_message_safe }}</div>
+                {% endif %}
+                <div class="info-row">
+                    <span class="info-label">Refunded amount</span>
+                    <span class="info-value">{{ refund.currency }} {{ "%.2f"|format(refund.amount) }} (full)</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Provider refund reference</span>
+                    <span class="info-value">{{ refund.provider_refund_id or 'Not issued yet' }}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Requested by</span>
+                    <span class="info-value">
+                        {{ refund.requested_by_admin.name if refund.requested_by_admin else 'Admin #' ~ refund.requested_by_admin_id }}
+                    </span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Requested at</span>
+                    <span class="info-value">{{ refund.requested_at.strftime('%d %b %Y, %I:%M %p') if refund.requested_at else '-' }}</span>
+                </div>
+                {% if refund.completed_at %}
+                <div class="info-row">
+                    <span class="info-label">Completed at</span>
+                    <span class="info-value">{{ refund.completed_at.strftime('%d %b %Y, %I:%M %p') }}</span>
+                </div>
+                {% endif %}
+                {% if refund.failed_at %}
+                <div class="info-row">
+                    <span class="info-label">Failed at</span>
+                    <span class="info-value">{{ refund.failed_at.strftime('%d %b %Y, %I:%M %p') }}</span>
+                </div>
+                {% endif %}
+                {% if refund.failure_message_safe %}
+                <div class="alert alert-error" style="margin-top: 12px;">{{ refund.failure_message_safe }}</div>
+                {% endif %}
+                {% else %}
+                <div class="info-row">
+                    <span class="info-label">Refund status</span>
+                    <span class="info-value">No refund has been requested for this payment.</span>
+                </div>
+                {% endif %}
+            </div>
+
+            {% if admin_can('admin.payments.refund') %}
+            <div style="border-top: 1px solid rgba(255,255,255,0.08); padding-top: 20px; margin-top: 20px;">
+                {% if refund_eligibility.eligible %}
+                <div class="alert alert-info" id="refundNotice" style="white-space: pre-line;">{{ REFUND_CONFIRMATION_NOTICE }}</div>
+                {% if refund_eligibility.entitlement_effects.get('subscription_policy') == 'MANUAL_REVIEW_REQUIRED' %}
+                <div class="alert alert-info">
+                    {{ REFUND_ENTITLEMENT_EFFECT_NOTES['VALIDITY_EXTENSION'] }}
+                </div>
+                {% endif %}
+                <div style="max-width: 640px;">
+                    <label for="refundReason" style="display:block; margin-bottom:8px; color: rgba(255,255,255,0.6);">
+                        Refund reason (required)
+                    </label>
+                    <textarea id="refundReason" rows="3" required aria-required="true"
+                              style="width:100%; min-height:80px; background: rgba(255,255,255,0.04); color:#e6e6e9; border:1px solid rgba(255,255,255,0.16); border-radius:8px; padding:10px;"
+                              placeholder="Why is this payment being refunded?"></textarea>
+                </div>
+                <div style="margin-top: 15px; display:flex; gap:15px; align-items:center; flex-wrap: wrap;">
+                    <button class="btn btn-danger" type="button" id="refundBtn"
+                            data-refund-url="{{ url_for('admin_refund_payment', payment_id=payment.id) }}">
+                        Refund Payment
+                    </button>
+                    <span id="refundStatusMsg" role="status" aria-live="polite" style="color: rgba(255,255,255,0.6);"></span>
+                </div>
+                {% else %}
+                <p id="refundIneligibleReason" style="color: rgba(255,255,255,0.6); margin-bottom: 15px;">
+                    Refund not available: {{ refund_eligibility.reason_text }}
+                </p>
+                <button class="btn btn-secondary" type="button" id="refundBtn" disabled
+                        title="{{ refund_eligibility.reason_text }}">
+                    Refund Payment
+                </button>
+                {% endif %}
+            </div>
+            {% endif %}
         </div>
 
         <!-- Related Subscription -->
@@ -879,6 +983,50 @@
                 console.error('Failed to copy: ', err);
             });
         }
+
+        // V1.1 admin refund. Full refund only - no amount is sent, because the
+        // endpoint takes no amount. The response is never treated as the final
+        // state: reconciliation can settle asynchronously (webhook), so we
+        // reload and let the server re-render the authoritative status.
+        (function () {
+            const btn = document.getElementById('refundBtn');
+            if (!btn || btn.disabled) { return; }
+            const reasonEl = document.getElementById('refundReason');
+            const msgEl = document.getElementById('refundStatusMsg');
+            const NOTICE = {{ REFUND_CONFIRMATION_NOTICE|tojson }};
+            const CSRF = "{{ csrf_token() }}";
+
+            btn.addEventListener('click', function () {
+                const reason = (reasonEl.value || '').trim();
+                if (!reason) {
+                    msgEl.textContent = 'A refund reason is required.';
+                    reasonEl.focus();
+                    return;
+                }
+                if (!window.confirm(NOTICE + '\n\nRefund the full amount now?')) { return; }
+                btn.disabled = true;
+                msgEl.textContent = 'Sending refund request…';
+                fetch(btn.dataset.refundUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF },
+                    body: JSON.stringify({ reason: reason })
+                }).then(async function (response) {
+                    let payload = null;
+                    try { payload = await response.json(); } catch (e) { /* redirect / error page */ }
+                    if (!response.ok || !payload || !payload.success) {
+                        msgEl.textContent = 'Refund could not be started'
+                            + (payload && payload.code ? ' (' + payload.code + ').' : '.')
+                            + ' Reloading current status…';
+                    } else {
+                        msgEl.textContent = 'Refund submitted. Reloading authoritative status…';
+                    }
+                    window.location.reload();
+                }).catch(function () {
+                    msgEl.textContent = 'Network error. Reload the page to see the current refund status.';
+                    btn.disabled = false;
+                });
+            });
+        })();
 
         // Auto remove alerts after 5 seconds
         document.addEventListener('DOMContentLoaded', function() {

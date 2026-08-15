@@ -617,6 +617,35 @@
                         {% endif %}
                     </div>
 
+                    {# V1.1 - one summary badge per card, only when there is something
+                       out of the ordinary to say. "You own this" on every card would be
+                       noise; the detail page carries the full ownership panel. #}
+                    {% if project.is_suspended or project.active_transfer_status or project.viewer_relationship == 'manager' or project.beneficiary_user_id %}
+                    <div class="card-meta" style="margin-top:-4px;">
+                        {% if project.is_suspended %}
+                        <span class="ss-chip" data-tone="stop">
+                            <i class="fas fa-ban" aria-hidden="true"></i> Suspended
+                        </span>
+                        {% endif %}
+                        {% if project.active_transfer_status %}
+                        <span class="ss-chip" data-tone="wait">
+                            <i class="fas fa-right-left" aria-hidden="true"></i>
+                            {{ PROJECT_TRANSFER_STATUS_LABELS.get(project.active_transfer_status, 'Transfer in progress') }}
+                        </span>
+                        {% endif %}
+                        {% if project.viewer_relationship == 'manager' %}
+                        <span class="ss-chip" data-tone="info">
+                            <i class="fas fa-user-gear" aria-hidden="true"></i> Managed by you
+                        </span>
+                        {% endif %}
+                        {% if project.beneficiary_user_id %}
+                        <span class="ss-chip" data-tone="neutral">
+                            <i class="fas fa-user" aria-hidden="true"></i> Has a customer
+                        </span>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
                     <div class="card-actions">
                         <a href="{{ url_for('project_view', project_id=project.id) }}" class="action-btn btn-view">
                             <i class="fas fa-eye"></i> View

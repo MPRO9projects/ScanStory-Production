@@ -118,6 +118,210 @@
         {% endif %}
     </div>
     
+    {# =====================================================================
+       V1.1 - Ownership & ScanStory Coverage.
+
+       Every value below is rendered from the server-side summaries
+       (project_coverage_summary / project_ownership_context) through the
+       shared label maps. No raw enum reaches this page, and no number is
+       recomputed here.
+       ===================================================================== #}
+    {% if coverage %}
+    <section class="ss-domain-panel mb-6" aria-labelledby="coverageHeading">
+      <h2 class="ss-domain-panel-title" id="coverageHeading">
+        <i class="fas fa-shield-halved" aria-hidden="true"></i> ScanStory Coverage
+      </h2>
+
+      <div class="flex flex-wrap items-center gap-2 mb-4">
+        {% if coverage.is_suspended %}
+        <span class="ss-chip" data-tone="stop">
+          <i class="fas fa-ban" aria-hidden="true"></i> Suspended
+        </span>
+        {% elif coverage.is_live and not coverage.effective_coverage_until %}
+        <span class="ss-chip" data-tone="ok">
+          <i class="fas fa-circle-check" aria-hidden="true"></i> Active
+        </span>
+        {% elif coverage.is_live %}
+        <span class="ss-chip" data-tone="ok">
+          <i class="fas fa-circle-check" aria-hidden="true"></i>
+          Covered until {{ coverage.effective_coverage_until|friendly_date }}
+        </span>
+        {% else %}
+        <span class="ss-chip" data-tone="wait">
+          <i class="fas fa-hourglass-end" aria-hidden="true"></i> Coverage expired
+        </span>
+        {% endif %}
+
+        {% if coverage.renewal_eligible and not coverage.is_suspended %}
+        <span class="ss-chip" data-tone="info">
+          <i class="fas fa-rotate" aria-hidden="true"></i> Renewal available
+        </span>
+        {% endif %}
+      </div>
+
+      <dl class="ss-domain-grid">
+        <div class="ss-domain-row">
+          <dt>Covered by</dt>
+          <dd>{{ PROJECT_COVERAGE_SOURCE_LABELS.get(coverage.coverage_source, 'Not covered right now') }}</dd>
+        </div>
+        <div class="ss-domain-row">
+          <dt>Valid until</dt>
+          <dd>
+            {% if coverage.is_suspended %}-
+            {% elif coverage.effective_coverage_until %}{{ coverage.effective_coverage_until|friendly_date }}
+            {% elif coverage.is_live %}No end date
+            {% else %}-{% endif %}
+          </dd>
+        </div>
+      </dl>
+
+      {% if coverage.is_suspended %}
+      {# Suspension is a moderation state, not a billing state. Renewing buys
+         nothing here, so no purchase CTA is offered at all. #}
+      <p class="ss-domain-note">
+        This ScanStory has been suspended after a review, so people cannot open it right now.
+        Your videos, images and QR code have not been deleted, and any coverage you have paid
+        for is still recorded. Buying coverage will not lift a suspension &mdash; contact support
+        if you think this was a mistake.
+      </p>
+      {% endif %}
+
+      {% if not admin_view and not coverage.is_suspended %}
+      <div class="mt-4" id="renewalSection">
+        <h3 class="ss-domain-panel-title" style="margin-bottom:12px;">
+          <i class="fas fa-rotate" aria-hidden="true"></i> Extend ScanStory Coverage
+        </h3>
+        {% if coverage.renewal_eligible %}
+        <p class="ss-domain-note" style="margin-top:0;">
+          Keeps this ScanStory live on its own. New coverage starts on
+          {{ coverage.renewal_starts_at|friendly_date }}, right after what is already paid for,
+          so no time is lost or doubled up. This does not change your account plan or its renewal date.
+        </p>
+        <div class="ss-addon-list" data-ss-addon-list role="list">
+          <p class="ss-addon-note">Loading options&hellip;</p>
+        </div>
+        <p class="ss-addon-status" data-ss-addon-status role="status" aria-live="polite" hidden></p>
+        {% elif coverage.renewal_blocked_code == 'COVERAGE_ALREADY_INDEFINITE' %}
+        <p class="ss-domain-note" style="margin-top:0;">
+          This ScanStory does not currently require standalone renewal &mdash; it is covered with no end date.
+        </p>
+        {% else %}
+        <p class="ss-domain-note" style="margin-top:0;">
+          Renewal is not available for this ScanStory right now.
+        </p>
+        {% endif %}
+      </div>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if ownership %}
+    <section class="ss-domain-panel mb-6" aria-labelledby="ownershipHeading">
+      <h2 class="ss-domain-panel-title" id="ownershipHeading">
+        <i class="fas fa-user-shield" aria-hidden="true"></i> Ownership
+      </h2>
+
+      <dl class="ss-domain-grid">
+        <div class="ss-domain-row">
+          <dt>Owner</dt>
+          <dd>
+            {% if ownership.viewer_is_owner %}You
+            {% elif ownership.owner %}{{ ownership.owner.full_name or ownership.owner.email }}
+            {% else %}Not assigned{% endif %}
+          </dd>
+        </div>
+        {% if ownership.manager %}
+        <div class="ss-domain-row">
+          <dt>Managed by</dt>
+          <dd>{% if ownership.viewer_is_manager %}You{% else %}{{ ownership.manager.full_name or ownership.manager.email }}{% endif %}</dd>
+        </div>
+        {% endif %}
+        {% if ownership.beneficiary %}
+        <div class="ss-domain-row">
+          <dt>Customer</dt>
+          <dd>{{ ownership.beneficiary.full_name or ownership.beneficiary.email }}</dd>
+        </div>
+        {% endif %}
+      </dl>
+
+      {% if ownership.transfer %}
+      <div class="mt-4">
+        <h3 class="ss-domain-panel-title" style="margin-bottom:12px;">
+          <i class="fas fa-right-left" aria-hidden="true"></i> Ownership transfer
+        </h3>
+        <span class="ss-chip"
+              data-tone="{% if ownership.transfer.status == 'COMPLETED' %}ok{% elif ownership.transfer.status in ['CANCELLED', 'EXPIRED'] %}neutral{% elif ownership.transfer.status == 'DISPUTED' %}stop{% else %}wait{% endif %}">
+          <i class="fas fa-right-left" aria-hidden="true"></i>
+          {{ PROJECT_TRANSFER_STATUS_LABELS.get(ownership.transfer.status, 'Transfer status unavailable') }}
+        </span>
+        {% if ownership.transfer_recipient %}
+        <p class="ss-domain-note">
+          Recipient: {{ ownership.transfer_recipient.full_name or ownership.transfer_recipient.email }}
+        </p>
+        {% endif %}
+        {% if ownership.transfer.status == 'PENDING_ACCEPTANCE' %}
+        <p class="ss-domain-note">
+          Ownership only changes once the recipient accepts. Until then nothing moves: the QR code,
+          the videos and the images stay exactly as they are, and your project slot is still held
+          &mdash; it is only released when the transfer completes.
+        </p>
+        {% elif ownership.transfer.status == 'PENDING_CAPACITY' %}
+        <p class="ss-domain-note">
+          The recipient accepted but does not have a free project slot yet, so the handover is
+          waiting. Nothing has been cancelled or moved: this ScanStory stays live, keeps the same
+          QR code, and keeps any coverage that belongs to it. It will complete once the recipient
+          has an available slot.
+        </p>
+        {% elif ownership.transfer.status == 'COMPLETED' %}
+        <p class="ss-domain-note">
+          Ownership was transferred on {{ ownership.transfer.completed_at|friendly_date }}.
+          The QR code and all media stayed the same, and coverage bought for this ScanStory
+          stayed with it.
+        </p>
+        {% elif ownership.transfer.status == 'DISPUTED' %}
+        <p class="ss-domain-note">
+          This transfer is being reviewed by the ScanStory team before ownership can change.
+        </p>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {% if ownership.claims %}
+      <div class="mt-4">
+        <h3 class="ss-domain-panel-title" style="margin-bottom:12px;">
+          <i class="fas fa-file-circle-question" aria-hidden="true"></i> Ownership review requests
+        </h3>
+        {% for claim in ownership.claims %}
+        <div class="ss-domain-row mb-2">
+          <span class="ss-domain-label">Requested {{ claim.created_at|friendly_date }}</span>
+          <div class="ss-domain-value">
+            <span class="ss-chip"
+                  data-tone="{% if claim.status in ['APPROVED_BY_ADMIN', 'TRANSFER_COMPLETED'] %}ok{% elif claim.status in ['REJECTED', 'CANCELLED', 'EXPIRED'] %}neutral{% else %}wait{% endif %}">
+              {{ PROJECT_CLAIM_STATUS_LABELS.get(claim.status, 'Status unavailable') }}
+            </span>
+          </div>
+        </div>
+        {% endfor %}
+        <p class="ss-domain-note">
+          Every ownership review request is checked by a person before ownership can change.
+          Submitting one never moves a ScanStory on its own.
+        </p>
+      </div>
+      {% endif %}
+
+      {% if not admin_view and ownership.viewer_is_owner and not ownership.transfer_is_active %}
+      {# Honest gap, not a dead control: there is no HTTP endpoint behind
+         transfer initiation or ownership-review requests in this build, so
+         no button is offered that would do nothing. #}
+      <p class="ss-domain-note">
+        Handing this ScanStory over to someone else is not something you can start from here yet.
+        When it is available, the QR code and all media stay the same, coverage bought for this
+        ScanStory travels with it, and your project slot is only released once the handover finishes.
+      </p>
+      {% endif %}
+    </section>
+    {% endif %}
+
     <!-- V1 Wave 6: fallback video explainer - kept next to the controls below, not buried -->
     <div class="glass p-4 mb-6 text-xs text-white/60 leading-relaxed">
         <i class="fas fa-circle-info text-cyan-400 mr-1"></i>
@@ -216,6 +420,33 @@
         {% endfor %}
     </div>
     
+    {% if coverage and coverage.renewal_eligible and not coverage.is_suspended and not admin_view %}
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script src="{{ url_for('static', filename='js/ss-addons.js') }}"></script>
+    <script>
+      // PROJECT_SERVICE_COVERAGE is project-targeted: the order MUST carry
+      // this project's id or the server rejects it (PROJECT_TARGET_INVALID).
+      (function () {
+        const section = document.getElementById('renewalSection');
+        if (!section || !window.SSAddons) return;
+        SSAddons.mount({
+          root: section,
+          addonType: 'PROJECT_SERVICE_COVERAGE',
+          projectId: {{ project.id }},
+          projectName: {{ project.name|tojson }},
+          csrfToken: "{{ csrf_token() }}",
+          summaryUrl: "{{ url_for('project_service_coverage_summary', project_id=project.id) }}",
+          onSummary: function () {
+            // Coverage dates, the chip and renewal eligibility are all
+            // rendered server-side - reload so they come from the same
+            // authority that just accepted the payment.
+            window.location.reload();
+          }
+        });
+      })();
+    </script>
+    {% endif %}
+
     <script>
         // Simple image fallback
         document.querySelectorAll('img').forEach(img => {
