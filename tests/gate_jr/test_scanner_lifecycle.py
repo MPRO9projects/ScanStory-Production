@@ -990,7 +990,7 @@ def test_scanner_entry_context_resolved_server_side_not_from_session_or_query_al
     assert '"context": "admin_test"' in resolver_body
     # no branch trusts the token's own claimed identity without re-checking the REAL session
     assert 'session.get("user_id")' in resolver_body
-    assert "project.owner_user_id == session_user_id" in resolver_body
+    assert "project_current_owner_user_id(project) == session_user_id" in resolver_body
     assert 'session.get("admin_id")' in resolver_body
     assert "project.owner_admin_id == session_admin_id" in resolver_body
     # never reads a raw entry_context/mode query param
@@ -1007,7 +1007,7 @@ def test_scanner_test_entry_routes_require_real_ownership_before_minting_a_token
     creator_end = app_src.index('@app.route("/admin/project/<int:project_id>/scanner-test")')
     creator_body = app_src[creator_start:creator_end]
     assert "@login_required" in creator_body
-    assert "project.owner_user_id != user.id" in creator_body
+    assert "user_can_manage_project(user, project)" in creator_body
     assert "abort(404)" in creator_body
     assert '_issue_scanner_test_token(project.id, "creator_test", user_id=user.id)' in creator_body
 
@@ -1445,14 +1445,14 @@ def test_altered_user_id_query_param_cannot_change_authentication():
     above), there is no code path left for a tampered ?user_id=<anyone> to affect anything —
     this is the general case a single 'the owner's id happened to match' test can't cover."""
     body = _scanner_view_body()
-    assert "project_owner_id = project.owner_user_id" in body  # ownership resolved from the DB record
+    assert "project_owner_id = project_current_owner_user_id(project)" in body  # ownership resolved from the DB record
     assert 'request.args.get("user_id"' not in body  # no code path left for a tampered param to reach
 
 
 def test_project_owner_is_resolved_from_the_database_record():
     body = _scanner_view_body()
-    assert "project_owner_id = project.owner_user_id" in body
-    owner_line_idx = body.index("project_owner_id = project.owner_user_id")
+    assert "project_owner_id = project_current_owner_user_id(project)" in body
+    owner_line_idx = body.index("project_owner_id = project_current_owner_user_id(project)")
     # the assignment itself must be a bare DB attribute read, not derived from request.args
     line_end = body.index("\n", owner_line_idx)
     assert "request.args" not in body[owner_line_idx:line_end]
@@ -1492,7 +1492,7 @@ def test_detect_init_attributes_scans_to_project_owner_not_session():
     start = app_src.index('def detect_init():')
     end = app_src.index('@app.route("/detect_track"')
     body = app_src[start:end]
-    assert "scan_attribution_owner_id = project.owner_user_id" in body
+    assert "scan_attribution_owner_id = project_current_owner_user_id(project)" in body
     assert 'session.get("user_id")' not in body
     assert "ScanLog(" in body
     assert "user_id=scan_attribution_owner_id," in body
@@ -1503,7 +1503,7 @@ def test_scanner_session_end_attributes_to_project_owner_not_session():
     start = app_src.index("def scanner_session_end():")
     end = app_src.index('@app.route("/detect_track"')
     body = app_src[start:end]
-    assert "scan_attribution_owner_id = project.owner_user_id if project else None" in body
+    assert "scan_attribution_owner_id = project_current_owner_user_id(project) if project else None" in body
     assert 'session.get("user_id")' not in body
     assert 'session[' not in body
 
@@ -1667,7 +1667,7 @@ def test_another_users_project_cannot_generate_creator_test_access_via_dashboard
     """The dashboard/preview/success links only ever call url_for('scanner_test_entry', ...)
     — they never embed a project_id belonging to someone else, and the route itself
     (verified in test_scanner_test_entry_routes_require_real_ownership_before_minting_a_token)
-    independently re-checks project.owner_user_id != user.id server-side regardless of which
+    independently re-checks user_can_manage_project(user, project) server-side regardless of which
     template linked to it. This test confirms the templates never bypass that route with
     their own inline token/context construction."""
     for html in (_dashboard_html(), _project_preview_html()):
@@ -1676,7 +1676,7 @@ def test_another_users_project_cannot_generate_creator_test_access_via_dashboard
     app_src = _app_py()
     creator_start = app_src.index('@app.route("/project/<int:project_id>/scanner-test")')
     creator_end = app_src.index('@app.route("/admin/project/<int:project_id>/scanner-test")')
-    assert "project.owner_user_id != user.id" in app_src[creator_start:creator_end]
+    assert "user_can_manage_project(user, project)" in app_src[creator_start:creator_end]
 
 
 # --- Round-4 correction: abort in-flight detection before exit --------------------------
