@@ -1327,6 +1327,14 @@
       border: 1px solid rgba(255, 207, 107, 0.35);
     }
 
+    /* The rule above is (0,2,0) and beat the browser's default `[hidden] { display: none }`
+       at (0,0,1), so `badge.hidden = DIRECT_QR_BACKEND_READY` left "COMING SOON" pinned
+       over a Direct QR option the backend already supports. Same explicit-[hidden] override
+       pattern as `.wizard-actions button[hidden]` below. */
+    .wizard-type-option .type-badge[hidden] {
+      display: none;
+    }
+
     .wizard-name-error {
       display: none;
       margin-top: 10px;
@@ -1500,6 +1508,7 @@
       /* Sticky action bar: Back / Next / Create are always reachable with a thumb. */
       .wizard-actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 10px;
         position: fixed;
         left: 0;
@@ -1536,6 +1545,23 @@
       }
 
       .wizard-actions button[hidden] {
+        display: none;
+      }
+
+      /* Step 3's Create button can be disabled by a condition set on step 1 or 2, which
+         the viewer can no longer see. This says which one, on its own line above the
+         buttons. */
+      .wizard-create-hint {
+        flex: 1 0 100%;
+        order: -1;
+        margin: 0;
+        font-size: 12px;
+        font-weight: 700;
+        color: #ffcf6b;
+        text-align: center;
+      }
+
+      .wizard-create-hint[hidden] {
         display: none;
       }
 
@@ -1814,7 +1840,7 @@
               <label class="input-label" for="projectName">Story Name<span class="wizard-name-required">*</span></label>
               <input type="text" name="name" id="projectName" class="input-field" placeholder="Enter story name" required
                 oninput="updateQRPreview(); updateFormFields(); clearStoryNameError();" />
-              <div class="wizard-name-error" id="storyNameError">Please give your ScanStory a name.</div>
+              <div class="wizard-name-error" id="storyNameError" role="alert">Please give your ScanStory a name.</div>
             </div>
 
             <label class="input-label">Choose Experience Type</label>
@@ -1931,6 +1957,7 @@
         <button type="button" id="wizardBackBtn" onclick="goToWizardStep(currentWizardStep - 1)" hidden>Back</button>
         <button type="button" class="primary" id="wizardNextBtn" onclick="goToWizardStep(currentWizardStep + 1)">Next</button>
         <button type="button" class="primary" id="wizardCreateBtn" onclick="document.getElementById('submitBtn').click()" hidden disabled>Create ScanStory</button>
+        <p class="wizard-create-hint" id="wizardCreateHint" role="status" aria-live="polite" hidden></p>
       </div>
     </form>
   </div>
@@ -2108,6 +2135,9 @@
       const error = document.getElementById('storyNameError');
       if (error) error.classList.add('is-visible');
       nameField.setAttribute('aria-invalid', 'true');
+      // Only while the error is actually showing — a permanent aria-describedby would make
+      // a screen reader read the error out on every visit to a perfectly valid field.
+      nameField.setAttribute('aria-describedby', 'storyNameError');
       nameField.scrollIntoView({ block: 'center', behavior: 'smooth' });
       nameField.focus({ preventScroll: true });
     }
@@ -2115,7 +2145,9 @@
     function clearStoryNameError() {
       const error = document.getElementById('storyNameError');
       if (error) error.classList.remove('is-visible');
-      document.getElementById('projectName').removeAttribute('aria-invalid');
+      const nameField = document.getElementById('projectName');
+      nameField.removeAttribute('aria-invalid');
+      nameField.removeAttribute('aria-describedby');
     }
 
     function updateWizardChrome() {
@@ -2147,6 +2179,34 @@
       const recapType = document.getElementById('recapExperienceType');
       if (recapName) recapName.textContent = name || 'Not set yet';
       if (recapType) recapType.textContent = experienceType() === 'direct_qr' ? 'Direct QR Video' : 'Image → Video';
+      updateWizardCreateHint();
+    }
+
+    // validateWizardStep() only guards step 1, so nothing used to tell a viewer sitting on
+    // step 3 WHY Create is greyed out — the blocking condition lives on a step they can no
+    // longer see. Mirrors the three conditions that disable #submitBtn, in the same order.
+    function wizardCreateBlockedReason() {
+      if (!document.getElementById('projectName').value.trim()) {
+        return 'Add a story name in step 1 to continue.';
+      }
+      if (experienceType() === 'direct_qr' && !DIRECT_QR_BACKEND_READY) {
+        return 'Direct QR Video cannot be published yet. Switch back to Image → Video in step 1.';
+      }
+      if (!Object.values(currentFiles).some(pairIsComplete)) {
+        return experienceType() === 'direct_qr'
+          ? 'Add a video in step 2 to continue.'
+          : 'Add an image and a video in step 2 to continue.';
+      }
+      return '';
+    }
+
+    function updateWizardCreateHint() {
+      const hint = document.getElementById('wizardCreateHint');
+      const create = document.getElementById('wizardCreateBtn');
+      if (!hint || !create) return;
+      const reason = create.hidden || !create.disabled ? '' : wizardCreateBlockedReason();
+      hint.textContent = reason;
+      hint.hidden = !reason;
     }
 
     /* ===================== Experience type =====================
@@ -3700,7 +3760,9 @@
     const RESUMABLE_UPLOAD_CHUNK_SIZE = 1024 * 1024;
     const RESUMABLE_UPLOAD_STORAGE_KEY = 'scanstory.resumableUpload.v1';
     const RESUMABLE_POLL_MAX_ATTEMPTS = 8;
-    const RESUMABLE_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'expired']);
+    // Terminality is read from the session payload's `is_terminal` (see
+    // _upload_session_payload() in app.py) rather than duplicating the server's status set
+    // here — the duplicate matched today but nothing kept the two in step.
     let activeResumableUpload = null;
 
     class UploadApiError extends Error {
@@ -4094,7 +4156,7 @@
                 current_offset: sessionPayload.session.current_offset,
                 current_phase: 'Uploading video'
               });
-            } else if (RESUMABLE_TERMINAL_STATUSES.has(sessionPayload.session.status)) {
+            } else if (sessionPayload.session?.is_terminal) {
               clearResumableUploadState();
               setUploadProgress('Upload failed', 0, safeUploadErrorMessage(sessionPayload.session.failure_code || 'SESSION_FAILED'), '', 'failed');
               sessionPayload = null;

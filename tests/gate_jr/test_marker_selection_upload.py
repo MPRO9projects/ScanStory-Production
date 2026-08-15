@@ -399,7 +399,10 @@ def test_resumable_upload_refresh_recovery_uses_authoritative_session_status():
     assert "window.location.href = `/success/${sessionPayload.session.project_id}`" in block
     assert "sessionPayload.session?.status === 'assembled'" in block
     assert "sessionPayload.session?.status === 'active'" in block
-    assert "RESUMABLE_TERMINAL_STATUSES.has(sessionPayload.session.status)" in block
+    # Terminality comes from the server's own is_terminal flag (see _upload_session_payload
+    # in app.py), not a duplicated client-side status set that nothing kept in step with it.
+    assert "sessionPayload.session?.is_terminal" in block
+    assert "RESUMABLE_TERMINAL_STATUSES" not in html
     assert "clearResumableUploadState()" in block
 
 

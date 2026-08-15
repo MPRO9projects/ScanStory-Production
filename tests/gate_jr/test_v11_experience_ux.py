@@ -84,10 +84,13 @@ def test_desktop_layout_is_untouched_by_the_wizard_wrappers():
 
 def test_missing_story_name_shows_the_specific_message_and_focuses_the_field():
     html = creator_html()
-    assert 'id="storyNameError">Please give your ScanStory a name.</div>' in html
+    assert 'id="storyNameError" role="alert">Please give your ScanStory a name.</div>' in html
     assert "function showStoryNameError()" in html
     assert "nameField.scrollIntoView({ block: 'center', behavior: 'smooth' })" in html
     assert "nameField.focus({ preventScroll: true })" in html
+    # The message is also wired to the field for assistive tech, and only while it shows.
+    assert "nameField.setAttribute('aria-describedby', 'storyNameError')" in html
+    assert "nameField.removeAttribute('aria-describedby')" in html
     # The generic browser bubble must not be the only feedback on submit.
     assert "alert('Please enter a Story name.')" not in html
 
