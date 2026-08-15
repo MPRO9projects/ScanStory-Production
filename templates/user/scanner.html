@@ -768,7 +768,49 @@
        line ran — never from a client-supplied return URL. #}
     <a href="{{ resolved_back_destination }}" class="back-btn" id="backBtn">← Back</a>
     <h3>SCANSTORY</h3>
-    <div style="width:80px"></div>
+    {# V1.1 public reporting. Deliberately placed in the page header, where a dead 80px
+       spacer already sat — it is nowhere near the camera surface, the in-lens recovery
+       panels or any recognition control, so nothing about scanning changes. #}
+    <button type="button" class="ss-report-trigger" id="reportOpenBtn"
+            aria-haspopup="dialog" aria-controls="reportSheet">
+      <i class="fa-regular fa-flag" aria-hidden="true"></i>
+      <span>Report</span>
+    </button>
+  </div>
+
+  <!-- Report sheet. Opens only on tap; hidden markup until then. -->
+  <div class="ss-sheet" id="reportSheet" hidden role="dialog" aria-modal="true" aria-labelledby="reportSheetTitle">
+    <div class="ss-sheet-card">
+      <h2 id="reportSheetTitle">Report this ScanStory</h2>
+      <p>
+        Tell us what is wrong and our team will review it. Reports are read by a person &mdash;
+        nothing is removed automatically. You do not need an account to report.
+      </p>
+
+      <div class="ss-sheet-reasons" role="radiogroup" aria-labelledby="reportSheetTitle">
+        {% for code, label in CONTENT_REPORT_REASON_LABELS.items() %}
+        <label class="ss-sheet-reason">
+          <input type="radio" name="report_reason" value="{{ code }}">
+          <span>{{ label }}</span>
+        </label>
+        {% endfor %}
+      </div>
+
+      <label for="reportDetails" style="display:block;font-size:12px;font-weight:700;margin-bottom:6px;">
+        More details (optional)
+      </label>
+      <textarea id="reportDetails" maxlength="{{ CONTENT_REPORT_DETAILS_MAX }}"
+                placeholder="Anything else we should know?"></textarea>
+      <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:4px;">
+        Up to {{ CONTENT_REPORT_DETAILS_MAX }} characters.
+      </div>
+
+      <div class="ss-sheet-actions">
+        <button type="button" class="ss-sheet-submit" id="reportSubmitBtn" disabled>Submit report</button>
+        <button type="button" class="ss-sheet-cancel" id="reportCancelBtn">Cancel</button>
+      </div>
+      <p class="ss-sheet-status" id="reportStatus" role="status" aria-live="polite"></p>
+    </div>
   </div>
 
   <!-- AR ENGINE INITIALIZATION OVERLAY -->
@@ -7499,6 +7541,106 @@
       setInterval(renderDiagPanel, 500); // cheap read-only render, no scanner-loop impact
       renderDiagPanel();
     }
+  </script>
+
+  <script>
+    /* V1.1 public content report.
+     *
+     * Fully self-contained: it reads no scanner state, starts nothing, stops
+     * nothing, and shares no variable with the detection code above. The only
+     * thing it borrows is the scan session id (when one exists) so the server
+     * can rate-limit per session — exactly what /api/projects/<id>/report
+     * already expects.
+     */
+    (function () {
+      const openBtn = document.getElementById('reportOpenBtn');
+      const sheet = document.getElementById('reportSheet');
+      if (!openBtn || !sheet) return;
+
+      const submitBtn = document.getElementById('reportSubmitBtn');
+      const cancelBtn = document.getElementById('reportCancelBtn');
+      const details = document.getElementById('reportDetails');
+      const status = document.getElementById('reportStatus');
+      const reasons = sheet.querySelectorAll('input[name="report_reason"]');
+      const REPORT_URL = "{{ url_for('report_project_content', project_id=project_id) }}";
+      let lastFocused = null;
+
+      function say(message, tone) {
+        status.textContent = message || '';
+        status.dataset.tone = tone || 'info';
+      }
+
+      function open() {
+        lastFocused = document.activeElement;
+        sheet.hidden = false;
+        say('', 'info');
+        // Focus the first reason so a keyboard user lands inside the dialog.
+        (reasons[0] || cancelBtn).focus();
+      }
+
+      function close() {
+        sheet.hidden = true;
+        if (lastFocused && lastFocused.focus) lastFocused.focus();
+      }
+
+      openBtn.addEventListener('click', open);
+      cancelBtn.addEventListener('click', close);
+      // Click on the backdrop (not the card) closes.
+      sheet.addEventListener('click', function (event) {
+        if (event.target === sheet) close();
+      });
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && !sheet.hidden) close();
+      });
+
+      // A reason is required by the server; keep submit off until one is picked.
+      reasons.forEach(function (radio) {
+        radio.addEventListener('change', function () { submitBtn.disabled = false; });
+      });
+
+      submitBtn.addEventListener('click', function () {
+        const chosen = sheet.querySelector('input[name="report_reason"]:checked');
+        if (!chosen) {
+          say('Please choose a reason.', 'error');
+          return;
+        }
+        submitBtn.disabled = true;
+        say('Sending…', 'info');
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (typeof scannerSessionId !== 'undefined' && scannerSessionId) {
+          headers['X-Scan-Session'] = scannerSessionId;
+        }
+
+        fetch(REPORT_URL, {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify({ reason: chosen.value, details: (details.value || '').trim() })
+        })
+          .then(async function (response) {
+            let payload = null;
+            try { payload = await response.json(); } catch (e) { /* not JSON */ }
+            if (response.status === 429) {
+              say('You have sent several reports already. Please try again a little later.', 'error');
+              submitBtn.disabled = false;
+              return;
+            }
+            if (!response.ok || !payload || !payload.success) {
+              say((payload && payload.error) || 'Could not send this report. Please try again.', 'error');
+              submitBtn.disabled = false;
+              return;
+            }
+            // Never "content removed" / "creator banned": a report only queues
+            // a row for a human to look at.
+            say('Report submitted for review.', 'success');
+            setTimeout(close, 1800);
+          })
+          .catch(function () {
+            say('Network error. Please check your connection and try again.', 'error');
+            submitBtn.disabled = false;
+          });
+      });
+    })();
   </script>
 </body>
 

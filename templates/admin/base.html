@@ -314,6 +314,14 @@
                                 </a>
                             </li>
 
+                            {% if admin_can('admin.reports.view') %}
+                            <li class="nav-item mb-2">
+                                <a class="nav-link {% if request.endpoint == 'admin_moderation_page' %}active{% endif %}" {% if request.endpoint == 'admin_moderation_page' %}aria-current="page"{% endif %} href="{{ url_for('admin_moderation_page') }}">
+                                    <i class="fas fa-flag"></i> Content Reports
+                                </a>
+                            </li>
+                            {% endif %}
+
                             <li class="nav-item mb-2">
                                 <a class="nav-link {% if request.endpoint in ('admin_scans', 'admin_user_scans') %}active{% endif %}" {% if request.endpoint in ('admin_scans', 'admin_user_scans') %}aria-current="page"{% endif %} href="{{ url_for('admin_scans') }}">
                                     <i class="fas fa-search"></i> Scans
