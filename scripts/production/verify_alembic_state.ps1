@@ -1,5 +1,6 @@
 param(
-    [switch]$ConfirmProductionReadOnly
+    [switch]$ConfirmProductionReadOnly,
+    [string]$Python = $env:SCANSTORY_PYTHON
 )
 
 Set-StrictMode -Version Latest
@@ -22,20 +23,34 @@ if (-not $env:FLASK_SECRET_KEY) {
     Fail "FLASK_SECRET_KEY must be set for Flask CLI import. Value will not be printed."
 }
 
-Write-Host "Running read-only Alembic state checks. No migrations will be applied."
-$headsOutput = python -m flask --app app db heads
-$headsOutput | ForEach-Object { Write-Host $_ }
-python -m flask --app app db history
-python -m flask --app app db current
+if (-not $Python) {
+    $Python = "python"
+}
 
-$expectedHead = "ebeab1cf4ec9"
-$headsText = ($headsOutput -join "`n")
-if ($headsText -notmatch $expectedHead) {
-    Fail "Expected migration head '$expectedHead' (razorpay webhook events) not found in 'flask db heads' output."
-}
+Write-Host "Running read-only Alembic state checks. No migrations will be applied."
+$headsOutput = & $Python -m flask --app app db heads
+$headsOutput | ForEach-Object { Write-Host $_ }
+& $Python -m flask --app app db history
+$currentOutput = & $Python -m flask --app app db current
+$currentOutput | ForEach-Object { Write-Host $_ }
+
 $headLines = $headsOutput | Where-Object { $_ -match "\(head\)" }
-if ($headLines.Count -gt 1) {
-    Fail "Multiple Alembic heads detected; expected exactly one head at '$expectedHead'."
+if ($headLines.Count -ne 1) {
+    Fail "Expected exactly one Alembic application head; found $($headLines.Count)."
 }
-Write-Host "Confirmed single head at expected revision '$expectedHead'."
+$appHead = (($headLines[0] -split "\s+")[0]).Trim()
+if (-not $appHead) {
+    Fail "Could not parse Alembic application head from 'flask db heads' output."
+}
+
+$currentLines = $currentOutput | Where-Object { $_ -match "^[0-9a-fA-F]+" }
+if ($currentLines.Count -ne 1) {
+    Fail "Expected exactly one current database Alembic revision; found $($currentLines.Count)."
+}
+$dbCurrent = (($currentLines[0] -split "\s+")[0]).Trim()
+if ($dbCurrent -ne $appHead) {
+    Fail "Database Alembic revision '$dbCurrent' does not match application head '$appHead'. Run/review migrations before deployment."
+}
+
+Write-Host "Confirmed database revision matches current application head '$appHead'."
 Write-Host "Alembic state verification completed."

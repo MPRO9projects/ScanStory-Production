@@ -16,14 +16,16 @@ PRIOR_REVISION = "f4a8c2b91d70"
 EXPERIENCE_REVISION = "b7c9d2e4f6a1"
 
 
-def _current_head_revision():
+def _script_directory():
     config = AlembicConfig()
     config.set_main_option("script_location", MIGRATIONS_DIR)
-    return ScriptDirectory.from_config(config).get_current_head()
+    return ScriptDirectory.from_config(config)
 
 
-def test_project_experience_type_migration_is_current_head():
-    assert _current_head_revision() == EXPERIENCE_REVISION
+def test_project_experience_type_migration_revision_exists():
+    script = _script_directory().get_revision(EXPERIENCE_REVISION)
+    assert script.revision == EXPERIENCE_REVISION
+    assert script.down_revision == PRIOR_REVISION
 
 
 def test_project_experience_type_upgrade_backfills_legacy_projects(tmp_path):

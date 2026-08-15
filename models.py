@@ -720,6 +720,7 @@ class Admin(db.Model):
 # Projects
 # ---------------------------------------------------------------------
 PROJECT_EXPERIENCE_TYPES = {"image_video", "direct_qr"}
+PROJECT_PLAYBACK_MODES = {"tracked_overlay", "detect_once", "direct"}
 
 
 class Project(db.Model):
@@ -734,6 +735,7 @@ class Project(db.Model):
 
     user_project_index = db.Column(db.Integer, nullable=True)  # Per-user project numbering
     experience_type = db.Column(db.String(30), nullable=False, default="image_video", server_default="image_video")
+    playback_mode = db.Column(db.String(30), nullable=False, default="tracked_overlay", server_default="tracked_overlay")
 
     scanner_url = db.Column(db.Text, nullable=True)
     qr_code_path = db.Column(db.String(500), nullable=True)
@@ -774,6 +776,10 @@ class Project(db.Model):
     @validates("experience_type")
     def validate_experience_type(self, key, value):
         return _validate_value(value or "image_video", PROJECT_EXPERIENCE_TYPES, key)
+
+    @validates("playback_mode")
+    def validate_playback_mode(self, key, value):
+        return _validate_value(value or "tracked_overlay", PROJECT_PLAYBACK_MODES, key)
 
     def __repr__(self):
         owner = f"user:{self.owner_user_id}" if self.owner_user_id else f"admin:{self.owner_admin_id}"

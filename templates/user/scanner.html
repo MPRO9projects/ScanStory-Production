@@ -711,6 +711,7 @@
 
 <body class="ss-user-scope"
       data-experience-type="{{ experience_type | default('image_video') }}"
+      data-playback-mode="{{ playback_mode | default('tracked_overlay') }}"
       data-target-count="{{ targets | default([]) | length }}">
   <div class="header">
     {# Root-cause fix (round 1): this used to hardcode href="/". Round-2 fix: session.get
@@ -829,17 +830,15 @@
               aria-expanded="false" aria-controls="targetGuide">View all {{ targets | length }} targets</button>
       {% endif %}
 
-      <fieldset id="playbackModeChoice">
-        <legend>How should the video play?</legend>
-        <label>
-          <input type="radio" name="playbackMode" value="tracked" checked>
-          <span><strong>Follow the target</strong>The video stays locked onto the target while you hold the camera on it.</span>
-        </label>
-        <label>
-          <input type="radio" name="playbackMode" value="detect_once">
-          <span><strong>Play once detected</strong>Recognize the target once, then keep playing even if you look away.</span>
-        </label>
-      </fieldset>
+      <div id="playbackModeChoice" aria-live="polite">
+        {% if playback_mode == 'detect_once' %}
+        <strong>Play once detected</strong>
+        <span>Recognize the target once, then keep playing even if you look away.</span>
+        {% else %}
+        <strong>Follow the target</strong>
+        <span>The video stays locked onto the target while you hold the camera on it.</span>
+        {% endif %}
+      </div>
 
       <p class="intro-note" id="cameraGuidance">
         This ScanStory uses your camera to recognize the target shown above.
@@ -1591,7 +1590,10 @@
     //                 lost. Still the default, and completely unchanged.
     // 'detect_once' — recognition is a one-shot trigger: after the first accepted detection
     //                 playback continues even if the marker is never seen again.
-    let scannerPlaybackMode = 'tracked';
+    const SERVER_PLAYBACK_MODE = document.body && document.body.dataset
+      ? document.body.dataset.playbackMode
+      : 'tracked_overlay';
+    let scannerPlaybackMode = SERVER_PLAYBACK_MODE === 'detect_once' ? 'detect_once' : 'tracked_overlay';
     let detectOnceLocked = false;
 
     markStartupCheckpoint('scanner_constants_initialized');
@@ -3992,8 +3994,7 @@
     }
 
     function selectedPlaybackMode() {
-      const checked = document.querySelector('input[name="playbackMode"]:checked');
-      return checked && checked.value === 'detect_once' ? 'detect_once' : 'tracked';
+      return SERVER_PLAYBACK_MODE === 'detect_once' ? 'detect_once' : 'tracked_overlay';
     }
 
     function startCameraFromIntro() {
