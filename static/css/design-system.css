@@ -886,3 +886,274 @@ body.ss-menu-open { overflow: hidden; }
   .ss-scan-btn-primary { flex: 1 1 100%; }
   .ss-scan-btn-secondary, .ss-scan-btn-tertiary { flex: 0 1 auto; }
 }
+
+/* ==========================================================================
+   V1.1 - ownership, coverage, capacity and moderation surfaces.
+
+   Uses only the tokens declared at the top of this file; no new palette and
+   no new scale. Every status pairs a colour with a word or an icon, so state
+   is never carried by colour alone.
+   ========================================================================== */
+
+.ss-domain-panel {
+  background: var(--ss-surface-1);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-lg);
+  padding: var(--ss-space-4);
+  color: var(--ss-text);
+}
+@media (min-width: 768px) {
+  .ss-domain-panel { padding: var(--ss-space-5); }
+}
+
+.ss-domain-panel-title {
+  display: flex;
+  align-items: center;
+  gap: var(--ss-space-2);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ss-text-muted);
+  margin: 0 0 var(--ss-space-4);
+}
+
+/* Definition rows. Grid rather than a table so a long value wraps under its
+   own label at 320px instead of forcing the page wider. */
+.ss-domain-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--ss-space-3);
+  margin: 0;
+}
+@media (min-width: 560px) {
+  .ss-domain-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.ss-domain-row {
+  min-width: 0;
+  background: var(--ss-surface-2);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-md);
+  padding: var(--ss-space-3);
+}
+.ss-domain-row dt,
+.ss-domain-row .ss-domain-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ss-text-faint);
+  margin: 0;
+}
+.ss-domain-row dd,
+.ss-domain-row .ss-domain-value {
+  margin: var(--ss-space-1) 0 0;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ss-text);
+  overflow-wrap: anywhere;
+}
+.ss-domain-note {
+  margin: var(--ss-space-3) 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ss-text-muted);
+}
+
+/* Status chips. data-tone picks the colour; the text inside always states
+   the status too. */
+.ss-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--ss-radius-pill);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--ss-border-strong);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--ss-text);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.ss-chip[data-tone="ok"]      { border-color: rgba(34, 197, 94, 0.4);  background: rgba(34, 197, 94, 0.12);  color: #86efac; }
+.ss-chip[data-tone="wait"]    { border-color: rgba(250, 204, 21, 0.4); background: rgba(250, 204, 21, 0.12); color: #fde68a; }
+.ss-chip[data-tone="stop"]    { border-color: rgba(239, 68, 68, 0.4);  background: rgba(239, 68, 68, 0.12);  color: #fca5a5; }
+.ss-chip[data-tone="info"]    { border-color: rgba(0, 212, 255, 0.35); background: rgba(0, 212, 255, 0.1);   color: #7dd3fc; }
+.ss-chip[data-tone="neutral"] { color: var(--ss-text-muted); }
+
+/* Capacity readout. Reusable slots, never "credits". */
+.ss-slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ss-space-3);
+  margin: 0 0 var(--ss-space-4);
+  padding: 0;
+  list-style: none;
+}
+.ss-slots li {
+  flex: 1 1 120px;
+  min-width: 0;
+  background: var(--ss-surface-2);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-md);
+  padding: var(--ss-space-3);
+  text-align: center;
+}
+.ss-slots .ss-slots-value {
+  display: block;
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1.1;
+  color: var(--ss-accent);
+}
+.ss-slots .ss-slots-label {
+  display: block;
+  margin-top: var(--ss-space-1);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ss-text-faint);
+}
+
+/* Add-on purchase list (rendered by static/js/ss-addons.js). */
+.ss-addon-list {
+  display: grid;
+  gap: var(--ss-space-3);
+  grid-template-columns: 1fr;
+}
+@media (min-width: 640px) {
+  .ss-addon-list { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+}
+.ss-addon-item {
+  background: var(--ss-surface-2);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-md);
+  padding: var(--ss-space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--ss-space-2);
+  min-width: 0;
+}
+.ss-addon-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--ss-space-2);
+  min-width: 0;
+}
+.ss-addon-item-name { font-weight: 800; font-size: 14px; overflow-wrap: anywhere; }
+.ss-addon-item-price { font-weight: 900; font-size: 14px; color: var(--ss-accent); white-space: nowrap; }
+.ss-addon-item-desc { margin: 0; font-size: 12px; line-height: 1.5; color: var(--ss-text-muted); }
+.ss-addon-buy {
+  margin-top: auto;
+  min-height: 44px;
+  border-radius: var(--ss-radius-pill);
+  border: 1px solid rgba(255, 0, 122, 0.45);
+  background: rgba(255, 0, 122, 0.14);
+  color: #ffd6e8;
+  font-weight: 800;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color var(--ss-duration-fast) var(--ss-ease);
+}
+.ss-addon-buy:hover:not(:disabled) { background: rgba(255, 0, 122, 0.24); }
+.ss-addon-buy:disabled { opacity: 0.55; cursor: not-allowed; }
+.ss-addon-note { margin: 0; font-size: 12px; line-height: 1.6; color: var(--ss-text-muted); }
+
+.ss-addon-status {
+  margin-top: var(--ss-space-3);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.5;
+  border-radius: var(--ss-radius-sm);
+  padding: var(--ss-space-2) var(--ss-space-3);
+  border: 1px solid var(--ss-border-strong);
+  color: var(--ss-text-muted);
+}
+.ss-addon-status[data-tone="error"]   { border-color: rgba(239, 68, 68, 0.4);  color: #fca5a5; }
+.ss-addon-status[data-tone="success"] { border-color: rgba(34, 197, 94, 0.4);  color: #86efac; }
+.ss-addon-status[data-tone="warn"]    { border-color: rgba(250, 204, 21, 0.4); color: #fde68a; }
+
+/* Report sheet (public viewer). A centred dialog that covers the page while
+   open rather than floating over the camera controls. */
+.ss-report-trigger {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--ss-border);
+  color: var(--ss-text-muted);
+  border-radius: var(--ss-radius-pill);
+  min-height: 44px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.ss-report-trigger:hover { color: var(--ss-text); border-color: var(--ss-border-strong); }
+
+.ss-sheet[hidden] { display: none; }
+.ss-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--ss-space-4);
+  background: rgba(0, 0, 0, 0.72);
+}
+.ss-sheet-card {
+  width: 100%;
+  max-width: 420px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--ss-surface-1);
+  border: 1px solid var(--ss-border-strong);
+  border-radius: var(--ss-radius-lg);
+  padding: var(--ss-space-4);
+  text-align: left;
+  color: var(--ss-text);
+}
+.ss-sheet-card h2 { margin: 0 0 var(--ss-space-2); font-size: 16px; font-weight: 900; }
+.ss-sheet-card p  { margin: 0 0 var(--ss-space-3); font-size: 12px; line-height: 1.6; color: var(--ss-text-muted); }
+.ss-sheet-reasons { display: grid; gap: 6px; margin: 0 0 var(--ss-space-3); }
+.ss-sheet-reason {
+  display: flex;
+  align-items: center;
+  gap: var(--ss-space-2);
+  min-height: 44px;
+  padding: 0 10px;
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-sm);
+  font-size: 13px;
+  cursor: pointer;
+}
+.ss-sheet-reason:hover { border-color: var(--ss-border-strong); }
+.ss-sheet-reason input { width: 18px; height: 18px; accent-color: var(--ss-primary); flex: none; }
+.ss-sheet-card textarea {
+  width: 100%;
+  min-height: 76px;
+  background: var(--ss-surface-2);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-sm);
+  color: var(--ss-text);
+  padding: 10px;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+.ss-sheet-actions { display: flex; gap: var(--ss-space-2); flex-wrap: wrap; margin-top: var(--ss-space-3); }
+.ss-sheet-actions button { flex: 1 1 130px; min-height: 44px; border-radius: var(--ss-radius-pill); font-weight: 800; font-size: 12px; cursor: pointer; }
+.ss-sheet-submit { border: 1px solid rgba(255, 0, 122, 0.45); background: rgba(255, 0, 122, 0.16); color: #ffd6e8; }
+.ss-sheet-submit:disabled { opacity: 0.55; cursor: not-allowed; }
+.ss-sheet-cancel { border: 1px solid var(--ss-border-strong); background: transparent; color: var(--ss-text-muted); }
+.ss-sheet-status { margin-top: var(--ss-space-3); font-size: 12px; font-weight: 700; line-height: 1.5; }
+.ss-sheet-status[data-tone="error"]   { color: #fca5a5; }
+.ss-sheet-status[data-tone="success"] { color: #86efac; }

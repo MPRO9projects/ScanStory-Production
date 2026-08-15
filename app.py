@@ -57,6 +57,7 @@ from models import (
     ScanEvent, SCAN_EVENT_TYPES, UserConsentEvidence, AddonCatalog,
     AddonPurchase, EntitlementTransaction, PROJECT_EXPERIENCE_TYPES,
     PROJECT_PLAYBACK_MODES, ACCOUNT_TYPE_BUSINESS_VENDOR,
+    ACCOUNT_TYPE_INDIVIDUAL,
     PROJECT_ACTIVE_TRANSFER_STATUSES, PROJECT_ACTIVE_CLAIM_STATUSES,
     ProjectOwnershipTransfer, ProjectOwnershipClaim, ProjectServiceCoverage,
     ContentReport, CONTENT_REPORT_REASONS, CONTENT_REPORT_STATUSES,
@@ -1568,6 +1569,137 @@ def is_business_vendor(user):
     return bool(user and (user.account_type or "").upper() == ACCOUNT_TYPE_BUSINESS_VENDOR)
 
 
+# ---------------------------------------------------------------------------
+# V1.1 Experience UX - user-facing label maps.
+#
+# The domain layer stores raw enum strings (BUSINESS_VENDOR, PENDING_CAPACITY,
+# STANDALONE_PROJECT_RENEWAL, ...). None of them may ever reach an end user's
+# screen. These maps are the single translation point; the templates only ever
+# render a value looked up here, and tests assert the keys stay in lockstep
+# with the model-level enum sets so a new backend state can never silently
+# render as a bare code.
+# ---------------------------------------------------------------------------
+ACCOUNT_TYPE_LABELS = {
+    ACCOUNT_TYPE_INDIVIDUAL: "Individual",
+    ACCOUNT_TYPE_BUSINESS_VENDOR: "Business / Vendor",
+}
+PROJECT_TRANSFER_STATUS_LABELS = {
+    "PENDING_ACCEPTANCE": "Waiting for recipient",
+    "PENDING_CAPACITY": "Recipient needs an available project slot",
+    "COMPLETED": "Ownership transferred",
+    "CANCELLED": "Transfer cancelled",
+    "EXPIRED": "Transfer expired",
+    "DISPUTED": "Transfer under review",
+}
+PROJECT_CLAIM_STATUS_LABELS = {
+    "OPEN": "Submitted - waiting for review",
+    "VENDOR_NOTIFIED": "Current owner has been notified",
+    "APPROVED_BY_VENDOR": "Current owner agreed - waiting to complete",
+    "PENDING_ADMIN_REVIEW": "Waiting for the ScanStory team to review",
+    "APPROVED_BY_ADMIN": "Approved - ownership handover started",
+    "REJECTED": "Not approved",
+    "CANCELLED": "Request cancelled",
+    "EXPIRED": "Request expired",
+    "TRANSFER_COMPLETED": "Ownership handed over",
+}
+PROJECT_COVERAGE_SOURCE_LABELS = {
+    "OWNER_SUBSCRIPTION": "Owner's plan",
+    "STANDALONE_PROJECT_RENEWAL": "ScanStory Coverage purchase",
+    "TRANSFER_CARRY_OVER": "Carried over with this ScanStory",
+    "ADMIN_GRANT": "Granted by the ScanStory team",
+    "LEGACY_COMPATIBILITY": "Included with your original ScanStory",
+}
+# Ordered on purpose: this is also the on-screen order of the report reasons.
+CONTENT_REPORT_REASON_LABELS = {
+    "EXPLICIT_OR_INAPPROPRIATE": "Explicit or inappropriate content",
+    "VIOLENCE_OR_DANGER": "Violence or dangerous content",
+    "HATE_OR_HARASSMENT": "Hate or harassment",
+    "SCAM_OR_MISLEADING": "Scam or misleading content",
+    "COPYRIGHT_OR_IP": "Copyright or intellectual property",
+    "PRIVACY": "Privacy concern",
+    "SPAM": "Spam",
+    "OTHER": "Other",
+}
+CONTENT_REPORT_STATUS_LABELS = {
+    "OPEN": "Open",
+    "UNDER_REVIEW": "Under review",
+    "ACTION_TAKEN": "Action taken",
+    "DISMISSED": "Dismissed",
+}
+CONTENT_REPORT_ACTION_LABELS = {
+    "NONE": "No action needed",
+    "PROJECT_SUSPENDED": "ScanStory suspended",
+    "CREATOR_CONTACT_REQUIRED": "Creator contact required",
+    "LEGAL_REVIEW_REQUIRED": "Legal review required",
+    "OTHER": "Other",
+}
+# Enforced by the public report endpoint below AND rendered as the textarea's
+# maxlength, so the form and the validator can never disagree. Lives here so
+# the Jinja globals registration a few lines down can see it.
+CONTENT_REPORT_DETAILS_MAX = 2000
+
+
+def account_type_label(user):
+    return ACCOUNT_TYPE_LABELS.get(
+        (getattr(user, "account_type", None) or ACCOUNT_TYPE_INDIVIDUAL).upper(), "Individual"
+    )
+
+
+# jinja_env.globals, not a context_processor: these are request-independent
+# constants, and globals are also visible to callers that render a template
+# directly through jinja_env.get_template(...).render() rather than through
+# Flask's render_template() - which several existing tests do.
+app.jinja_env.globals.update(
+    ACCOUNT_TYPE_LABELS=ACCOUNT_TYPE_LABELS,
+    PROJECT_TRANSFER_STATUS_LABELS=PROJECT_TRANSFER_STATUS_LABELS,
+    PROJECT_CLAIM_STATUS_LABELS=PROJECT_CLAIM_STATUS_LABELS,
+    PROJECT_COVERAGE_SOURCE_LABELS=PROJECT_COVERAGE_SOURCE_LABELS,
+    CONTENT_REPORT_REASON_LABELS=CONTENT_REPORT_REASON_LABELS,
+    CONTENT_REPORT_STATUS_LABELS=CONTENT_REPORT_STATUS_LABELS,
+    CONTENT_REPORT_ACTION_LABELS=CONTENT_REPORT_ACTION_LABELS,
+    CONTENT_REPORT_DETAILS_MAX=CONTENT_REPORT_DETAILS_MAX,
+    account_type_label=account_type_label,
+)
+
+
+def project_ownership_context(project, viewer):
+    """Everything the ownership/coverage panels render, resolved once.
+
+    Read-only. There is no HTTP route for initiating a transfer or a claim in
+    this build (only the service functions), so this deliberately reports
+    state rather than offering an action that has nothing behind it.
+    """
+    if not project:
+        return None
+    owner_id = project_current_owner_user_id(project)
+    owner = User.query.get(owner_id) if owner_id else None
+    manager = User.query.get(project.manager_vendor_user_id) if project.manager_vendor_user_id else None
+    beneficiary = User.query.get(project.beneficiary_user_id) if project.beneficiary_user_id else None
+    transfer = (
+        ProjectOwnershipTransfer.query.filter_by(project_id=project.id)
+        .order_by(ProjectOwnershipTransfer.id.desc())
+        .first()
+    )
+    claims = (
+        ProjectOwnershipClaim.query.filter_by(project_id=project.id)
+        .order_by(ProjectOwnershipClaim.id.desc())
+        .limit(5)
+        .all()
+    )
+    viewer_id = getattr(viewer, "id", None)
+    return {
+        "owner": owner,
+        "manager": manager,
+        "beneficiary": beneficiary,
+        "viewer_is_owner": bool(viewer_id and owner and owner.id == viewer_id),
+        "viewer_is_manager": bool(viewer_id and manager and manager.id == viewer_id),
+        "transfer": transfer,
+        "transfer_is_active": bool(transfer and transfer.status in PROJECT_ACTIVE_TRANSFER_STATUSES),
+        "claims": claims,
+        "transfer_recipient": User.query.get(transfer.to_user_id) if transfer and transfer.to_user_id else None,
+    }
+
+
 def project_current_owner_user_id(project):
     return project.current_owner_user_id or project.owner_user_id if project else None
 
@@ -2137,6 +2269,28 @@ def _schedule_project_pair_processing(project_id, failure_flash="Processing queu
 def project_display_number_filter(project):
     """Jinja2 filter to get display number"""
     return get_project_display_number(project)
+
+
+@app.template_filter('friendly_date')
+def friendly_date_filter(value):
+    """Render either a datetime or an ISO-8601 string as '31 Dec 2026'.
+
+    The coverage/capacity summaries are JSON-shaped (they are served over HTTP
+    too), so their dates reach a template as strings while ORM columns reach
+    it as datetimes. One filter handles both instead of each template slicing
+    the string itself.
+    """
+    if not value:
+        return "-"
+    if isinstance(value, str):
+        try:
+            value = dt.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return value
+    try:
+        return value.strftime("%d %b %Y")
+    except AttributeError:
+        return str(value)
 # --------------------------------------------------------------------------------------------
 # SMTP Email
 # --------------------------------------------------------------------------------------------
@@ -5197,6 +5351,9 @@ def user_profile():
         user=user,
         trial=trial,
         projects=projects,
+        # Every slot number on screen comes from this one authoritative
+        # summary - the page never derives a total or a remainder itself.
+        capacity=project_capacity_summary(user),
         get_system_config=get_system_config
     )
 
@@ -5252,9 +5409,27 @@ def projects_page():
     # id DESC breaks ties deterministically instead of relying on DB order.
     rows = query.order_by(Project.created_at.desc(), Project.id.desc()).all()
 
+    # One grouped lookup instead of a per-card query: a transfer in flight has
+    # to be visible from the list, but 40 cards must not mean 40 round trips.
+    active_transfers = {}
+    if rows:
+        for transfer in ProjectOwnershipTransfer.query.filter(
+            ProjectOwnershipTransfer.project_id.in_([p.id for p, _ in rows]),
+            ProjectOwnershipTransfer.status.in_(PROJECT_ACTIVE_TRANSFER_STATUSES),
+        ).all():
+            active_transfers[transfer.project_id] = transfer.status
+
     projects = []
     for project, pair_count in rows:
         project.pairs_count = int(pair_count or 0)
+        # Card-level ownership summary only (one badge). The full ownership /
+        # coverage detail lives on the project detail page so a list of 40
+        # cards doesn't turn into 40 stacked panels.
+        project.viewer_relationship = (
+            "owner" if project_current_owner_user_id(project) == user.id else "manager"
+        )
+        project.is_suspended = not project.is_active
+        project.active_transfer_status = active_transfers.get(project.id)
         projects.append(project)
 
     has_any_projects = db.session.query(Project.id).filter(project_user_access_filter(user.id)).first() is not None
@@ -5885,6 +6060,9 @@ def user_create_project_page():
         user=user,
         max_pairs_per_project=max_pairs_per_project,
         dev_test_entitled=dev_test_entitled,
+        # Step 1's "Creating this ScanStory for:" choice exists for vendors
+        # only; an INDIVIDUAL account never renders it at all.
+        viewer_is_business_vendor=is_business_vendor(user),
         video_upload_warnings=VIDEO_UPLOAD_WARNINGS,
         direct_qr_supported=direct_qr_experience_supported(),
         crop_debug_enabled=(
@@ -7828,8 +8006,9 @@ def project_service_coverage_summary(project_id):
 # ---------------------------------------------------------------------------
 # Public content reporting (Domain 2B). Creating a report NEVER suspends,
 # deletes or notifies - it only queues a row for explicit human review.
+# CONTENT_REPORT_DETAILS_MAX is declared with the V1.1 label maps above, so the
+# viewer's textarea maxlength and this route's validation are the same number.
 # ---------------------------------------------------------------------------
-CONTENT_REPORT_DETAILS_MAX = 2000
 
 
 def _privacy_hash(value):
@@ -10114,7 +10293,9 @@ def project_preview(project_id):
                          user=user,
                          project=project,
                          pairs=pairs,
-                         admin_view=admin_view)
+                         admin_view=admin_view,
+                         coverage=project_coverage_summary(project),
+                         ownership=project_ownership_context(project, user))
 
 @app.route("/admin_panel", methods=["GET"])
 def admin_panel_redirect():
@@ -11662,7 +11843,27 @@ def _content_report_payload(report):
         "resolution_reason": report.resolution_reason,
         "reporter_user_id": report.reporter_user_id,
         "has_reporter_contact": bool(report.reporter_email),
+        # Additive: the moderation queue needs something readable to show
+        # next to the project link instead of a bare numeric id.
+        "project_name": report.project.name if report.project else None,
     }
+
+
+@app.route("/admin/moderation", methods=["GET"])
+@require_admin_permission("admin.reports.view")
+def admin_moderation_page():
+    """Server-rendered shell for the existing JSON moderation API.
+
+    /admin/reports and /admin/reports/<id>/review stay pure JSON (they already
+    have contract tests); this only adds the page that drives them, so the
+    queue is reachable from the admin nav instead of via curl.
+    """
+    return render_template(
+        "admin/moderation.html",
+        report_statuses=["OPEN", "UNDER_REVIEW", "ACTION_TAKEN", "DISMISSED"],
+        report_actions=["NONE", "PROJECT_SUSPENDED", "CREATOR_CONTACT_REQUIRED", "LEGAL_REVIEW_REQUIRED", "OTHER"],
+        status_filter=(request.args.get("status") or "").strip().upper(),
+    )
 
 
 @app.route("/admin/reports", methods=["GET"])

@@ -463,6 +463,73 @@
                     </div>
                 </div>
 
+                {# =============================================================
+                   V1.1 - Project Slots (PROJECT_CAPACITY).
+
+                   Reusable capacity, NOT credits: a slot returns to the pool
+                   when a ScanStory is deleted or transferred away. Every
+                   number is read straight from project_capacity_summary() -
+                   this template never adds, subtracts or assumes one.
+                   ============================================================= #}
+                <section class="ss-domain-panel mb-6 md:mb-8 mx-3 md:mx-0" id="capacitySection"
+                         aria-labelledby="capacityHeading" data-aos="fade-up" data-aos-delay="80">
+                    <h2 class="ss-domain-panel-title" id="capacityHeading">
+                        <i class="fa-solid fa-layer-group" aria-hidden="true"></i> Project Slots
+                    </h2>
+
+                    {% if capacity.unlimited %}
+                    <p class="ss-domain-note" style="margin-top:0;">
+                        Your plan has no limit on how many ScanStories you can create, so extra
+                        project slots are not needed.
+                    </p>
+                    {% else %}
+                    <ul class="ss-slots" id="capacityNumbers">
+                        <li>
+                            <span class="ss-slots-value" data-capacity="base_project_limit">{{ capacity.base_project_limit }}</span>
+                            <span class="ss-slots-label">Plan slots</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value" data-capacity="purchased_project_capacity">{{ capacity.purchased_project_capacity }}</span>
+                            <span class="ss-slots-label">Purchased slots</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value" data-capacity="effective_project_limit">{{ capacity.effective_project_limit }}</span>
+                            <span class="ss-slots-label">Total slots</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value" data-capacity="projects_used">{{ capacity.projects_used }}</span>
+                            <span class="ss-slots-label">Used</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value" data-capacity="projects_remaining">{{ capacity.projects_remaining }}</span>
+                            <span class="ss-slots-label">Available</span>
+                        </li>
+                    </ul>
+
+                    {% if capacity.projects_remaining == 0 %}
+                    <p class="ss-domain-note" style="margin-top:0;">
+                        <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+                        All your project slots are in use. Add more slots below, or delete a
+                        ScanStory you no longer need to free one up.
+                    </p>
+                    {% endif %}
+
+                    <p class="ss-domain-note" style="margin-top:0;">
+                        Project slots are reusable. A slot is taken while a ScanStory occupies it
+                        and returns to your pool when that ScanStory is deleted or its ownership is
+                        transferred to someone else. Purchased slots stay on your account even if
+                        your plan lapses.
+                    </p>
+
+                    <div class="mt-4">
+                        <div class="ss-addon-list" data-ss-addon-list role="list">
+                            <p class="ss-addon-note">Loading options&hellip;</p>
+                        </div>
+                        <p class="ss-addon-status" data-ss-addon-status role="status" aria-live="polite" hidden></p>
+                    </div>
+                    {% endif %}
+                </section>
+
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 px-3 md:px-0">
                     <!-- Profile Details -->
                     <div class="glass rounded-[20px] md:rounded-[28px] p-4 md:p-6 lg:col-span-2" data-aos="fade-up" data-aos-delay="60">
@@ -501,6 +568,22 @@
                             <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4">
                                 <div class="text-white/60 text-xs uppercase font-black tracking-widest">Phone</div>
                                 <div class="font-bold md:font-black mt-1 text-sm md:text-base">{{ user.phone or "-" }}</div>
+                            </div>
+
+                            {# V1.1: account type is read-only here on purpose. There is no
+                               backend endpoint that changes User.account_type, so offering a
+                               switch would be a control with nothing behind it. The raw enum
+                               (BUSINESS_VENDOR) is never printed - only its label. #}
+                            <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4">
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">Account Type</div>
+                                <div class="font-bold md:font-black mt-1 text-sm md:text-base">{{ account_type_label(user) }}</div>
+                                <div class="text-white/50 text-xs mt-1 md:mt-2 leading-relaxed">
+                                    {% if account_type_label(user) == 'Business / Vendor' %}
+                                    You can create ScanStories for your own business and for your customers.
+                                    {% else %}
+                                    Your ScanStories belong to you.
+                                    {% endif %}
+                                </div>
                             </div>
 
                             <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4 md:col-span-2">
@@ -771,5 +854,34 @@
         window.addEventListener('orientationchange', setViewportHeight);
         setViewportHeight();
     </script>
+
+    {% if not capacity.unlimited %}
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script src="{{ url_for('static', filename='js/ss-addons.js') }}"></script>
+    <script>
+      // PROJECT_CAPACITY is account-level: the order carries no project_id at
+      // all (the server rejects one with PROJECT_TARGET_INVALID).
+      (function () {
+        const section = document.getElementById('capacitySection');
+        if (!section || !window.SSAddons) return;
+        SSAddons.mount({
+          root: section,
+          addonType: 'PROJECT_CAPACITY',
+          csrfToken: "{{ csrf_token() }}",
+          summaryUrl: "{{ url_for('account_capacity_summary') }}",
+          onSummary: function (payload) {
+            // Re-read from /api/account/capacity rather than trusting the
+            // checkout callback: the ledger is the only thing that decides
+            // how many slots exist.
+            const capacity = payload.capacity || {};
+            section.querySelectorAll('[data-capacity]').forEach(function (node) {
+              const value = capacity[node.dataset.capacity];
+              if (value !== undefined && value !== null) node.textContent = value;
+            });
+          }
+        });
+      })();
+    </script>
+    {% endif %}
 </body>
 </html>

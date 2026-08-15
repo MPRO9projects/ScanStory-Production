@@ -1908,6 +1908,38 @@
                 </label>
               </div>
             </div>
+
+            {% if viewer_is_business_vendor %}
+            <!-- V1.1: Business / Vendor accounts only. An Individual account never renders
+                 this block at all.
+
+                 IMPORTANT / honest by design: the project-creation route builds every
+                 ScanStory as creator = owner = the signed-in user and accepts no customer
+                 or beneficiary identifier, so this choice does NOT assign the ScanStory to
+                 anyone else. It only changes the guidance shown here and on the review
+                 step. Nothing invents a customer field the server would ignore, and no
+                 screen claims a handover happened. -->
+            <div id="createdForGroup">
+              <label class="input-label" id="createdForLabel">Creating this ScanStory for</label>
+              <div class="wizard-type-options" role="radiogroup" aria-labelledby="createdForLabel">
+                <label class="wizard-type-option playback-option">
+                  <input type="radio" name="created_for" value="self" checked onchange="updateCreatedForNotice()" />
+                  <strong>My business / myself</strong>
+                  <span>You create it and you keep it. You are the owner.</span>
+                </label>
+                <label class="wizard-type-option playback-option">
+                  <input type="radio" name="created_for" value="customer" onchange="updateCreatedForNotice()" />
+                  <strong>A customer</strong>
+                  <span>You build it for someone else and keep managing it for now.</span>
+                </label>
+              </div>
+              <p class="help-text" id="createdForNotice" style="margin:-12px 0 18px;display:none;">
+                This ScanStory is still created under your account &mdash; you stay the owner and can
+                manage it as usual. Handing ownership over to your customer is not something you can
+                start from the app yet, so nothing is assigned to them at this point.
+              </p>
+            </div>
+            {% endif %}
           </div>
 
           <div data-wizard-pane="2">
@@ -1952,6 +1984,16 @@
               <dt>Playback style</dt>
               <dd id="recapPlaybackMode">Tracked Overlay</dd>
             </div>
+            {% if viewer_is_business_vendor %}
+            <div class="wizard-recap-row">
+              <dt>Created for</dt>
+              <dd id="recapCreatedFor">My business / myself</dd>
+            </div>
+            <div class="wizard-recap-row">
+              <dt>Owner</dt>
+              <dd id="recapOwner">You ({{ user.email }})</dd>
+            </div>
+            {% endif %}
           </dl>
 
           <div class="preview-list" id="previewList">
@@ -2231,7 +2273,23 @@
       if (recapName) recapName.textContent = name || 'Not set yet';
       if (recapType) recapType.textContent = experienceType() === 'direct_qr' ? 'Direct QR Video' : 'Image → Video';
       if (recapPlayback) recapPlayback.textContent = playbackModeLabel();
+      const recapCreatedFor = document.getElementById('recapCreatedFor');
+      if (recapCreatedFor) {
+        recapCreatedFor.textContent = createdForValue() === 'customer' ? 'A customer' : 'My business / myself';
+      }
       updateWizardCreateHint();
+    }
+
+    /* Vendor-only. Absent for an Individual account, so every reader guards on null. */
+    function createdForValue() {
+      const checked = document.querySelector('input[name="created_for"]:checked');
+      return checked ? checked.value : 'self';
+    }
+
+    function updateCreatedForNotice() {
+      const notice = document.getElementById('createdForNotice');
+      if (notice) notice.style.display = createdForValue() === 'customer' ? 'block' : 'none';
+      updateWizardRecap();
     }
 
     /* Reads the same radios the form submits, so the review step can never disagree with
