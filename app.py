@@ -59,6 +59,8 @@ from models import (
     PROJECT_PLAYBACK_MODES, ACCOUNT_TYPE_BUSINESS_VENDOR,
     PROJECT_ACTIVE_TRANSFER_STATUSES, PROJECT_ACTIVE_CLAIM_STATUSES,
     ProjectOwnershipTransfer, ProjectOwnershipClaim, ProjectServiceCoverage,
+    ContentReport, CONTENT_REPORT_REASONS, CONTENT_REPORT_STATUSES,
+    CONTENT_REPORT_ACTIONS,
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
@@ -273,6 +275,7 @@ RATE_LIMITS = {
     "register_ip": (30, 3600),
     "forgot_password_ip": (30, 3600),
     "resend_otp_ip": (20, 3600),
+    "content_report": (5, 3600),
 }
 
 
@@ -1478,6 +1481,8 @@ ADMIN_ROLE_PERMISSIONS = {
         "admin.projects.suspend",
         "admin.payments.view",
         "admin.processing.view",
+        "admin.reports.view",
+        "admin.reports.manage",
     },
     "superadmin": {
         "admin.dashboard.view",
@@ -1487,6 +1492,8 @@ ADMIN_ROLE_PERMISSIONS = {
         "admin.projects.suspend",
         "admin.payments.view",
         "admin.processing.view",
+        "admin.reports.view",
+        "admin.reports.manage",
         "superadmin.admins.manage",
         "superadmin.plans.manage",
         "superadmin.settings.manage",
@@ -1754,6 +1761,147 @@ def add_project_service_coverage(project, source_type, coverage_start=None, cove
     db.session.add(coverage)
     db.session.flush()
     return coverage
+
+
+def _project_future_coverage_candidates(project, now):
+    """ACTIVE, not-yet-expired coverage rows - including ones that start in the
+    future. Deliberately NOT filtered by coverage_start (unlike
+    _project_specific_coverage_candidates, which answers "is it live right
+    now"): renewal chaining has to see coverage bought for a later window, or
+    a second purchase would overlap and waste the first."""
+    if not project:
+        return []
+    return ProjectServiceCoverage.query.filter(
+        ProjectServiceCoverage.project_id == project.id,
+        ProjectServiceCoverage.status == "ACTIVE",
+        or_(ProjectServiceCoverage.coverage_end.is_(None), ProjectServiceCoverage.coverage_end > now),
+    ).all()
+
+
+def project_renewal_anchor(project, now=None):
+    """The instant a newly purchased project-service period must start from.
+
+    Returns the latest already-paid-for horizon across every coverage source
+    (current owner's account subscription + this project's own ACTIVE
+    coverages), or `now` when nothing covers it. Coverage_end is exclusive
+    everywhere in this codebase (`coverage_end > now` means live), so chaining
+    start = previous end is contiguous with no overlap and no wasted day -
+    the same convention VALIDITY_EXTENSION already uses for subscriptions.
+
+    Returns None when an *indefinite* coverage (coverage_end IS NULL) is
+    active: no finite purchase could ever become effective on top of it.
+    Project.is_active is deliberately ignored here - admin suspension governs
+    live availability, not whether paid dates exist underneath it.
+    """
+    now = now or get_utc_now()
+    if not project:
+        return now
+    anchor = now
+
+    owner_id = project_current_owner_user_id(project)
+    owner = User.query.get(owner_id) if owner_id else None
+    if owner and owner.has_active_subscription():
+        horizon = owner.subscription_expires_at
+        if horizon is None and owner.subscription_status == "trial":
+            # A trial has no subscription_expires_at but is not open-ended.
+            trial = owner.trial_details
+            horizon = trial.trial_end if trial else None
+        if horizon is None:
+            return None
+        if horizon > anchor:
+            anchor = horizon
+
+    for coverage in _project_future_coverage_candidates(project, now):
+        if coverage.coverage_end is None:
+            return None
+        if coverage.coverage_end > anchor:
+            anchor = coverage.coverage_end
+    return anchor
+
+
+def project_renewal_eligibility(project, now=None):
+    """LEGACY_COMPATIBILITY rule (Domain 2A backfilled every then-active
+    project an indefinite, never-ending coverage row). Chosen rule: block paid
+    standalone renewal while any indefinite coverage is active, rather than
+    normalizing it away. Normalizing would have to cap a currently-unlimited
+    live project at the purchased horizon - the user would pay to receive
+    strictly *less* coverage, and a bad cap would take a live QR offline. A
+    read-only guard cannot lose data; normalization is an ops migration that
+    can happen later without a schema change.
+    """
+    if not project:
+        return False, "PROJECT_NOT_FOUND", "Project not found."
+    if project_renewal_anchor(project, now) is None:
+        return False, "COVERAGE_ALREADY_INDEFINITE", "This ScanStory is already covered without an end date; renewal is not required."
+    return True, None, None
+
+
+def apply_standalone_project_renewal(project, user, days, source_id, source_reference=None, reason=None, now=None):
+    """Create exactly one STANDALONE_PROJECT_RENEWAL coverage row, chained so
+    it never overlaps existing coverage. Never touches
+    User.subscription_expires_at - project service is project-specific."""
+    days = int(days or 0)
+    if days <= 0:
+        raise ValueError("Renewal duration must be a positive number of days.")
+    anchor = project_renewal_anchor(project, now)
+    if anchor is None:
+        raise ValueError("Project already has indefinite coverage.")
+    return add_project_service_coverage(
+        project,
+        "STANDALONE_PROJECT_RENEWAL",
+        coverage_start=anchor,
+        coverage_end=anchor + timedelta(days=days),
+        source_id=source_id,
+        source_reference=source_reference,
+        created_by_user=user,
+        reason=reason,
+    )
+
+
+def admin_grant_project_service_coverage(project, admin, days, reason, now=None):
+    """Governed admin grant. Finite only - the existing admin policy has no
+    indefinite-grant capability and this checkpoint does not add one."""
+    if not project or not admin:
+        raise ValueError("Project and admin are required.")
+    days = int(days or 0)
+    if days <= 0:
+        raise ValueError("Admin grant requires a finite positive duration in days.")
+    if not (reason or "").strip():
+        raise ValueError("Admin grant requires a reason.")
+    now = now or get_utc_now()
+    anchor = project_renewal_anchor(project, now) or now
+    coverage = add_project_service_coverage(
+        project,
+        "ADMIN_GRANT",
+        coverage_start=anchor,
+        coverage_end=anchor + timedelta(days=days),
+        created_by_admin=admin,
+        reason=reason.strip(),
+    )
+    log_admin_activity(
+        admin.id,
+        "project_coverage_grant",
+        f"Granted {days} days service coverage to project {project.id}: {reason.strip()[:150]}",
+    )
+    return coverage
+
+
+def project_coverage_summary(project, now=None):
+    now = now or get_utc_now()
+    state = project_public_access_state(project, now)
+    anchor = project_renewal_anchor(project, now)
+    eligible, code, _message = project_renewal_eligibility(project, now)
+    return {
+        "project_id": project.id if project else None,
+        "is_live": state["is_live"],
+        "reason": state["reason"],
+        "coverage_source": state["coverage_source"],
+        "effective_coverage_until": state["effective_coverage_until"].isoformat() if state["effective_coverage_until"] else None,
+        "renewal_starts_at": anchor.isoformat() if anchor else None,
+        "renewal_eligible": eligible,
+        "renewal_blocked_code": code,
+        "is_suspended": bool(project and not project.is_active),
+    }
 
 
 def project_public_access_state(project, now=None):
@@ -2230,6 +2378,68 @@ def _atomic_increment_user_counter(user_id, counter_column, limit_column):
     return updated == 1
 
 
+# ---------------------------------------------------------------------------
+# Effective project capacity (Domain 2B).
+#
+# SOURCE OF TRUTH: User.subscribed_project_limit stays the *materialized
+# effective* limit (base plan capacity + purchased PROJECT_CAPACITY ledger
+# deltas), which is what _apply_entitlement_transaction() already did before
+# this checkpoint and what _reserve_project_quota_atomic() compares against
+# inside a single atomic UPDATE. Computing the limit dynamically instead would
+# mean replacing that atomic reservation with a read-then-write, losing the
+# concurrency guarantee - so the ledger stays the *audit* trail and the column
+# stays the *enforcement* value. Every place that re-syncs the column from a
+# plan must therefore route through reconciled_project_limit() so purchased
+# capacity is never silently dropped (rule 3: it survives subscription lapse).
+# There is exactly one addition of ledger to plan, so no double counting.
+# ---------------------------------------------------------------------------
+def purchased_project_capacity(user):
+    """Auditable sum of PROJECT_CAPACITY entitlement deltas for this user."""
+    if not user:
+        return 0
+    total = db.session.query(
+        func.coalesce(func.sum(EntitlementTransaction.delta_value), 0)
+    ).filter(
+        EntitlementTransaction.user_id == user.id,
+        EntitlementTransaction.entitlement_type == "PROJECT_CAPACITY",
+    ).scalar()
+    return int(total or 0)
+
+
+def reconciled_project_limit(user, plan_project_limit):
+    """Base plan capacity + purchased capacity. None/0 plan limit = unlimited."""
+    if plan_project_limit in (None, 0):
+        return plan_project_limit
+    return int(plan_project_limit) + purchased_project_capacity(user)
+
+
+def effective_project_limit(user):
+    """The one capacity number every project-capacity check must use.
+
+    Returns None for "unlimited" (matching _limit_reached's own convention).
+    """
+    if not user or has_dev_test_entitlement(user):
+        return None
+    limit = user.subscribed_project_limit
+    if limit in (None, 0):
+        return None
+    return int(limit)
+
+
+def project_capacity_summary(user):
+    limit = effective_project_limit(user)
+    purchased = purchased_project_capacity(user)
+    used = int(user.projects_used or 0)
+    return {
+        "effective_project_limit": limit,
+        "purchased_project_capacity": purchased,
+        "base_project_limit": None if limit is None else max(0, limit - purchased),
+        "projects_used": used,
+        "projects_remaining": None if limit is None else max(0, limit - used),
+        "unlimited": limit is None,
+    }
+
+
 def _reserve_project_quota_atomic(user):
     if has_dev_test_entitlement(user):
         return True
@@ -2696,7 +2906,7 @@ def check_user_limits(user):
             db.session.commit()
             return False, url_for("subscribe_page"), "Trial period expired"
 
-        if _limit_reached(user.subscribed_project_limit, user.projects_used):
+        if _limit_reached(effective_project_limit(user), user.projects_used):
             user.subscription_status = "limit_reached"
             db.session.commit()
             return False, url_for("subscribe_page"), f"Project limit reached ({user.subscribed_project_limit} projects)"
@@ -2718,7 +2928,7 @@ def check_user_limits(user):
             db.session.commit()
             return False, url_for("subscribe_page"), "Subscription expired"
 
-        if _limit_reached(user.subscribed_project_limit, user.projects_used):
+        if _limit_reached(effective_project_limit(user), user.projects_used):
             user.subscription_status = "limit_reached"
             db.session.commit()
             return False, url_for("subscribe_page"), "Project limit reached"
@@ -4784,8 +4994,10 @@ def dashboard():
             # ✅ Sync limits from trial plan - Mirror exactly what's in plan
             if trial_plan:
                 try:
-                    # Use exact values from plan, no defaults
-                    plan_projects = trial_plan.total_project_limit
+                    # Use exact values from plan, no defaults. Project limit is
+                    # plan + purchased PAYG capacity so a plan re-sync never
+                    # silently erases an auditable capacity entitlement.
+                    plan_projects = reconciled_project_limit(user, trial_plan.total_project_limit)
                     plan_scans = trial_plan.total_scan_limit
 
                     if user.subscribed_project_limit != plan_projects:
@@ -5532,7 +5744,7 @@ def login():
         # 🔥 SYNC LIMITS FROM TRIAL PLAN (ADMIN EDIT FIX)
         trial_plan = SubscriptionPlan.query.filter_by(is_trial_plan=True, is_active=True).first()
         if trial_plan:
-            plan_projects = trial_plan.total_project_limit
+            plan_projects = reconciled_project_limit(user, trial_plan.total_project_limit)
             plan_scans = trial_plan.total_scan_limit
 
             if user.subscribed_project_limit != plan_projects:
@@ -7277,7 +7489,11 @@ def admin_set_project_fallback_pair(project_id):
 # --------------------------------------------------------------------------------------------
 # Subscription & Payment Routes
 # --------------------------------------------------------------------------------------------
-ADDON_PURCHASABLE_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION"}
+ADDON_PURCHASABLE_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY", "PROJECT_SERVICE_COVERAGE"}
+# Add-on types that target exactly one project. Everything else is
+# account-level and must NOT carry a project_id.
+ADDON_PROJECT_TARGETED_TYPES = {"PROJECT_SERVICE_COVERAGE"}
+ENTITLEMENT_PROJECT_TARGETED_TYPES = {"PROJECT_SERVICE_COVERAGE"}
 
 
 def _addon_catalog_payload(item):
@@ -7305,6 +7521,10 @@ def _addon_effect(item, quantity=1):
         return "VALIDITY_EXTENSION", int(item.validity_days_delta or 0) * quantity
     if item.addon_type == "PROJECT_CAPACITY":
         return "PROJECT_CAPACITY", int(item.project_delta or 0) * quantity
+    if item.addon_type == "PROJECT_SERVICE_COVERAGE":
+        # Reuses validity_days_delta as the catalog-driven duration; a
+        # separate column would carry the same integer.
+        return "PROJECT_SERVICE_COVERAGE", int(item.validity_days_delta or 0) * quantity
     raise ValueError("Unsupported add-on type.")
 
 
@@ -7321,7 +7541,7 @@ def _validate_addon_catalog_for_purchase(item):
     return True, None, None
 
 
-def _apply_entitlement_transaction(user, entitlement_type, delta, source_type, source_id, reason, metadata=None):
+def _apply_entitlement_transaction(user, entitlement_type, delta, source_type, source_id, reason, metadata=None, project=None):
     existing = EntitlementTransaction.query.filter_by(
         source_type=source_type,
         source_id=source_id,
@@ -7330,9 +7550,13 @@ def _apply_entitlement_transaction(user, entitlement_type, delta, source_type, s
     if existing:
         return existing, True
 
+    if entitlement_type in ENTITLEMENT_PROJECT_TARGETED_TYPES and project is None:
+        raise ValueError(f"{entitlement_type} requires a target project.")
+
     now = dt.utcnow()
     tx = EntitlementTransaction(
         user_id=user.id,
+        project_id=project.id if project else None,
         entitlement_type=entitlement_type,
         delta_value=int(delta),
         source_type=source_type,
@@ -7352,8 +7576,21 @@ def _apply_entitlement_transaction(user, entitlement_type, delta, source_type, s
         if user.subscription_status in ("expired", "limit_reached"):
             user.subscription_status = "active"
     elif entitlement_type == "PROJECT_CAPACITY":
+        # Reusable account-level slot capacity, never a one-use creation
+        # token: it raises the materialized effective limit and the ledger row
+        # above is the permanent audit trail (never deleted on lapse).
         if user.subscribed_project_limit not in (None, 0):
             user.subscribed_project_limit = int(user.subscribed_project_limit or 0) + int(delta)
+    elif entitlement_type == "PROJECT_SERVICE_COVERAGE":
+        apply_standalone_project_renewal(
+            project,
+            user,
+            delta,
+            source_id=source_id,
+            source_reference=f"{source_type}:{source_id}",
+            reason=reason,
+            now=now,
+        )
     else:
         raise ValueError("Unsupported entitlement type.")
 
@@ -7378,6 +7615,19 @@ def fulfill_addon_purchase(purchase):
     if not user:
         return {"success": False, "code": "USER_NOT_FOUND", "error": "User not found."}
 
+    project = None
+    if item.addon_type in ADDON_PROJECT_TARGETED_TYPES:
+        project = Project.query.get(purchase.project_id) if purchase.project_id else None
+        if not project:
+            return {"success": False, "code": "PROJECT_NOT_FOUND", "error": "Target ScanStory not found."}
+        if not user_can_manage_project(user, project):
+            return {"success": False, "code": "PROJECT_FORBIDDEN", "error": "You cannot renew this ScanStory."}
+        eligible, code, message = project_renewal_eligibility(project)
+        if not eligible:
+            return {"success": False, "code": code, "error": message}
+    elif purchase.project_id:
+        return {"success": False, "code": "PROJECT_TARGET_INVALID", "error": "This add-on is account-level and cannot target a project."}
+
     try:
         _tx, replay = _apply_entitlement_transaction(
             user,
@@ -7387,6 +7637,7 @@ def fulfill_addon_purchase(purchase):
             purchase.id,
             f"Self-service add-on purchase {purchase.order_id}",
             metadata={"catalog_code": item.code, "quantity": purchase.quantity},
+            project=project,
         )
         now = dt.utcnow()
         purchase.status = "fulfilled"
@@ -7445,6 +7696,25 @@ def create_addon_order():
     ok, code, message = _validate_addon_catalog_for_purchase(item)
     if not ok:
         return jsonify({"success": False, "code": code, "error": message}), 400
+
+    # Project targeting (Domain 2B): renewal add-ons bind to exactly one
+    # project the buyer is authorised to manage; account-level add-ons must not
+    # carry a project at all.
+    try:
+        project_id = int(payload.get("project_id"))
+    except (TypeError, ValueError, AttributeError):
+        project_id = None
+    project = None
+    if item.addon_type in ADDON_PROJECT_TARGETED_TYPES:
+        project = Project.query.get(project_id) if project_id else None
+        if not project or not user_can_manage_project(user, project):
+            return jsonify({"success": False, "code": "PROJECT_NOT_FOUND", "error": "ScanStory not found."}), 404
+        eligible, ecode, emessage = project_renewal_eligibility(project)
+        if not eligible:
+            return jsonify({"success": False, "code": ecode, "error": emessage}), 400
+    elif project_id:
+        return jsonify({"success": False, "code": "PROJECT_TARGET_INVALID", "error": "This add-on is account-level and cannot target a project."}), 400
+
     if not razorpay_client:
         return jsonify({"success": False, "code": "PAYMENT_NOT_CONFIGURED", "error": "Payment gateway not configured."}), 503
 
@@ -7456,6 +7726,7 @@ def create_addon_order():
         order_id=f"ADDON_{user.id}_{int(time.time())}_{uuid.uuid4().hex[:8]}",
         user_id=user.id,
         catalog_id=item.id,
+        project_id=project.id if project else None,
         quantity=quantity,
         amount=item.unit_amount,
         total_amount=total_amount,
@@ -7473,6 +7744,7 @@ def create_addon_order():
                 "user_id": str(user.id),
                 "addon_purchase_id": str(purchase.id),
                 "addon_code": item.code,
+                "project_id": str(project.id) if project else "",
             },
         })
         purchase.razorpay_order_id = razorpay_order["id"]
@@ -7507,6 +7779,11 @@ def verify_addon_purchase(purchase_id):
         return jsonify({"success": False, "code": "MISSING_PAYMENT_DETAILS", "error": "Missing payment details."}), 400
     if razorpay_order_id != purchase.razorpay_order_id:
         return jsonify({"success": False, "code": "ORDER_MISMATCH", "error": "Payment order does not match this add-on purchase."}), 400
+    # Re-bind catalog item + amount (and, for renewals, the target project) to
+    # the stored purchase before any entitlement is applied.
+    catalog_item = AddonCatalog.query.get(purchase.catalog_id)
+    if not catalog_item or round(float(catalog_item.unit_amount) * int(purchase.quantity or 1), 2) != round(float(purchase.total_amount), 2):
+        return jsonify({"success": False, "code": "AMOUNT_MISMATCH", "error": "Add-on pricing changed; please start a new order."}), 409
     try:
         razorpay_client.utility.verify_payment_signature({
             "razorpay_order_id": razorpay_order_id,
@@ -7530,6 +7807,88 @@ def verify_addon_purchase(purchase_id):
     result = fulfill_addon_purchase(purchase)
     status = 200 if result.get("success") else 409
     return jsonify(result), status
+
+
+@app.route("/api/account/capacity", methods=["GET"])
+@login_required
+def account_capacity_summary():
+    return jsonify({"success": True, "capacity": project_capacity_summary(current_user())})
+
+
+@app.route("/api/projects/<int:project_id>/coverage", methods=["GET"])
+@login_required
+def project_service_coverage_summary(project_id):
+    user = current_user()
+    project = Project.query.get(project_id)
+    if not project or not user_can_manage_project(user, project):
+        return jsonify({"success": False, "code": "NOT_FOUND", "error": "ScanStory not found."}), 404
+    return jsonify({"success": True, "coverage": project_coverage_summary(project)})
+
+
+# ---------------------------------------------------------------------------
+# Public content reporting (Domain 2B). Creating a report NEVER suspends,
+# deletes or notifies - it only queues a row for explicit human review.
+# ---------------------------------------------------------------------------
+CONTENT_REPORT_DETAILS_MAX = 2000
+
+
+def _privacy_hash(value):
+    """Same one-way sha256 convention used elsewhere in this codebase, salted
+    with the app secret so a raw IP/session id is never stored or recoverable."""
+    if not value:
+        return None
+    return hashlib.sha256(f"{app.secret_key}:{value}".encode("utf-8")).hexdigest()
+
+
+@app.route("/api/projects/<int:project_id>/report", methods=["POST"])
+@csrf.exempt  # Public, unauthenticated viewer endpoint - no browser session/cookie to bind a CSRF token to (same class as the scanner endpoints).
+def report_project_content(project_id):
+    project = Project.query.get(project_id)
+    if not project:
+        return jsonify({"success": False, "code": "NOT_FOUND", "error": "ScanStory not found."}), 404
+
+    session_id = (request.headers.get("X-Scan-Session") or session.get("scan_session_id") or "")[:120]
+    ip_hash = _privacy_hash(_client_ip())
+    session_hash = _privacy_hash(session_id) if session_id else None
+
+    ok, retry_after = _check_rate_limit(
+        "content_report",
+        _rate_limit_key("content_report", project_id, session_hash or "-"),
+    )
+    if not ok:
+        response = jsonify({"success": False, "code": "RATE_LIMITED", "error": "Too many reports. Please try again later."})
+        response.status_code = 429
+        response.headers["Retry-After"] = str(retry_after)
+        return response
+
+    payload = request.get_json(silent=True) or request.form
+    reason = (payload.get("reason") or "").strip().upper()
+    if reason not in CONTENT_REPORT_REASONS:
+        return jsonify({"success": False, "code": "INVALID_REASON", "error": "Please choose a valid report reason."}), 400
+    details = (payload.get("details") or "").strip()
+    if len(details) > CONTENT_REPORT_DETAILS_MAX:
+        return jsonify({"success": False, "code": "DETAILS_TOO_LONG", "error": f"Details must be {CONTENT_REPORT_DETAILS_MAX} characters or fewer."}), 400
+    reporter_email = (payload.get("reporter_email") or "").strip()[:255] or None
+
+    reporter = current_user()
+    report = ContentReport(
+        project_id=project.id,
+        reporter_user_id=reporter.id if reporter else None,
+        reporter_email=reporter_email or (reporter.email if reporter else None),
+        reporter_session_hash=session_hash,
+        reporter_ip_hash=ip_hash,
+        reason=reason,
+        details=details or None,
+        status="OPEN",
+        metadata_json=json.dumps({
+            "user_agent": (request.headers.get("User-Agent") or "")[:300],
+            "referrer": (request.referrer or "")[:300],
+        }, sort_keys=True),
+    )
+    db.session.add(report)
+    db.session.commit()
+    # Deliberately generic: no report id, no counts, no moderation state.
+    return jsonify({"success": True, "message": "Thanks - our team will review this."}), 201
 
 
 @app.route("/pricing")
@@ -7639,7 +7998,7 @@ def activate_payment(payment_order):
     user.subscription_taken_at = now
     user.subscription_expires_at = subscription_end
     user.subscription_status = "active"
-    user.subscribed_project_limit = plan.total_project_limit
+    user.subscribed_project_limit = reconciled_project_limit(user, plan.total_project_limit)
     user.subscribed_scan_limit = plan.total_scan_limit
     user.projects_used = 0
     user.scans_used = 0
@@ -11281,6 +11640,119 @@ def admin_delete_project(project_id):
     
     flash("Project deleted successfully.", "success")
     return redirect(url_for("admin_projects"))
+
+
+# --------------------------------------------------------------------------------------------
+# Admin Routes - Content report moderation (Domain 2B). Explicit, audited, and
+# never automatic: no route here deletes a project or its media, and none bans
+# a creator. Reactivating a suspended project keeps using the existing
+# admin_restore_project route rather than a new reversal path.
+# --------------------------------------------------------------------------------------------
+def _content_report_payload(report):
+    return {
+        "id": report.id,
+        "project_id": report.project_id,
+        "reason": report.reason,
+        "details": report.details,
+        "status": report.status,
+        "created_at": report.created_at.isoformat() if report.created_at else None,
+        "reviewed_at": report.reviewed_at.isoformat() if report.reviewed_at else None,
+        "reviewed_by_admin_id": report.reviewed_by_admin_id,
+        "resolution_action": report.resolution_action,
+        "resolution_reason": report.resolution_reason,
+        "reporter_user_id": report.reporter_user_id,
+        "has_reporter_contact": bool(report.reporter_email),
+    }
+
+
+@app.route("/admin/reports", methods=["GET"])
+@require_admin_permission("admin.reports.view")
+def admin_content_reports():
+    query = ContentReport.query
+    status = (request.args.get("status") or "").strip().upper()
+    if status in CONTENT_REPORT_STATUSES:
+        query = query.filter(ContentReport.status == status)
+    project_id = request.args.get("project_id", type=int)
+    if project_id:
+        query = query.filter(ContentReport.project_id == project_id)
+    reports = (
+        query.order_by(ContentReport.created_at.desc(), ContentReport.id.desc())
+        .limit(admin_page_size())
+        .all()
+    )
+    return jsonify({"success": True, "reports": [_content_report_payload(r) for r in reports]})
+
+
+@app.route("/admin/reports/<int:report_id>", methods=["GET"])
+@require_admin_permission("admin.reports.view")
+def admin_content_report_detail(report_id):
+    report = ContentReport.query.get_or_404(report_id)
+    return jsonify({"success": True, "report": _content_report_payload(report)})
+
+
+@app.route("/admin/reports/<int:report_id>/review", methods=["POST"])
+@require_admin_permission("admin.reports.manage")
+def admin_review_content_report(report_id):
+    admin = current_admin()
+    report = ContentReport.query.get_or_404(report_id)
+    payload = request.get_json(silent=True) or request.form
+    status = (payload.get("status") or "").strip().upper()
+    if status not in CONTENT_REPORT_STATUSES or status == "OPEN":
+        return jsonify({"success": False, "code": "INVALID_STATUS", "error": "Invalid moderation status."}), 400
+    action = (payload.get("resolution_action") or "").strip().upper() or None
+    if status == "ACTION_TAKEN" and action not in CONTENT_REPORT_ACTIONS:
+        return jsonify({"success": False, "code": "INVALID_ACTION", "error": "Invalid moderation action."}), 400
+    if action and action not in CONTENT_REPORT_ACTIONS:
+        return jsonify({"success": False, "code": "INVALID_ACTION", "error": "Invalid moderation action."}), 400
+    resolution_reason = (payload.get("resolution_reason") or "").strip() or None
+
+    report.status = status
+    report.resolution_action = action
+    report.resolution_reason = resolution_reason
+    report.reviewed_by_admin_id = admin.id
+    if status != "UNDER_REVIEW":
+        report.reviewed_at = get_utc_now()
+
+    if status == "ACTION_TAKEN" and action == "PROJECT_SUSPENDED":
+        project = Project.query.get(report.project_id)
+        if project:
+            # Suspension only. Project row, media and QR are untouched.
+            project.is_active = False
+    db.session.commit()
+
+    log_admin_activity(
+        admin.id,
+        "content_report_review",
+        f"Report {report.id} (project {report.project_id}) -> {status}"
+        + (f" action={action}" if action else "")
+        + (f": {resolution_reason[:150]}" if resolution_reason else ""),
+    )
+    return jsonify({"success": True, "report": _content_report_payload(report)})
+
+
+@app.route("/admin/projects/<int:project_id>/service-coverage/grant", methods=["POST"])
+@require_admin_permission("superadmin.capacity.manage")
+def admin_grant_project_coverage(project_id):
+    admin = current_admin()
+    project = Project.query.get_or_404(project_id)
+    payload = request.get_json(silent=True) or request.form
+    try:
+        days = int(payload.get("days"))
+    except (TypeError, ValueError):
+        days = 0
+    try:
+        coverage = admin_grant_project_service_coverage(project, admin, days, payload.get("reason"))
+    except ValueError as exc:
+        db.session.rollback()
+        return jsonify({"success": False, "code": "INVALID_GRANT", "error": str(exc)}), 400
+    db.session.commit()
+    return jsonify({
+        "success": True,
+        "coverage_id": coverage.id,
+        "coverage_start": coverage.coverage_start.isoformat(),
+        "coverage_end": coverage.coverage_end.isoformat(),
+    }), 201
+
 
 # --------------------------------------------------------------------------------------------
 # Admin Routes - Module 9: Scan Usage Control

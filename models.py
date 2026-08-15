@@ -547,9 +547,9 @@ class RazorpayWebhookEvent(db.Model):
 # ---------------------------------------------------------------------
 # Self-service add-ons and entitlement ledger
 # ---------------------------------------------------------------------
-ADDON_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY"}
+ADDON_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY", "PROJECT_SERVICE_COVERAGE"}
 ADDON_PURCHASE_STATUSES = {"pending", "fulfilled", "failed", "cancelled", "refunded"}
-ENTITLEMENT_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY"}
+ENTITLEMENT_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY", "PROJECT_SERVICE_COVERAGE"}
 
 
 class AddonCatalog(db.Model):
@@ -584,6 +584,7 @@ class AddonPurchase(db.Model):
     order_id = db.Column(db.String(100), unique=True, nullable=False, index=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     catalog_id = db.Column(db.Integer, db.ForeignKey("addon_catalog.id"), nullable=False, index=True)
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
     quantity = db.Column(db.Integer, nullable=False, default=1)
     amount = db.Column(db.Float, nullable=False)
     total_amount = db.Column(db.Float, nullable=False)
@@ -599,6 +600,7 @@ class AddonPurchase(db.Model):
     updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
     user = db.relationship("User", backref="addon_purchases", lazy=True)
+    project = db.relationship("Project", lazy=True)
 
     @validates("status")
     def validate_status(self, key, value):
@@ -613,6 +615,7 @@ class EntitlementTransaction(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
     entitlement_type = db.Column(db.String(40), nullable=False, index=True)
     delta_value = db.Column(db.Integer, nullable=False)
     source_type = db.Column(db.String(40), nullable=False, index=True)
@@ -624,6 +627,7 @@ class EntitlementTransaction(db.Model):
     created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
 
     user = db.relationship("User", backref="entitlement_transactions", lazy=True)
+    project = db.relationship("Project", lazy=True)
 
     @property
     def metadata_dict(self):
@@ -1242,6 +1246,71 @@ class AdminActivity(db.Model):
     activity_type = db.Column(db.String(100), nullable=False)
     description = db.Column(db.Text, nullable=False)
     activity_at = db.Column(db.DateTime, nullable=False, default=get_utc_now)
+
+
+# ---------------------------------------------------------------------
+# Human-reviewed content reports
+# ---------------------------------------------------------------------
+CONTENT_REPORT_REASONS = {
+    "EXPLICIT_OR_INAPPROPRIATE",
+    "VIOLENCE_OR_DANGER",
+    "HATE_OR_HARASSMENT",
+    "SCAM_OR_MISLEADING",
+    "COPYRIGHT_OR_IP",
+    "PRIVACY",
+    "SPAM",
+    "OTHER",
+}
+CONTENT_REPORT_STATUSES = {"OPEN", "UNDER_REVIEW", "ACTION_TAKEN", "DISMISSED"}
+CONTENT_REPORT_ACTIONS = {
+    "NONE",
+    "PROJECT_SUSPENDED",
+    "CREATOR_CONTACT_REQUIRED",
+    "LEGAL_REVIEW_REQUIRED",
+    "OTHER",
+}
+
+
+class ContentReport(db.Model):
+    __tablename__ = "content_reports"
+    __table_args__ = (
+        db.Index("ix_content_reports_project_status", "project_id", "status"),
+        db.Index("ix_content_reports_created_at", "created_at"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+    reporter_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    reporter_email = db.Column(db.String(255), nullable=True)
+    reporter_session_hash = db.Column(db.String(64), nullable=True, index=True)
+    reporter_ip_hash = db.Column(db.String(64), nullable=True, index=True)
+    reason = db.Column(db.String(40), nullable=False, index=True)
+    details = db.Column(db.Text, nullable=True)
+    status = db.Column(db.String(30), nullable=False, default="OPEN", server_default="OPEN", index=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True, index=True)
+    resolution_action = db.Column(db.String(40), nullable=True)
+    resolution_reason = db.Column(db.Text, nullable=True)
+    metadata_json = db.Column(db.Text, nullable=True)
+
+    project = db.relationship("Project", backref=db.backref("content_reports", lazy=True, cascade="all, delete-orphan"))
+    reporter_user = db.relationship("User", foreign_keys=[reporter_user_id], lazy=True)
+    reviewed_by_admin = db.relationship("Admin", foreign_keys=[reviewed_by_admin_id], lazy=True)
+
+    @validates("reason")
+    def validate_reason(self, key, value):
+        return _validate_value((value or "").strip().upper(), CONTENT_REPORT_REASONS, key)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value((value or "OPEN").strip().upper(), CONTENT_REPORT_STATUSES, key)
+
+    @validates("resolution_action")
+    def validate_resolution_action(self, key, value):
+        if value in (None, ""):
+            return None
+        return _validate_value((value or "").strip().upper(), CONTENT_REPORT_ACTIONS, key)
 
 
 # ---------------------------------------------------------------------

@@ -32,11 +32,15 @@ def _migration_app(tmp_path, name):
     return app
 
 
-def test_upload_session_experience_contract_is_current_head():
+def test_upload_session_experience_contract_is_on_the_single_head_chain():
+    # Asserts placement in the chain, not "is the head": later phases layer
+    # further revisions on top and there must still be exactly one head.
     script = _script_directory()
     revision = script.get_revision(UPLOAD_CONTRACT_REVISION)
-    assert script.get_current_head() == UPLOAD_CONTRACT_REVISION
+    assert len(script.get_heads()) == 1
     assert revision.down_revision == PRIOR_REVISION
+    ancestry = {r.revision for r in script.iterate_revisions(script.get_current_head(), "base")}
+    assert UPLOAD_CONTRACT_REVISION in ancestry
 
 
 def test_upload_session_experience_contract_upgrade_backfills_existing_sessions(tmp_path):
