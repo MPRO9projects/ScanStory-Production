@@ -2525,11 +2525,18 @@ def _validate_project_experience_playback(experience_type, playback_mode):
     raise ValueError("Playback mode is not supported for this experience type")
 
 
-def _parse_project_playback_mode(experience_type):
-    playback_mode = _normalize_playback_mode(request.form.get("playback_mode"))
+def _resolve_project_experience_playback(experience_type_value=None, playback_mode_value=None):
+    experience_type = (experience_type_value or "image_video").strip().lower()
+    if experience_type not in PROJECT_EXPERIENCE_TYPES:
+        raise ValueError("Unsupported experience type")
+    playback_mode = _normalize_playback_mode(playback_mode_value)
     playback_mode = playback_mode or _default_playback_mode_for_experience(experience_type)
     _validate_project_experience_playback(experience_type, playback_mode)
-    return playback_mode
+    return experience_type, playback_mode
+
+
+def _parse_project_playback_mode(experience_type):
+    return _resolve_project_experience_playback(experience_type, request.form.get("playback_mode"))[1]
 
 
 def _direct_qr_marker_meta():
@@ -6290,6 +6297,8 @@ def _upload_session_payload(session_row):
         "progress_percent": progress_percent,
         "image_size": session_row.image_size,
         "video_size": session_row.video_size,
+        "experience_type": session_row.experience_type,
+        "playback_mode": session_row.playback_mode,
         "project_id": session_row.project_id,
         "pair_id": session_row.pair_id,
         "pair": pair_payload,
@@ -6397,6 +6406,14 @@ def _finalize_enqueue_and_complete(session_row):
     branch in finalize_upload_session) - that is the operator/client
     recovery path, not a separate CLI.
     """
+    project = Project.query.get(session_row.project_id)
+    if project and project.experience_type == "direct_qr":
+        session_row.status = "completed"
+        session_row.completed_at = get_utc_now()
+        session_row.failure_code = None
+        db.session.commit()
+        return True
+
     job = _schedule_project_pair_processing(session_row.project_id)
     if job:
         session_row.status = "completed"
@@ -6423,13 +6440,23 @@ def create_upload_session():
     payload = request.get_json(silent=True) or {}
 
     try:
+        experience_type, playback_mode = _resolve_project_experience_playback(
+            payload.get("experience_type"),
+            payload.get("playback_mode"),
+        )
+    except ValueError as exc:
+        return _upload_api_error("INVALID_EXPERIENCE_PLAYBACK", str(exc), 400)
+
+    try:
         image_size = int(payload.get("image_size"))
         video_size = int(payload.get("video_size"))
     except (TypeError, ValueError):
         return _upload_api_error("INVALID_SIZE", "image_size and video_size must be provided as integers.", 400)
 
-    if image_size <= 0 or video_size <= 0:
-        return _upload_api_error("INVALID_SIZE", "image_size and video_size must be positive.", 400)
+    if video_size <= 0 or image_size < 0 or (experience_type == "image_video" and image_size <= 0):
+        return _upload_api_error("INVALID_SIZE", "image_size and video_size must be positive for Image → Video; Direct QR may omit image bytes.", 400)
+    if experience_type == "direct_qr" and image_size != 0:
+        return _upload_api_error("INVALID_SIZE", "Direct QR resumable uploads must not include marker image bytes.", 400)
     if image_size > MAX_IMAGE_SIZE:
         return _upload_api_error("IMAGE_TOO_LARGE", "Declared image size exceeds the allowed limit.", 400)
     if video_size > MAX_VIDEO_SIZE:
@@ -6476,6 +6503,8 @@ def create_upload_session():
         original_video_name=_sanitize_display_text(payload.get("original_video_name")),
         image_content_type=_sanitize_display_text(payload.get("image_content_type"), max_len=100),
         video_content_type=_sanitize_display_text(payload.get("video_content_type"), max_len=100),
+        experience_type=experience_type,
+        playback_mode=playback_mode,
         image_size=image_size,
         video_size=video_size,
         expected_total_size=expected_total_size,
@@ -6716,23 +6745,31 @@ def _finalize_assemble_and_validate(session_row, user, admin):
         if computed != session_row.client_checksum_sha256:
             return fail("CHECKSUM_MISMATCH", "Uploaded data failed checksum verification.")
 
+    experience_type = session_row.experience_type or "image_video"
+    playback_mode = session_row.playback_mode or _default_playback_mode_for_experience(experience_type)
+    try:
+        _validate_project_experience_playback(experience_type, playback_mode)
+    except ValueError as exc:
+        return fail("INVALID_EXPERIENCE_PLAYBACK", str(exc), 400)
+
     validation_start = time.perf_counter()
-    image_view = _BoundedFileView(combined_path, 0, session_row.image_size)
+    image_view = _BoundedFileView(combined_path, 0, session_row.image_size) if experience_type == "image_video" else None
     video_view = _BoundedFileView(combined_path, session_row.image_size, session_row.video_size)
     img_temp = vid_temp = img_ext = vid_ext = None
     image_error = video_error = None
     try:
-        image_storage = FileStorage(
-            stream=image_view,
-            filename=session_row.original_image_name or "upload.jpg",
-            content_type=session_row.image_content_type or "application/octet-stream",
-        )
-        try:
-            img_temp, img_ext = validate_image(
-                image_storage, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+        if experience_type == "image_video":
+            image_storage = FileStorage(
+                stream=image_view,
+                filename=session_row.original_image_name or "upload.jpg",
+                content_type=session_row.image_content_type or "application/octet-stream",
             )
-        except UploadValidationError as exc:
-            image_error = exc
+            try:
+                img_temp, img_ext = validate_image(
+                    image_storage, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+                )
+            except UploadValidationError as exc:
+                image_error = exc
 
         if image_error is None:
             video_storage = FileStorage(
@@ -6751,7 +6788,8 @@ def _finalize_assemble_and_validate(session_row, user, admin):
         # below (via `fail()` or the success path) - on Windows, a file
         # with an open handle cannot be deleted, so doing this any later
         # would silently no-op the cleanup on failure.
-        image_view.close()
+        if image_view:
+            image_view.close()
         video_view.close()
         validation_duration_ms = _elapsed_ms(validation_start)
 
@@ -6788,6 +6826,8 @@ def _finalize_assemble_and_validate(session_row, user, admin):
                 owner_admin_id=admin.id,
                 owner_user_id=None,
                 user_project_index=project_index,
+                experience_type=experience_type,
+                playback_mode=playback_mode,
             )
         else:
             max_index = db.session.query(func.max(Project.user_project_index)).filter(
@@ -6801,6 +6841,8 @@ def _finalize_assemble_and_validate(session_row, user, admin):
                 created_by_user_id=user.id,
                 current_owner_user_id=user.id,
                 user_project_index=project_index,
+                experience_type=experience_type,
+                playback_mode=playback_mode,
             )
         db.session.add(project)
         db.session.flush()
@@ -6818,16 +6860,20 @@ def _finalize_assemble_and_validate(session_row, user, admin):
             if not pair_slots_ok:
                 raise ValueError(pair_slots_error)
 
-        img_filename = f"{project.id}_0.jpg"
+        img_filename = f"{project.id}_0.jpg" if experience_type == "image_video" else None
         vid_filename = f"{project.id}_0{vid_ext}"
-        img_path = os.path.join(images_dir, img_filename)
-        os.replace(img_temp, img_path)  # atomic move: already-validated content only
-        saved_paths.append(img_path)
+        img_path = None
+        if img_filename:
+            img_path = os.path.join(images_dir, img_filename)
+            os.replace(img_temp, img_path)  # atomic move: already-validated content only
+            saved_paths.append(img_path)
         vid_path = os.path.join(videos_dir, vid_filename)
         os.replace(vid_temp, vid_path)  # atomic move: already-validated content only
         saved_paths.append(vid_path)
 
-        image_path_url = f"/admin/image/{project.id}/0" if is_admin_owner else f"/image/{project.id}/0"
+        image_path_url = None
+        if img_filename:
+            image_path_url = f"/admin/image/{project.id}/0" if is_admin_owner else f"/image/{project.id}/0"
         pair = ProjectPair(
             project_id=project.id,
             pair_index=0,
@@ -6836,11 +6882,11 @@ def _finalize_assemble_and_validate(session_row, user, admin):
             image_path=image_path_url,
             original_image_name=session_row.original_image_name,
             original_video_name=session_row.original_video_name,
-            image_size=os.path.getsize(img_path),
+            image_size=os.path.getsize(img_path) if img_path else None,
             video_size=os.path.getsize(vid_path),
-            is_processed=False,
-            processing_status="uploaded",
-            feature_extraction_status="pending",
+            is_processed=experience_type == "direct_qr",
+            processing_status="completed" if experience_type == "direct_qr" else "uploaded",
+            feature_extraction_status="not_required" if experience_type == "direct_qr" else "pending",
             processing_error=None,
         )
         db.session.add(pair)

@@ -376,6 +376,37 @@ def test_review_step_recaps_the_chosen_playback_style():
     assert "if (recapPlayback) recapPlayback.textContent = playbackModeLabel();" in html
 
 
+def test_creator_upload_paths_send_experience_and_playback_contract():
+    html = creator_html()
+    assert "function creatorExperiencePayload()" in html
+    assert "playback_mode: type === 'direct_qr' ? 'direct'" in html
+    assert "fd.append('experience_type', experiencePayload.experience_type);" in html
+    assert "fd.append('playback_mode', experiencePayload.playback_mode);" in html
+    assert "...experiencePayload" in html
+    assert "createResumableSession(resumableMarkerFile, pair.video, projectName, experiencePayload" in html
+
+
+def test_resumable_recovery_matches_experience_and_playback_contract():
+    html = creator_html()
+    matcher = html[html.index("function storedSessionMatchesFiles("):html.index("function sequentialUploadSlice(")]
+    assert "stored.experience_type === experiencePayload.experience_type" in matcher
+    assert "stored.playback_mode === experiencePayload.playback_mode" in matcher
+    assert "stored.imageName === (markerFile?.name || null)" in matcher
+    assert "stored.imageSize === (markerFile?.size || 0)" in matcher
+    saved_start = html.index("activeResumableUpload = {", html.index("const session = sessionPayload.session;"))
+    saved_state = html[saved_start:html.index("saveResumableUploadState(activeResumableUpload);", saved_start)]
+    assert "experience_type: experiencePayload.experience_type" in saved_state
+    assert "playback_mode: experiencePayload.playback_mode" in saved_state
+
+
+def test_direct_qr_resumable_upload_sends_video_only_not_fabricated_marker():
+    html = creator_html()
+    assert "const totalBytes = (resumableMarkerFile?.size || 0) + pair.video.size;" in html
+    assert "image_size: markerFile?.size || 0" in html
+    assert "original_image_name: markerFile?.name || null" in html
+    assert "if (experiencePayload.experience_type === 'image_video')" in html
+
+
 def test_project_creation_submit_buttons_share_the_same_wording():
     html = creator_html()
     assert '<i class="fas fa-qrcode"></i> Create ScanStory' in html

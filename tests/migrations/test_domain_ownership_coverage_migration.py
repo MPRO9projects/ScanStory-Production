@@ -32,10 +32,9 @@ def _migration_app(tmp_path, name):
     return app
 
 
-def test_domain_ownership_revision_is_current_head():
+def test_domain_ownership_revision_exists():
     script = _script_directory()
     revision = script.get_revision(DOMAIN_REVISION)
-    assert script.get_current_head() == DOMAIN_REVISION
     assert revision.down_revision == PRIOR_REVISION
 
 

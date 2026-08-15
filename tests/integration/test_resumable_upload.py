@@ -137,6 +137,8 @@ def test_create_session_success(client, login_user):
     assert session["expected_total_size"] == 3000
     assert session["uploaded_bytes"] == 0
     assert session["remaining_bytes"] == 3000
+    assert session["experience_type"] == "image_video"
+    assert session["playback_mode"] == "tracked_overlay"
     assert session["progress_percent"] == 0
     assert session["can_upload_chunks"] is True
     assert session["can_finalize"] is False
@@ -172,6 +174,60 @@ def test_create_session_rejects_non_positive_sizes(client, login_user):
     resp = _create_session(client, 0, 100)
     assert resp.status_code == 400
     assert resp.get_json()["code"] == "INVALID_SIZE"
+
+
+def test_create_session_accepts_detect_once_contract(client, app_module, login_user):
+    resp = _create_session(
+        client,
+        1000,
+        2000,
+        experience_type="image_video",
+        playback_mode="detect_once",
+    )
+
+    assert resp.status_code == 201
+    session = resp.get_json()["session"]
+    row = app_module.UploadSession.query.get(session["id"])
+    assert session["experience_type"] == "image_video"
+    assert session["playback_mode"] == "detect_once"
+    assert row.experience_type == "image_video"
+    assert row.playback_mode == "detect_once"
+
+
+def test_create_session_accepts_direct_qr_video_only_contract(client, app_module, login_user):
+    resp = _create_session(
+        client,
+        0,
+        2000,
+        experience_type="direct_qr",
+        playback_mode="direct",
+        original_image_name=None,
+    )
+
+    assert resp.status_code == 201
+    session = resp.get_json()["session"]
+    row = app_module.UploadSession.query.get(session["id"])
+    assert session["expected_total_size"] == 2000
+    assert session["experience_type"] == "direct_qr"
+    assert session["playback_mode"] == "direct"
+    assert row.image_size == 0
+
+
+def test_create_session_rejects_invalid_experience_playback_mapping(client, login_user):
+    for experience_type, playback_mode in (
+        ("direct_qr", "tracked_overlay"),
+        ("direct_qr", "detect_once"),
+        ("image_video", "direct"),
+    ):
+        resp = _create_session(
+            client,
+            1000,
+            2000,
+            experience_type=experience_type,
+            playback_mode=playback_mode,
+        )
+        assert resp.status_code == 400
+        assert resp.get_json()["code"] == "INVALID_EXPERIENCE_PLAYBACK"
 
 
 # ---------------------------------------------------------------------
@@ -426,6 +482,45 @@ def test_finalize_twice_rejected_not_double_processed(client, app_module, login_
     assert second.get_json()["code"] == "ALREADY_FINALIZED"
     assert app_module.Project.query.count() == 1
     assert app_module.ProjectPair.query.count() == 1
+
+
+def test_finalize_detect_once_session_creates_detect_once_project(client, app_module, login_user, monkeypatch):
+    _patch_qr(app_module, monkeypatch)
+    session_id = _create_and_upload(client, experience_type="image_video", playback_mode="detect_once")
+
+    resp = _finalize(client, session_id)
+
+    assert resp.status_code == 200, resp.get_json()
+    project = app_module.Project.query.one()
+    session = app_module.UploadSession.query.get(session_id)
+    assert session.experience_type == "image_video"
+    assert session.playback_mode == "detect_once"
+    assert project.experience_type == "image_video"
+    assert project.playback_mode == "detect_once"
+
+
+def test_finalize_direct_qr_session_creates_video_only_direct_project(client, app_module, login_user, monkeypatch):
+    _patch_qr(app_module, monkeypatch)
+    session_id = _create_and_upload(
+        client,
+        image_bytes=b"",
+        experience_type="direct_qr",
+        playback_mode="direct",
+        original_image_name=None,
+        image_content_type=None,
+    )
+
+    resp = _finalize(client, session_id)
+
+    assert resp.status_code == 200, resp.get_json()
+    project = app_module.Project.query.one()
+    pair = app_module.ProjectPair.query.one()
+    assert project.experience_type == "direct_qr"
+    assert project.playback_mode == "direct"
+    assert pair.image_filename is None
+    assert pair.image_size is None
+    assert pair.is_processed is True
+    assert pair.feature_extraction_status == "not_required"
 
 
 def test_lost_finalize_success_recovered_from_authoritative_status(
