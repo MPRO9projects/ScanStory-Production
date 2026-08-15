@@ -177,12 +177,19 @@
 </div>
 
 <div class="row g-4 mt-1">
-    <div class="col-lg-6">
+    <div class="col-12">
         <div class="card h-100">
             <div class="card-header">Recent Add-on Purchases</div>
             <div class="card-body p-0">
+                {# V1.1 admin refund. Eligibility, refund status and reconciliation
+                   status all come from the server; nothing here is decided in the
+                   browser, and there is no partial-amount input because the refund
+                   endpoint accepts no amount. #}
+                {% if admin_can('admin.payments.refund') %}
+                <div class="alert alert-info m-3" id="addonRefundNotice" style="white-space: pre-line;">{{ REFUND_CONFIRMATION_NOTICE }}</div>
+                {% endif %}
                 <div class="table-responsive">
-                    <table class="table table-dark table-hover mb-0">
+                    <table class="table table-dark table-hover mb-0 align-middle">
                         <thead>
                             <tr>
                                 <th>ID</th>
@@ -191,10 +198,13 @@
                                 <th>Status</th>
                                 <th>Total</th>
                                 <th>Fulfilled</th>
+                                <th>Refund</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for purchase in addon_purchases %}
+                            {% set eligibility = addon_refund_eligibility.get(purchase.id) or {} %}
+                            {% set purchase_refund = addon_refunds.get(purchase.id) %}
                             <tr>
                                 <td>{{ purchase.id }}</td>
                                 <td>#{{ purchase.user_id }}</td>
@@ -202,9 +212,63 @@
                                 <td>{{ purchase.status }}</td>
                                 <td>{{ purchase.currency }} {{ purchase.total_amount }}</td>
                                 <td>{{ purchase.fulfilled_at.strftime('%d %b %Y %H:%M') if purchase.fulfilled_at else "-" }}</td>
+                                <td style="min-width: 320px;">
+                                    {% if purchase_refund %}
+                                    {# Refund status and reconciliation status are two
+                                       independent facts and are always both shown. #}
+                                    <div data-refund-status="{{ purchase_refund.status }}">
+                                        <strong>{{ REFUND_STATUS_LABELS.get(purchase_refund.status, purchase_refund.status) }}</strong>
+                                        &middot; {{ purchase_refund.currency }} {{ "%.2f"|format(purchase_refund.amount) }} (full)
+                                    </div>
+                                    <div class="text-muted small" data-reconciliation-status="{{ purchase_refund.reconciliation_status }}">
+                                        {{ REFUND_RECONCILIATION_LABELS.get(purchase_refund.reconciliation_status, purchase_refund.reconciliation_status) }}
+                                    </div>
+                                    {% if purchase_refund.reconciliation_message_safe %}
+                                    <div class="text-muted small">{{ purchase_refund.reconciliation_message_safe }}</div>
+                                    {% endif %}
+                                    <div class="text-muted small">
+                                        Reference {{ purchase_refund.provider_refund_id or 'not issued yet' }} &middot;
+                                        by {{ purchase_refund.requested_by_admin.name if purchase_refund.requested_by_admin else 'Admin #' ~ purchase_refund.requested_by_admin_id }}
+                                        {% if purchase_refund.requested_at %} on {{ purchase_refund.requested_at.strftime('%d %b %Y %H:%M') }}{% endif %}
+                                    </div>
+                                    {% if purchase_refund.failure_message_safe %}
+                                    <div class="text-danger small">{{ purchase_refund.failure_message_safe }}</div>
+                                    {% endif %}
+                                    {% endif %}
+
+                                    {% if admin_can('admin.payments.refund') %}
+                                    {% if eligibility.get('eligible') %}
+                                    {% set effect_note = REFUND_ENTITLEMENT_EFFECT_NOTES.get(eligibility.get('entitlement_effects', {}).get('entitlement_type')) %}
+                                    {% if effect_note %}
+                                    <div class="text-muted small mb-2">{{ effect_note }}</div>
+                                    {% endif %}
+                                    <label class="visually-hidden" for="addonRefundReason{{ purchase.id }}">Refund reason for purchase {{ purchase.id }} (required)</label>
+                                    <input class="form-control form-control-sm mb-2" type="text" required aria-required="true"
+                                           id="addonRefundReason{{ purchase.id }}" placeholder="Refund reason (required)">
+                                    <button class="btn btn-sm btn-danger addon-refund-btn" type="button"
+                                            data-refund-url="{{ url_for('admin_refund_addon_purchase', purchase_id=purchase.id) }}"
+                                            data-reason-id="addonRefundReason{{ purchase.id }}">
+                                        Refund Purchase
+                                    </button>
+                                    <span class="small text-muted ms-2" role="status" aria-live="polite" id="addonRefundMsg{{ purchase.id }}"></span>
+                                    {% elif not purchase_refund %}
+                                    <div class="text-muted small addon-refund-ineligible">
+                                        Refund not available: {{ eligibility.get('reason_text') or 'Not eligible for refund.' }}
+                                    </div>
+                                    <button class="btn btn-sm btn-secondary" type="button" disabled
+                                            title="{{ eligibility.get('reason_text') or 'Not eligible for refund.' }}">
+                                        Refund Purchase
+                                    </button>
+                                    {% else %}
+                                    <div class="text-muted small addon-refund-ineligible">
+                                        Refund not available: {{ eligibility.get('reason_text') or 'Not eligible for refund.' }}
+                                    </div>
+                                    {% endif %}
+                                    {% endif %}
+                                </td>
                             </tr>
                             {% else %}
-                            <tr><td colspan="6" class="text-center text-muted py-4">No add-on purchases found.</td></tr>
+                            <tr><td colspan="7" class="text-center text-muted py-4">No add-on purchases found.</td></tr>
                             {% endfor %}
                         </tbody>
                     </table>
@@ -212,7 +276,7 @@
             </div>
         </div>
     </div>
-    <div class="col-lg-6">
+    <div class="col-12">
         <div class="card h-100">
             <div class="card-header">Recent Entitlement Ledger</div>
             <div class="card-body p-0">
@@ -248,4 +312,51 @@
         </div>
     </div>
 </div>
+
+{% if admin_can('admin.payments.refund') %}
+<script>
+  // Full refund only; no amount is sent because the endpoint accepts none.
+  // The POST response is never rendered as the final state - reconciliation can
+  // settle later via webhook - so the page is reloaded and the server re-renders
+  // the authoritative refund and reconciliation status.
+  (function () {
+    const NOTICE = {{ REFUND_CONFIRMATION_NOTICE|tojson }};
+    const CSRF = "{{ csrf_token() }}";
+    document.querySelectorAll('.addon-refund-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        const reasonEl = document.getElementById(btn.dataset.reasonId);
+        const msgEl = document.getElementById(btn.dataset.reasonId.replace('addonRefundReason', 'addonRefundMsg'));
+        const reason = (reasonEl.value || '').trim();
+        if (!reason) {
+          msgEl.textContent = 'A refund reason is required.';
+          reasonEl.focus();
+          return;
+        }
+        if (!window.confirm(NOTICE + '\n\nRefund the full amount now?')) { return; }
+        btn.disabled = true;
+        msgEl.textContent = 'Sending refund request…';
+        fetch(btn.dataset.refundUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF },
+          body: JSON.stringify({ reason: reason })
+        }).then(async function (response) {
+          let payload = null;
+          try { payload = await response.json(); } catch (e) { /* redirect / error page */ }
+          if (!response.ok || !payload || !payload.success) {
+            msgEl.textContent = 'Refund could not be started'
+              + (payload && payload.code ? ' (' + payload.code + ').' : '.')
+              + ' Reloading current status…';
+          } else {
+            msgEl.textContent = 'Refund submitted. Reloading authoritative status…';
+          }
+          window.location.reload();
+        }).catch(function () {
+          msgEl.textContent = 'Network error. Reload the page to see the current refund status.';
+          btn.disabled = false;
+        });
+      });
+    });
+  })();
+</script>
+{% endif %}
 {% endblock %}

@@ -1641,6 +1641,59 @@ CONTENT_REPORT_ACTION_LABELS = {
 # the Jinja globals registration a few lines down can see it.
 CONTENT_REPORT_DETAILS_MAX = 2000
 
+# Refund display. Two INDEPENDENT axes, deliberately never merged: the provider
+# can have refunded the money (REFUNDED) while the local entitlement
+# reconciliation still needs a human (MANUAL_REVIEW_REQUIRED). Labelling that
+# combination "Refund failed" would be a lie, so the admin surfaces render both
+# lines side by side, always.
+REFUND_STATUS_LABELS = {
+    "REFUND_REQUESTED": "Refund requested",
+    "REFUND_PROCESSING": "Refund processing",
+    "REFUNDED": "Refunded",
+    "REFUND_FAILED": "Refund failed",
+}
+REFUND_RECONCILIATION_LABELS = {
+    "PENDING": "Entitlement update pending",
+    "APPLIED": "Entitlements reconciled",
+    "MANUAL_REVIEW_REQUIRED": "Manual reconciliation required",
+    "FAILED": "Reconciliation needs attention",
+}
+# What a refund does to entitlements, in words, per entitlement type the
+# refund reconciliation actually touches. Nothing here may imply deletion of a
+# ScanStory, its media or its QR code - the backend never deletes any of those.
+REFUND_ENTITLEMENT_EFFECT_NOTES = {
+    "PROJECT_CAPACITY": (
+        "Refunding this removes the purchased project slots from the account. "
+        "Existing ScanStorys, media and QR codes are kept and keep working. If the "
+        "account ends up above its available slots, new ScanStory creation and "
+        "incoming transfers stay unavailable until usage is back within the "
+        "available slots."
+    ),
+    "EXTRA_SCANS": (
+        "Refunding this removes the purchased scan allowance. Existing ScanStorys, "
+        "media and QR codes are kept and keep working."
+    ),
+    "PROJECT_SERVICE_COVERAGE": (
+        "Refunding this revokes the purchased ScanStory Coverage period for the "
+        "project. Existing ScanStorys, media and QR codes are kept; the project "
+        "simply returns to whatever other coverage it has."
+    ),
+    "VALIDITY_EXTENSION": (
+        "Validity extensions are not reversed automatically. The payment is "
+        "refunded and the subscription expiry is left untouched for an admin to "
+        "reconcile manually."
+    ),
+}
+# Shown on screen AND used verbatim in the confirm() prompt, so the promise the
+# admin reads and the promise the admin confirms cannot drift apart.
+REFUND_CONFIRMATION_NOTICE = (
+    "This is a FULL refund. Partial refunds are not supported in V1.1.\n"
+    "Razorpay will process the refund.\n"
+    "Entitlement and capacity effects may follow provider confirmation, so they may not be instant.\n"
+    "ScanStorys, media and QR codes are never deleted automatically.\n"
+    "Some subscription and validity refunds require manual entitlement reconciliation by an admin."
+)
+
 
 def account_type_label(user):
     return ACCOUNT_TYPE_LABELS.get(
@@ -1661,6 +1714,10 @@ app.jinja_env.globals.update(
     CONTENT_REPORT_STATUS_LABELS=CONTENT_REPORT_STATUS_LABELS,
     CONTENT_REPORT_ACTION_LABELS=CONTENT_REPORT_ACTION_LABELS,
     CONTENT_REPORT_DETAILS_MAX=CONTENT_REPORT_DETAILS_MAX,
+    REFUND_STATUS_LABELS=REFUND_STATUS_LABELS,
+    REFUND_RECONCILIATION_LABELS=REFUND_RECONCILIATION_LABELS,
+    REFUND_ENTITLEMENT_EFFECT_NOTES=REFUND_ENTITLEMENT_EFFECT_NOTES,
+    REFUND_CONFIRMATION_NOTICE=REFUND_CONFIRMATION_NOTICE,
     account_type_label=account_type_label,
 )
 
@@ -11987,12 +12044,16 @@ def admin_view_payment(payment_id):
     
     user = User.query.get(payment.user_id)
     plan = SubscriptionPlan.query.get(payment.plan_id)
-    
+
+    # Eligibility is decided by the same backend function the POST route uses -
+    # the template never recomputes it, it only renders eligible/reason_text.
     return render_template("admin/view_payment.html",
                          admin=admin,
                          payment=payment,
                          user=user,
-                         plan=plan)
+                         plan=plan,
+                         refund=_existing_refund_for_source(payment_order=payment),
+                         refund_eligibility=refund_eligibility_for_payment_order(payment))
 
 
 @app.route("/admin/api/payments/<int:payment_id>/refund-eligibility", methods=["GET"])
@@ -12833,6 +12894,12 @@ def _rq_diagnostics_payload():
 @app.route("/admin/operations", methods=["GET"])
 @require_admin_permission("superadmin.operations.view")
 def admin_operations():
+    addon_purchases = (
+        AddonPurchase.query
+        .order_by(AddonPurchase.updated_at.desc(), AddonPurchase.id.desc())
+        .limit(25)
+        .all()
+    )
     return render_template(
         "admin/operations.html",
         admin=current_admin(),
@@ -12848,12 +12915,17 @@ def admin_operations():
             .limit(25)
             .all()
         ),
-        addon_purchases=(
-            AddonPurchase.query
-            .order_by(AddonPurchase.updated_at.desc(), AddonPurchase.id.desc())
-            .limit(25)
-            .all()
-        ),
+        addon_purchases=addon_purchases,
+        # Same backend eligibility function the POST route enforces, resolved
+        # per row. The template never decides eligibility for itself.
+        addon_refund_eligibility={
+            purchase.id: refund_eligibility_for_addon_purchase(purchase)
+            for purchase in addon_purchases
+        },
+        addon_refunds={
+            purchase.id: _existing_refund_for_source(addon_purchase=purchase)
+            for purchase in addon_purchases
+        },
         entitlement_transactions=(
             EntitlementTransaction.query
             .order_by(EntitlementTransaction.created_at.desc(), EntitlementTransaction.id.desc())
