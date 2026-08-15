@@ -531,6 +531,7 @@ class RazorpayWebhookEvent(db.Model):
     processing_status = db.Column(db.String(20), nullable=False, default="received")
     payment_order_id = db.Column(db.Integer, db.ForeignKey("payment_orders.id"), nullable=True, index=True)
     addon_purchase_id = db.Column(db.Integer, db.ForeignKey("addon_purchases.id"), nullable=True, index=True)
+    payment_refund_id = db.Column(db.Integer, db.ForeignKey("payment_refunds.id"), nullable=True, index=True)
     failure_code = db.Column(db.String(50), nullable=True)
     attempt_count = db.Column(db.Integer, nullable=False, default=1)
 
@@ -539,9 +540,87 @@ class RazorpayWebhookEvent(db.Model):
 
     payment_order = db.relationship("PaymentOrder", lazy=True)
     addon_purchase = db.relationship("AddonPurchase", lazy=True)
+    payment_refund = db.relationship("PaymentRefund", lazy=True)
 
     def __repr__(self):
         return f"<RazorpayWebhookEvent {self.event_type} status={self.processing_status}>"
+
+
+# ---------------------------------------------------------------------
+# Admin-initiated payment refunds
+# ---------------------------------------------------------------------
+REFUND_STATUSES = {"REFUND_REQUESTED", "REFUND_PROCESSING", "REFUNDED", "REFUND_FAILED"}
+REFUND_RECONCILIATION_STATUSES = {
+    "PENDING",
+    "APPLIED",
+    "MANUAL_REVIEW_REQUIRED",
+    "FAILED",
+}
+REFUND_PROVIDERS = {"RAZORPAY"}
+
+
+class PaymentRefund(db.Model):
+    __tablename__ = "payment_refunds"
+    __table_args__ = (
+        db.CheckConstraint(
+            "(payment_order_id IS NOT NULL AND addon_purchase_id IS NULL) OR "
+            "(payment_order_id IS NULL AND addon_purchase_id IS NOT NULL)",
+            name="ck_payment_refunds_exactly_one_source",
+        ),
+        db.UniqueConstraint("payment_order_id", name="uq_payment_refunds_payment_order_id"),
+        db.UniqueConstraint("addon_purchase_id", name="uq_payment_refunds_addon_purchase_id"),
+        db.UniqueConstraint("provider_refund_id", name="uq_payment_refunds_provider_refund_id"),
+        db.UniqueConstraint("idempotency_key", name="uq_payment_refunds_idempotency_key"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    payment_order_id = db.Column(db.Integer, db.ForeignKey("payment_orders.id"), nullable=True, index=True)
+    addon_purchase_id = db.Column(db.Integer, db.ForeignKey("addon_purchases.id"), nullable=True, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
+    provider = db.Column(db.String(30), nullable=False, default="RAZORPAY", server_default="RAZORPAY")
+    provider_refund_id = db.Column(db.String(255), nullable=True, index=True)
+    provider_payment_id = db.Column(db.String(255), nullable=False, index=True)
+    provider_status = db.Column(db.String(40), nullable=True)
+    amount = db.Column(db.Float, nullable=False)
+    currency = db.Column(db.String(3), nullable=False, default="INR")
+    status = db.Column(db.String(30), nullable=False, default="REFUND_REQUESTED", server_default="REFUND_REQUESTED", index=True)
+    reconciliation_status = db.Column(db.String(40), nullable=False, default="PENDING", server_default="PENDING", index=True)
+    reconciliation_message_safe = db.Column(db.String(255), nullable=True)
+    reason = db.Column(db.Text, nullable=False)
+    requested_by_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=False, index=True)
+    requested_at = db.Column(db.DateTime, nullable=False, default=get_utc_now)
+    processing_started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    failed_at = db.Column(db.DateTime, nullable=True)
+    failure_code = db.Column(db.String(80), nullable=True)
+    failure_message_safe = db.Column(db.String(255), nullable=True)
+    idempotency_key = db.Column(db.String(120), nullable=False)
+    metadata_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    payment_order = db.relationship("PaymentOrder", lazy=True)
+    addon_purchase = db.relationship("AddonPurchase", lazy=True)
+    user = db.relationship("User", lazy=True)
+    project = db.relationship("Project", lazy=True)
+    requested_by_admin = db.relationship("Admin", lazy=True)
+
+    @validates("provider")
+    def validate_provider(self, key, value):
+        return _validate_value((value or "RAZORPAY").strip().upper(), REFUND_PROVIDERS, key)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value((value or "REFUND_REQUESTED").strip().upper(), REFUND_STATUSES, key)
+
+    @validates("reconciliation_status")
+    def validate_reconciliation_status(self, key, value):
+        return _validate_value(
+            (value or "PENDING").strip().upper(),
+            REFUND_RECONCILIATION_STATUSES,
+            key,
+        )
 
 
 # ---------------------------------------------------------------------
@@ -935,11 +1014,14 @@ class ProjectServiceCoverage(db.Model):
     created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
     created_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     created_by_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True, index=True)
+    revoked_at = db.Column(db.DateTime, nullable=True)
+    revoked_by_refund_id = db.Column(db.Integer, db.ForeignKey("payment_refunds.id"), nullable=True, index=True)
     reason = db.Column(db.Text, nullable=True)
 
     project = db.relationship("Project", backref=db.backref("service_coverages", lazy=True, cascade="all, delete-orphan"))
     created_by_user = db.relationship("User", foreign_keys=[created_by_user_id], lazy=True)
     created_by_admin = db.relationship("Admin", foreign_keys=[created_by_admin_id], lazy=True)
+    revoked_by_refund = db.relationship("PaymentRefund", lazy=True)
 
     @validates("source_type")
     def validate_source_type(self, key, value):
