@@ -32,10 +32,9 @@ def _migration_app(tmp_path, name):
     return app
 
 
-def test_project_targeted_entitlements_is_current_head():
+def test_project_targeted_entitlements_revision_boundary():
     script = _script_directory()
     revision = script.get_revision(COMMERCIAL_REVISION)
-    assert script.get_current_head() == COMMERCIAL_REVISION
     assert revision.down_revision == PRIOR_REVISION
 
 

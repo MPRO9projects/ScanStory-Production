@@ -61,7 +61,8 @@ from models import (
     PROJECT_ACTIVE_TRANSFER_STATUSES, PROJECT_ACTIVE_CLAIM_STATUSES,
     ProjectOwnershipTransfer, ProjectOwnershipClaim, ProjectServiceCoverage,
     ContentReport, CONTENT_REPORT_REASONS, CONTENT_REPORT_STATUSES,
-    CONTENT_REPORT_ACTIONS,
+    CONTENT_REPORT_ACTIONS, PaymentRefund, REFUND_STATUSES,
+    REFUND_RECONCILIATION_STATUSES,
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
@@ -1492,6 +1493,7 @@ ADMIN_ROLE_PERMISSIONS = {
         "admin.projects.view",
         "admin.projects.suspend",
         "admin.payments.view",
+        "admin.payments.refund",
         "admin.processing.view",
         "admin.reports.view",
         "admin.reports.manage",
@@ -1505,6 +1507,7 @@ ADMIN_ROLE_PERMISSIONS = {
     },
 }
 HIGH_IMPACT_PERMISSIONS = {
+    "admin.payments.refund",
     "superadmin.admins.manage",
     "superadmin.plans.manage",
     "superadmin.settings.manage",
@@ -2584,12 +2587,14 @@ def project_capacity_summary(user):
     limit = effective_project_limit(user)
     purchased = purchased_project_capacity(user)
     used = int(user.projects_used or 0)
+    over_capacity = False if limit is None else used > limit
     return {
         "effective_project_limit": limit,
         "purchased_project_capacity": purchased,
         "base_project_limit": None if limit is None else max(0, limit - purchased),
         "projects_used": used,
         "projects_remaining": None if limit is None else max(0, limit - used),
+        "over_capacity": over_capacity,
         "unlimited": limit is None,
     }
 
@@ -7843,6 +7848,401 @@ def fulfill_addon_purchase(purchase):
         return {"success": False, "code": "ENTITLEMENT_CONFLICT", "error": "Entitlement was already recorded."}
 
 
+REFUND_TERMINAL_STATUSES = {"REFUNDED"}
+REFUND_ACTIVE_STATUSES = {"REFUND_REQUESTED", "REFUND_PROCESSING"}
+REFUND_MANUAL_SUBSCRIPTION_MESSAGE = (
+    "Subscription entitlement reconciliation requires manual admin review; "
+    "subscription dates and limits were not changed automatically."
+)
+REFUND_MANUAL_VALIDITY_MESSAGE = (
+    "Validity-extension reconciliation requires manual review; subscription expiry was not changed automatically."
+)
+
+
+def _refund_source_kind(refund):
+    return "payment_order" if refund.payment_order_id else "addon_purchase"
+
+
+def _existing_refund_for_source(payment_order=None, addon_purchase=None):
+    if payment_order is not None:
+        return PaymentRefund.query.filter_by(payment_order_id=payment_order.id).first()
+    if addon_purchase is not None:
+        return PaymentRefund.query.filter_by(addon_purchase_id=addon_purchase.id).first()
+    return None
+
+
+def _payment_refund_payload(refund):
+    return {
+        "id": refund.id,
+        "payment_order_id": refund.payment_order_id,
+        "addon_purchase_id": refund.addon_purchase_id,
+        "user_id": refund.user_id,
+        "project_id": refund.project_id,
+        "provider": refund.provider,
+        "provider_refund_id": refund.provider_refund_id,
+        "provider_payment_id": refund.provider_payment_id,
+        "provider_status": refund.provider_status,
+        "amount": refund.amount,
+        "currency": refund.currency,
+        "status": refund.status,
+        "reconciliation_status": refund.reconciliation_status,
+        "reconciliation_message_safe": refund.reconciliation_message_safe,
+        "requested_by_admin_id": refund.requested_by_admin_id,
+        "requested_at": refund.requested_at.isoformat() if refund.requested_at else None,
+        "completed_at": refund.completed_at.isoformat() if refund.completed_at else None,
+        "failed_at": refund.failed_at.isoformat() if refund.failed_at else None,
+        "failure_code": refund.failure_code,
+        "failure_message_safe": refund.failure_message_safe,
+    }
+
+
+def _refund_amount_paise(amount):
+    return max(100, int(round(float(amount or 0) * 100)))
+
+
+def _refund_eligibility_payload(eligible, code, text, commercial_type, amount=None, currency=None, refund=None, effects=None):
+    return {
+        "eligible": bool(eligible),
+        "reason_code": code,
+        "reason_text": text,
+        "commercial_type": commercial_type,
+        "amount": amount,
+        "currency": currency,
+        "already_refunded": bool(refund and refund.status == "REFUNDED"),
+        "refund_id": refund.id if refund else None,
+        "refund_status": refund.status if refund else None,
+        "reconciliation_status": refund.reconciliation_status if refund else None,
+        "entitlement_effects": effects or {},
+    }
+
+
+def refund_eligibility_for_payment_order(payment_order):
+    if not payment_order:
+        return _refund_eligibility_payload(False, "NOT_FOUND", "Payment order not found.", "subscription")
+    existing = _existing_refund_for_source(payment_order=payment_order)
+    if existing:
+        if existing.status in REFUND_ACTIVE_STATUSES:
+            return _refund_eligibility_payload(False, "REFUND_ALREADY_PROCESSING", "A refund is already processing.", "subscription", refund=existing)
+        if existing.status == "REFUND_FAILED":
+            return _refund_eligibility_payload(False, "REFUND_PREVIOUSLY_FAILED", "The previous refund attempt failed and requires admin review.", "subscription", refund=existing)
+        return _refund_eligibility_payload(False, "ALREADY_REFUNDED", "This payment has already been refunded.", "subscription", refund=existing)
+    if payment_order.status != "success":
+        return _refund_eligibility_payload(False, "PAYMENT_NOT_SUCCESSFUL", "Only successful paid orders can be refunded.", "subscription")
+    if not (payment_order.razorpay_payment_id or "").strip():
+        return _refund_eligibility_payload(False, "PROVIDER_PAYMENT_MISSING", "Provider payment id is missing.", "subscription")
+    return _refund_eligibility_payload(
+        True,
+        None,
+        None,
+        "subscription",
+        amount=payment_order.total_amount,
+        currency=payment_order.currency,
+        effects={"subscription_policy": "MANUAL_REVIEW_REQUIRED"},
+    )
+
+
+def _latest_standalone_renewal_coverage_for_project(project_id):
+    return (
+        ProjectServiceCoverage.query
+        .filter_by(project_id=project_id, source_type="STANDALONE_PROJECT_RENEWAL", status="ACTIVE")
+        .filter(ProjectServiceCoverage.coverage_end.isnot(None))
+        .order_by(ProjectServiceCoverage.coverage_start.desc(), ProjectServiceCoverage.id.desc())
+        .first()
+    )
+
+
+def _coverage_for_addon_purchase(purchase):
+    return ProjectServiceCoverage.query.filter_by(
+        source_type="STANDALONE_PROJECT_RENEWAL",
+        source_id=purchase.id,
+        source_reference=f"addon_purchase:{purchase.id}",
+    ).first()
+
+
+def refund_eligibility_for_addon_purchase(purchase, now=None):
+    now = now or get_utc_now()
+    if not purchase:
+        return _refund_eligibility_payload(False, "NOT_FOUND", "Add-on purchase not found.", "addon")
+    item = AddonCatalog.query.get(purchase.catalog_id)
+    commercial_type = item.addon_type if item else "addon"
+    existing = _existing_refund_for_source(addon_purchase=purchase)
+    if existing:
+        if existing.status in REFUND_ACTIVE_STATUSES:
+            return _refund_eligibility_payload(False, "REFUND_ALREADY_PROCESSING", "A refund is already processing.", commercial_type, refund=existing)
+        if existing.status == "REFUND_FAILED":
+            return _refund_eligibility_payload(False, "REFUND_PREVIOUSLY_FAILED", "The previous refund attempt failed and requires admin review.", commercial_type, refund=existing)
+        return _refund_eligibility_payload(False, "ALREADY_REFUNDED", "This purchase has already been refunded.", commercial_type, refund=existing)
+    if purchase.status != "fulfilled":
+        return _refund_eligibility_payload(False, "PURCHASE_NOT_FULFILLED", "Only fulfilled purchases can be refunded.", commercial_type)
+    if not (purchase.razorpay_payment_id or "").strip():
+        return _refund_eligibility_payload(False, "PROVIDER_PAYMENT_MISSING", "Provider payment id is missing.", commercial_type)
+    if not item:
+        return _refund_eligibility_payload(False, "ADDON_NOT_FOUND", "Add-on catalog item not found.", commercial_type)
+
+    entitlement_type, delta = _addon_effect(item, purchase.quantity)
+    effects = {"entitlement_type": entitlement_type, "delta": -int(delta)}
+    if entitlement_type == "PROJECT_SERVICE_COVERAGE":
+        coverage = _coverage_for_addon_purchase(purchase)
+        if not coverage or coverage.status != "ACTIVE":
+            return _refund_eligibility_payload(False, "COVERAGE_NOT_ACTIVE", "Renewal coverage is not active.", commercial_type)
+        latest = _latest_standalone_renewal_coverage_for_project(purchase.project_id)
+        if latest and latest.id != coverage.id:
+            return _refund_eligibility_payload(
+                False,
+                "SUPERSEDED_BY_LATER_RENEWAL",
+                "A later standalone renewal depends on this coverage.",
+                commercial_type,
+            )
+        if coverage.coverage_start <= now:
+            return _refund_eligibility_payload(
+                False,
+                "INELIGIBLE_CONSUMED_SERVICE",
+                "This renewal period has already started and requires manual review.",
+                commercial_type,
+            )
+        effects["coverage_id"] = coverage.id
+    return _refund_eligibility_payload(True, None, None, commercial_type, purchase.total_amount, purchase.currency, effects=effects)
+
+
+def _create_refund_row_for_source(admin, reason, idempotency_key, payment_order=None, addon_purchase=None):
+    if not (reason or "").strip():
+        raise ValueError("Refund reason is required.")
+    if payment_order is not None:
+        source = payment_order
+        user_id = payment_order.user_id
+        project_id = None
+        provider_payment_id = payment_order.razorpay_payment_id
+        amount = payment_order.total_amount
+        currency = payment_order.currency
+    else:
+        source = addon_purchase
+        user_id = addon_purchase.user_id
+        project_id = addon_purchase.project_id
+        provider_payment_id = addon_purchase.razorpay_payment_id
+        amount = addon_purchase.total_amount
+        currency = addon_purchase.currency
+    return PaymentRefund(
+        payment_order_id=payment_order.id if payment_order else None,
+        addon_purchase_id=addon_purchase.id if addon_purchase else None,
+        user_id=user_id,
+        project_id=project_id,
+        provider="RAZORPAY",
+        provider_payment_id=provider_payment_id,
+        amount=amount,
+        currency=currency,
+        status="REFUND_REQUESTED",
+        reconciliation_status="PENDING",
+        reason=reason.strip(),
+        requested_by_admin_id=admin.id,
+        requested_at=get_utc_now(),
+        idempotency_key=idempotency_key,
+        metadata_json=json.dumps({"source": source.__tablename__}, sort_keys=True),
+    )
+
+
+def _safe_provider_failure_message(exc):
+    return "Payment gateway refund request failed."
+
+
+def _call_razorpay_full_refund(refund):
+    if not razorpay_client:
+        raise RuntimeError("Payment gateway not configured.")
+    data = {
+        "amount": _refund_amount_paise(refund.amount),
+        "notes": {
+            "refund_id": str(refund.id),
+            "source": _refund_source_kind(refund),
+            "admin_id": str(refund.requested_by_admin_id),
+        },
+    }
+    return razorpay_client.payment.refund(refund.provider_payment_id, data)
+
+
+def _provider_refund_status_to_local(provider_status):
+    status = (provider_status or "").strip().lower()
+    if status == "processed":
+        return "REFUNDED"
+    if status == "failed":
+        return "REFUND_FAILED"
+    return "REFUND_PROCESSING"
+
+
+def _original_entitlement_for_refund(refund):
+    if not refund.addon_purchase_id:
+        return None
+    return EntitlementTransaction.query.filter_by(
+        source_type="addon_purchase",
+        source_id=refund.addon_purchase_id,
+    ).first()
+
+
+def _apply_refund_reconciliation(refund):
+    if refund.reconciliation_status in {"APPLIED", "MANUAL_REVIEW_REQUIRED"}:
+        return True
+    if refund.payment_order_id:
+        order = PaymentOrder.query.get(refund.payment_order_id)
+        if order:
+            order.status = "refunded"
+        refund.reconciliation_status = "MANUAL_REVIEW_REQUIRED"
+        refund.reconciliation_message_safe = REFUND_MANUAL_SUBSCRIPTION_MESSAGE
+        return True
+
+    purchase = AddonPurchase.query.get(refund.addon_purchase_id)
+    item = AddonCatalog.query.get(purchase.catalog_id) if purchase else None
+    original = _original_entitlement_for_refund(refund)
+    if not purchase or not item or not original:
+        refund.reconciliation_status = "FAILED"
+        refund.reconciliation_message_safe = "Original add-on entitlement could not be found."
+        return False
+
+    if item.addon_type == "VALIDITY_EXTENSION":
+        refund.reconciliation_status = "MANUAL_REVIEW_REQUIRED"
+        refund.reconciliation_message_safe = REFUND_MANUAL_VALIDITY_MESSAGE
+        purchase.status = "refunded"
+        return True
+
+    existing_reversal = EntitlementTransaction.query.filter_by(
+        source_type="refund",
+        source_id=refund.id,
+        entitlement_type=original.entitlement_type,
+    ).first()
+    if not existing_reversal:
+        reversal = EntitlementTransaction(
+            user_id=refund.user_id,
+            project_id=original.project_id,
+            entitlement_type=original.entitlement_type,
+            delta_value=-int(original.delta_value or 0),
+            source_type="refund",
+            source_id=refund.id,
+            reason=f"Refund reversal for {refund.id}",
+            metadata_json=json.dumps({
+                "original_transaction_id": original.id,
+                "refund_id": refund.id,
+                "commercial_source": "addon_purchase",
+                "addon_purchase_id": purchase.id,
+            }, sort_keys=True),
+            valid_from=get_utc_now(),
+        )
+        db.session.add(reversal)
+        if original.entitlement_type == "EXTRA_SCANS" and purchase.user.subscribed_scan_limit not in (None, 0):
+            purchase.user.subscribed_scan_limit = int(purchase.user.subscribed_scan_limit or 0) - int(original.delta_value or 0)
+        elif original.entitlement_type == "PROJECT_CAPACITY" and purchase.user.subscribed_project_limit not in (None, 0):
+            purchase.user.subscribed_project_limit = int(purchase.user.subscribed_project_limit or 0) - int(original.delta_value or 0)
+        elif original.entitlement_type == "PROJECT_SERVICE_COVERAGE":
+            coverage = _coverage_for_addon_purchase(purchase)
+            if coverage and coverage.status == "ACTIVE":
+                coverage.status = "REVOKED"
+                coverage.revoked_at = get_utc_now()
+                coverage.revoked_by_refund_id = refund.id
+            else:
+                refund.reconciliation_status = "FAILED"
+                refund.reconciliation_message_safe = "Original project coverage could not be revoked."
+                return False
+    purchase.status = "refunded"
+    refund.reconciliation_status = "APPLIED"
+    refund.reconciliation_message_safe = "Refund reconciliation applied."
+    return True
+
+
+def mark_refund_provider_result(refund, provider_refund_id=None, provider_status=None, failure_code=None, failure_message_safe=None):
+    now = get_utc_now()
+    if provider_refund_id:
+        refund.provider_refund_id = provider_refund_id
+    if provider_status:
+        refund.provider_status = provider_status
+    local_status = _provider_refund_status_to_local(provider_status)
+    refund.status = local_status
+    if local_status == "REFUNDED":
+        refund.completed_at = refund.completed_at or now
+        refund.failed_at = None
+        refund.failure_code = None
+        refund.failure_message_safe = None
+        _apply_refund_reconciliation(refund)
+    elif local_status == "REFUND_FAILED":
+        refund.failed_at = now
+        refund.failure_code = failure_code or "PROVIDER_REFUND_FAILED"
+        refund.failure_message_safe = failure_message_safe or "Provider reported refund failure."
+    return refund
+
+
+def initiate_admin_refund(admin, payment_order=None, addon_purchase=None, reason=None, idempotency_key=None):
+    if not (reason or "").strip():
+        return {"success": False, "code": "REFUND_REASON_REQUIRED", "error": "Refund reason is required."}
+
+    source_name = "payment_order" if payment_order is not None else "addon_purchase"
+    source_id = payment_order.id if payment_order is not None else addon_purchase.id
+    idempotency_key = (idempotency_key or f"refund:{source_name}:{source_id}").strip()[:120]
+    existing = PaymentRefund.query.filter_by(idempotency_key=idempotency_key).first()
+    if existing:
+        return {"success": True, "refund": _payment_refund_payload(existing), "replay": True}
+
+    eligibility = (
+        refund_eligibility_for_payment_order(payment_order)
+        if payment_order is not None
+        else refund_eligibility_for_addon_purchase(addon_purchase)
+    )
+    if not eligibility["eligible"]:
+        return {"success": False, "code": eligibility["reason_code"], "eligibility": eligibility}
+
+    refund = _create_refund_row_for_source(admin, reason, idempotency_key, payment_order, addon_purchase)
+    db.session.add(refund)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        existing = _existing_refund_for_source(payment_order=payment_order, addon_purchase=addon_purchase)
+        if existing:
+            return {"success": True, "refund": _payment_refund_payload(existing), "replay": True}
+        raise
+
+    log_admin_activity(
+        admin.id,
+        "refund_requested",
+        f"Refund {refund.id} requested for {source_name} {source_id}: {refund.reason[:150]}",
+    )
+    refund.status = "REFUND_PROCESSING"
+    refund.processing_started_at = get_utc_now()
+    db.session.commit()
+    log_admin_activity(admin.id, "refund_provider_attempted", f"Refund {refund.id} sent to Razorpay.")
+
+    try:
+        provider_result = _call_razorpay_full_refund(refund)
+    except Exception as exc:
+        refund.status = "REFUND_FAILED"
+        refund.failed_at = get_utc_now()
+        refund.failure_code = "PROVIDER_REQUEST_FAILED"
+        refund.failure_message_safe = _safe_provider_failure_message(exc)
+        db.session.commit()
+        log_admin_activity(admin.id, "refund_failed", f"Refund {refund.id} provider request failed.")
+        return {"success": False, "code": "PROVIDER_REQUEST_FAILED", "refund": _payment_refund_payload(refund)}
+
+    provider_refund_id = provider_result.get("id") if isinstance(provider_result, dict) else None
+    provider_status = provider_result.get("status") if isinstance(provider_result, dict) else None
+    try:
+        mark_refund_provider_result(refund, provider_refund_id, provider_status)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        refund = PaymentRefund.query.get(refund.id)
+        refund.reconciliation_status = "FAILED"
+        refund.reconciliation_message_safe = "Refund provider accepted, but local reconciliation failed."
+        db.session.commit()
+        return {"success": True, "refund": _payment_refund_payload(refund), "replay": False}
+
+    if refund.status == "REFUNDED":
+        log_admin_activity(admin.id, "refund_confirmed", f"Refund {refund.id} confirmed by provider.")
+        log_admin_activity(
+            admin.id,
+            "refund_reconciliation",
+            f"Refund {refund.id} reconciliation status {refund.reconciliation_status}.",
+        )
+    elif refund.status == "REFUND_FAILED":
+        log_admin_activity(admin.id, "refund_failed", f"Refund {refund.id} failed at provider.")
+    else:
+        log_admin_activity(admin.id, "refund_provider_accepted", f"Refund {refund.id} accepted by provider.")
+    return {"success": True, "refund": _payment_refund_payload(refund), "replay": False}
+
+
 @app.route("/api/addons/catalog", methods=["GET"])
 @login_required
 def addon_catalog():
@@ -8416,16 +8816,13 @@ def verify_payment():
 # ---------------------------------------------------------------------------
 # Razorpay webhook (server-to-server reconciliation, no browser session).
 # ---------------------------------------------------------------------------
-# Minimal supported event set: payment.captured alone is sufficient. Its
-# payload.payment.entity carries both razorpay_order_id and the payment's
-# own id/status/amount/currency - exactly what verify_payment() already uses
-# to look up the stored PaymentOrder and call activate_payment(). order.paid
-# would just be a second, redundant path to the same order for the same
-# underlying capture (one order = one payment in this flow) - so it, like
-# every other event type, is acknowledged with zero mutation instead of
-# handled. Refund/chargeback/settlement/subscription-renewal events are out
-# of scope entirely - the current model has no support for any of them.
-SUPPORTED_WEBHOOK_EVENTS = {"payment.captured"}
+# Supported reconciliation events are payment.captured plus Razorpay's refund
+# lifecycle events. order.paid remains redundant in this app's one-order /
+# one-payment flow, and chargeback/settlement/subscription-renewal events stay
+# acknowledged without mutation because no local entitlement contract exists for
+# them.
+REFUND_WEBHOOK_EVENTS = {"refund.created", "refund.processed", "refund.failed", "refund.speed_changed"}
+SUPPORTED_WEBHOOK_EVENTS = {"payment.captured"} | REFUND_WEBHOOK_EVENTS
 
 
 def _razorpay_webhook_signature_valid(raw_body, signature, secret):
@@ -8487,7 +8884,7 @@ def _record_webhook_event(idempotency_key, event_type, payment_id, order_id, pay
         return existing, True
 
 
-def _finalize_webhook_event(event, status, failure_code=None, payment_order_id=None, addon_purchase_id=None):
+def _finalize_webhook_event(event, status, failure_code=None, payment_order_id=None, addon_purchase_id=None, payment_refund_id=None):
     updates = {
         RazorpayWebhookEvent.processing_status: status,
         RazorpayWebhookEvent.processed_at: dt.utcnow(),
@@ -8498,6 +8895,8 @@ def _finalize_webhook_event(event, status, failure_code=None, payment_order_id=N
         updates[RazorpayWebhookEvent.payment_order_id] = payment_order_id
     if addon_purchase_id is not None:
         updates[RazorpayWebhookEvent.addon_purchase_id] = addon_purchase_id
+    if payment_refund_id is not None:
+        updates[RazorpayWebhookEvent.payment_refund_id] = payment_refund_id
     RazorpayWebhookEvent.query.filter(RazorpayWebhookEvent.id == event.id).update(
         updates, synchronize_session=False
     )
@@ -8538,6 +8937,71 @@ def _process_addon_webhook_event(event, entity, payment_id, order_id):
         )
         return True
     _finalize_webhook_event(event, "processed", addon_purchase_id=purchase.id)
+    return True
+
+
+def _process_refund_webhook_event(event, refund_entity, payment_entity):
+    refund_id = refund_entity.get("id") if isinstance(refund_entity, dict) else None
+    payment_id = refund_entity.get("payment_id") if isinstance(refund_entity, dict) else None
+    provider_status = refund_entity.get("status") if isinstance(refund_entity, dict) else None
+    if not refund_id or not payment_id:
+        _finalize_webhook_event(event, "failed", failure_code="malformed_refund_entity")
+        return True
+    refund = PaymentRefund.query.filter_by(provider_refund_id=refund_id).first()
+    if not refund:
+        refund = PaymentRefund.query.filter_by(provider_payment_id=payment_id, status="REFUND_PROCESSING").first()
+    if not refund:
+        _finalize_webhook_event(event, "failed", failure_code="unknown_refund")
+        return True
+    try:
+        expected_paise = _refund_amount_paise(refund.amount)
+        actual_paise = int(refund_entity.get("amount"))
+    except (TypeError, ValueError):
+        _finalize_webhook_event(event, "failed", failure_code="refund_amount_unreadable", payment_refund_id=refund.id)
+        return True
+    if actual_paise != expected_paise:
+        _finalize_webhook_event(event, "failed", failure_code="refund_amount_mismatch", payment_refund_id=refund.id)
+        return True
+    if refund_entity.get("currency") and (refund_entity.get("currency") or "").upper() != (refund.currency or "").upper():
+        _finalize_webhook_event(event, "failed", failure_code="refund_currency_mismatch", payment_refund_id=refund.id)
+        return True
+    if payment_entity and payment_entity.get("id") and payment_entity.get("id") != refund.provider_payment_id:
+        _finalize_webhook_event(event, "failed", failure_code="refund_payment_mismatch", payment_refund_id=refund.id)
+        return True
+
+    if event.event_type == "refund.speed_changed":
+        refund.provider_refund_id = refund.provider_refund_id or refund_id
+        refund.provider_status = provider_status or refund.provider_status
+        db.session.commit()
+        _finalize_webhook_event(event, "ignored", failure_code="refund_speed_changed", payment_refund_id=refund.id)
+        return True
+
+    mark_refund_provider_result(
+        refund,
+        provider_refund_id=refund_id,
+        provider_status=provider_status,
+        failure_code="PROVIDER_REFUND_FAILED" if event.event_type == "refund.failed" else None,
+        failure_message_safe="Provider reported refund failure." if event.event_type == "refund.failed" else None,
+    )
+    db.session.commit()
+    if refund.status == "REFUNDED":
+        log_admin_activity(
+            refund.requested_by_admin_id,
+            "refund_confirmed",
+            f"Refund {refund.id} confirmed via webhook.",
+        )
+        log_admin_activity(
+            refund.requested_by_admin_id,
+            "refund_reconciliation",
+            f"Refund {refund.id} reconciliation status {refund.reconciliation_status}.",
+        )
+    elif refund.status == "REFUND_FAILED":
+        log_admin_activity(
+            refund.requested_by_admin_id,
+            "refund_failed",
+            f"Refund {refund.id} failed via webhook.",
+        )
+    _finalize_webhook_event(event, "processed", payment_refund_id=refund.id)
     return True
 
 
@@ -8587,19 +9051,32 @@ def razorpay_webhook():
     payment_id = None
     order_id = None
     entity = None
-    if event_type in SUPPORTED_WEBHOOK_EVENTS:
+    refund_entity = None
+    payment_entity = None
+    if event_type == "payment.captured":
         try:
             entity = payload["payload"]["payment"]["entity"]
             payment_id = entity.get("id")
             order_id = entity.get("order_id")
         except (KeyError, TypeError, AttributeError):
             entity = None
+    elif event_type in REFUND_WEBHOOK_EVENTS:
+        try:
+            refund_entity = payload["payload"]["refund"]["entity"]
+            payment_entity = payload.get("payload", {}).get("payment", {}).get("entity")
+            payment_id = refund_entity.get("payment_id")
+            order_id = payment_entity.get("order_id") if isinstance(payment_entity, dict) else None
+            entity = refund_entity
+        except (KeyError, TypeError, AttributeError):
+            refund_entity = None
 
-    if event_type in SUPPORTED_WEBHOOK_EVENTS and payment_id and order_id:
+    if event_type == "payment.captured" and payment_id and order_id:
         # Stable across Razorpay's own retries of the same logical event,
         # even if the retry re-sends a byte-different body (e.g. different
         # created_at) - see models.py's RazorpayWebhookEvent docstring.
         idempotency_key = f"{event_type}|{payment_id}|{order_id}"
+    elif event_type in REFUND_WEBHOOK_EVENTS and refund_entity and refund_entity.get("id") and payment_id:
+        idempotency_key = f"{event_type}|{refund_entity.get('id')}|{payment_id}"
     else:
         # No reconciliation is performed for any other event type, so a
         # payload-hash-derived fallback key is sufficient here.
@@ -8617,6 +9094,13 @@ def razorpay_webhook():
     if event_type not in SUPPORTED_WEBHOOK_EVENTS:
         _finalize_webhook_event(event, "ignored", failure_code="unsupported_event_type")
         app.logger.info(f"razorpay_webhook_ignored event_id={event.id} event_type={event_type} reason=unsupported")
+        return jsonify({"status": "ok"}), 200
+
+    if event_type in REFUND_WEBHOOK_EVENTS:
+        if refund_entity is None:
+            _finalize_webhook_event(event, "failed", failure_code="malformed_refund_entity")
+            return jsonify({"status": "ok"}), 200
+        _process_refund_webhook_event(event, refund_entity, payment_entity)
         return jsonify({"status": "ok"}), 200
 
     if entity is None:
@@ -11509,6 +11993,59 @@ def admin_view_payment(payment_id):
                          payment=payment,
                          user=user,
                          plan=plan)
+
+
+@app.route("/admin/api/payments/<int:payment_id>/refund-eligibility", methods=["GET"])
+@require_admin_permission("admin.payments.view")
+def admin_payment_refund_eligibility(payment_id):
+    payment = PaymentOrder.query.get_or_404(payment_id)
+    return jsonify({"success": True, "eligibility": refund_eligibility_for_payment_order(payment)})
+
+
+@app.route("/admin/api/payments/<int:payment_id>/refund", methods=["POST"])
+@require_admin_permission("admin.payments.refund")
+def admin_refund_payment(payment_id):
+    admin = current_admin()
+    payment = PaymentOrder.query.get_or_404(payment_id)
+    payload = request.get_json(silent=True) or request.form
+    result = initiate_admin_refund(
+        admin,
+        payment_order=payment,
+        reason=payload.get("reason"),
+        idempotency_key=payload.get("idempotency_key"),
+    )
+    status = 200 if result.get("success") else 409
+    return jsonify(result), status
+
+
+@app.route("/admin/api/addon-purchases/<int:purchase_id>/refund-eligibility", methods=["GET"])
+@require_admin_permission("admin.payments.view")
+def admin_addon_refund_eligibility(purchase_id):
+    purchase = AddonPurchase.query.get_or_404(purchase_id)
+    return jsonify({"success": True, "eligibility": refund_eligibility_for_addon_purchase(purchase)})
+
+
+@app.route("/admin/api/addon-purchases/<int:purchase_id>/refund", methods=["POST"])
+@require_admin_permission("admin.payments.refund")
+def admin_refund_addon_purchase(purchase_id):
+    admin = current_admin()
+    purchase = AddonPurchase.query.get_or_404(purchase_id)
+    payload = request.get_json(silent=True) or request.form
+    result = initiate_admin_refund(
+        admin,
+        addon_purchase=purchase,
+        reason=payload.get("reason"),
+        idempotency_key=payload.get("idempotency_key"),
+    )
+    status = 200 if result.get("success") else 409
+    return jsonify(result), status
+
+
+@app.route("/admin/api/refunds/<int:refund_id>", methods=["GET"])
+@require_admin_permission("admin.payments.view")
+def admin_refund_detail(refund_id):
+    refund = PaymentRefund.query.get_or_404(refund_id)
+    return jsonify({"success": True, "refund": _payment_refund_payload(refund)})
 
 def _safe_display_filename(value):
     if not value:
