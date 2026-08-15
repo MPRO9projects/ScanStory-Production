@@ -309,8 +309,9 @@ def test_upload_client_diagnostics_use_safe_metrics_only():
 
 def test_resumable_upload_frontend_uses_documented_routes_and_csrf():
     html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
-    assert "createResumableSession(markerFile, videoFile, projectName, signal)" in html
+    assert "createResumableSession(markerFile, videoFile, projectName, experiencePayload, signal)" in html
     assert "fetchUploadJson('/api/uploads/sessions'" in html
+    assert "...experiencePayload" in html
     assert "`/api/uploads/sessions/${sessionId}/chunk`" in html
     assert "`/api/uploads/sessions/${sessionId}`" in html
     assert "`/api/uploads/sessions/${sessionId}/finalize`" in html
@@ -332,7 +333,8 @@ def test_resumable_upload_streams_marker_then_video_sequentially():
     html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
     start = html.index("function sequentialUploadSlice")
     block = html[start:html.index("async function fetchUploadJson", start)]
-    assert "const markerEnd = markerFile.size" in block
+    assert "const markerSize = markerFile?.size || 0" in block
+    assert "const markerEnd = markerSize" in block
     assert "markerFile.slice(offset, end)" in block
     assert "videoFile.slice(offset - markerEnd, end - markerEnd)" in block
     assert "markerFile.slice(offset, markerEnd)" in block
@@ -817,6 +819,67 @@ def test_marker_mode_is_stored_per_pair_and_mixed_modes_work(client, app_module,
     assert pairs[1].marker_crop_y == 0
     assert pairs[1].marker_crop_width == 1
     assert pairs[1].marker_crop_height == 1
+
+
+def test_standard_upload_persists_image_video_detect_once(client, app_module, login_user, monkeypatch):
+    _patch_upload_processing(app_module, monkeypatch)
+    data = _upload_data(name="detect-once", modes=("crop",))
+    data["experience_type"] = "image_video"
+    data["playback_mode"] = "detect_once"
+
+    response = client.post("/upload", data=data, content_type="multipart/form-data", follow_redirects=False)
+
+    assert response.status_code == 302
+    project = app_module.Project.query.one()
+    assert project.experience_type == "image_video"
+    assert project.playback_mode == "detect_once"
+
+
+def test_standard_upload_persists_direct_qr_without_marker_image(client, app_module, login_user, monkeypatch):
+    _patch_upload_processing(app_module, monkeypatch)
+    response = client.post(
+        "/upload",
+        data={
+            "name": "Direct QR",
+            "upload_id": "upload-direct",
+            "experience_type": "direct_qr",
+            "playback_mode": "direct",
+            "videos": [(_mp4_bytes(), "direct.mp4")],
+        },
+        content_type="multipart/form-data",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 302
+    project = app_module.Project.query.one()
+    pair = app_module.ProjectPair.query.one()
+    assert project.experience_type == "direct_qr"
+    assert project.playback_mode == "direct"
+    assert pair.image_filename is None
+    assert pair.is_processed is True
+    assert pair.feature_extraction_status == "not_required"
+
+
+@pytest.mark.parametrize(
+    ("experience_type", "playback_mode"),
+    [
+        ("direct_qr", "tracked_overlay"),
+        ("direct_qr", "detect_once"),
+        ("image_video", "direct"),
+    ],
+)
+def test_standard_upload_rejects_invalid_experience_playback_mapping(
+    client, app_module, login_user, monkeypatch, experience_type, playback_mode
+):
+    _patch_upload_processing(app_module, monkeypatch)
+    data = _upload_data(name=f"bad-{experience_type}-{playback_mode}", modes=("crop",))
+    data["experience_type"] = experience_type
+    data["playback_mode"] = playback_mode
+
+    response = client.post("/upload", data=data, content_type="multipart/form-data", follow_redirects=False)
+
+    assert response.status_code == 302
+    assert app_module.Project.query.count() == 0
 
 
 def test_video_server_timing_logs_use_same_upload_id(client, app_module, login_user, monkeypatch):

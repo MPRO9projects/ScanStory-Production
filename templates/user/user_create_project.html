@@ -2278,6 +2278,15 @@
       return document.getElementById('experienceType').value;
     }
 
+    function creatorExperiencePayload() {
+      const type = experienceType() === 'direct_qr' ? 'direct_qr' : 'image_video';
+      const checkedPlayback = document.querySelector('input[name="playback_mode"]:checked');
+      return {
+        experience_type: type,
+        playback_mode: type === 'direct_qr' ? 'direct' : (checkedPlayback?.value || 'tracked_overlay')
+      };
+    }
+
     function setExperienceType(type) {
       const value = type === 'direct_qr' ? 'direct_qr' : 'image_video';
       document.getElementById('experienceType').value = value;
@@ -3793,10 +3802,13 @@
     function buildUploadItems(readyPairs) {
       const items = [];
       let cursor = 0;
+      const directQr = experienceType() === 'direct_qr';
       readyPairs.forEach(({ pair }, index) => {
-        const markerSize = pair.processedFile?.size || 0;
-        items.push({ pairIndex: index, fileType: 'marker', filename: pair.processedFile?.name || `marker-${index}.jpg`, size: markerSize, start: cursor, end: cursor + markerSize });
-        cursor += markerSize;
+        if (!directQr) {
+          const markerSize = pair.processedFile?.size || 0;
+          items.push({ pairIndex: index, fileType: 'marker', filename: pair.processedFile?.name || `marker-${index}.jpg`, size: markerSize, start: cursor, end: cursor + markerSize });
+          cursor += markerSize;
+        }
         const videoSize = pair.video?.size || 0;
         items.push({ pairIndex: index, fileType: 'video', filename: pair.video?.name || `video-${index}.mp4`, size: videoSize, start: cursor, end: cursor + videoSize });
         cursor += videoSize;
@@ -3911,20 +3923,23 @@
       } catch (_err) {}
     }
 
-    function storedSessionMatchesFiles(stored, markerFile, videoFile, projectName) {
+    function storedSessionMatchesFiles(stored, markerFile, videoFile, projectName, experiencePayload) {
       return !!stored
         && stored.version === 1
         && stored.projectName === projectName
-        && stored.imageName === markerFile.name
-        && stored.imageSize === markerFile.size
+        && stored.experience_type === experiencePayload.experience_type
+        && stored.playback_mode === experiencePayload.playback_mode
+        && stored.imageName === (markerFile?.name || null)
+        && stored.imageSize === (markerFile?.size || 0)
         && stored.videoName === videoFile.name
         && stored.videoSize === videoFile.size
         && stored.videoLastModified === (videoFile.lastModified || 0);
     }
 
     function sequentialUploadSlice(markerFile, videoFile, offset, length) {
-      const markerEnd = markerFile.size;
-      const end = Math.min(offset + length, markerFile.size + videoFile.size);
+      const markerSize = markerFile?.size || 0;
+      const markerEnd = markerSize;
+      const end = Math.min(offset + length, markerSize + videoFile.size);
       if (offset < markerEnd && end <= markerEnd) {
         return markerFile.slice(offset, end);
       }
@@ -3957,19 +3972,20 @@
       return payload || {};
     }
 
-    async function createResumableSession(markerFile, videoFile, projectName, signal) {
+    async function createResumableSession(markerFile, videoFile, projectName, experiencePayload, signal) {
       return fetchUploadJson('/api/uploads/sessions', {
         method: 'POST',
         signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          image_size: markerFile.size,
+          image_size: markerFile?.size || 0,
           video_size: videoFile.size,
           project_name: projectName,
-          original_image_name: markerFile.name,
+          original_image_name: markerFile?.name || null,
           original_video_name: videoFile.name,
-          image_content_type: markerFile.type || 'image/jpeg',
-          video_content_type: videoFile.type || 'video/mp4'
+          image_content_type: markerFile?.type || null,
+          video_content_type: videoFile.type || 'video/mp4',
+          ...experiencePayload
         })
       });
     }
@@ -4176,7 +4192,7 @@
     }
 
     async function submitResumableSinglePair(context) {
-      const { projectName, readyPairs, uploadId, submitBtn, totalStart, videoBytes, originalBytes, uploadState } = context;
+      const { projectName, readyPairs, uploadId, submitBtn, totalStart, videoBytes, originalBytes, uploadState, experiencePayload } = context;
       const item = readyPairs[0];
       const pair = item.pair;
       const controller = new AbortController();
@@ -4186,18 +4202,21 @@
 
       try {
         uploadState.phase = 'Preparing marker';
-        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing marker...';
-        setUploadProgress('Preparing marker', 8, 'Creating the scannable marker image.', '', 'preparing');
-        if (pair.markerMode === 'full_image') pair.crop = { x: 0, y: 0, width: 1, height: 1 };
-        const markerFile = await renderMarkerBlob(item.id, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
-        const resumableMarkerFile = new File([markerFile], markerFile.name || 'marker-0.jpg', { type: markerFile.type || 'image/jpeg' });
-        const totalBytes = resumableMarkerFile.size + pair.video.size;
+        let resumableMarkerFile = null;
+        if (experiencePayload.experience_type === 'image_video') {
+          submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing marker...';
+          setUploadProgress('Preparing marker', 8, 'Creating the scannable marker image.', '', 'preparing');
+          if (pair.markerMode === 'full_image') pair.crop = { x: 0, y: 0, width: 1, height: 1 };
+          const markerFile = await renderMarkerBlob(item.id, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
+          resumableMarkerFile = new File([markerFile], markerFile.name || 'marker-0.jpg', { type: markerFile.type || 'image/jpeg' });
+        }
+        const totalBytes = (resumableMarkerFile?.size || 0) + pair.video.size;
         uploadState.totalBytes = totalBytes;
         uploadState.videoBytes = videoBytes;
 
         let sessionPayload = null;
         const stored = loadResumableUploadState();
-        if (storedSessionMatchesFiles(stored, resumableMarkerFile, pair.video, projectName)) {
+        if (storedSessionMatchesFiles(stored, resumableMarkerFile, pair.video, projectName, experiencePayload)) {
           try {
             sessionPayload = await getUploadSessionStatus(stored.sessionId, controller.signal);
             if (sessionPayload.session?.status === 'completed' && sessionPayload.session.project_id) {
@@ -4237,18 +4256,20 @@
         if (!sessionPayload) {
           uploadState.phase = 'Creating upload session';
           setUploadProgress('Creating upload session', 10, 'Preparing a resumable upload session with the server.', `0 B of ${formatBytes(totalBytes)}`, 'preparing');
-          sessionPayload = await createResumableSession(resumableMarkerFile, pair.video, projectName, controller.signal);
+          sessionPayload = await createResumableSession(resumableMarkerFile, pair.video, projectName, experiencePayload, controller.signal);
         }
 
         const session = sessionPayload.session;
         activeResumableUpload = {
           ...activeResumableUpload,
           sessionId: session.id,
-          imageName: resumableMarkerFile.name,
-          imageSize: resumableMarkerFile.size,
+          imageName: resumableMarkerFile?.name || null,
+          imageSize: resumableMarkerFile?.size || 0,
           videoName: pair.video.name,
           videoSize: pair.video.size,
           videoLastModified: pair.video.lastModified || 0,
+          experience_type: experiencePayload.experience_type,
+          playback_mode: experiencePayload.playback_mode,
           expectedTotalSize: session.expected_total_size,
           currentOffset: session.current_offset || 0,
           finalizeStarted: false
@@ -4366,6 +4387,7 @@
       uploadClientLog('UPLOAD CLIENT VALIDATION DONE', uploadState, { current_phase: 'Preparing project' });
 
       const submitBtn = document.getElementById('submitBtn');
+      const experiencePayload = creatorExperiencePayload();
       uploadActive = true;
       activeUploadId = uploadId;
       uploadRedirected = false;
@@ -4380,6 +4402,8 @@
       const fd = new FormData();
       fd.append('name', projectName);
       fd.append('upload_id', uploadId);
+      fd.append('experience_type', experiencePayload.experience_type);
+      fd.append('playback_mode', experiencePayload.playback_mode);
       const originalBytes = readyPairs.reduce((sum, item) => sum + (item.pair.image?.size || 0), 0);
       let optimizedBytes = 0;
 
@@ -4400,7 +4424,8 @@
           totalStart,
           videoBytes,
           originalBytes,
-          uploadState
+          uploadState,
+          experiencePayload
         });
         return;
       }
@@ -4410,27 +4435,29 @@
       try {
         for (let index = 0; index < readyPairs.length; index++) {
           const pair = readyPairs[index].pair;
-          uploadState.phase = 'Preparing marker';
-          submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing marker...';
-          setUploadProgress(`Preparing marker ${index + 1}/${readyPairs.length}`, 8 + index * 12, 'Creating the scannable marker image.');
-          const prepStart = performance.now();
-          if (pair.markerMode === 'full_image') pair.crop = { x: 0, y: 0, width: 1, height: 1 };
-          logClientStage('CLIENT CROP DONE', { upload_id: uploadId, pair_index: index, marker_mode: pair.markerMode, crop: pair.crop });
-          const markerFile = await renderMarkerBlob(readyPairs[index].id, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
-          optimizedBytes += markerFile.size;
-          logClientStage('CLIENT IMAGE COMPRESS DONE', {
-            upload_id: uploadId,
-            pair_index: index,
-            original_image_bytes: pair.image.size,
-            optimized_marker_bytes: markerFile.size,
-            processed_width: pair.processedWidth,
-            processed_height: pair.processedHeight,
-            preparation_duration_ms: Math.round(performance.now() - prepStart),
-            marker_quality: pair.quality?.status
-          });
-          fd.append('images', markerFile, `marker-${index}.jpg`);
+          if (experiencePayload.experience_type === 'image_video') {
+            uploadState.phase = 'Preparing marker';
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing marker...';
+            setUploadProgress(`Preparing marker ${index + 1}/${readyPairs.length}`, 8 + index * 12, 'Creating the scannable marker image.');
+            const prepStart = performance.now();
+            if (pair.markerMode === 'full_image') pair.crop = { x: 0, y: 0, width: 1, height: 1 };
+            logClientStage('CLIENT CROP DONE', { upload_id: uploadId, pair_index: index, marker_mode: pair.markerMode, crop: pair.crop });
+            const markerFile = await renderMarkerBlob(readyPairs[index].id, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
+            optimizedBytes += markerFile.size;
+            logClientStage('CLIENT IMAGE COMPRESS DONE', {
+              upload_id: uploadId,
+              pair_index: index,
+              original_image_bytes: pair.image.size,
+              optimized_marker_bytes: markerFile.size,
+              processed_width: pair.processedWidth,
+              processed_height: pair.processedHeight,
+              preparation_duration_ms: Math.round(performance.now() - prepStart),
+              marker_quality: pair.quality?.status
+            });
+            fd.append('images', markerFile, `marker-${index}.jpg`);
+            appendMarkerMeta(fd, index, pair);
+          }
           fd.append('videos', pair.video, pair.video.name || `video-${index}.mp4`);
-          appendMarkerMeta(fd, index, pair);
         }
       } catch (err) {
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: uploadState.phase });

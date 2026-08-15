@@ -1813,6 +1813,8 @@ class UploadSession(db.Model):
     original_video_name = db.Column(db.String(255), nullable=True)
     image_content_type = db.Column(db.String(100), nullable=True)
     video_content_type = db.Column(db.String(100), nullable=True)
+    experience_type = db.Column(db.String(30), nullable=False, default="image_video", server_default="image_video")
+    playback_mode = db.Column(db.String(30), nullable=False, default="tracked_overlay", server_default="tracked_overlay")
 
     image_size = db.Column(db.Integer, nullable=False)   # declared/expected image byte count
     video_size = db.Column(db.Integer, nullable=False)   # declared/expected video byte count
@@ -1843,6 +1845,8 @@ class UploadSession(db.Model):
         db.CheckConstraint("current_offset >= 0", name="ck_upload_session_offset_non_negative"),
         db.CheckConstraint("current_offset <= expected_total_size", name="ck_upload_session_offset_le_total"),
         db.CheckConstraint("image_size >= 0 AND video_size >= 0", name="ck_upload_session_sizes_non_negative"),
+        db.CheckConstraint("experience_type IN ('image_video', 'direct_qr')", name="ck_upload_sessions_experience_type"),
+        db.CheckConstraint("playback_mode IN ('tracked_overlay', 'detect_once', 'direct')", name="ck_upload_sessions_playback_mode"),
         db.Index("ix_upload_sessions_owner_user_status", "owner_user_id", "status"),
         db.Index("ix_upload_sessions_owner_admin_status", "owner_admin_id", "status"),
         db.Index("ix_upload_sessions_status_expires", "status", "expires_at"),
@@ -1855,6 +1859,14 @@ class UploadSession(db.Model):
     @validates("purpose")
     def validate_purpose(self, key, value):
         return _validate_value(value, UPLOAD_SESSION_PURPOSES, key)
+
+    @validates("experience_type")
+    def validate_experience_type(self, key, value):
+        return _validate_value(value or "image_video", PROJECT_EXPERIENCE_TYPES, key)
+
+    @validates("playback_mode")
+    def validate_playback_mode(self, key, value):
+        return _validate_value(value or "tracked_overlay", PROJECT_PLAYBACK_MODES, key)
 
     def __repr__(self):
         owner = f"user:{self.owner_user_id}" if self.owner_user_id else f"admin:{self.owner_admin_id}"
