@@ -55,7 +55,8 @@ from models import (
     UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation,
     RazorpayWebhookEvent, ProcessingJob, UploadSession, get_utc_now,
     ScanEvent, SCAN_EVENT_TYPES, UserConsentEvidence, AddonCatalog,
-    AddonPurchase, EntitlementTransaction, PROJECT_EXPERIENCE_TYPES
+    AddonPurchase, EntitlementTransaction, PROJECT_EXPERIENCE_TYPES,
+    PROJECT_PLAYBACK_MODES
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
@@ -2264,6 +2265,36 @@ def _parse_project_experience_type():
     return raw
 
 
+def _normalize_playback_mode(value):
+    raw = (value or "").strip().lower()
+    if not raw:
+        return None
+    if raw == "tracked":
+        return "tracked_overlay"
+    if raw not in PROJECT_PLAYBACK_MODES:
+        raise ValueError("Unsupported playback mode")
+    return raw
+
+
+def _default_playback_mode_for_experience(experience_type):
+    return "direct" if experience_type == "direct_qr" else "tracked_overlay"
+
+
+def _validate_project_experience_playback(experience_type, playback_mode):
+    if experience_type == "direct_qr" and playback_mode == "direct":
+        return
+    if experience_type == "image_video" and playback_mode in {"tracked_overlay", "detect_once"}:
+        return
+    raise ValueError("Playback mode is not supported for this experience type")
+
+
+def _parse_project_playback_mode(experience_type):
+    playback_mode = _normalize_playback_mode(request.form.get("playback_mode"))
+    playback_mode = playback_mode or _default_playback_mode_for_experience(experience_type)
+    _validate_project_experience_playback(experience_type, playback_mode)
+    return playback_mode
+
+
 def _direct_qr_marker_meta():
     return {
         "mode": "full_image",
@@ -2334,6 +2365,18 @@ def project_experience_type(project):
     """Experience type for a project, defaulting to the only type V1 could store."""
     value = getattr(project, "experience_type", None) or EXPERIENCE_TYPE_IMAGE_VIDEO
     return EXPERIENCE_TYPE_DIRECT_QR if value == EXPERIENCE_TYPE_DIRECT_QR else EXPERIENCE_TYPE_IMAGE_VIDEO
+
+
+def project_playback_mode(project):
+    """Authoritative playback mode stored on Project, with legacy-safe defaults."""
+    experience_type = project_experience_type(project)
+    value = getattr(project, "playback_mode", None) or _default_playback_mode_for_experience(experience_type)
+    try:
+        value = _normalize_playback_mode(value) or _default_playback_mode_for_experience(experience_type)
+        _validate_project_experience_playback(experience_type, value)
+        return value
+    except ValueError:
+        return _default_playback_mode_for_experience(experience_type)
 
 
 def dev_test_entitlement_enabled():
@@ -5426,6 +5469,7 @@ def handle_upload():
     name = request.form.get("name", "Untitled Project")
     try:
         experience_type = _parse_project_experience_type()
+        playback_mode = _parse_project_playback_mode(experience_type)
     except ValueError as exc:
         flash(str(exc), "error")
         return redirect(url_for("user_create_project_page"))
@@ -5536,6 +5580,7 @@ def handle_upload():
             owner_user_id=user.id,
             user_project_index=user_project_index,
             experience_type=experience_type,
+            playback_mode=playback_mode,
         )
         _upload_log("UPLOAD PERSIST START", upload_id, user_id=user.id, pair_count=pair_count)
         db.session.add(project)
@@ -8252,6 +8297,7 @@ def scanner(project_id):
     # at, and Direct QR Video needs a video to play without any camera at all. Both are
     # read-only projections of pairs that are already public via /image and /video.
     experience_type = project_experience_type(project)
+    playback_mode = project_playback_mode(project)
     pairs = (
         ProjectPair.query.filter_by(project_id=project.id)
         .order_by(ProjectPair.pair_index)
@@ -8275,6 +8321,7 @@ def scanner(project_id):
         creator_type=creator_type,
         creator_name=creator_name,
         experience_type=experience_type,
+        playback_mode=playback_mode,
         targets=targets,
         scanner_diagnostics_enabled=scanner_diagnostics_enabled(),
         scanner_entry_context=entry["context"],
