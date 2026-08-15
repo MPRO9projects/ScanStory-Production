@@ -118,15 +118,20 @@ def test_state_changing_project_actions_reject_get(client, admin, project_with_p
 
 
 def test_refund_and_receipt_dead_links_are_not_clickable(client, app_module, db_session, admin, normal_user, plan):
+    """Receipt resend is still a dead action and stays disabled. Refund is no
+    longer one: it now points at a real endpoint, so the requirement is that the
+    URL it advertises actually resolves rather than that it is absent."""
     _login_admin(client, admin)
     payment = _payment(app_module, db_session, normal_user, plan)
     response = client.get(f"/admin/payments/{payment.id}")
     assert response.status_code == 200
     body = response.get_data(as_text=True)
-    assert "/refund" not in body
     assert "resend-receipt" not in body
-    assert "Refund unavailable" in body
     assert "Receipt resend unavailable" in body
+
+    refund_url = f"/admin/api/payments/{payment.id}/refund"
+    assert f'data-refund-url="{refund_url}"' in body
+    assert app_module.app.url_map.bind("localhost").match(refund_url, method="POST")[0] == "admin_refund_payment"
 
 
 def test_failed_admin_login_is_logged_and_repeated_failures_lock_account(client, app_module, db_session, admin):

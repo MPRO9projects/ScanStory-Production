@@ -684,21 +684,28 @@ def test_moderation_permission_codes_are_the_real_ones(app_module):
 # I. Refund boundary, accessibility, responsive and regression guards
 # ===========================================================================
 def test_no_user_facing_refund_action_exists_anywhere(app_module):
-    """A 'refunded' payment status exists for history; a refund FEATURE does not."""
+    """A user-facing refund FEATURE still does not exist.
+
+    Superseded in part by the admin refund checkpoint: admin-facing refund
+    routes and UI now exist. What must never exist is a self-service refund a
+    normal user can reach - see tests/gate_jr/test_v11_admin_refund_ux.py for
+    the full admin-side contract.
+    """
     offenders = []
     for path in TEMPLATES.rglob("*.html"):
+        if "admin" in path.parts:
+            continue
         text = path.read_text(encoding="utf-8", errors="ignore").lower()
         for phrase in ("request refund", "cancel & refund", "cancel and refund", "issue refund", "process refund"):
             if phrase in text:
                 offenders.append((str(path), phrase))
     assert offenders == []
-    # The one refund control in the admin package is explicitly disabled.
-    payment_html = read_template("admin/view_payment.html")
-    assert "Refund unavailable" in payment_html
-    assert "disabled" in payment_html.split("Refund unavailable")[0][-400:]
-    # And no route exposes one.
-    rules = {str(rule) for rule in app_module.app.url_map.iter_rules()}
-    assert not [r for r in rules if "refund" in r.lower()]
+    # Every refund route is admin-only.
+    refund_rules = [
+        rule for rule in app_module.app.url_map.iter_rules() if "refund" in str(rule).lower()
+    ]
+    assert refund_rules
+    assert all(str(rule).startswith("/admin/") for rule in refund_rules)
 
 
 @pytest.mark.parametrize(
