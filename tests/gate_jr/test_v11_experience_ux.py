@@ -84,10 +84,13 @@ def test_desktop_layout_is_untouched_by_the_wizard_wrappers():
 
 def test_missing_story_name_shows_the_specific_message_and_focuses_the_field():
     html = creator_html()
-    assert 'id="storyNameError">Please give your ScanStory a name.</div>' in html
+    assert 'id="storyNameError" role="alert">Please give your ScanStory a name.</div>' in html
     assert "function showStoryNameError()" in html
     assert "nameField.scrollIntoView({ block: 'center', behavior: 'smooth' })" in html
     assert "nameField.focus({ preventScroll: true })" in html
+    # The message is also wired to the field for assistive tech, and only while it shows.
+    assert "nameField.setAttribute('aria-describedby', 'storyNameError')" in html
+    assert "nameField.removeAttribute('aria-describedby')" in html
     # The generic browser bubble must not be the only feedback on submit.
     assert "alert('Please enter a Story name.')" not in html
 
@@ -332,3 +335,89 @@ def test_many_targets_collapse_behind_view_all(app_module):
     assert 'id="targetGuide"' in html and 'class="many"' in html
     assert html.count("target-card target-extra") == 3
     assert "View all 9 targets" in html
+
+
+# --------------------------------------------------------------------------
+# Playback Style — creator side
+#
+# The creator now chooses Project.playback_mode at creation time, so these lock
+# down the two things that make an invalid combination unreachable from the form:
+# the radios are native (so the browser submits them) and they are DISABLED for
+# Direct QR (so nothing is submitted and the server applies its own 'direct').
+# --------------------------------------------------------------------------
+
+
+def test_playback_style_is_a_native_radio_group_in_wizard_step_one():
+    html = creator_html()
+    assert 'id="playbackModeGroup"' in html
+    assert 'role="radiogroup"' in html and 'aria-labelledby="playbackModeLabel"' in html
+    assert 'name="playback_mode" value="tracked_overlay" checked' in html
+    assert 'name="playback_mode" value="detect_once"' in html
+    # Step 1 is the Details pane; the group must sit inside it so Back/Next keeps it.
+    step_one = html.split('<div data-wizard-pane="1">')[1].split('<div data-wizard-pane="2">')[0]
+    assert 'id="playbackModeGroup"' in step_one
+
+
+def test_direct_qr_hides_and_disables_the_playback_radios():
+    html = creator_html()
+    assert 'body[data-experience-type="direct_qr"] #playbackModeGroup' in html
+    # Disabled controls are not submitted, which is what makes direct_qr+tracked_overlay
+    # unsendable rather than merely discouraged.
+    assert "input.disabled = value !== 'image_video';" in html
+
+
+def test_review_step_recaps_the_chosen_playback_style():
+    html = creator_html()
+    assert 'id="recapPlaybackMode"' in html
+    assert "<dt>Playback style</dt>" in html
+    assert "function playbackModeLabel()" in html
+    # The recap reads the same radios the form posts, so the two cannot disagree.
+    assert "document.querySelector('input[name=\"playback_mode\"]:checked')" in html
+    assert "if (recapPlayback) recapPlayback.textContent = playbackModeLabel();" in html
+
+
+def test_project_creation_submit_buttons_share_the_same_wording():
+    html = creator_html()
+    assert '<i class="fas fa-qrcode"></i> Create ScanStory' in html
+    assert "Get My Scan Code" not in html
+    # The genuinely separate QR retrieval action lives on the success page and keeps
+    # its own wording.
+    success = Path("templates/user/success.html").read_text(encoding="utf-8", errors="ignore")
+    assert "Download QR Code" in success
+
+
+def test_nav_back_meets_the_minimum_touch_target():
+    assert "min-height: 44px;" in creator_html()
+
+
+# --------------------------------------------------------------------------
+# Playback Style — viewer side
+# --------------------------------------------------------------------------
+
+
+def test_viewer_has_no_operable_playback_choice():
+    html = scanner_html()
+    # No radios, no fieldset, no legend: the viewer states the creator's choice.
+    assert 'name="playbackMode"' not in html
+    assert "<fieldset" not in html
+    assert "#playbackModeChoice legend" not in html
+    assert "selectedPlaybackMode()" in html
+
+
+def test_viewer_fails_safe_on_an_unrecognized_persisted_mode():
+    html = scanner_html()
+    assert "const PLAYBACK_MODES = ['tracked_overlay', 'detect_once', 'direct'];" in html
+    assert "console.warn('[scanner] unrecognized persisted playback mode'" in html
+    # The recovery is a safe default, never a choice UI.
+    assert "PLAYBACK_MODES.indexOf(RAW_PLAYBACK_MODE) === -1 ? 'tracked_overlay' : RAW_PLAYBACK_MODE" in html
+    # And no client-side override channel was introduced alongside it.
+    assert "localStorage.getItem('playback" not in html
+
+
+def test_fallback_playback_never_writes_the_persisted_playback_mode():
+    html = scanner_html()
+    # SERVER_PLAYBACK_MODE is a const read once from the server-rendered dataset, and
+    # scannerPlaybackMode is only ever assigned from selectedPlaybackMode().
+    assert "const SERVER_PLAYBACK_MODE" in html
+    assert html.count("scannerPlaybackMode =") == 2  # the let-initializer and the intro assignment
+    assert "scannerPlaybackMode = selectedPlaybackMode();" in html

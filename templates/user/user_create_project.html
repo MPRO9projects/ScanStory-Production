@@ -100,6 +100,10 @@
       display: inline-flex;
       align-items: center;
       gap: 10px;
+      /* 10px uppercase text in 11px padding measured ~33px tall — under the 44px minimum
+         touch target. min-height grows the pill without touching padding, so the mobile
+         override below (which only shrinks padding/font) still lands on 44px. */
+      min-height: 44px;
       padding: 11px 18px;
       border-radius: 999px;
       text-decoration: none;
@@ -1307,10 +1311,27 @@
       color: rgba(255, 255, 255, 0.58);
     }
 
-    .wizard-type-option.active {
+    .wizard-type-option.active,
+    .wizard-type-option:has(input[type="radio"]:checked) {
       border-color: rgba(0, 212, 255, 0.55);
       background: rgba(0, 212, 255, 0.10);
       box-shadow: 0 0 20px rgba(0, 212, 255, 0.14);
+    }
+
+    /* Playback Style reuses the experience-type card look, but is a native radio group so
+       the browser supplies arrow-key navigation, group semantics and form submission for
+       free. The grid keeps the radio in its own column beside the two block children. */
+    .playback-option {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      column-gap: 10px;
+      align-items: start;
+    }
+
+    .playback-option input[type="radio"] {
+      grid-row: 1 / 3;
+      margin: 3px 0 0;
+      accent-color: #00d4ff;
     }
 
     .wizard-type-option .type-badge {
@@ -1325,6 +1346,14 @@
       color: #ffcf6b;
       background: rgba(255, 207, 107, 0.12);
       border: 1px solid rgba(255, 207, 107, 0.35);
+    }
+
+    /* The rule above is (0,2,0) and beat the browser's default `[hidden] { display: none }`
+       at (0,0,1), so `badge.hidden = DIRECT_QR_BACKEND_READY` left "COMING SOON" pinned
+       over a Direct QR option the backend already supports. Same explicit-[hidden] override
+       pattern as `.wizard-actions button[hidden]` below. */
+    .wizard-type-option .type-badge[hidden] {
+      display: none;
     }
 
     .wizard-name-error {
@@ -1344,6 +1373,7 @@
     body[data-experience-type="direct_qr"] .pair-image-block,
     body[data-experience-type="direct_qr"] .marker-tools,
     body[data-experience-type="direct_qr"] .marker-substep,
+    body[data-experience-type="direct_qr"] #playbackModeGroup,
     body[data-experience-type="direct_qr"] .recap-target {
       display: none !important;
     }
@@ -1500,6 +1530,7 @@
       /* Sticky action bar: Back / Next / Create are always reachable with a thumb. */
       .wizard-actions {
         display: flex;
+        flex-wrap: wrap;
         gap: 10px;
         position: fixed;
         left: 0;
@@ -1536,6 +1567,23 @@
       }
 
       .wizard-actions button[hidden] {
+        display: none;
+      }
+
+      /* Step 3's Create button can be disabled by a condition set on step 1 or 2, which
+         the viewer can no longer see. This says which one, on its own line above the
+         buttons. */
+      .wizard-create-hint {
+        flex: 1 0 100%;
+        order: -1;
+        margin: 0;
+        font-size: 12px;
+        font-weight: 700;
+        color: #ffcf6b;
+        text-align: center;
+      }
+
+      .wizard-create-hint[hidden] {
         display: none;
       }
 
@@ -1814,7 +1862,7 @@
               <label class="input-label" for="projectName">Story Name<span class="wizard-name-required">*</span></label>
               <input type="text" name="name" id="projectName" class="input-field" placeholder="Enter story name" required
                 oninput="updateQRPreview(); updateFormFields(); clearStoryNameError();" />
-              <div class="wizard-name-error" id="storyNameError">Please give your ScanStory a name.</div>
+              <div class="wizard-name-error" id="storyNameError" role="alert">Please give your ScanStory a name.</div>
             </div>
 
             <label class="input-label">Choose Experience Type</label>
@@ -1836,6 +1884,30 @@
               Direct QR Video is not ready to publish yet, so this ScanStory cannot be created with it selected.
               Switch back to Image &rarr; Video to continue.
             </p>
+
+            <!-- Playback Style only exists for Image -> Video: Direct QR has exactly one way
+                 to play, so the group is hidden AND its radios disabled for that type. A
+                 disabled control is not submitted, so the server sees no playback_mode and
+                 applies its own default ('direct') — the invalid combinations are therefore
+                 unreachable from this form rather than merely discouraged. The server-side
+                 check in _validate_project_experience_playback() stays the real authority. -->
+            <div id="playbackModeGroup">
+              <label class="input-label" id="playbackModeLabel">Choose Playback Style</label>
+              <div class="wizard-type-options" id="playbackModeOptions" role="radiogroup" aria-labelledby="playbackModeLabel">
+                <label class="wizard-type-option playback-option">
+                  <input type="radio" name="playback_mode" value="tracked_overlay" checked
+                    onchange="updateWizardRecap()" />
+                  <strong>Tracked Overlay</strong>
+                  <span>The video stays attached to your photo and keeps following it while the camera tracks it.</span>
+                </label>
+                <label class="wizard-type-option playback-option">
+                  <input type="radio" name="playback_mode" value="detect_once"
+                    onchange="updateWizardRecap()" />
+                  <strong>Detect Once</strong>
+                  <span>Recognize your photo once, then the video plays uninterrupted even if the camera looks away.</span>
+                </label>
+              </div>
+            </div>
           </div>
 
           <div data-wizard-pane="2">
@@ -1876,6 +1948,10 @@
               <dt>Experience type</dt>
               <dd id="recapExperienceType">Image &rarr; Video</dd>
             </div>
+            <div class="wizard-recap-row">
+              <dt>Playback style</dt>
+              <dd id="recapPlaybackMode">Tracked Overlay</dd>
+            </div>
           </dl>
 
           <div class="preview-list" id="previewList">
@@ -1912,7 +1988,7 @@
               <i class="fas fa-play"></i> Test Experience
             </button>
             <button type="submit" class="action-btn upload-btn" id="submitBtn" disabled>
-              <i class="fas fa-qrcode"></i> Get My Scan Code
+              <i class="fas fa-qrcode"></i> Create ScanStory
             </button>
             <button type="button" class="action-btn clear-btn" id="cancelUploadBtn" onclick="cancelActiveUpload()" style="display:none;">
               <i class="fas fa-ban"></i> Cancel Upload
@@ -1931,6 +2007,7 @@
         <button type="button" id="wizardBackBtn" onclick="goToWizardStep(currentWizardStep - 1)" hidden>Back</button>
         <button type="button" class="primary" id="wizardNextBtn" onclick="goToWizardStep(currentWizardStep + 1)">Next</button>
         <button type="button" class="primary" id="wizardCreateBtn" onclick="document.getElementById('submitBtn').click()" hidden disabled>Create ScanStory</button>
+        <p class="wizard-create-hint" id="wizardCreateHint" role="status" aria-live="polite" hidden></p>
       </div>
     </form>
   </div>
@@ -2108,6 +2185,9 @@
       const error = document.getElementById('storyNameError');
       if (error) error.classList.add('is-visible');
       nameField.setAttribute('aria-invalid', 'true');
+      // Only while the error is actually showing — a permanent aria-describedby would make
+      // a screen reader read the error out on every visit to a perfectly valid field.
+      nameField.setAttribute('aria-describedby', 'storyNameError');
       nameField.scrollIntoView({ block: 'center', behavior: 'smooth' });
       nameField.focus({ preventScroll: true });
     }
@@ -2115,7 +2195,9 @@
     function clearStoryNameError() {
       const error = document.getElementById('storyNameError');
       if (error) error.classList.remove('is-visible');
-      document.getElementById('projectName').removeAttribute('aria-invalid');
+      const nameField = document.getElementById('projectName');
+      nameField.removeAttribute('aria-invalid');
+      nameField.removeAttribute('aria-describedby');
     }
 
     function updateWizardChrome() {
@@ -2145,8 +2227,47 @@
       const name = document.getElementById('projectName').value.trim();
       const recapName = document.getElementById('recapStoryName');
       const recapType = document.getElementById('recapExperienceType');
+      const recapPlayback = document.getElementById('recapPlaybackMode');
       if (recapName) recapName.textContent = name || 'Not set yet';
       if (recapType) recapType.textContent = experienceType() === 'direct_qr' ? 'Direct QR Video' : 'Image → Video';
+      if (recapPlayback) recapPlayback.textContent = playbackModeLabel();
+      updateWizardCreateHint();
+    }
+
+    /* Reads the same radios the form submits, so the review step can never disagree with
+       what is actually posted. Direct QR has no radio to read: it always plays straight
+       away, which is what the server stores as 'direct'. */
+    function playbackModeLabel() {
+      if (experienceType() === 'direct_qr') return 'Plays instantly on scan';
+      const checked = document.querySelector('input[name="playback_mode"]:checked');
+      return checked && checked.value === 'detect_once' ? 'Detect Once' : 'Tracked Overlay';
+    }
+
+    // validateWizardStep() only guards step 1, so nothing used to tell a viewer sitting on
+    // step 3 WHY Create is greyed out — the blocking condition lives on a step they can no
+    // longer see. Mirrors the three conditions that disable #submitBtn, in the same order.
+    function wizardCreateBlockedReason() {
+      if (!document.getElementById('projectName').value.trim()) {
+        return 'Add a story name in step 1 to continue.';
+      }
+      if (experienceType() === 'direct_qr' && !DIRECT_QR_BACKEND_READY) {
+        return 'Direct QR Video cannot be published yet. Switch back to Image → Video in step 1.';
+      }
+      if (!Object.values(currentFiles).some(pairIsComplete)) {
+        return experienceType() === 'direct_qr'
+          ? 'Add a video in step 2 to continue.'
+          : 'Add an image and a video in step 2 to continue.';
+      }
+      return '';
+    }
+
+    function updateWizardCreateHint() {
+      const hint = document.getElementById('wizardCreateHint');
+      const create = document.getElementById('wizardCreateBtn');
+      if (!hint || !create) return;
+      const reason = create.hidden || !create.disabled ? '' : wizardCreateBlockedReason();
+      hint.textContent = reason;
+      hint.hidden = !reason;
     }
 
     /* ===================== Experience type =====================
@@ -2171,6 +2292,13 @@
       // required or the browser will block submit on a field nobody can see.
       document.querySelectorAll('input[type="file"][accept^="image"]').forEach(input => {
         input.required = value === 'image_video';
+      });
+
+      // Disabled radios are not submitted, so Direct QR posts no playback_mode at all and
+      // the server applies 'direct'. This is what makes direct_qr + tracked_overlay (and
+      // image_video + direct) impossible to send from this form.
+      document.querySelectorAll('input[name="playback_mode"]').forEach(input => {
+        input.disabled = value !== 'image_video';
       });
 
       const contentTitle = document.getElementById('contentStepTitle');
@@ -3624,7 +3752,7 @@
       disableUploadNavigationWarning();
       if (submitBtn) {
         submitBtn.disabled = false;
-        submitBtn.innerHTML = '<i class="fas fa-qrcode"></i> Get My Scan Code';
+        submitBtn.innerHTML = '<i class="fas fa-qrcode"></i> Create ScanStory';
       }
       updateFormFields();
     }
@@ -3700,7 +3828,9 @@
     const RESUMABLE_UPLOAD_CHUNK_SIZE = 1024 * 1024;
     const RESUMABLE_UPLOAD_STORAGE_KEY = 'scanstory.resumableUpload.v1';
     const RESUMABLE_POLL_MAX_ATTEMPTS = 8;
-    const RESUMABLE_TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'expired']);
+    // Terminality is read from the session payload's `is_terminal` (see
+    // _upload_session_payload() in app.py) rather than duplicating the server's status set
+    // here — the duplicate matched today but nothing kept the two in step.
     let activeResumableUpload = null;
 
     class UploadApiError extends Error {
@@ -4094,7 +4224,7 @@
                 current_offset: sessionPayload.session.current_offset,
                 current_phase: 'Uploading video'
               });
-            } else if (RESUMABLE_TERMINAL_STATUSES.has(sessionPayload.session.status)) {
+            } else if (sessionPayload.session?.is_terminal) {
               clearResumableUploadState();
               setUploadProgress('Upload failed', 0, safeUploadErrorMessage(sessionPayload.session.failure_code || 'SESSION_FAILED'), '', 'failed');
               sessionPayload = null;
