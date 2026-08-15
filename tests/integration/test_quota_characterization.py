@@ -91,6 +91,13 @@ def _upload_data(name="Quota Project", pair_count=1):
     return data
 
 
+def _direct_qr_upload_data(name="Direct QR Quota Project", pair_count=1):
+    data = {"name": name, "upload_id": f"quota-{name}", "experience_type": "direct_qr", "videos": []}
+    for index in range(pair_count):
+        data["videos"].append((BytesIO(_MP4_BYTES), f"direct-{index}.mp4"))
+    return data
+
+
 def _patch_upload_side_effects(app_module, monkeypatch):
     monkeypatch.setattr(app_module, "standardize_uploaded_image", lambda *args, **kwargs: None)
     monkeypatch.setattr(app_module, "make_feature_working_jpeg", lambda *args, **kwargs: Path(args[1]).write_bytes(b"work"))
@@ -549,13 +556,37 @@ def test_project_create_uses_atomic_quota_reservation():
     assert "user.projects_used = int(user.projects_used or 0) + 1" not in body
 
 
-def test_pair_create_uses_project_scoped_pair_slot_reservation():
-    source = Path("app.py").read_text(encoding="utf-8", errors="ignore")
-    start = source.index('def handle_upload():')
-    end = source.index('@app.route("/project/<int:project_id>"', start)
-    body = source[start:end]
-    assert "_reserve_pair_slots_for_project(project.id, len(images), max_pairs)" in body
-    assert "with_for_update" in source
+def test_pair_create_uses_project_scoped_pair_slot_reservation(client, app_module, db_session, normal_user, monkeypatch):
+    _patch_upload_side_effects(app_module, monkeypatch)
+    calls = []
+    real_reserve = app_module._reserve_pair_slots_for_project
+
+    def spy(project_id, requested_pairs, max_pairs):
+        calls.append((project_id, requested_pairs, max_pairs))
+        return real_reserve(project_id, requested_pairs, max_pairs)
+
+    monkeypatch.setattr(app_module, "get_plan_pairs_limit", lambda _user: 2)
+    monkeypatch.setattr(app_module, "_reserve_pair_slots_for_project", spy)
+    normal_user.subscribed_project_limit = 4
+    db_session.commit()
+    _login_user(client, normal_user)
+
+    image_video = client.post(
+        "/upload", data=_upload_data(name="Image Video Slots", pair_count=2),
+        content_type="multipart/form-data", follow_redirects=False
+    )
+    direct_qr = client.post(
+        "/upload", data=_direct_qr_upload_data(name="Direct QR Slots", pair_count=2),
+        content_type="multipart/form-data", follow_redirects=False
+    )
+
+    assert image_video.status_code == 302
+    assert direct_qr.status_code == 302
+    projects = app_module.Project.query.order_by(app_module.Project.id).all()
+    assert [project.experience_type for project in projects] == ["image_video", "direct_qr"]
+    assert calls == [(projects[0].id, 2, 2), (projects[1].id, 2, 2)]
+    assert app_module.ProjectPair.query.filter_by(project_id=projects[0].id).count() == 2
+    assert app_module.ProjectPair.query.filter_by(project_id=projects[1].id).count() == 2
 
 
 def test_scan_end_uses_atomic_claim_and_quota_consumption():

@@ -123,15 +123,18 @@ def _post_upload(client, **kwargs):
     return client.post("/upload", data=data, content_type="multipart/form-data", follow_redirects=False)
 
 
-def _post_direct_qr_upload(client, video_bytes=None, experience_type="direct_qr"):
+def _post_direct_qr_upload(client, video_bytes=None, experience_type="direct_qr", playback_mode=None):
+    data = {
+        "name": "Direct QR Project",
+        "upload_id": "uv-direct-qr",
+        "experience_type": experience_type,
+        "videos": [(BytesIO(video_bytes if video_bytes is not None else _mp4_bytes()), "direct.mp4")],
+    }
+    if playback_mode is not None:
+        data["playback_mode"] = playback_mode
     return client.post(
         "/upload",
-        data={
-            "name": "Direct QR Project",
-            "upload_id": "uv-direct-qr",
-            "experience_type": experience_type,
-            "videos": [(BytesIO(video_bytes if video_bytes is not None else _mp4_bytes()), "direct.mp4")],
-        },
+        data=data,
         content_type="multipart/form-data",
         follow_redirects=False,
     )
@@ -146,6 +149,7 @@ def test_valid_jpeg_accepted(client, app_module, login_user):
     assert response.status_code == 302
     assert app_module.Project.query.count() == 1
     assert app_module.Project.query.first().experience_type == "image_video"
+    assert app_module.Project.query.first().playback_mode == "tracked_overlay"
     pair = app_module.ProjectPair.query.first()
     assert pair.processing_status == "uploaded"
 
@@ -167,11 +171,13 @@ def test_valid_supported_video_accepted(client, app_module, login_user):
 def test_image_video_experience_type_persists(client, app_module, login_user):
     data = _upload_data(image_bytes=_jpeg_bytes(), video_bytes=_mp4_bytes())
     data["experience_type"] = "image_video"
+    data["playback_mode"] = "detect_once"
     response = client.post("/upload", data=data, content_type="multipart/form-data", follow_redirects=False)
     assert response.status_code == 302
     project = app_module.Project.query.first()
     pair = app_module.ProjectPair.query.first()
     assert project.experience_type == "image_video"
+    assert project.playback_mode == "detect_once"
     assert pair.image_filename
     assert pair.processing_status == "uploaded"
 
@@ -182,6 +188,7 @@ def test_direct_qr_experience_type_persists_without_target_image(client, app_mod
     project = app_module.Project.query.first()
     pair = app_module.ProjectPair.query.first()
     assert project.experience_type == "direct_qr"
+    assert project.playback_mode == "direct"
     assert pair.image_filename is None
     assert pair.image_path is None
     assert pair.video_filename.endswith(".mp4")
@@ -192,6 +199,21 @@ def test_direct_qr_experience_type_persists_without_target_image(client, app_mod
 
 def test_invalid_experience_type_rejected(client, app_module, login_user):
     response = _post_direct_qr_upload(client, experience_type="image")
+    assert response.status_code == 302
+    assert app_module.Project.query.count() == 0
+
+
+def test_invalid_playback_type_rejected(client, app_module, login_user):
+    response = _post_direct_qr_upload(client, playback_mode="tracked_overlay")
+    assert response.status_code == 302
+    assert app_module.Project.query.count() == 0
+
+
+def test_image_video_direct_playback_rejected(client, app_module, login_user):
+    data = _upload_data(image_bytes=_jpeg_bytes(), video_bytes=_mp4_bytes())
+    data["experience_type"] = "image_video"
+    data["playback_mode"] = "direct"
+    response = client.post("/upload", data=data, content_type="multipart/form-data", follow_redirects=False)
     assert response.status_code == 302
     assert app_module.Project.query.count() == 0
 

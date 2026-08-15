@@ -217,12 +217,15 @@ def render_scanner(app_module, **overrides):
         "entry_route_type": "public_scanner_route",
         "entry_authorization_result": "n/a_public",
         "experience_type": "image_video",
+        "playback_mode": "tracked_overlay",
         "targets": [
             {"index": i, "image_url": f"/image/1/{i}", "video_url": f"/video/1/{i}", "label": f"Target {i + 1}"}
             for i in range(1)
         ],
     }
     context.update(overrides)
+    if context["experience_type"] == "direct_qr" and "playback_mode" not in overrides:
+        context["playback_mode"] = "direct"
     # A request context (not just an app context) so url_for in the template can build.
     with app_module.app.test_request_context("/scanner/1"):
         return app_module.app.jinja_env.get_template("user/scanner.html").render(**context)
@@ -261,10 +264,9 @@ def test_target_guide_is_a_preview_layer_and_never_filters_detection(app_module)
 def test_detect_once_is_a_lifecycle_change_not_a_detection_change():
     html = scanner_html()
     assert "function lockDetectOnceExperience(reason)" in html
-    assert "let scannerPlaybackMode = 'tracked';" in html
-    # Tracked overlay stays the default and keeps its own path.
-    assert 'value="tracked" checked' in html
-    assert 'value="detect_once"' in html
+    assert "let scannerPlaybackMode = SERVER_PLAYBACK_MODE === 'detect_once' ? 'detect_once' : 'tracked_overlay';" in html
+    assert "function selectedPlaybackMode()" in html
+    assert "input[name=\"playbackMode\"]" not in html
     # The lock only suppresses the two functions that could stop playback.
     assert "function stopOverlayImmediate() {\n      if (detectOnceLocked) return;" in html
     assert "function requestPoseHold(reason) {\n      if (detectOnceLocked) return;" in html
@@ -304,9 +306,16 @@ def test_direct_qr_player_is_separate_from_the_ar_overlay_element(app_module):
 def test_image_video_scanner_page_renders_the_guide(app_module):
     html = render_scanner(app_module)
     assert 'data-experience-type="image_video"' in html
+    assert 'data-playback-mode="tracked_overlay"' in html
     assert 'id="targetGuide"' in html and 'class="single"' in html
     assert "Point your camera at this to start the experience." in html
     assert 'id="directQrVideo"' not in html
+
+
+def test_detect_once_scanner_page_uses_persisted_playback_mode(app_module):
+    html = render_scanner(app_module, playback_mode="detect_once")
+    assert 'data-playback-mode="detect_once"' in html
+    assert "Play once detected" in html
 
 
 def test_scanner_markup_is_balanced_in_both_experience_types(app_module):
