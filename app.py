@@ -56,7 +56,9 @@ from models import (
     RazorpayWebhookEvent, ProcessingJob, UploadSession, get_utc_now,
     ScanEvent, SCAN_EVENT_TYPES, UserConsentEvidence, AddonCatalog,
     AddonPurchase, EntitlementTransaction, PROJECT_EXPERIENCE_TYPES,
-    PROJECT_PLAYBACK_MODES
+    PROJECT_PLAYBACK_MODES, ACCOUNT_TYPE_BUSINESS_VENDOR,
+    PROJECT_ACTIVE_TRANSFER_STATUSES, PROJECT_ACTIVE_CLAIM_STATUSES,
+    ProjectOwnershipTransfer, ProjectOwnershipClaim, ProjectServiceCoverage,
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 from rate_limit import limiter as request_limiter
@@ -1555,8 +1557,243 @@ def _project_unavailable_response():
     return (render_template("user/project_unavailable.html"), 404)
 
 
+def is_business_vendor(user):
+    return bool(user and (user.account_type or "").upper() == ACCOUNT_TYPE_BUSINESS_VENDOR)
+
+
+def project_current_owner_user_id(project):
+    return project.current_owner_user_id or project.owner_user_id if project else None
+
+
+def project_created_by_user_id(project):
+    return project.created_by_user_id or project.owner_user_id if project else None
+
+
+def user_can_manage_project(user, project):
+    if not user or not project:
+        return False
+    user_id = user.id
+    if project_current_owner_user_id(project) == user_id:
+        return True
+    return bool(project.manager_vendor_user_id == user_id and is_business_vendor(user))
+
+
+def user_can_transfer_project(user, project):
+    return user_can_manage_project(user, project)
+
+
+def project_user_access_filter(user_id):
+    return or_(
+        Project.current_owner_user_id == user_id,
+        and_(Project.current_owner_user_id.is_(None), Project.owner_user_id == user_id),
+        Project.manager_vendor_user_id == user_id,
+    )
+
+
+def _active_project_transfer(project_id):
+    return ProjectOwnershipTransfer.query.filter(
+        ProjectOwnershipTransfer.project_id == project_id,
+        ProjectOwnershipTransfer.status.in_(PROJECT_ACTIVE_TRANSFER_STATUSES),
+    ).first()
+
+
+def set_project_current_owner(project, new_owner, retain_vendor_management=False, manager_vendor=None):
+    if not project or not new_owner:
+        raise ValueError("Project and new owner are required.")
+    if manager_vendor is not None and not is_business_vendor(manager_vendor):
+        raise ValueError("manager_vendor_user_id must reference a BUSINESS_VENDOR user.")
+    if project.created_by_user_id is None:
+        project.created_by_user_id = project_created_by_user_id(project)
+    project.current_owner_user_id = new_owner.id
+    project.owner_user_id = new_owner.id
+    project.manager_vendor_user_id = manager_vendor.id if retain_vendor_management and manager_vendor else None
+
+
+def initiate_project_ownership_transfer(project, initiated_by_user, recipient_user, retain_vendor_management=False, reason=None, expires_at=None):
+    if not user_can_transfer_project(initiated_by_user, project):
+        raise PermissionError("Only the current owner or explicit vendor manager can initiate transfer.")
+    current_owner_id = project_current_owner_user_id(project)
+    if not recipient_user or not current_owner_id:
+        raise ValueError("A valid recipient and current owner are required.")
+    if recipient_user.id == current_owner_id:
+        raise ValueError("Cannot transfer a project to the current owner.")
+    if _active_project_transfer(project.id):
+        raise ValueError("An active transfer already exists for this project.")
+
+    transfer = ProjectOwnershipTransfer(
+        project_id=project.id,
+        initiated_by_user_id=initiated_by_user.id,
+        from_owner_user_id=current_owner_id,
+        to_user_id=recipient_user.id,
+        retain_vendor_management=bool(retain_vendor_management),
+        status="PENDING_ACCEPTANCE",
+        reason=reason,
+        expires_at=expires_at,
+    )
+    db.session.add(transfer)
+    db.session.flush()
+    return transfer
+
+
+def accept_project_ownership_transfer(transfer, acting_user=None, completed_by_admin=None):
+    if transfer.status not in {"PENDING_ACCEPTANCE", "PENDING_CAPACITY"}:
+        raise ValueError("Transfer is not pending acceptance.")
+    if acting_user is None and completed_by_admin is None:
+        raise PermissionError("Transfer acceptance requires the recipient or an admin override.")
+    if acting_user is not None and acting_user.id != transfer.to_user_id:
+        raise PermissionError("Only the intended recipient can accept this transfer.")
+
+    project = Project.query.get(transfer.project_id)
+    recipient = User.query.get(transfer.to_user_id)
+    sender = User.query.get(transfer.from_owner_user_id)
+    if not project or not recipient or not sender:
+        raise ValueError("Transfer project, sender, or recipient no longer exists.")
+    if project_current_owner_user_id(project) != transfer.from_owner_user_id:
+        raise ValueError("Project owner changed after transfer initiation.")
+
+    if not _reserve_project_quota_atomic(recipient):
+        transfer.status = "PENDING_CAPACITY"
+        db.session.flush()
+        return transfer
+
+    try:
+        sender.projects_used = max(0, int(sender.projects_used or 0) - 1)
+        manager_vendor = sender if transfer.retain_vendor_management and is_business_vendor(sender) else None
+        set_project_current_owner(
+            project,
+            recipient,
+            retain_vendor_management=bool(manager_vendor),
+            manager_vendor=manager_vendor,
+        )
+        now = get_utc_now()
+        transfer.status = "COMPLETED"
+        transfer.accepted_at = transfer.accepted_at or now
+        transfer.completed_at = now
+        transfer.completed_by_admin_id = completed_by_admin.id if completed_by_admin else None
+        db.session.flush()
+        return transfer
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def create_project_ownership_claim(project, claimant_user, evidence_summary=None, evidence_json=None):
+    if not project or not claimant_user:
+        raise ValueError("Project and claimant are required.")
+    if project_current_owner_user_id(project) == claimant_user.id:
+        raise ValueError("Current owner cannot claim their own project.")
+    existing = ProjectOwnershipClaim.query.filter(
+        ProjectOwnershipClaim.project_id == project.id,
+        ProjectOwnershipClaim.claimant_user_id == claimant_user.id,
+        ProjectOwnershipClaim.status.in_(PROJECT_ACTIVE_CLAIM_STATUSES),
+    ).first()
+    if existing:
+        return existing
+    claim = ProjectOwnershipClaim(
+        project_id=project.id,
+        claimant_user_id=claimant_user.id,
+        current_owner_user_id=project_current_owner_user_id(project),
+        status="OPEN",
+        evidence_summary=evidence_summary,
+        evidence_json=json.dumps(evidence_json) if isinstance(evidence_json, (dict, list)) else evidence_json,
+    )
+    db.session.add(claim)
+    db.session.flush()
+    return claim
+
+
+def approve_project_ownership_claim_by_admin(claim, admin, decision_reason=None):
+    if not claim or not admin:
+        raise ValueError("Claim and admin are required.")
+    if claim.status not in PROJECT_ACTIVE_CLAIM_STATUSES:
+        raise ValueError("Claim is not active.")
+    project = Project.query.get(claim.project_id)
+    claimant = User.query.get(claim.claimant_user_id)
+    if not project or not claimant:
+        raise ValueError("Claim project or claimant no longer exists.")
+    transfer = initiate_project_ownership_transfer(
+        project,
+        initiated_by_user=User.query.get(claim.current_owner_user_id),
+        recipient_user=claimant,
+        retain_vendor_management=False,
+        reason="Admin-approved ownership recovery claim.",
+    ) if claim.current_owner_user_id else None
+    claim.status = "APPROVED_BY_ADMIN"
+    claim.reviewed_at = get_utc_now()
+    claim.reviewed_by_admin_id = admin.id
+    claim.decision_reason = decision_reason
+    claim.transfer_id = transfer.id if transfer else None
+    db.session.flush()
+    return claim, transfer
+
+
+def _project_specific_coverage_candidates(project, now):
+    if not project:
+        return []
+    return ProjectServiceCoverage.query.filter(
+        ProjectServiceCoverage.project_id == project.id,
+        ProjectServiceCoverage.status == "ACTIVE",
+        ProjectServiceCoverage.coverage_start <= now,
+        or_(ProjectServiceCoverage.coverage_end.is_(None), ProjectServiceCoverage.coverage_end > now),
+    ).all()
+
+
+def add_project_service_coverage(project, source_type, coverage_start=None, coverage_end=None, source_id=None, source_reference=None, created_by_user=None, created_by_admin=None, reason=None):
+    coverage = ProjectServiceCoverage(
+        project_id=project.id,
+        source_type=source_type,
+        source_id=source_id,
+        source_reference=source_reference,
+        coverage_start=coverage_start or get_utc_now(),
+        coverage_end=coverage_end,
+        status="ACTIVE",
+        created_by_user_id=created_by_user.id if created_by_user else None,
+        created_by_admin_id=created_by_admin.id if created_by_admin else None,
+        reason=reason,
+    )
+    db.session.add(coverage)
+    db.session.flush()
+    return coverage
+
+
+def project_public_access_state(project, now=None):
+    now = now or get_utc_now()
+    if not project:
+        return {"is_live": False, "reason": "not_found", "effective_coverage_until": None, "coverage_source": None}
+    if not project.is_active:
+        return {"is_live": False, "reason": "inactive", "effective_coverage_until": None, "coverage_source": None}
+
+    best_until = None
+    best_source = None
+    has_indefinite = False
+
+    owner = User.query.get(project_current_owner_user_id(project)) if project_current_owner_user_id(project) else None
+    if owner and owner.has_active_subscription():
+        best_source = "OWNER_SUBSCRIPTION"
+        best_until = owner.subscription_expires_at
+        has_indefinite = best_until is None
+
+    for coverage in _project_specific_coverage_candidates(project, now):
+        if coverage.coverage_end is None:
+            has_indefinite = True
+            best_until = None
+            best_source = coverage.source_type
+        elif not has_indefinite and (best_until is None or coverage.coverage_end > best_until):
+            best_until = coverage.coverage_end
+            best_source = coverage.source_type
+
+    if best_source:
+        return {
+            "is_live": True,
+            "reason": "covered",
+            "effective_coverage_until": None if has_indefinite else best_until,
+            "coverage_source": best_source,
+        }
+    return {"is_live": False, "reason": "no_valid_coverage", "effective_coverage_until": None, "coverage_source": None}
+
+
 def _project_is_available(project):
-    return bool(project and project.is_active)
+    return bool(project_public_access_state(project)["is_live"])
 
 
 # ---------------------------------------------------------------------
@@ -4734,7 +4971,7 @@ def send_contact_email():
 def user_profile():
     user = current_user()
     trial = TrialDetails.query.filter_by(user_id=user.id).first()
-    projects = Project.query.filter_by(owner_user_id=user.id).order_by(Project.created_at.desc()).all()
+    projects = Project.query.filter(project_user_access_filter(user.id)).order_by(Project.created_at.desc()).all()
     
     return render_template(
         "user/profile.html",
@@ -4770,7 +5007,7 @@ def projects_page():
             Project,
             pair_counts.c.pair_count,
         )
-        .filter(Project.owner_user_id == user.id)
+        .filter(project_user_access_filter(user.id))
         .outerjoin(pair_counts, Project.id == pair_counts.c.project_id)
     )
 
@@ -4801,7 +5038,7 @@ def projects_page():
         project.pairs_count = int(pair_count or 0)
         projects.append(project)
 
-    has_any_projects = db.session.query(Project.id).filter_by(owner_user_id=user.id).first() is not None
+    has_any_projects = db.session.query(Project.id).filter(project_user_access_filter(user.id)).first() is not None
 
     return render_template(
         "user/projects.html",
@@ -4817,7 +5054,7 @@ def projects_page():
 def download_project_qr(project_id):
     user = current_user()
     project = Project.query.get(project_id)
-    if not project or project.owner_user_id != user.id:
+    if not user_can_manage_project(user, project):
         abort(404)
     if not project.qr_code_filename:
         abort(404)
@@ -4833,11 +5070,13 @@ def download_project_qr(project_id):
 def user_delete_project(project_id):
     user = current_user()
     project = Project.query.get(project_id)
-    if not project or project.owner_user_id != user.id:
+    if not user_can_manage_project(user, project):
         abort(404)
     
     # Decrement projects count
-    user.projects_used = max(0, (user.projects_used or 0) - 1)
+    owner = User.query.get(project_current_owner_user_id(project)) if project_current_owner_user_id(project) else None
+    if owner:
+        owner.projects_used = max(0, (owner.projects_used or 0) - 1)
     
     _delete_project_files_and_rows(project)
     db.session.commit()
@@ -4851,7 +5090,7 @@ def user_delete_project(project_id):
 def user_edit_project_page(project_id):
     user = current_user()
     project = Project.query.get(project_id)
-    if not project or project.owner_user_id != user.id:
+    if not user_can_manage_project(user, project):
         abort(404)
 
     pairs = ProjectPair.query.filter_by(project_id=project_id).order_by(ProjectPair.pair_index).all()
@@ -4863,7 +5102,7 @@ def user_edit_project_page(project_id):
 def user_edit_project(project_id):
     user = current_user()
     project = Project.query.get(project_id)
-    if not project or project.owner_user_id != user.id:
+    if not user_can_manage_project(user, project):
         abort(404)
 
     pairs = ProjectPair.query.filter_by(project_id=project_id).order_by(ProjectPair.pair_index).all()
@@ -4964,7 +5203,7 @@ def user_edit_project(project_id):
 def user_reprocess_project(project_id):
     user = current_user()
     project = Project.query.get(project_id)
-    if not project or project.owner_user_id != user.id:
+    if not user_can_manage_project(user, project):
         abort(404)
 
     pairs_to_reprocess = ProjectPair.query.filter_by(project_id=project_id).all()
@@ -5578,6 +5817,8 @@ def handle_upload():
         project = Project(
             name=name,
             owner_user_id=user.id,
+            created_by_user_id=user.id,
+            current_owner_user_id=user.id,
             user_project_index=user_project_index,
             experience_type=experience_type,
             playback_mode=playback_mode,
@@ -6557,10 +6798,19 @@ def _finalize_assemble_and_validate(session_row, user, admin):
                 name=session_row.project_name or "Untitled Project",
                 owner_user_id=user.id,
                 owner_admin_id=None,
+                created_by_user_id=user.id,
+                current_owner_user_id=user.id,
                 user_project_index=project_index,
             )
         db.session.add(project)
         db.session.flush()
+        if is_admin_owner:
+            add_project_service_coverage(
+                project,
+                "ADMIN_GRANT",
+                created_by_admin=admin,
+                reason="Admin-created project public service coverage.",
+            )
 
         if not is_admin_owner:
             max_pairs = get_plan_pairs_limit(user)
@@ -6916,7 +7166,7 @@ def project_view(project_id):
     else:
         # Regular user viewing their own project
         user = current_user()
-        if project.owner_user_id != user.id:
+        if not user_can_manage_project(user, project):
             abort(404)
     
     # Redirect to projects list or preview
@@ -6961,7 +7211,7 @@ def set_project_fallback_pair(project_id):
     is never leaked to a non-owner)."""
     user = current_user()
     project = Project.query.get_or_404(project_id)
-    if project.owner_user_id != user.id:
+    if not user_can_manage_project(user, project):
         abort(404)
     return _apply_fallback_pair_selection(project)
 
@@ -8039,7 +8289,7 @@ def success_page(project_id):
     user = current_user()
     project = Project.query.get(project_id)
     
-    if not project or project.owner_user_id != user.id:
+    if not user_can_manage_project(user, project):
         abort(404)
     
     # ✅ Calculate display number for the project (use helper which prefers persisted index)
@@ -8199,7 +8449,7 @@ def resolve_scanner_entry_context(project, test_token):
     ctx = payload.get("ctx")
     if ctx == "creator_test":
         session_user_id = session.get("user_id")
-        if session_user_id and payload.get("user_id") == session_user_id and project.owner_user_id == session_user_id:
+        if session_user_id and payload.get("user_id") == session_user_id and project_current_owner_user_id(project) == session_user_id:
             return {
                 "context": "creator_test",
                 "back_url": url_for("project_preview", project_id=project.id),
@@ -8238,7 +8488,7 @@ def scanner_test_entry(project_id):
     token so /scanner/ can prove this visit came from here."""
     user = current_user()
     project = Project.query.get_or_404(project_id)
-    if project.owner_user_id != user.id:
+    if not user_can_manage_project(user, project):
         abort(404)
     token = _issue_scanner_test_token(project.id, "creator_test", user_id=user.id)
     return redirect(url_for("scanner", project_id=project.id, test_token=token))
@@ -8285,10 +8535,11 @@ def scanner(project_id):
     # project_owner_id / project_owner_admin_id: resolved from the DB record, never from an
     # editable URL parameter. This is what used to be a single ambiguous `user_id` reused for
     # both "who owns this project" and "who is scanning it".
-    project_owner_id = project.owner_user_id
+    project_owner_id = project_current_owner_user_id(project)
     if project_owner_id:
         creator_type = "user"
-        creator_name = project.owner_user.full_name if project.owner_user else "User"
+        owner_user = User.query.get(project_owner_id)
+        creator_name = owner_user.full_name if owner_user else "User"
     else:
         creator_type = "admin"
         creator_name = project.owner_admin.name if project.owner_admin else "Admin"
@@ -8446,7 +8697,7 @@ def detect_init():
         # that session had been force-mutated to the owner's id by the scanner() route (see
         # the removed "FORCE set user_id ... from QR code" line). It is NOT the authenticated
         # viewer's own identity, which is never touched by this endpoint.
-        scan_attribution_owner_id = project.owner_user_id
+        scan_attribution_owner_id = project_current_owner_user_id(project)
         scan_session_id = request.form.get("scan_session_id")
 
         print(f"👤 scan_attribution_owner_id: {scan_attribution_owner_id}")
@@ -9003,7 +9254,7 @@ def scanner_session_end():
         # authentication state, since a public viewer with no session at all still needs
         # their scan to count against the project owner's quota. See detect_init() above for
         # the same fix.
-        scan_attribution_owner_id = project.owner_user_id if project else None
+        scan_attribution_owner_id = project_current_owner_user_id(project) if project else None
 
         print(f"📌 project_id: {project_id}")
         print(f"📌 session_id: {session_id}")
@@ -9449,7 +9700,7 @@ def project_preview(project_id):
     else:
         # Regular user viewing their own project
         user = current_user()
-        if project.owner_user_id != user.id:
+        if not user_can_manage_project(user, project):
             abort(404)
     
     pairs = ProjectPair.query.filter_by(project_id=project.id).order_by(ProjectPair.pair_index).all()
@@ -9921,7 +10172,7 @@ def admin_view_user(user_id):
     user = User.query.get_or_404(user_id)
     
     # Get user projects
-    projects = Project.query.filter_by(owner_user_id=user.id).order_by(Project.created_at.desc()).all()
+    projects = Project.query.filter(project_user_access_filter(user.id)).order_by(Project.created_at.desc()).all()
     
     # Get user payments
     payments = PaymentOrder.query.filter_by(user_id=user.id).order_by(PaymentOrder.created_at.desc()).all()
@@ -9946,11 +10197,11 @@ def admin_view_user_dashboard(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
     trial = TrialDetails.query.filter_by(user_id=user.id).first()
-    total_projects = Project.query.filter_by(owner_user_id=user.id).count()
+    total_projects = Project.query.filter(project_user_access_filter(user.id)).count()
     total_pairs = (
         db.session.query(func.count(ProjectPair.id))
         .join(Project, ProjectPair.project_id == Project.id)
-        .filter(Project.owner_user_id == user.id)
+        .filter(project_user_access_filter(user.id))
         .scalar()
         or 0
     )
@@ -9958,7 +10209,7 @@ def admin_view_user_dashboard(user_id):
     successful_scans = ScanLog.query.filter_by(user_id=user.id, is_successful=True).count()
     failed_scans = ScanLog.query.filter_by(user_id=user.id, is_successful=False).count()
     recent_projects = (
-        Project.query.filter_by(owner_user_id=user.id)
+        Project.query.filter(project_user_access_filter(user.id))
         .order_by(Project.created_at.desc(), Project.id.desc())
         .limit(10)
         .all()
@@ -11542,6 +11793,13 @@ def admin_handle_upload():
         user_project_index=admin_project_index
     )
     db.session.add(project)
+    db.session.flush()
+    add_project_service_coverage(
+        project,
+        "ADMIN_GRANT",
+        created_by_admin=admin,
+        reason="Admin-created project public service coverage.",
+    )
     db.session.commit()
     
     # Move ALL already-validated files into place

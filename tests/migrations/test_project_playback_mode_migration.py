@@ -16,10 +16,10 @@ PRIOR_REVISION = "b7c9d2e4f6a1"
 PLAYBACK_REVISION = "c8d1e2f3a4b5"
 
 
-def _current_head_revision():
+def _script_directory():
     config = AlembicConfig()
     config.set_main_option("script_location", MIGRATIONS_DIR)
-    return ScriptDirectory.from_config(config).get_current_head()
+    return ScriptDirectory.from_config(config)
 
 
 def _migration_app(tmp_path, name):
@@ -32,8 +32,11 @@ def _migration_app(tmp_path, name):
     return app
 
 
-def test_project_playback_mode_migration_is_current_head():
-    assert _current_head_revision() == PLAYBACK_REVISION
+def test_project_playback_mode_migration_revision_exists():
+    script = _script_directory()
+    revision = script.get_revision(PLAYBACK_REVISION)
+    assert revision.revision == PLAYBACK_REVISION
+    assert revision.down_revision == PRIOR_REVISION
 
 
 def test_project_playback_mode_upgrade_backfills_by_experience_type(tmp_path):

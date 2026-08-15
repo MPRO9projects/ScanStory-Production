@@ -17,6 +17,11 @@ def get_utc_now():
     return dt.utcnow()
 
 
+ACCOUNT_TYPE_INDIVIDUAL = "INDIVIDUAL"
+ACCOUNT_TYPE_BUSINESS_VENDOR = "BUSINESS_VENDOR"
+USER_ACCOUNT_TYPES = {ACCOUNT_TYPE_INDIVIDUAL, ACCOUNT_TYPE_BUSINESS_VENDOR}
+
+
 # ---------F------------------------------------------------------------
 # Subscription Plans
 # ---------------------------------------------------------------------
@@ -132,6 +137,12 @@ class User(db.Model):
     company = db.Column(db.String(255), nullable=True)
     profile_image = db.Column(db.String(500), nullable=True)
     password_hash = db.Column(db.String(255), nullable=False)
+    account_type = db.Column(
+        db.String(30),
+        nullable=False,
+        default=ACCOUNT_TYPE_INDIVIDUAL,
+        server_default=ACCOUNT_TYPE_INDIVIDUAL,
+    )
 
     # Account status
     is_verified = db.Column(db.Boolean, default=False)
@@ -176,7 +187,13 @@ class User(db.Model):
     # Relationships
     trial_details = db.relationship("TrialDetails", backref="user", uselist=False, lazy=True, cascade="all, delete-orphan")
     otp_codes = db.relationship("OTPCode", backref="user", lazy=True, cascade="all, delete-orphan")
-    projects = db.relationship("Project", backref="owner_user", lazy=True, cascade="all, delete-orphan")
+    projects = db.relationship(
+        "Project",
+        backref="owner_user",
+        lazy=True,
+        cascade="all, delete-orphan",
+        foreign_keys="Project.owner_user_id",
+    )
     payment_orders = db.relationship("PaymentOrder", backref="user", lazy=True, cascade="all, delete-orphan")
     login_activities = db.relationship("UserLoginActivity", backref="user", lazy=True, cascade="all, delete-orphan")
     consent_evidence = db.relationship("UserConsentEvidence", backref="user", lazy=True, cascade="all, delete-orphan")
@@ -276,6 +293,10 @@ class User(db.Model):
     @validates("email")
     def validate_email(self, key, email):
         return email.strip().lower() if email else email
+
+    @validates("account_type")
+    def validate_account_type(self, key, value):
+        return _validate_value((value or ACCOUNT_TYPE_INDIVIDUAL).strip().upper(), USER_ACCOUNT_TYPES, key)
 
     def __repr__(self):
         return f"<User {self.email} ({self.id})>"
@@ -721,6 +742,35 @@ class Admin(db.Model):
 # ---------------------------------------------------------------------
 PROJECT_EXPERIENCE_TYPES = {"image_video", "direct_qr"}
 PROJECT_PLAYBACK_MODES = {"tracked_overlay", "detect_once", "direct"}
+PROJECT_TRANSFER_STATUSES = {
+    "PENDING_ACCEPTANCE",
+    "PENDING_CAPACITY",
+    "COMPLETED",
+    "CANCELLED",
+    "EXPIRED",
+    "DISPUTED",
+}
+PROJECT_ACTIVE_TRANSFER_STATUSES = {"PENDING_ACCEPTANCE", "PENDING_CAPACITY", "DISPUTED"}
+PROJECT_CLAIM_STATUSES = {
+    "OPEN",
+    "VENDOR_NOTIFIED",
+    "APPROVED_BY_VENDOR",
+    "PENDING_ADMIN_REVIEW",
+    "APPROVED_BY_ADMIN",
+    "REJECTED",
+    "CANCELLED",
+    "EXPIRED",
+    "TRANSFER_COMPLETED",
+}
+PROJECT_ACTIVE_CLAIM_STATUSES = {"OPEN", "VENDOR_NOTIFIED", "PENDING_ADMIN_REVIEW", "APPROVED_BY_VENDOR"}
+PROJECT_SERVICE_COVERAGE_SOURCE_TYPES = {
+    "OWNER_SUBSCRIPTION",
+    "STANDALONE_PROJECT_RENEWAL",
+    "TRANSFER_CARRY_OVER",
+    "ADMIN_GRANT",
+    "LEGACY_COMPATIBILITY",
+}
+PROJECT_SERVICE_COVERAGE_STATUSES = {"ACTIVE", "REVOKED", "EXPIRED", "SUPERSEDED"}
 
 
 class Project(db.Model):
@@ -732,6 +782,10 @@ class Project(db.Model):
 
     owner_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     owner_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True, index=True)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    current_owner_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    manager_vendor_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    beneficiary_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
 
     user_project_index = db.Column(db.Integer, nullable=True)  # Per-user project numbering
     experience_type = db.Column(db.String(30), nullable=False, default="image_video", server_default="image_video")
@@ -772,6 +826,10 @@ class Project(db.Model):
     pairs = db.relationship("ProjectPair", backref="project", lazy=True, cascade="all, delete-orphan", order_by="ProjectPair.pair_index", foreign_keys="ProjectPair.project_id")
     scan_logs = db.relationship("ScanLog", backref="project", lazy=True, cascade="all, delete-orphan")
     scan_events = db.relationship("ScanEvent", backref="project", lazy=True, cascade="all, delete-orphan")
+    created_by_user = db.relationship("User", foreign_keys=[created_by_user_id], lazy=True)
+    current_owner_user = db.relationship("User", foreign_keys=[current_owner_user_id], lazy=True)
+    manager_vendor_user = db.relationship("User", foreign_keys=[manager_vendor_user_id], lazy=True)
+    beneficiary_user = db.relationship("User", foreign_keys=[beneficiary_user_id], lazy=True)
 
     @validates("experience_type")
     def validate_experience_type(self, key, value):
@@ -784,6 +842,108 @@ class Project(db.Model):
     def __repr__(self):
         owner = f"user:{self.owner_user_id}" if self.owner_user_id else f"admin:{self.owner_admin_id}"
         return f"<Project '{self.name}' ({owner})>"
+
+
+class ProjectOwnershipTransfer(db.Model):
+    __tablename__ = "project_ownership_transfers"
+    __table_args__ = (
+        db.Index("ix_project_ownership_transfers_project_status", "project_id", "status"),
+        db.Index("ix_project_ownership_transfers_to_status", "to_user_id", "status"),
+        db.Index("ix_project_ownership_transfers_from_status", "from_owner_user_id", "status"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+    initiated_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    from_owner_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    to_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    retain_vendor_management = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+    status = db.Column(db.String(30), nullable=False, default="PENDING_ACCEPTANCE", server_default="PENDING_ACCEPTANCE")
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    accepted_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+    cancelled_at = db.Column(db.DateTime, nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=True)
+    completed_by_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True, index=True)
+    reason = db.Column(db.Text, nullable=True)
+    note = db.Column(db.Text, nullable=True)
+    metadata_json = db.Column(db.Text, nullable=True)
+
+    project = db.relationship("Project", backref=db.backref("ownership_transfers", lazy=True))
+    initiated_by_user = db.relationship("User", foreign_keys=[initiated_by_user_id], lazy=True)
+    from_owner_user = db.relationship("User", foreign_keys=[from_owner_user_id], lazy=True)
+    to_user = db.relationship("User", foreign_keys=[to_user_id], lazy=True)
+    completed_by_admin = db.relationship("Admin", foreign_keys=[completed_by_admin_id], lazy=True)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value((value or "PENDING_ACCEPTANCE").strip().upper(), PROJECT_TRANSFER_STATUSES, key)
+
+
+class ProjectOwnershipClaim(db.Model):
+    __tablename__ = "project_ownership_claims"
+    __table_args__ = (
+        db.Index("ix_project_ownership_claims_project_status", "project_id", "status"),
+        db.Index("ix_project_ownership_claims_claimant_status", "claimant_user_id", "status"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+    claimant_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
+    current_owner_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    status = db.Column(db.String(30), nullable=False, default="OPEN", server_default="OPEN")
+    evidence_summary = db.Column(db.Text, nullable=True)
+    evidence_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    vendor_notified_at = db.Column(db.DateTime, nullable=True)
+    response_deadline_at = db.Column(db.DateTime, nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True, index=True)
+    decision_reason = db.Column(db.Text, nullable=True)
+    transfer_id = db.Column(db.Integer, db.ForeignKey("project_ownership_transfers.id"), nullable=True, index=True)
+
+    project = db.relationship("Project", backref=db.backref("ownership_claims", lazy=True))
+    claimant_user = db.relationship("User", foreign_keys=[claimant_user_id], lazy=True)
+    current_owner_user = db.relationship("User", foreign_keys=[current_owner_user_id], lazy=True)
+    reviewed_by_admin = db.relationship("Admin", foreign_keys=[reviewed_by_admin_id], lazy=True)
+    transfer = db.relationship("ProjectOwnershipTransfer", foreign_keys=[transfer_id], lazy=True)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value((value or "OPEN").strip().upper(), PROJECT_CLAIM_STATUSES, key)
+
+
+class ProjectServiceCoverage(db.Model):
+    __tablename__ = "project_service_coverages"
+    __table_args__ = (
+        db.Index("ix_project_service_coverages_project_status_end", "project_id", "status", "coverage_end"),
+        db.Index("ix_project_service_coverages_source", "source_type", "source_id", "source_reference"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+    source_type = db.Column(db.String(40), nullable=False)
+    source_id = db.Column(db.Integer, nullable=True)
+    source_reference = db.Column(db.String(120), nullable=True)
+    coverage_start = db.Column(db.DateTime, nullable=False, default=get_utc_now)
+    coverage_end = db.Column(db.DateTime, nullable=True)
+    status = db.Column(db.String(30), nullable=False, default="ACTIVE", server_default="ACTIVE")
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    created_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    created_by_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True, index=True)
+    reason = db.Column(db.Text, nullable=True)
+
+    project = db.relationship("Project", backref=db.backref("service_coverages", lazy=True, cascade="all, delete-orphan"))
+    created_by_user = db.relationship("User", foreign_keys=[created_by_user_id], lazy=True)
+    created_by_admin = db.relationship("Admin", foreign_keys=[created_by_admin_id], lazy=True)
+
+    @validates("source_type")
+    def validate_source_type(self, key, value):
+        return _validate_value((value or "").strip().upper(), PROJECT_SERVICE_COVERAGE_SOURCE_TYPES, key)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value((value or "ACTIVE").strip().upper(), PROJECT_SERVICE_COVERAGE_STATUSES, key)
 
 
 class ProjectPair(db.Model):
