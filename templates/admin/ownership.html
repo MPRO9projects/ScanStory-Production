@@ -1,0 +1,185 @@
+{% extends "admin/base.html" %}
+{% block title %}Ownership Review{% endblock %}
+
+{#
+  V1.1 Wave 4 - manual ownership adjudication.
+
+  Every action offered here maps to a governed backend transition that exists.
+  There is no "force ownership" control: approving a claim only OPENS a
+  transfer, and completing a transfer still enforces both the recipient's
+  project-slot capacity and their storage capacity. Nothing on this page
+  deletes media or a project.
+#}
+
+{% macro audit_cell(entries) %}
+  {% if entries %}
+    <details>
+      <summary class="small text-muted">{{ entries|length }} event(s)</summary>
+      <ul class="small mb-0 ps-3">
+        {% for entry in entries|reverse %}
+        <li>
+          <code>{{ entry.action }}</code> &rarr; {{ entry.status }}
+          <span class="text-muted">{{ entry.at }}</span>
+          {% if entry.actor_admin_id %}<span class="text-muted">admin #{{ entry.actor_admin_id }}</span>
+          {% elif entry.actor_user_id %}<span class="text-muted">user #{{ entry.actor_user_id }}</span>{% endif %}
+          {% if entry.reason %}<div class="text-muted">{{ entry.reason }}</div>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </details>
+  {% else %}
+    <span class="text-muted small">&mdash;</span>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+<h1 class="h3 mb-1">Ownership Review</h1>
+<p class="text-muted">
+  Ownership is never inferred. A transfer moves a project only when the recipient accepts and
+  their account has both a free project slot and enough storage; a claim is evidence, not proof.
+</p>
+
+{% if not admin_can('admin.ownership.manage') %}
+<div class="alert alert-info">
+  You have read-only access to ownership review. Resolving transfers and claims requires the
+  ownership-manage permission.
+</div>
+{% endif %}
+
+<h2 class="h5 mt-4">Ownership transfers</h2>
+<div class="card mb-4">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <caption class="visually-hidden">Project ownership transfers</caption>
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">ScanStory</th>
+            <th scope="col">Parties</th>
+            <th scope="col">Status</th>
+            <th scope="col">Capacity block</th>
+            <th scope="col">History</th>
+            <th scope="col" class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in transfer_rows %}
+          <tr>
+            <td>{{ row.transfer.id }}</td>
+            <td>
+              {{ row.project.name if row.project else '(deleted)' }}
+              <div class="small text-muted">project {{ row.transfer.project_id }}</div>
+            </td>
+            <td class="small">
+              <div>Created by: {{ row.created_by or '&mdash;'|safe }}</div>
+              <div>Current owner: {{ row.current_owner or '&mdash;'|safe }}</div>
+              <div>Managing vendor: {{ row.manager_vendor or '&mdash;'|safe }}</div>
+              <div>Beneficiary: {{ row.beneficiary or '&mdash;'|safe }}</div>
+              <div class="mt-1">From: {{ row.from_owner or '&mdash;'|safe }} &rarr; To: {{ row.to_user or '&mdash;'|safe }}</div>
+            </td>
+            <td>
+              <span class="badge bg-secondary">{{ row.transfer.status }}</span>
+              <div class="small text-muted">{{ PROJECT_TRANSFER_STATUS_LABELS.get(row.transfer.status, '') }}</div>
+            </td>
+            <td class="small">
+              {% if row.capacity_block %}
+                <div>Storage OK: {{ row.capacity_block.storage_ok }}</div>
+                <div>Slot OK: {{ row.capacity_block.project_slot_ok }}</div>
+                <div>Project bytes: {{ row.capacity_block.project_bytes }}</div>
+                <div class="text-muted">Checked {{ row.capacity_block.checked_at }}</div>
+              {% else %}
+                <span class="text-muted">&mdash;</span>
+              {% endif %}
+            </td>
+            <td>{{ audit_cell(row.audit) }}</td>
+            <td class="text-end">
+              {% if admin_can('admin.ownership.manage') %}
+                {% for action, label, style in [
+                    ('complete', 'Complete', 'btn-outline-primary'),
+                    ('dispute', 'Dispute', 'btn-outline-warning'),
+                    ('release-dispute', 'Release', 'btn-outline-secondary'),
+                    ('cancel', 'Cancel', 'btn-outline-danger')] %}
+                <form method="POST" class="d-inline"
+                      action="{{ url_for('admin_resolve_ownership_transfer', transfer_id=row.transfer.id, action=action) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="reason" value="">
+                  <button type="submit" class="btn btn-sm {{ style }} mb-1">{{ label }}</button>
+                </form>
+                {% endfor %}
+              {% else %}
+                <span class="text-muted small">Read-only</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="7" class="text-center text-muted py-4">No ownership transfers recorded.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<h2 class="h5">Ownership review requests</h2>
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-hover mb-0 align-middle">
+        <caption class="visually-hidden">Project ownership claims</caption>
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">ScanStory</th>
+            <th scope="col">Claimant</th>
+            <th scope="col">Current owner</th>
+            <th scope="col">Status</th>
+            <th scope="col">Evidence</th>
+            <th scope="col">History</th>
+            <th scope="col" class="text-end">Decision</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in claim_rows %}
+          <tr>
+            <td>{{ row.claim.id }}</td>
+            <td>
+              {{ row.project.name if row.project else '(deleted)' }}
+              <div class="small text-muted">project {{ row.claim.project_id }}</div>
+            </td>
+            <td class="small">{{ row.claimant or '&mdash;'|safe }}</td>
+            <td class="small">
+              {{ row.current_owner or '&mdash;'|safe }}
+              {% if row.manager_vendor %}<div class="text-muted">vendor: {{ row.manager_vendor }}</div>{% endif %}
+            </td>
+            <td>
+              <span class="badge bg-secondary">{{ row.claim.status }}</span>
+              <div class="small text-muted">{{ PROJECT_CLAIM_STATUS_LABELS.get(row.claim.status, '') }}</div>
+            </td>
+            <td class="small">{{ row.claim.evidence_summary or '&mdash;'|safe }}</td>
+            <td>{{ audit_cell(row.audit) }}</td>
+            <td class="text-end">
+              {% if admin_can('admin.ownership.manage') %}
+              <form method="POST" action="{{ url_for('admin_approve_ownership_claim', claim_id=row.claim.id) }}" class="mb-1">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="text" name="decision_reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)">
+                <button type="submit" class="btn btn-sm btn-outline-primary">Approve</button>
+              </form>
+              <form method="POST" action="{{ url_for('admin_reject_ownership_claim', claim_id=row.claim.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-sm btn-outline-danger">Reject</button>
+              </form>
+              {% else %}
+                <span class="text-muted small">Read-only</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" class="text-center text-muted py-4">No ownership review requests recorded.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
