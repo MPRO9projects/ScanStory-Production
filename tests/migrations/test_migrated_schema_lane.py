@@ -120,11 +120,16 @@ def _exec(sql, **params):
 # Chain integrity
 # ---------------------------------------------------------------------------
 def test_wave1_revisions_keep_a_single_linear_head():
+    # UPLOAD_FK_REVISION is no longer the head: Wave 2 added e7a3f9c2b1d5 on
+    # top of it. Same treatment the refunds revision got when Wave 1 superseded
+    # it - what must stay true is that the chain is single-headed and that the
+    # Wave 1 revisions keep their exact place in it.
     script = _script_directory()
     assert len(script.get_heads()) == 1
-    assert script.get_current_head() == UPLOAD_FK_REVISION
     assert script.get_revision(ADDON_CHECK_REVISION).down_revision == PRE_WAVE1_HEAD
     assert script.get_revision(UPLOAD_FK_REVISION).down_revision == ADDON_CHECK_REVISION
+    ancestry = {r.revision for r in script.iterate_revisions(script.get_current_head(), "base")}
+    assert {ADDON_CHECK_REVISION, UPLOAD_FK_REVISION} <= ancestry
 
 
 def test_historical_migrations_were_not_edited():

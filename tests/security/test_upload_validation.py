@@ -299,14 +299,22 @@ def test_empty_upload_rejected(client, app_module, login_user):
 # ---------------------------------------------------------------------------
 
 def test_oversize_image_rejected(client, app_module, login_user, monkeypatch):
-    monkeypatch.setattr(app_module, "MAX_IMAGE_SIZE", 100)
+    # entitlements.py is the canonical home of the immutable server ceiling;
+    # the effective per-file limit is min(plan policy, this). app_module's
+    # same-named constant is only an import-time snapshot used to size the
+    # absolute request cap, so patching it here would enforce nothing.
+    import entitlements
+
+    monkeypatch.setattr(entitlements, "MAX_IMAGE_SIZE", 100)
     response = _post_upload(client, image_bytes=_jpeg_bytes(1200, 900), video_bytes=_mp4_bytes())
     assert response.status_code == 302
     assert app_module.Project.query.count() == 0
 
 
 def test_oversize_video_rejected(client, app_module, login_user, monkeypatch):
-    monkeypatch.setattr(app_module, "MAX_VIDEO_SIZE", 100)
+    import entitlements
+
+    monkeypatch.setattr(entitlements, "MAX_VIDEO_SIZE", 100)
     response = _post_upload(client, image_bytes=_jpeg_bytes(), video_bytes=_mp4_bytes(frames=8))
     assert response.status_code == 302
     assert app_module.Project.query.count() == 0
