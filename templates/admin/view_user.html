@@ -764,6 +764,47 @@
                 {% endif %}
             </div>
         </div>
+
+        {% if entitlement_summary %}
+        <div class="card" data-testid="effective-entitlement-summary">
+            <div class="card-header">
+                <h3 class="card-title">Effective Entitlement Summary</h3>
+            </div>
+            <div class="info-grid">
+                <div class="info-item">
+                    <div class="info-label">Account Type</div>
+                    <div class="info-value">{{ entitlement_summary.account_type_label }}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Plan Family</div>
+                    <div class="info-value">{{ entitlement_summary.plan_family if entitlement_summary.plan_family_available and entitlement_summary.plan_family else "Backend pending" }}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Project Slots</div>
+                    <div class="info-value">{% if entitlement_summary.project_unlimited %}Unlimited{% else %}{{ entitlement_summary.effective_project_limit }}{% endif %}</div>
+                    <div class="info-label">Plan {{ entitlement_summary.base_project_limit if not entitlement_summary.project_unlimited else "Unlimited" }} + purchased {{ entitlement_summary.purchased_project_capacity }}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Scan Allowance</div>
+                    <div class="info-value">{% if entitlement_summary.scan_unlimited %}Unlimited{% else %}{{ entitlement_summary.effective_scan_limit }}{% endif %}</div>
+                    <div class="info-label">Plan {{ entitlement_summary.base_scan_limit if not entitlement_summary.scan_unlimited else "Unlimited" }} + purchased {{ entitlement_summary.purchased_scan_capacity }}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Pairs / Project</div>
+                    <div class="info-value">{{ entitlement_summary.max_pairs_per_project }}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Experience Modes</div>
+                    <div class="info-value">Direct QR; Detect Once; Tracked Overlay</div>
+                </div>
+            </div>
+            {% if entitlement_summary.over_project_capacity or entitlement_summary.over_scan_capacity %}
+            <div class="alert alert-error">
+                Existing projects are retained. New creation or scanning may be restricted until usage is back within the effective allowance or the account is upgraded.
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
         
         <!-- Projects Section - UPDATED with Display Numbers -->
         <!-- <div class="card">

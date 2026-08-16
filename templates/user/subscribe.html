@@ -378,6 +378,38 @@
             color: #fff;
         }
 
+        .commercial-panel {
+            border: 1px solid rgba(0, 212, 255, 0.18);
+            background: rgba(0, 212, 255, 0.05);
+            border-radius: 22px;
+            padding: 1rem;
+        }
+
+        .commercial-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 0.8rem;
+        }
+
+        .commercial-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 999px;
+            padding: 0.45rem 0.7rem;
+            color: #e6fbff;
+            background: rgba(255, 255, 255, 0.04);
+            font-size: 0.78rem;
+            font-weight: 800;
+        }
+
+        .commercial-note {
+            color: rgba(255, 255, 255, 0.66);
+            font-size: 0.82rem;
+            line-height: 1.6;
+        }
+
         /* Payment modal */
         .payment-modal {
             position: fixed;
@@ -929,6 +961,45 @@
             </div>
             {% endif %}
 
+            <section class="commercial-panel mb-6 md:mb-8" data-testid="v11-commercial-plan-presentation">
+                <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                    <div>
+                        <label class="label-style">V1.1 Account Families</label>
+                        <h2 class="text-lg md:text-xl font-black text-white mb-2">Individual and Business / Vendor plans</h2>
+                        <p class="commercial-note">
+                            Account type is stored on the user account. Plan-family filtering will use the backend plan-family field when it is available.
+                            Until then, active plans are shown together without inventing family-specific limits.
+                        </p>
+                    </div>
+                    <div class="flex flex-wrap gap-2" aria-label="Supported account families">
+                        <span class="commercial-chip"><i class="fas fa-user" aria-hidden="true"></i> Individual</span>
+                        <span class="commercial-chip"><i class="fas fa-briefcase" aria-hidden="true"></i> Business / Vendor</span>
+                    </div>
+                </div>
+                <div class="commercial-grid mt-4">
+                    <div class="glass-container p-4">
+                        <div class="info-label mb-2">Experience terminology</div>
+                        <div class="flex flex-wrap gap-2">
+                            {% for option in v11_experience_options %}
+                            <span class="commercial-chip">{{ option.label }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    <div class="glass-container p-4">
+                        <div class="info-label mb-2">Plan-family contract</div>
+                        {% if plan_family_contract_available %}
+                        <p class="commercial-note">Backend plan-family fields are available for filtering.</p>
+                        {% else %}
+                        <p class="commercial-note">Backend plan-family fields are not available in this worktree yet; this page avoids fabricated family pricing.</p>
+                        {% endif %}
+                    </div>
+                    <div class="glass-container p-4">
+                        <div class="info-label mb-2">Grandfathering</div>
+                        <p class="commercial-note">Existing projects are retained during plan changes. New creation or scanning can be blocked if the account is over its effective allowance.</p>
+                    </div>
+                </div>
+            </section>
+
             <div class="currency-toggle-wrap" aria-label="Currency selector">
                 <div class="currency-toggle-label">Display Pricing In</div>
                 <button type="button" class="currency-btn active" data-currency="inr">INR ₹</button>
@@ -1042,6 +1113,33 @@
                         </div>
                     </div>
 
+                    <div class="mb-6 md:mb-8 p-3 md:p-5 commercial-panel">
+                        <label class="label-style mb-3 md:mb-4 text-center">V1.1 Commercial Fit</label>
+                        <div class="space-y-3">
+                            <div class="info-item">
+                                <span class="info-label">Account family</span>
+                                <span class="info-value">
+                                    {% if plan_family_contract_available and plan.plan_family %}
+                                    {{ plan.plan_family }}
+                                    {% else %}
+                                    Backend pending
+                                    {% endif %}
+                                </span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Experience modes</span>
+                                <span class="info-value">Direct QR, Detect Once, Tracked Overlay</span>
+                            </div>
+                            <div class="info-item">
+                                <span class="info-label">Storage/media policy</span>
+                                <span class="info-value">Backend pending</span>
+                            </div>
+                        </div>
+                        <p class="commercial-note mt-3">
+                            This page displays only fields currently backed by the server. Per-plan experience and media-policy gates will appear after the backend exposes them.
+                        </p>
+                    </div>
+
                     <!-- Features -->
                     <div class="mb-6 md:mb-8">
                         <label class="label-style mb-3 md:mb-4">Features</label>
@@ -1120,8 +1218,7 @@
                             <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
                             <span class="text-sm md:text-base">Can I change my plan later?</span>
                         </h3>
-                        <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">Yes, you can upgrade or downgrade your
-                            plan at any time. Changes take effect immediately.</p>
+                        <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">Upgrades take effect after confirmed payment. Downgrades are scheduled for the next plan-term boundary and do not delete existing projects.</p>
                     </div>
 
                     <div>

@@ -401,6 +401,41 @@
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
+
+        .policy-panel {
+            margin: 18px 0;
+            padding: 16px;
+            border-radius: 10px;
+            border: 1px solid rgba(0,212,255,0.18);
+            background: rgba(0,212,255,0.05);
+        }
+
+        .policy-row {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.72);
+            font-size: 13px;
+        }
+
+        .policy-row:last-child {
+            border-bottom: 0;
+        }
+
+        .policy-value {
+            color: #e6e6e9;
+            font-weight: 700;
+            text-align: right;
+        }
+
+        .policy-note {
+            color: rgba(255,255,255,0.62);
+            font-size: 13px;
+            line-height: 1.55;
+            margin: 0 0 18px;
+        }
         
         .plan-status {
             display: inline-block;
@@ -539,6 +574,22 @@
                 {% endfor %}
             {% endif %}
         {% endwith %}
+
+        <div class="card" data-testid="v11-plan-policy-contract">
+            <h3 style="margin-bottom: 10px;">V1.1 Commercial Policy Contract</h3>
+            <p class="policy-note">
+                This admin view surfaces operational plan fields that exist today: price, validity, project capacity,
+                scan allowance and pairs per project. Plan family, storage/media policy, per-experience entitlements
+                and lifecycle/revision status are shown as backend-pending instead of editable controls because those
+                fields are not present on SubscriptionPlan in this worktree.
+            </p>
+            <div class="policy-panel">
+                <div class="policy-row"><span>Supported account types</span><span class="policy-value">Individual; Business / Vendor</span></div>
+                <div class="policy-row"><span>Supported experience labels</span><span class="policy-value">Direct QR; Detect Once; Tracked Overlay</span></div>
+                <div class="policy-row"><span>Plan-family field</span><span class="policy-value">{{ 'Available' if plan_family_contract_available else 'Backend pending' }}</span></div>
+                <div class="policy-row"><span>Storage/media policy fields</span><span class="policy-value">Backend pending</span></div>
+            </div>
+        </div>
         
         <!-- Plans Grid -->
         <div class="plans-grid">
@@ -625,6 +676,35 @@
                             {% endif %}
                         </div>
                         <div class="plan-limit-label">Pairs / project</div>
+                    </div>
+                </div>
+
+                <div class="policy-panel">
+                    <div class="policy-row">
+                        <span>Plan family</span>
+                        <span class="policy-value">
+                            {% if plan_family_contract_available and plan.plan_family %}
+                                {{ plan.plan_family }}
+                            {% else %}
+                                Backend pending
+                            {% endif %}
+                        </span>
+                    </div>
+                    <div class="policy-row">
+                        <span>Experience entitlements</span>
+                        <span class="policy-value">Direct QR; Detect Once; Tracked Overlay</span>
+                    </div>
+                    <div class="policy-row">
+                        <span>Base storage</span>
+                        <span class="policy-value">Backend pending</span>
+                    </div>
+                    <div class="policy-row">
+                        <span>Media policy</span>
+                        <span class="policy-value">Backend pending</span>
+                    </div>
+                    <div class="policy-row">
+                        <span>Lifecycle/revision</span>
+                        <span class="policy-value">Backend pending</span>
                     </div>
                 </div>
                 <div class="plan-actions">

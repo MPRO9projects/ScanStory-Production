@@ -530,6 +530,50 @@
                     {% endif %}
                 </section>
 
+                {% if entitlement_summary %}
+                <section class="ss-domain-panel mb-6 md:mb-8 mx-3 md:mx-0" id="entitlementSummary"
+                         aria-labelledby="entitlementHeading" data-aos="fade-up" data-aos-delay="90">
+                    <h2 class="ss-domain-panel-title" id="entitlementHeading">
+                        <i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Effective Entitlement
+                    </h2>
+                    <p class="ss-domain-note" style="margin-top:0;">
+                        This read-only summary comes from the backend plan, usage and entitlement ledger fields.
+                    </p>
+                    <ul class="ss-slots" data-testid="effective-entitlement-summary" role="list">
+                        <li>
+                            <span class="ss-slots-value">{{ entitlement_summary.account_type_label }}</span>
+                            <span class="ss-slots-label">Account type</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value">{{ entitlement_summary.plan_family if entitlement_summary.plan_family_available and entitlement_summary.plan_family else "Backend pending" }}</span>
+                            <span class="ss-slots-label">Plan family</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value">{% if entitlement_summary.project_unlimited %}Unlimited{% else %}{{ entitlement_summary.effective_project_limit }}{% endif %}</span>
+                            <span class="ss-slots-label">Project slots</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value">{% if entitlement_summary.scan_unlimited %}Unlimited{% else %}{{ entitlement_summary.effective_scan_limit }}{% endif %}</span>
+                            <span class="ss-slots-label">Scan allowance</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value">{{ entitlement_summary.max_pairs_per_project }}</span>
+                            <span class="ss-slots-label">Pairs / project</span>
+                        </li>
+                    </ul>
+                    <div class="flex flex-wrap gap-2 mt-4" aria-label="Available experience modes">
+                        {% for option in entitlement_summary.allowed_experiences %}
+                        <span class="status-badge status-active">{{ option.label }}</span>
+                        {% endfor %}
+                    </div>
+                    {% if entitlement_summary.over_project_capacity or entitlement_summary.over_scan_capacity %}
+                    <p class="ss-domain-note" style="margin-top:1rem;">
+                        Existing projects are retained. New creation or scanning may be restricted until usage is back within the effective allowance or the account is upgraded.
+                    </p>
+                    {% endif %}
+                </section>
+                {% endif %}
+
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6 px-3 md:px-0">
                     <!-- Profile Details -->
                     <div class="glass rounded-[20px] md:rounded-[28px] p-4 md:p-6 lg:col-span-2" data-aos="fade-up" data-aos-delay="60">

@@ -19,6 +19,42 @@
     <strong>Admin view:</strong> you are not impersonating this user. No creator session or user authentication state is changed.
 </div>
 
+{% if entitlement_summary %}
+<div class="card mb-4" data-testid="effective-entitlement-summary">
+    <div class="card-header">Effective Entitlement</div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-3">
+                <div class="text-muted small">Account Type</div>
+                <div class="fw-bold">{{ entitlement_summary.account_type_label }}</div>
+            </div>
+            <div class="col-md-3">
+                <div class="text-muted small">Plan Family</div>
+                <div class="fw-bold">{{ entitlement_summary.plan_family if entitlement_summary.plan_family_available and entitlement_summary.plan_family else "Backend pending" }}</div>
+            </div>
+            <div class="col-md-3">
+                <div class="text-muted small">Project Slots</div>
+                <div class="fw-bold">{% if entitlement_summary.project_unlimited %}Unlimited{% else %}{{ entitlement_summary.effective_project_limit }}{% endif %}</div>
+                <div class="small text-muted">Plan {{ entitlement_summary.base_project_limit if not entitlement_summary.project_unlimited else "Unlimited" }} + purchased {{ entitlement_summary.purchased_project_capacity }}</div>
+            </div>
+            <div class="col-md-3">
+                <div class="text-muted small">Scan Allowance</div>
+                <div class="fw-bold">{% if entitlement_summary.scan_unlimited %}Unlimited{% else %}{{ entitlement_summary.effective_scan_limit }}{% endif %}</div>
+                <div class="small text-muted">Plan {{ entitlement_summary.base_scan_limit if not entitlement_summary.scan_unlimited else "Unlimited" }} + purchased {{ entitlement_summary.purchased_scan_capacity }}</div>
+            </div>
+        </div>
+        <div class="mt-3 small">
+            <strong>Experience modes:</strong> Direct QR; Detect Once; Tracked Overlay
+        </div>
+        {% if entitlement_summary.over_project_capacity or entitlement_summary.over_scan_capacity %}
+        <div class="alert alert-warning mt-3 mb-0">
+            Existing projects are retained. New creation or scanning may be restricted until usage is back within the effective allowance or the account is upgraded.
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endif %}
+
 <div class="row g-3 mb-4">
     <div class="col-md-3">
         <div class="card h-100">
