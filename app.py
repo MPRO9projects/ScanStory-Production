@@ -1806,9 +1806,9 @@ app.jinja_env.globals.update(
 def project_ownership_context(project, viewer):
     """Everything the ownership/coverage panels render, resolved once.
 
-    Read-only. There is no HTTP route for initiating a transfer or a claim in
-    this build (only the service functions), so this deliberately reports
-    state rather than offering an action that has nothing behind it.
+    The central /ownership surface owns user mutations. Project pages use this
+    context for truthful state and lightweight links/forms, while backend
+    routes remain authoritative for every ownership transition.
     """
     if not project:
         return None
@@ -1830,11 +1830,19 @@ def project_ownership_context(project, viewer):
         .all()
     )
     viewer_id = getattr(viewer, "id", None)
+    viewer_active_claim = next(
+        (
+            claim for claim in claims
+            if viewer_id and claim.claimant_user_id == viewer_id and claim.status in PROJECT_ACTIVE_CLAIM_STATUSES
+        ),
+        None,
+    )
     return {
         "creator": creator,
         "owner": owner,
         "manager": manager,
         "beneficiary": beneficiary,
+        "viewer_active_claim": viewer_active_claim,
         "viewer_is_creator": bool(viewer_id and creator and creator.id == viewer_id),
         "viewer_is_owner": bool(viewer_id and owner and owner.id == viewer_id),
         "viewer_is_manager": bool(viewer_id and manager and manager.id == viewer_id),

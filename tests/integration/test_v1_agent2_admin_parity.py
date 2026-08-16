@@ -9,6 +9,7 @@ These are route/template-level smoke tests only - no scanner CV/recognition
 code is touched or exercised here.
 """
 from datetime import datetime, timedelta
+import json
 
 import pytest
 
@@ -789,7 +790,182 @@ def test_claim_presentation_does_not_imply_ownership_changed(
     assert "you now own this project" not in body.lower()
 
 
-def test_admin_project_view_shows_read_only_ownership_transfer_claim_context(
+def test_project_preview_links_to_real_ownership_center_and_claim_route(
+    client, app_module, db_session, project_with_pair
+):
+    project, _pair = project_with_pair
+    owner = app_module.User.query.get(project.owner_user_id)
+    vendor = _user(app_module, db_session, "claiming-vendor@example.com", "Claiming Vendor", app_module.ACCOUNT_TYPE_BUSINESS_VENDOR)
+    project.current_owner_user_id = owner.id
+    project.manager_vendor_user_id = vendor.id
+    db_session.commit()
+
+    with client.session_transaction() as sess:
+        sess["user_id"] = vendor.id
+
+    response = client.get(f"/project/{project.id}/preview")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert 'href="/ownership"' in body
+    assert f'action="/projects/{project.id}/ownership-claim"' in body
+    assert 'name="evidence_summary"' in body
+    assert "Submitting a claim does not transfer ownership" in body
+    assert "not something you can start from here yet" not in body
+
+
+def test_project_preview_hides_duplicate_claim_submission_for_active_claim(
+    client, app_module, db_session, project_with_pair
+):
+    project, _pair = project_with_pair
+    owner = app_module.User.query.get(project.owner_user_id)
+    vendor = _user(app_module, db_session, "active-claim-vendor@example.com", "Active Claim Vendor", app_module.ACCOUNT_TYPE_BUSINESS_VENDOR)
+    project.current_owner_user_id = owner.id
+    project.manager_vendor_user_id = vendor.id
+    claim = app_module.ProjectOwnershipClaim(
+        project_id=project.id,
+        claimant_user_id=vendor.id,
+        current_owner_user_id=owner.id,
+        status="OPEN",
+    )
+    db_session.add(claim)
+    db_session.commit()
+
+    with client.session_transaction() as sess:
+        sess["user_id"] = vendor.id
+
+    response = client.get(f"/project/{project.id}/preview")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert f'action="/projects/{project.id}/ownership-claim"' not in body
+    assert "You already have an active ownership review request" in body
+
+
+def test_user_ownership_page_wires_real_transfer_actions_and_capacity_copy(
+    client, app_module, db_session, normal_user, project_with_pair
+):
+    project, _pair = project_with_pair
+    sender = _user(app_module, db_session, "handover-sender@example.com", "Handover Sender")
+    outgoing_recipient = _user(app_module, db_session, "handover-recipient@example.com", "Handover Recipient")
+    pending_project = app_module.Project(name="Waiting Transfer", owner_user_id=sender.id, current_owner_user_id=sender.id)
+    blocked_project = app_module.Project(name="Blocked Transfer", owner_user_id=sender.id, current_owner_user_id=sender.id)
+    outgoing_project = app_module.Project(name="Outgoing Transfer", owner_user_id=normal_user.id, current_owner_user_id=normal_user.id)
+    transferable_project = app_module.Project(name="Available Transfer", owner_user_id=normal_user.id, current_owner_user_id=normal_user.id)
+    db_session.add_all([pending_project, blocked_project, outgoing_project, transferable_project])
+    db_session.flush()
+    pending = app_module.ProjectOwnershipTransfer(
+        project_id=pending_project.id,
+        initiated_by_user_id=sender.id,
+        from_owner_user_id=sender.id,
+        to_user_id=normal_user.id,
+        status="PENDING_ACCEPTANCE",
+    )
+    blocked = app_module.ProjectOwnershipTransfer(
+        project_id=blocked_project.id,
+        initiated_by_user_id=sender.id,
+        from_owner_user_id=sender.id,
+        to_user_id=normal_user.id,
+        status="PENDING_CAPACITY",
+        metadata_json=json.dumps({
+            "capacity_block": {
+                "storage_ok": False,
+                "project_slot_ok": False,
+                "project_bytes": 1234,
+                "checked_at": "2026-01-01T00:00:00",
+            }
+        }),
+    )
+    outgoing = app_module.ProjectOwnershipTransfer(
+        project_id=outgoing_project.id,
+        initiated_by_user_id=normal_user.id,
+        from_owner_user_id=normal_user.id,
+        to_user_id=outgoing_recipient.id,
+        status="PENDING_ACCEPTANCE",
+    )
+    completed = app_module.ProjectOwnershipTransfer(
+        project_id=project.id,
+        initiated_by_user_id=normal_user.id,
+        from_owner_user_id=normal_user.id,
+        to_user_id=outgoing_recipient.id,
+        status="COMPLETED",
+    )
+    db_session.add_all([pending, blocked, outgoing, completed])
+    db_session.commit()
+
+    with client.session_transaction() as sess:
+        sess["user_id"] = normal_user.id
+
+    response = client.get("/ownership")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert f'action="/ownership/transfers/{pending.id}/accept"' in body
+    assert f'action="/ownership/transfers/{pending.id}/reject"' in body
+    assert f'action="/ownership/transfers/{blocked.id}/retry"' in body
+    assert "Capacity still needed" in body
+    assert "storage" in body
+    assert "project slot" in body
+    assert "Ownership has not changed" in body
+    assert "media plus QR remain intact" in body
+    assert f'action="/ownership/transfers/{outgoing.id}/cancel"' in body
+    assert f'action="/projects/{transferable_project.id}/transfer"' in body
+    assert 'name="recipient_email"' in body
+    assert 'name="retain_vendor_management"' in body
+    assert 'name="reason"' in body
+    assert f"/ownership/transfers/{completed.id}/" not in body
+
+
+def test_user_ownership_page_wires_claim_response_and_cancellation(
+    client, app_module, db_session, normal_user, project_with_pair
+):
+    project, _pair = project_with_pair
+    claimant = _user(app_module, db_session, "claim-response@example.com", "Claim Response")
+    owned_project = app_module.Project(name="Claimed Story", owner_user_id=normal_user.id, current_owner_user_id=normal_user.id)
+    other_owner = _user(app_module, db_session, "other-owner@example.com", "Other Owner")
+    claimed_project = app_module.Project(name="My Claim", owner_user_id=other_owner.id, current_owner_user_id=other_owner.id)
+    db_session.add_all([owned_project, claimed_project])
+    db_session.flush()
+    incoming_claim = app_module.ProjectOwnershipClaim(
+        project_id=owned_project.id,
+        claimant_user_id=claimant.id,
+        current_owner_user_id=normal_user.id,
+        status="OPEN",
+        evidence_summary="Customer proof",
+    )
+    my_claim = app_module.ProjectOwnershipClaim(
+        project_id=claimed_project.id,
+        claimant_user_id=normal_user.id,
+        current_owner_user_id=other_owner.id,
+        status="PENDING_ADMIN_REVIEW",
+    )
+    completed_claim = app_module.ProjectOwnershipClaim(
+        project_id=project.id,
+        claimant_user_id=normal_user.id,
+        current_owner_user_id=other_owner.id,
+        status="TRANSFER_COMPLETED",
+    )
+    db_session.add_all([incoming_claim, my_claim, completed_claim])
+    db_session.commit()
+
+    with client.session_transaction() as sess:
+        sess["user_id"] = normal_user.id
+
+    response = client.get("/ownership")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert f'action="/ownership/claims/{incoming_claim.id}/respond"' in body
+    assert 'name="decision" value="accept"' in body
+    assert 'name="decision" value="refuse"' in body
+    assert 'name="note"' in body
+    assert "Refusing moves the request to Admin review" in body
+    assert f'action="/ownership/claims/{my_claim.id}/cancel"' in body
+    assert "The linked handover completed. Ownership is now transferred." in body
+    assert f'action="/ownership/claims/{completed_claim.id}/cancel"' not in body
+
+
+def test_admin_project_view_links_to_real_ownership_review(
     client, login_admin, app_module, db_session, normal_user, project_with_pair
 ):
     project, _pair = project_with_pair
@@ -830,6 +1006,67 @@ def test_admin_project_view_shows_read_only_ownership_transfer_claim_context(
     assert "project and/or storage capacity" in body
     assert "Claims do not transfer ownership by themselves" in body
     assert "Coverage/service state is separate from ownership state" in body
-    assert "No fake ownership-change controls are shown" in body
+    assert 'href="/admin/ownership"' in body
+    assert "backend action routes are available" not in body
     assert "F:\\\\" not in body
     assert "SECRET_KEY" not in body
+
+
+def test_admin_ownership_page_wires_state_aware_real_actions(
+    client, login_admin, app_module, db_session, normal_user
+):
+    recipient = _user(app_module, db_session, "admin-action-recipient@example.com", "Admin Action Recipient")
+    project = app_module.Project(name="Admin Ownership Queue", owner_user_id=normal_user.id, current_owner_user_id=normal_user.id)
+    db_session.add(project)
+    db_session.flush()
+    pending = app_module.ProjectOwnershipTransfer(
+        project_id=project.id,
+        initiated_by_user_id=normal_user.id,
+        from_owner_user_id=normal_user.id,
+        to_user_id=recipient.id,
+        status="PENDING_ACCEPTANCE",
+    )
+    disputed = app_module.ProjectOwnershipTransfer(
+        project_id=project.id,
+        initiated_by_user_id=normal_user.id,
+        from_owner_user_id=normal_user.id,
+        to_user_id=recipient.id,
+        status="DISPUTED",
+    )
+    completed = app_module.ProjectOwnershipTransfer(
+        project_id=project.id,
+        initiated_by_user_id=normal_user.id,
+        from_owner_user_id=normal_user.id,
+        to_user_id=recipient.id,
+        status="COMPLETED",
+    )
+    claim = app_module.ProjectOwnershipClaim(
+        project_id=project.id,
+        claimant_user_id=recipient.id,
+        current_owner_user_id=normal_user.id,
+        status="PENDING_ADMIN_REVIEW",
+        evidence_summary="Needs review",
+    )
+    terminal_claim = app_module.ProjectOwnershipClaim(
+        project_id=project.id,
+        claimant_user_id=recipient.id,
+        current_owner_user_id=normal_user.id,
+        status="REJECTED",
+    )
+    db_session.add_all([pending, disputed, completed, claim, terminal_claim])
+    db_session.commit()
+
+    response = client.get("/admin/ownership")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert f'action="/admin/ownership/transfers/{pending.id}/complete"' in body
+    assert f'action="/admin/ownership/transfers/{pending.id}/dispute"' in body
+    assert f'action="/admin/ownership/transfers/{pending.id}/cancel"' in body
+    assert f'action="/admin/ownership/transfers/{disputed.id}/release-dispute"' in body
+    assert f'action="/admin/ownership/transfers/{completed.id}/complete"' not in body
+    assert f'action="/admin/ownership/claims/{claim.id}/approve"' in body
+    assert f'action="/admin/ownership/claims/{claim.id}/reject"' in body
+    assert f'action="/admin/ownership/claims/{terminal_claim.id}/approve"' not in body
+    assert 'name="decision_reason"' in body
+    assert 'name="reason"' in body

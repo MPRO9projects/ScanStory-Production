@@ -1,12 +1,7 @@
 {#
-  V1.1 Wave 4 - ownership actions surface.
-
-  Deliberately plain. This page exists because the backend transfer/claim
-  routes now exist and a transfer RECIPIENT has nowhere else to accept from
-  (they do not manage the project yet, so the project detail page is not
-  reachable for them). Visual design of the ownership panels belongs to the
-  UI checkpoint that owns project_preview.html - this page is the functional
-  surface those controls can later be wired into, not a competing design.
+  V1.1 Wave 4 - central ownership workflow.
+  Backend routes own every state transition; this page only exposes actions
+  that map to the real transfer/claim contract.
 #}
 <!DOCTYPE html>
 <html lang="en">
@@ -17,10 +12,14 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
   <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
     body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px;
-           background: #0b0b14; color: #f3f3f7; line-height: 1.55; }
-    main { max-width: 940px; margin: 0 auto; }
-    h1 { font-size: 1.6rem; margin: 0 0 4px; }
+           background: radial-gradient(circle at top left, rgba(255,0,122,0.12), transparent 30%),
+                       radial-gradient(circle at top right, rgba(0,212,255,0.1), transparent 28%),
+                       #0b0b14; color: #f3f3f7; line-height: 1.55; }
+    main { max-width: 1080px; margin: 0 auto; }
+    h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); margin: 0 0 4px; letter-spacing: 0; }
     h2 { font-size: 1.1rem; margin: 32px 0 8px; }
     p.lead { color: #a5a5b8; margin: 0 0 24px; }
     section { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
@@ -29,18 +28,35 @@
     .row:first-of-type { border-top: 0; }
     .muted { color: #9a9ab0; font-size: 0.85rem; }
     .status { display: inline-block; font-size: 0.75rem; padding: 2px 8px; border-radius: 999px;
-              background: rgba(255,255,255,0.1); }
+              background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.16); }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
     form { display: inline-block; margin: 8px 8px 0 0; }
+    .handover-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; max-width: 760px; }
+    .handover-form .full { grid-column: 1 / -1; }
+    label { display: grid; gap: 5px; }
     input[type=text], input[type=email], textarea, select {
       background: rgba(0,0,0,0.35); color: #f3f3f7; border: 1px solid rgba(255,255,255,0.15);
-      border-radius: 6px; padding: 7px 9px; font: inherit; min-width: 220px; }
+      border-radius: 6px; padding: 7px 9px; font: inherit; min-width: 0; width: 100%; }
+    textarea { resize: vertical; min-height: 78px; }
     button { background: #ff007a; color: #fff; border: 0; border-radius: 6px;
              padding: 8px 14px; font: inherit; cursor: pointer; }
     button.secondary { background: rgba(255,255,255,0.14); }
+    button.danger { background: rgba(251,113,133,0.2); color: #fecdd3; border: 1px solid rgba(251,113,133,0.45); }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible {
+      outline: 3px solid rgba(0,212,255,0.55); outline-offset: 3px;
+    }
+    .capacity-note { margin-top: 10px; padding: 10px; border-radius: 8px;
+                     background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.28); }
     .flash { border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; }
     .flash.error { background: rgba(255,60,60,0.18); }
     .flash.success { background: rgba(60,200,120,0.18); }
     a { color: #00d4ff; }
+    @media (max-width: 620px) {
+      body { padding: 14px; }
+      section { padding: 14px; }
+      .handover-form { grid-template-columns: 1fr; }
+      .actions, .actions form, button { width: 100%; }
+    }
   </style>
 </head>
 <body>
@@ -70,22 +86,34 @@
         <div class="muted">Request #{{ transfer.id }}</div>
         {% set block = capacity_blocks.get(transfer.id) %}
         {% if block %}
-          <div class="muted">
-            Not enough room in your account yet -
+          <div class="capacity-note">
+            <strong>Capacity still needed:</strong>
             {% if not block.storage_ok %}storage{% endif %}
             {% if not block.storage_ok and not block.project_slot_ok %} and {% endif %}
-            {% if not block.project_slot_ok %}available ScanStory slots{% endif %}.
-            Nothing has been moved or deleted; free up capacity and try again.
+            {% if not block.project_slot_ok %}project slot{% endif %}.
+            Ownership has not changed: the current owner remains current owner, and media plus QR remain intact.
+            Free up capacity and retry this same handover.
+            {% if block.checked_at %}<div class="muted">Last checked {{ block.checked_at }}</div>{% endif %}
           </div>
         {% endif %}
-        <form method="POST" action="{{ url_for('accept_ownership_transfer_route', transfer_id=transfer.id) }}">
+        <div class="actions">
+        {% if transfer.status == 'PENDING_CAPACITY' %}
+        <form method="POST" action="/ownership/transfers/{{ transfer.id }}/retry" onsubmit="return confirm('Retry this handover after freeing capacity? Ownership only changes if the backend checks pass.');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit">{{ 'Try again' if transfer.status == 'PENDING_CAPACITY' else 'Accept handover' }}</button>
+          <button type="submit">Retry capacity check</button>
+        </form>
+        {% elif transfer.status == 'PENDING_ACCEPTANCE' %}
+        <form method="POST" action="/ownership/transfers/{{ transfer.id }}/accept" onsubmit="return confirm('Accept this handover? Ownership moves only if account capacity checks pass.');">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit">Accept handover</button>
         </form>
         <form method="POST" action="{{ url_for('reject_ownership_transfer_route', transfer_id=transfer.id) }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="reason" value="Recipient declined from ownership center.">
           <button type="submit" class="secondary">Decline</button>
         </form>
+        {% endif %}
+        </div>
       </div>
     {% endfor %}
   </section>
@@ -100,10 +128,15 @@
         <strong>{{ (projects_by_id.get(transfer.project_id).name if projects_by_id.get(transfer.project_id) else 'ScanStory #' ~ transfer.project_id) }}</strong>
         <span class="status">{{ PROJECT_TRANSFER_STATUS_LABELS.get(transfer.status, transfer.status) }}</span>
         <div class="muted">Request #{{ transfer.id }} - you keep this ScanStory and its project slot until the handover finishes.</div>
-        <form method="POST" action="{{ url_for('cancel_ownership_transfer_route', transfer_id=transfer.id) }}">
+        {% if transfer.status in ['PENDING_ACCEPTANCE', 'PENDING_CAPACITY'] %}
+        <div class="actions">
+        <form method="POST" action="{{ url_for('cancel_ownership_transfer_route', transfer_id=transfer.id) }}" onsubmit="return confirm('Withdraw this handover request? Ownership will remain unchanged.');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="secondary">Withdraw</button>
+          <input type="hidden" name="reason" value="Sender withdrew from ownership center.">
+          <button type="submit" class="danger">Withdraw</button>
         </form>
+        </div>
+        {% endif %}
       </div>
     {% endfor %}
   </section>
@@ -118,12 +151,16 @@
       {% for project in transferable %}
       <div class="row">
         <strong>{{ project.name }}</strong>
-        <form method="POST" action="{{ url_for('start_project_ownership_transfer', project_id=project.id) }}">
+        <form method="POST" action="{{ url_for('start_project_ownership_transfer', project_id=project.id) }}" class="handover-form" onsubmit="return confirm('Send this handover request? The recipient must accept before anything moves.');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <label class="muted" for="recipient{{ project.id }}">Recipient account email</label>
-          <input type="email" id="recipient{{ project.id }}" name="recipient_email" required placeholder="owner@example.com">
-          <label class="muted"><input type="checkbox" name="retain_vendor_management" value="1"> Keep managing it</label>
-          <button type="submit">Send handover request</button>
+          <label class="muted" for="recipient{{ project.id }}">Recipient account email
+            <input type="email" id="recipient{{ project.id }}" name="recipient_email" required placeholder="owner@example.com" autocomplete="email">
+          </label>
+          <label class="muted" for="reason{{ project.id }}">Reason (recorded)
+            <input type="text" id="reason{{ project.id }}" name="reason" maxlength="500" placeholder="Customer handover, account change, etc.">
+          </label>
+          <label class="muted full"><input type="checkbox" name="retain_vendor_management" value="1"> Keep vendor management after the handover</label>
+          <button class="full" type="submit">Send handover request</button>
         </form>
       </div>
       {% endfor %}
@@ -144,16 +181,22 @@
         <strong>{{ (projects_by_id.get(claim.project_id).name if projects_by_id.get(claim.project_id) else 'ScanStory #' ~ claim.project_id) }}</strong>
         <span class="status">{{ PROJECT_CLAIM_STATUS_LABELS.get(claim.status, claim.status) }}</span>
         <div class="muted">Request #{{ claim.id }}{% if claim.evidence_summary %} - {{ claim.evidence_summary }}{% endif %}</div>
-        <form method="POST" action="{{ url_for('respond_ownership_claim_route', claim_id=claim.id) }}">
+        <label class="muted" for="claimNote{{ claim.id }}">Response note (recorded)</label>
+        <textarea id="claimNote{{ claim.id }}" name="note" form="claimAccept{{ claim.id }}" maxlength="500" placeholder="Optional context for this response."></textarea>
+        <div class="actions">
+        <form id="claimAccept{{ claim.id }}" method="POST" action="{{ url_for('respond_ownership_claim_route', claim_id=claim.id) }}" onsubmit="return confirm('Agree to open a handover for this claimant? Ownership is not final until they accept and capacity checks pass.');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="decision" value="accept">
           <button type="submit">Agree to hand over</button>
         </form>
-        <form method="POST" action="{{ url_for('respond_ownership_claim_route', claim_id=claim.id) }}">
+        <form method="POST" action="{{ url_for('respond_ownership_claim_route', claim_id=claim.id) }}" onsubmit="return confirm('Send this request to the ScanStory team for review? Ownership will remain unchanged.');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="decision" value="refuse">
+          <input type="hidden" name="note" value="Current owner disagreed from ownership center.">
           <button type="submit" class="secondary">Disagree - send to ScanStory team</button>
         </form>
+        </div>
+        <p class="muted">Agreeing opens a governed handover. Refusing moves the request to Admin review.</p>
       </div>
     {% endfor %}
   </section>
@@ -169,10 +212,14 @@
         <span class="status">{{ PROJECT_CLAIM_STATUS_LABELS.get(claim.status, claim.status) }}</span>
         <div class="muted">Request #{{ claim.id }}</div>
         {% if claim.status in ['OPEN', 'VENDOR_NOTIFIED', 'PENDING_ADMIN_REVIEW', 'APPROVED_BY_VENDOR'] %}
-        <form method="POST" action="{{ url_for('cancel_ownership_claim_route', claim_id=claim.id) }}">
+        <div class="actions">
+        <form method="POST" action="{{ url_for('cancel_ownership_claim_route', claim_id=claim.id) }}" onsubmit="return confirm('Withdraw this ownership review request?');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button type="submit" class="secondary">Withdraw request</button>
+          <button type="submit" class="danger">Withdraw request</button>
         </form>
+        </div>
+        {% elif claim.status == 'TRANSFER_COMPLETED' %}
+        <p class="muted">The linked handover completed. Ownership is now transferred.</p>
         {% endif %}
       </div>
     {% endfor %}
