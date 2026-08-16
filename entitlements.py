@@ -1,0 +1,293 @@
+"""Central effective-entitlement resolver (V1.1 Wave 2).
+
+ONE authoritative answer to "what is this account currently allowed to do".
+Every new commercial check routes through get_effective_entitlements(); nothing
+re-derives plan math locally.
+
+Two things this module deliberately keeps apart, because conflating them was
+called out as a correctness risk:
+
+  * ENTITLEMENT - what the ACCOUNT may currently do (this module).
+  * SERVICE COVERAGE - whether a PROJECT's public availability is still paid
+    for (ProjectServiceCoverage / apply_standalone_project_renewal in app.py).
+
+Wave 2 scope note: `base_storage_bytes` here is an ENTITLEMENT number only.
+There is no usage accounting against it - no MediaObject, no storage_bytes_used,
+no filesystem billing scan. That is Wave 3. The resolver already exposes
+`purchased_storage_bytes` / `effective_storage_bytes` so Wave 3 can start
+summing a ledger into them without a breaking shape change.
+"""
+import os
+
+from sqlalchemy.sql import func
+
+from models import (
+    PLAN_FAMILY_INDIVIDUAL,
+    PLAN_STATUS_ACTIVE,
+    EntitlementTransaction,
+    db,
+)
+
+# ---------------------------------------------------------------------------
+# IMMUTABLE SERVER SAFETY CEILINGS.
+#
+# These are the hard limits the server will enforce no matter what any plan
+# says. They are configuration/deployment values, NOT admin-editable plan
+# fields - an admin must never be able to raise a plan above them. The
+# effective per-file limit is always min(plan policy, ceiling).
+#
+# These moved here from app.py so the resolver and the upload paths share one
+# definition instead of two drifting copies; app.py imports them back.
+# ---------------------------------------------------------------------------
+MAX_IMAGE_SIZE = int(os.environ.get("MAX_IMAGE_UPLOAD_BYTES", 50 * 1024 * 1024))
+MAX_VIDEO_SIZE = int(os.environ.get("MAX_VIDEO_UPLOAD_BYTES", 1 * 1024 * 1024 * 1024))
+MAX_IMAGE_DIMENSION_PX = int(os.environ.get("MAX_IMAGE_DIMENSION_PX", 8000))
+MAX_IMAGE_PIXELS = int(os.environ.get("MAX_IMAGE_PIXELS", 40_000_000))
+# Optional; unset/0 disables the duration check entirely.
+MAX_VIDEO_DURATION_SECONDS = int(os.environ.get("MAX_VIDEO_DURATION_SECONDS", "0") or "0") or None
+# Hard ceiling on pairs any plan may configure.
+MAX_PAIRS_PER_PROJECT_CEILING = int(os.environ.get("MAX_PAIRS_PER_PROJECT_CEILING", "10") or "10")
+
+# Ledger source_type values, split by who paid for the entitlement. Purchased
+# and admin-granted entitlement must stay distinguishable and neither may
+# silently overwrite the other.
+ADMIN_GRANT_SOURCE_TYPE = "admin_grant"
+PURCHASE_SOURCE_TYPES = ("addon_purchase", "refund")
+
+# Playback mode -> the SubscriptionPlan column that entitles it.
+PLAYBACK_MODE_ENTITLEMENT_FIELDS = {
+    "direct": "allow_direct_qr",
+    "detect_once": "allow_detect_once",
+    "tracked_overlay": "allow_tracked_overlay",
+}
+
+
+def cap(plan_value, ceiling):
+    """Effective limit = min(plan policy, hard server ceiling).
+
+    None on either side means "that side imposes no limit". Both None -> None
+    (no check at all), which is how the pre-Wave-2 duration check behaved.
+    """
+    values = [v for v in (plan_value, ceiling) if v not in (None, 0)]
+    if not values:
+        return None
+    return min(int(v) for v in values)
+
+
+def _ledger_sum(user_id, entitlement_type, source_types=None, exclude_source_types=None):
+    q = db.session.query(
+        func.coalesce(func.sum(EntitlementTransaction.delta_value), 0)
+    ).filter(
+        EntitlementTransaction.user_id == user_id,
+        EntitlementTransaction.entitlement_type == entitlement_type,
+    )
+    if source_types is not None:
+        q = q.filter(EntitlementTransaction.source_type.in_(tuple(source_types)))
+    if exclude_source_types is not None:
+        q = q.filter(~EntitlementTransaction.source_type.in_(tuple(exclude_source_types)))
+    return int(q.scalar() or 0)
+
+
+def ledger_breakdown(user, entitlement_type):
+    """Purchased vs admin-granted split of one ledger dimension.
+
+    `total` is every row, which is what the materialized User.subscribed_*
+    columns are reconciled against - so the split is reporting, never a second
+    source of truth that could drift from enforcement.
+    """
+    if not user:
+        return {"purchased": 0, "admin_granted": 0, "total": 0}
+    uid = user.id
+    admin_granted = _ledger_sum(uid, entitlement_type, source_types=(ADMIN_GRANT_SOURCE_TYPE,))
+    total = _ledger_sum(uid, entitlement_type)
+    return {
+        "purchased": total - admin_granted,
+        "admin_granted": admin_granted,
+        "total": total,
+    }
+
+
+def allowed_playback_modes(plan):
+    """The playback modes this plan may CREATE or CHANGE INTO.
+
+    No plan (trial/lapsed) keeps today's behaviour: everything allowed. This
+    never revokes a mode an existing project already has - grandfathering is
+    handled by only consulting this on create/change paths.
+    """
+    if plan is None:
+        return set(PLAYBACK_MODE_ENTITLEMENT_FIELDS)
+    return {
+        mode
+        for mode, field in PLAYBACK_MODE_ENTITLEMENT_FIELDS.items()
+        if bool(getattr(plan, field, True))
+    }
+
+
+def plan_pairs_limit(plan):
+    """Plan pairs-per-project, already capped by the server ceiling.
+
+    None = unlimited (matching get_plan_pairs_limit's pre-existing contract,
+    where a NULL/0 plan value meant "not configured").
+    """
+    raw = getattr(plan, "max_pairs_per_project", None) if plan else None
+    try:
+        raw = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        raw = None
+    if raw is not None and raw <= 0:
+        raw = None
+    if raw is None:
+        return None
+    return cap(raw, MAX_PAIRS_PER_PROJECT_CEILING)
+
+
+def get_effective_entitlements(user, unlimited_override=False):
+    """The one coherent effective view of an account's commercial allowances.
+
+    `unlimited_override` is how callers pass the dev-test entitlement in
+    without this module having to import app.py (circular).
+    """
+    plan = getattr(user, "subscription_plan", None) if user else None
+
+    projects = ledger_breakdown(user, "PROJECT_CAPACITY")
+    scans = ledger_breakdown(user, "EXTRA_SCANS")
+
+    # SOURCE OF TRUTH for enforcement stays the materialized User columns -
+    # they are what the atomic reservation UPDATEs compare against. The plan +
+    # ledger numbers below are the audit view of how they were composed.
+    if unlimited_override:
+        effective_projects = None
+        effective_scans = None
+    else:
+        raw_projects = getattr(user, "subscribed_project_limit", None) if user else None
+        raw_scans = getattr(user, "subscribed_scan_limit", None) if user else None
+        effective_projects = None if raw_projects in (None, 0) else int(raw_projects)
+        effective_scans = None if raw_scans in (None, 0) else int(raw_scans)
+
+    projects_used = int(getattr(user, "projects_used", 0) or 0) if user else 0
+    scans_used = int(getattr(user, "scans_used", 0) or 0) if user else 0
+
+    if unlimited_override:
+        modes = set(PLAYBACK_MODE_ENTITLEMENT_FIELDS)
+        pairs = None
+    else:
+        modes = allowed_playback_modes(plan)
+        pairs = plan_pairs_limit(plan)
+
+    base_storage = getattr(plan, "base_storage_bytes", None) if plan else None
+    # Wave 3 will sum a purchased-storage ledger here. Kept in the contract now
+    # so adding it later is additive, not a breaking shape change.
+    purchased_storage = 0
+
+    return {
+        # --- plan identity / lifecycle ---
+        "plan_id": getattr(plan, "id", None),
+        "plan_name": getattr(plan, "plan_name", None),
+        "plan_family": getattr(plan, "plan_family", None) or PLAN_FAMILY_INDIVIDUAL,
+        "plan_revision": int(getattr(plan, "plan_revision", 1) or 1),
+        "plan_lifecycle_status": getattr(plan, "lifecycle_status", None) or PLAN_STATUS_ACTIVE,
+        "plan_is_purchasable": bool(getattr(plan, "is_purchasable", False)) if plan else False,
+
+        # --- project capacity ---
+        "base_project_limit": getattr(plan, "total_project_limit", None) if plan else None,
+        "purchased_project_capacity": projects["purchased"],
+        "admin_granted_project_capacity": projects["admin_granted"],
+        "effective_project_limit": effective_projects,
+        "projects_used": projects_used,
+        "projects_remaining": None if effective_projects is None else max(0, effective_projects - projects_used),
+        "over_project_capacity": False if effective_projects is None else projects_used > effective_projects,
+
+        # --- scans ---
+        "base_scan_limit": getattr(plan, "total_scan_limit", None) if plan else None,
+        "purchased_scan_capacity": scans["purchased"],
+        "admin_granted_scan_capacity": scans["admin_granted"],
+        "effective_scan_limit": effective_scans,
+        "scans_used": scans_used,
+        "scans_remaining": None if effective_scans is None else max(0, effective_scans - scans_used),
+
+        # --- pairs (server ceiling already applied) ---
+        "max_pairs_per_project": pairs,
+
+        # --- storage ENTITLEMENT only (Wave 3 does usage accounting) ---
+        "base_storage_bytes": base_storage,
+        "purchased_storage_bytes": purchased_storage,
+        "effective_storage_bytes": None if base_storage is None else int(base_storage) + purchased_storage,
+        "storage_usage_tracked": False,
+
+        # --- experience entitlements ---
+        "allow_direct_qr": "direct" in modes,
+        "allow_detect_once": "detect_once" in modes,
+        "allow_tracked_overlay": "tracked_overlay" in modes,
+        "allowed_playback_modes": modes,
+
+        # --- per-file media policy, hard ceiling already applied ---
+        "image_policy": {
+            "max_bytes": cap(getattr(plan, "max_image_bytes", None) if plan else None, MAX_IMAGE_SIZE),
+            "max_dimension_px": cap(getattr(plan, "max_image_dimension_px", None) if plan else None, MAX_IMAGE_DIMENSION_PX),
+            "max_pixels": cap(getattr(plan, "max_image_pixels", None) if plan else None, MAX_IMAGE_PIXELS),
+        },
+        "video_policy": {
+            "max_bytes": cap(getattr(plan, "max_video_bytes", None) if plan else None, MAX_VIDEO_SIZE),
+            "max_duration_seconds": cap(
+                getattr(plan, "max_video_duration_seconds", None) if plan else None,
+                MAX_VIDEO_DURATION_SECONDS,
+            ),
+        },
+
+        # --- account / term state ---
+        "subscription_status": getattr(user, "subscription_status", None) if user else None,
+        "subscription_expires_at": getattr(user, "subscription_expires_at", None) if user else None,
+        "has_active_subscription": bool(user.has_active_subscription()) if user else False,
+        "pending_plan_id": getattr(user, "pending_plan_id", None) if user else None,
+        "pending_plan_effective_at": getattr(user, "pending_plan_effective_at", None) if user else None,
+
+        "unlimited": bool(unlimited_override),
+    }
+
+
+def image_limits(entitlements):
+    """(max_bytes, max_dimension_px, max_pixels) in validate_image()'s order."""
+    p = entitlements["image_policy"]
+    return p["max_bytes"], p["max_dimension_px"], p["max_pixels"]
+
+
+def video_limits(entitlements):
+    """(max_bytes, max_duration_seconds) in validate_video()'s order."""
+    p = entitlements["video_policy"]
+    return p["max_bytes"], p["max_duration_seconds"]
+
+
+def is_downgrade(current_plan, new_plan):
+    """Does new_plan represent a strictly LOWER commercial policy?
+
+    Used to decide whether a confirmed paid plan change applies immediately
+    (upgrade / like-for-like) or is deferred to the next term boundary
+    (downgrade). None/0 on a numeric limit means unlimited, i.e. the highest
+    possible value - so moving from unlimited to a finite number is a
+    downgrade, and the reverse is not.
+    """
+    if current_plan is None or new_plan is None or current_plan.id == new_plan.id:
+        return False
+
+    def _rank(value):
+        # None/0 == unlimited == infinitely high.
+        return float("inf") if value in (None, 0) else int(value)
+
+    for field in ("total_project_limit", "total_scan_limit", "max_pairs_per_project"):
+        if _rank(getattr(new_plan, field, None)) < _rank(getattr(current_plan, field, None)):
+            return True
+
+    # Losing ANY experience entitlement is a downgrade (set difference, not a
+    # strict-subset test - swapping one premium mode for another still removes
+    # something the account currently has).
+    if allowed_playback_modes(current_plan) - allowed_playback_modes(new_plan):
+        return True
+
+    # Storage: None means "unspecified", which is not a claim of unlimited
+    # storage - only compare when BOTH sides state a number.
+    old_storage = getattr(current_plan, "base_storage_bytes", None)
+    new_storage = getattr(new_plan, "base_storage_bytes", None)
+    if old_storage is not None and new_storage is not None and int(new_storage) < int(old_storage):
+        return True
+
+    return False
