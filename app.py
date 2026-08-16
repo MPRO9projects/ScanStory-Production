@@ -1661,7 +1661,7 @@ ACCOUNT_TYPE_LABELS = {
 }
 PROJECT_TRANSFER_STATUS_LABELS = {
     "PENDING_ACCEPTANCE": "Waiting for recipient",
-    "PENDING_CAPACITY": "Recipient needs an available project slot",
+    "PENDING_CAPACITY": "Recipient needs project/storage capacity",
     "COMPLETED": "Ownership transferred",
     "CANCELLED": "Transfer cancelled",
     "EXPIRED": "Transfer expired",
@@ -1804,6 +1804,8 @@ def project_ownership_context(project, viewer):
     """
     if not project:
         return None
+    creator_id = project_created_by_user_id(project)
+    creator = User.query.get(creator_id) if creator_id else None
     owner_id = project_current_owner_user_id(project)
     owner = User.query.get(owner_id) if owner_id else None
     manager = User.query.get(project.manager_vendor_user_id) if project.manager_vendor_user_id else None
@@ -1821,9 +1823,11 @@ def project_ownership_context(project, viewer):
     )
     viewer_id = getattr(viewer, "id", None)
     return {
+        "creator": creator,
         "owner": owner,
         "manager": manager,
         "beneficiary": beneficiary,
+        "viewer_is_creator": bool(viewer_id and creator and creator.id == viewer_id),
         "viewer_is_owner": bool(viewer_id and owner and owner.id == viewer_id),
         "viewer_is_manager": bool(viewer_id and manager and manager.id == viewer_id),
         "transfer": transfer,
@@ -13828,6 +13832,8 @@ def admin_view_project(project_id):
                          total_scans=total_scans,
                          successful_scans=successful_scans,
                          failed_scans=failed_scans,
+                         ownership=project_ownership_context(project, None),
+                         coverage=project_coverage_summary(project),
                          safe_qr_filename=_safe_display_filename(project.qr_code_filename or project.qr_code_path),
                          qr_ready=bool(project.qr_code_path or project.qr_code_filename))
 

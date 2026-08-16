@@ -670,3 +670,166 @@ def test_admin_user_page_exposes_storage_grant_without_path_or_secret_leak(
     assert "Existing projects, media and QR codes remain available" in body
     assert "F:\\\\" not in body
     assert "SECRET_KEY" not in body
+
+
+# ---------------------------------------------------------------------------
+# V1.1 Wave 4: vendor / ownership / transfer / claim presentation foundation
+# ---------------------------------------------------------------------------
+
+def _user(app_module, db_session, email, first_name, account_type=None):
+    user = app_module.User(
+        email=email,
+        first_name=first_name,
+        last_name="User",
+        password_hash="test-only",
+        is_verified=True,
+        subscription_status="trial",
+        account_type=account_type or app_module.ACCOUNT_TYPE_INDIVIDUAL,
+        subscribed_project_limit=10,
+        subscribed_scan_limit=100,
+    )
+    db_session.add(user)
+    db_session.commit()
+    return user
+
+
+def test_self_project_preview_keeps_ownership_panel_simple(
+    client, login_user, project_with_pair
+):
+    project, _pair = project_with_pair
+    response = client.get(f"/project/{project.id}/preview")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert "Current owner" in body
+    assert "Creator" not in body
+    assert "Managing Vendor" not in body
+    assert "Customer" not in body
+
+
+def test_vendor_managed_project_preview_distinguishes_creator_owner_manager_and_customer(
+    client, login_user, app_module, db_session, project_with_pair
+):
+    owner = login_user
+    project, _pair = project_with_pair
+    vendor = _user(app_module, db_session, "vendor@example.com", "Vendor", app_module.ACCOUNT_TYPE_BUSINESS_VENDOR)
+    customer = _user(app_module, db_session, "customer@example.com", "Customer")
+    project.created_by_user_id = vendor.id
+    project.current_owner_user_id = owner.id
+    project.manager_vendor_user_id = vendor.id
+    project.beneficiary_user_id = customer.id
+    db_session.commit()
+
+    response = client.get(f"/project/{project.id}/preview")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert "Creator" in body
+    assert "Vendor User" in body
+    assert "Current owner" in body
+    assert "Managed by" in body
+    assert "Customer" in body
+    assert "Customer User" in body
+    assert "you now own this project" not in body.lower()
+
+
+def test_pending_capacity_transfer_copy_is_non_destructive_and_capacity_truthful(
+    client, login_user, app_module, db_session, project_with_pair
+):
+    project, _pair = project_with_pair
+    recipient = _user(app_module, db_session, "recipient@example.com", "Recipient")
+    project.current_owner_user_id = login_user.id
+    transfer = app_module.ProjectOwnershipTransfer(
+        project_id=project.id,
+        initiated_by_user_id=login_user.id,
+        from_owner_user_id=login_user.id,
+        to_user_id=recipient.id,
+        status="PENDING_CAPACITY",
+    )
+    db_session.add(transfer)
+    db_session.commit()
+
+    response = client.get(f"/project/{project.id}/preview")
+    assert response.status_code == 200
+    body = response.data.decode()
+    normalized = " ".join(body.split())
+
+    assert "Recipient needs project/storage capacity" in body
+    assert "project" in body.lower()
+    assert "storage capacity" in body.lower()
+    assert "Ownership has not changed" in body
+    assert "media and QR code remain intact" in body
+    assert "the current owner stays authoritative" in normalized
+    assert "deleted" not in body.lower()
+
+
+def test_claim_presentation_does_not_imply_ownership_changed(
+    client, login_user, app_module, db_session, project_with_pair
+):
+    project, _pair = project_with_pair
+    claimant = _user(app_module, db_session, "claimant@example.com", "Claimant")
+    project.current_owner_user_id = login_user.id
+    claim = app_module.ProjectOwnershipClaim(
+        project_id=project.id,
+        claimant_user_id=claimant.id,
+        current_owner_user_id=login_user.id,
+        status="APPROVED_BY_ADMIN",
+        evidence_summary="Customer says this is theirs",
+    )
+    db_session.add(claim)
+    db_session.commit()
+
+    response = client.get(f"/project/{project.id}/preview")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert "Ownership review requests" in body
+    assert "Approved - ownership handover started" in body
+    assert "Submitting one never moves a ScanStory on its own" in body
+    assert "you now own this project" not in body.lower()
+
+
+def test_admin_project_view_shows_read_only_ownership_transfer_claim_context(
+    client, login_admin, app_module, db_session, normal_user, project_with_pair
+):
+    project, _pair = project_with_pair
+    vendor = _user(app_module, db_session, "admin-vendor@example.com", "Admin Vendor", app_module.ACCOUNT_TYPE_BUSINESS_VENDOR)
+    customer = _user(app_module, db_session, "admin-customer@example.com", "Admin Customer")
+    recipient = _user(app_module, db_session, "admin-recipient@example.com", "Admin Recipient")
+    project.created_by_user_id = vendor.id
+    project.current_owner_user_id = normal_user.id
+    project.manager_vendor_user_id = vendor.id
+    project.beneficiary_user_id = customer.id
+    transfer = app_module.ProjectOwnershipTransfer(
+        project_id=project.id,
+        initiated_by_user_id=normal_user.id,
+        from_owner_user_id=normal_user.id,
+        to_user_id=recipient.id,
+        retain_vendor_management=True,
+        status="PENDING_CAPACITY",
+    )
+    claim = app_module.ProjectOwnershipClaim(
+        project_id=project.id,
+        claimant_user_id=recipient.id,
+        current_owner_user_id=normal_user.id,
+        status="PENDING_ADMIN_REVIEW",
+    )
+    db_session.add_all([transfer, claim])
+    db_session.commit()
+
+    response = client.get(f"/admin/projects/{project.id}")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert 'data-testid="admin-ownership-context"' in body
+    assert "Creator" in body
+    assert "Current Owner" in body
+    assert "Managing Vendor" in body
+    assert "Customer / Beneficiary" in body
+    assert "PENDING CAPACITY" in body
+    assert "project and/or storage capacity" in body
+    assert "Claims do not transfer ownership by themselves" in body
+    assert "Coverage/service state is separate from ownership state" in body
+    assert "No fake ownership-change controls are shown" in body
+    assert "F:\\\\" not in body
+    assert "SECRET_KEY" not in body

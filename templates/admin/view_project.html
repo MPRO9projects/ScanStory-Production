@@ -638,6 +638,65 @@
             </div>
         </div>
 
+        {% if ownership %}
+        <div class="card" data-testid="admin-ownership-context">
+            <h3 style="margin-bottom: 20px;">Ownership, Transfer and Claim Context</h3>
+            <div class="info-grid">
+                <div class="info-section">
+                    <h3>People</h3>
+                    <div class="info-row"><span class="info-label">Creator</span><span class="info-value">{% if ownership.creator %}{{ ownership.creator.full_name or ownership.creator.email }}{% else %}Not recorded{% endif %}</span></div>
+                    <div class="info-row"><span class="info-label">Current Owner</span><span class="info-value">{% if ownership.owner %}{{ ownership.owner.full_name or ownership.owner.email }}{% else %}Not assigned{% endif %}</span></div>
+                    <div class="info-row"><span class="info-label">Managing Vendor</span><span class="info-value">{% if ownership.manager %}{{ ownership.manager.full_name or ownership.manager.email }}{% else %}None{% endif %}</span></div>
+                    <div class="info-row"><span class="info-label">Customer / Beneficiary</span><span class="info-value">{% if ownership.beneficiary %}{{ ownership.beneficiary.full_name or ownership.beneficiary.email }}{% else %}None{% endif %}</span></div>
+                </div>
+                <div class="info-section">
+                    <h3>Transfer State</h3>
+                    {% if ownership.transfer %}
+                    <div class="info-row"><span class="info-label">Status</span><span class="info-value">{{ PROJECT_TRANSFER_STATUS_LABELS.get(ownership.transfer.status, ownership.transfer.status) }}</span></div>
+                    <div class="info-row"><span class="info-label">Recipient</span><span class="info-value">{% if ownership.transfer_recipient %}{{ ownership.transfer_recipient.full_name or ownership.transfer_recipient.email }}{% else %}-{% endif %}</span></div>
+                    <div class="info-row"><span class="info-label">Vendor management retained</span><span class="info-value">{{ 'Yes' if ownership.transfer.retain_vendor_management else 'No' }}</span></div>
+                    {% if ownership.transfer.status == 'PENDING_CAPACITY' %}
+                    <p style="color: rgba(255,255,255,0.7); margin-top: 10px;">
+                        PENDING CAPACITY: ownership has not changed. Project media and QR code remain intact, the current owner remains authoritative, and completion waits for backend-confirmed project and/or storage capacity.
+                    </p>
+                    {% endif %}
+                    {% else %}
+                    <div class="info-row"><span class="info-label">Status</span><span class="info-value">No transfer recorded</span></div>
+                    {% endif %}
+                </div>
+                <div class="info-section">
+                    <h3>Claims and Coverage</h3>
+                    <div class="info-row"><span class="info-label">Recent Claims</span><span class="info-value">{{ ownership.claims|length }}</span></div>
+                    <div class="info-row"><span class="info-label">Coverage State</span><span class="info-value">{% if coverage and coverage.is_suspended %}Suspended{% elif coverage and coverage.is_live %}Live{% else %}Not live{% endif %}</span></div>
+                    <p style="color: rgba(255,255,255,0.7); margin-top: 10px;">
+                        Claims do not transfer ownership by themselves. Coverage/service state is separate from ownership state.
+                    </p>
+                </div>
+            </div>
+            {% if ownership.claims %}
+            <div class="table-container" style="margin-top: 20px;">
+                <table class="table">
+                    <thead><tr><th>Claim ID</th><th>Claimant</th><th>Status</th><th>Created</th><th>Decision</th></tr></thead>
+                    <tbody>
+                        {% for claim in ownership.claims %}
+                        <tr>
+                            <td>{{ claim.id }}</td>
+                            <td>{{ claim.claimant_user.full_name or claim.claimant_user.email if claim.claimant_user else '-' }}</td>
+                            <td>{{ PROJECT_CLAIM_STATUS_LABELS.get(claim.status, claim.status) }}</td>
+                            <td>{{ claim.created_at.strftime('%d %b %Y, %I:%M %p') if claim.created_at else '-' }}</td>
+                            <td>{{ claim.decision_reason or '-' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+            <p style="color: rgba(255,255,255,0.6); margin-top: 15px;">
+                This page is read-only for transfers and claims until backend action routes are available. No fake ownership-change controls are shown.
+            </p>
+        </div>
+        {% endif %}
+
         <div class="card">
             <h3 style="margin-bottom: 20px;">Scan Activity</h3>
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
