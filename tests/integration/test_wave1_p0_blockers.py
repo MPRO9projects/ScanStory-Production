@@ -227,7 +227,9 @@ def test_p0_2_invalid_addon_type_is_still_rejected(app_module, db_session):
         app_module.AddonCatalog(
             code="bogus",
             name="bogus",
-            addon_type="ACCOUNT_STORAGE",  # not in ADDON_TYPES this wave
+            # ACCOUNT_STORAGE became a real type in Wave 3, so this needs a
+            # genuinely unsupported value to keep testing what it means to.
+            addon_type="TELEPORTATION_CREDITS",
             unit_amount=1.0,
         )
 
