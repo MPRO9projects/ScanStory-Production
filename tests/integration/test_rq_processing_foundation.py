@@ -237,7 +237,11 @@ def test_ready_fake_and_inline_modes_do_not_require_redis(client, app_module, mo
     response = client.get("/ready")
 
     assert response.status_code == 200
-    assert response.get_json() == {"status": "ready", "checks": {"database": "ok"}}
+    # Wave 1 P0-6: readiness now names the queue mode instead of staying silent
+    # about it. In a non-production runtime fake/inline are still "ready" and
+    # still skip the Redis probe; the difference is that the degraded mode is
+    # now visible in the payload rather than indistinguishable from a real queue.
+    assert response.get_json() == {"status": "ready", "checks": {"database": "ok", "queue": mode}}
 
 
 def test_healthz_remains_live_when_rq_redis_unavailable(client, app_module, monkeypatch):
