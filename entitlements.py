@@ -11,16 +11,18 @@ called out as a correctness risk:
   * SERVICE COVERAGE - whether a PROJECT's public availability is still paid
     for (ProjectServiceCoverage / apply_standalone_project_renewal in app.py).
 
-Wave 2 scope note: `base_storage_bytes` here is an ENTITLEMENT number only.
-There is no usage accounting against it - no MediaObject, no storage_bytes_used,
-no filesystem billing scan. That is Wave 3. The resolver already exposes
-`purchased_storage_bytes` / `effective_storage_bytes` so Wave 3 can start
-summing a ledger into them without a breaking shape change.
+Wave 3 update: storage usage is now REAL. `storage_usage_tracked` is True, and
+`storage_used_bytes` / `storage_remaining_bytes` / `over_storage` are backed by
+the media_objects ledger via storage_accounting.py. Effective storage is the sum
+of three separately auditable sources - plan base + purchased ACCOUNT_STORAGE
+add-ons + admin grants - and is independent of project capacity, scan allowance,
+pair limits, service coverage and experience entitlement.
 """
 import os
 
 from sqlalchemy.sql import func
 
+import storage_accounting
 from models import (
     PLAN_FAMILY_INDIVIDUAL,
     PLAN_STATUS_ACTIVE,
@@ -174,10 +176,23 @@ def get_effective_entitlements(user, unlimited_override=False):
         modes = allowed_playback_modes(plan)
         pairs = plan_pairs_limit(plan)
 
+    # --- storage: three separate, auditable sources -----------------------
+    # base (plan) + purchased (ACCOUNT_STORAGE add-ons) + admin grants. None
+    # base means "this plan states no storage allowance", which is NOT a claim
+    # of unlimited storage but is treated as unenforced - the same reading
+    # is_downgrade() already applies. Purchased/granted bytes on top of an
+    # unstated base therefore also leave the account unenforced; a plan must
+    # state a base before storage can be metered.
     base_storage = getattr(plan, "base_storage_bytes", None) if plan else None
-    # Wave 3 will sum a purchased-storage ledger here. Kept in the contract now
-    # so adding it later is additive, not a breaking shape change.
-    purchased_storage = 0
+    storage = ledger_breakdown(user, "ACCOUNT_STORAGE")
+    purchased_storage = storage["purchased"]
+    granted_storage = storage["admin_granted"]
+    if unlimited_override or base_storage is None:
+        effective_storage = None
+    else:
+        effective_storage = max(0, int(base_storage) + purchased_storage + granted_storage)
+    storage_used = storage_accounting.stored_storage_used_bytes(user)
+    over_storage = effective_storage is not None and storage_used > effective_storage
 
     return {
         # --- plan identity / lifecycle ---
@@ -208,11 +223,18 @@ def get_effective_entitlements(user, unlimited_override=False):
         # --- pairs (server ceiling already applied) ---
         "max_pairs_per_project": pairs,
 
-        # --- storage ENTITLEMENT only (Wave 3 does usage accounting) ---
+        # --- storage entitlement AND usage (Wave 3) ---
         "base_storage_bytes": base_storage,
         "purchased_storage_bytes": purchased_storage,
-        "effective_storage_bytes": None if base_storage is None else int(base_storage) + purchased_storage,
-        "storage_usage_tracked": False,
+        "admin_granted_storage_bytes": granted_storage,
+        "effective_storage_bytes": effective_storage,
+        "storage_used_bytes": storage_used,
+        "storage_remaining_bytes": None if effective_storage is None else max(0, effective_storage - storage_used),
+        # Flipped True in Wave 3: the UI's "entitlement only, not tracked yet"
+        # disclaimer is now obsolete and these numbers are real.
+        "storage_usage_tracked": True,
+        "over_storage": over_storage,
+        "storage_overage_bytes": max(0, storage_used - effective_storage) if effective_storage is not None else 0,
 
         # --- experience entitlements ---
         "allow_direct_qr": "direct" in modes,
