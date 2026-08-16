@@ -572,12 +572,46 @@
                     <p class="ss-domain-note" style="margin-top:1rem;">
                         Per-file limits on your plan: image up to {{ entitlement_summary.max_image_display }},
                         video up to {{ entitlement_summary.max_video_display }}.
-                        Storage allowance:
-                        {% if entitlement_summary.base_storage_display %}{{ entitlement_summary.base_storage_display }}{% else %}not specified on your plan{% endif %}.
-                        {% if not entitlement_summary.storage_usage_tracked %}
-                        Storage usage is not measured yet, so no used/available figure is shown against this allowance.
-                        {% endif %}
                     </p>
+                    <ul class="ss-slots mt-4" data-testid="storage-entitlement-summary" role="list">
+                        <li>
+                            <span class="ss-slots-value" data-storage="base_storage_display">{{ entitlement_summary.base_storage_display if entitlement_summary.base_storage_display else "Not specified" }}</span>
+                            <span class="ss-slots-label">Base storage</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value" data-storage="purchased_storage_display">{{ entitlement_summary.purchased_storage_display }}</span>
+                            <span class="ss-slots-label">Purchased storage</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value" data-storage="admin_granted_storage_display">{{ entitlement_summary.admin_granted_storage_display }}</span>
+                            <span class="ss-slots-label">Admin grant</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value" data-storage="effective_storage_display">{{ entitlement_summary.effective_storage_display if entitlement_summary.effective_storage_display else "Not specified" }}</span>
+                            <span class="ss-slots-label">Effective total</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value" data-storage="storage_used_display">{{ entitlement_summary.storage_used_display }}</span>
+                            <span class="ss-slots-label">Used</span>
+                        </li>
+                        <li>
+                            <span class="ss-slots-value" data-storage="storage_remaining_display">{{ entitlement_summary.storage_remaining_display if entitlement_summary.storage_remaining_display else "Not specified" }}</span>
+                            <span class="ss-slots-label">Remaining</span>
+                        </li>
+                    </ul>
+                    {% if entitlement_summary.over_storage %}
+                    <p class="ss-domain-note" style="margin-top:1rem;" data-testid="storage-overage-copy">
+                        Your account is over storage by <strong data-storage="storage_overage_display">{{ entitlement_summary.storage_overage_display }}</strong>.
+                        Existing projects, media and QR codes remain available. New uploads that consume more storage are blocked until you delete or reduce media, buy storage if available, or upgrade.
+                        Smaller replacements may be allowed when they reduce the total stored bytes.
+                    </p>
+                    {% endif %}
+                    <div class="mt-4" id="storageSection" data-testid="account-storage-addons">
+                        <div class="ss-addon-list" data-ss-addon-list role="list">
+                            <p class="ss-addon-note">Loading storage options&hellip;</p>
+                        </div>
+                        <p class="ss-addon-status" data-ss-addon-status role="status" aria-live="polite" hidden></p>
+                    </div>
                     {% if entitlement_summary.pending_plan_name %}
                     <p class="ss-domain-note" style="margin-top:1rem;">
                         A plan change to <strong>{{ entitlement_summary.pending_plan_name }}</strong> is scheduled for your next
@@ -919,7 +953,7 @@
         setViewportHeight();
     </script>
 
-    {% if not capacity.unlimited %}
+    {% if entitlement_summary %}
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
     <script src="{{ url_for('static', filename='js/ss-addons.js') }}"></script>
     <script>
@@ -927,23 +961,41 @@
       // all (the server rejects one with PROJECT_TARGET_INVALID).
       (function () {
         const section = document.getElementById('capacitySection');
-        if (!section || !window.SSAddons) return;
-        SSAddons.mount({
-          root: section,
-          addonType: 'PROJECT_CAPACITY',
-          csrfToken: "{{ csrf_token() }}",
-          summaryUrl: "{{ url_for('account_capacity_summary') }}",
-          onSummary: function (payload) {
-            // Re-read from /api/account/capacity rather than trusting the
-            // checkout callback: the ledger is the only thing that decides
-            // how many slots exist.
-            const capacity = payload.capacity || {};
-            section.querySelectorAll('[data-capacity]').forEach(function (node) {
-              const value = capacity[node.dataset.capacity];
-              if (value !== undefined && value !== null) node.textContent = value;
-            });
-          }
-        });
+        if (!window.SSAddons) return;
+        if (section) {
+          SSAddons.mount({
+            root: section,
+            addonType: 'PROJECT_CAPACITY',
+            csrfToken: "{{ csrf_token() }}",
+            summaryUrl: "{{ url_for('account_capacity_summary') }}",
+            onSummary: function (payload) {
+              // Re-read from /api/account/capacity rather than trusting the
+              // checkout callback: the ledger is the only thing that decides
+              // how many slots exist.
+              const capacity = payload.capacity || {};
+              section.querySelectorAll('[data-capacity]').forEach(function (node) {
+                const value = capacity[node.dataset.capacity];
+                if (value !== undefined && value !== null) node.textContent = value;
+              });
+            }
+          });
+        }
+        const storageSection = document.getElementById('storageSection');
+        if (storageSection) {
+          SSAddons.mount({
+            root: storageSection,
+            addonType: 'ACCOUNT_STORAGE',
+            csrfToken: "{{ csrf_token() }}",
+            summaryUrl: "{{ url_for('account_capacity_summary') }}",
+            onSummary: function (payload) {
+              const summary = payload.entitlement_summary || {};
+              storageSection.closest('[data-testid="effective-entitlement-summary"]').querySelectorAll('[data-storage]').forEach(function (node) {
+                const value = summary[node.dataset.storage];
+                if (value !== undefined && value !== null) node.textContent = value;
+              });
+            }
+          });
+        }
       })();
     </script>
     {% endif %}

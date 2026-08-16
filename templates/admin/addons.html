@@ -86,7 +86,7 @@
                             {% if item.scan_delta %}scans +{{ item.scan_delta }}<br>{% endif %}
                             {% if item.project_delta %}projects +{{ item.project_delta }}<br>{% endif %}
                             {% if item.validity_days_delta %}days +{{ item.validity_days_delta }}<br>{% endif %}
-                            {% if item.storage_bytes_delta %}storage +{{ item.storage_bytes_delta }} bytes{% endif %}
+                            {% if item.storage_bytes_delta %}storage +{{ format_bytes_display(item.storage_bytes_delta) }}{% endif %}
                         </td>
                         <td><span class="pill {{ 'on' if item.is_active else 'off' }}">{{ 'Yes' if item.is_active else 'No' }}</span></td>
                         <td><span class="pill {{ 'on' if item.is_commercially_available else 'off' }}">{{ 'Yes' if item.is_commercially_available else 'No' }}</span></td>

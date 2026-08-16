@@ -50,9 +50,11 @@
             {% endfor %}
         </div>
         <div class="mt-2 small">
-            <strong>Storage allowance:</strong>
-            {{ entitlement_summary.base_storage_display if entitlement_summary.base_storage_display else "Not specified" }}
-            {% if not entitlement_summary.storage_usage_tracked %}<span class="text-muted">— entitlement only, storage usage is not tracked yet</span>{% endif %}
+            <strong>Storage Used / Remaining:</strong>
+            used {{ entitlement_summary.storage_used_display }};
+            remaining {{ entitlement_summary.storage_remaining_display if entitlement_summary.storage_remaining_display else "Not specified" }};
+            total {{ entitlement_summary.effective_storage_display if entitlement_summary.effective_storage_display else "Not specified" }}
+            <span class="text-muted">(base {{ entitlement_summary.base_storage_display if entitlement_summary.base_storage_display else "Not specified" }} + purchased {{ entitlement_summary.purchased_storage_display }} + admin {{ entitlement_summary.admin_granted_storage_display }})</span>
         </div>
         {% if entitlement_summary.pending_plan_name %}
         <div class="alert alert-info mt-3 mb-0">
@@ -63,6 +65,11 @@
         {% if entitlement_summary.over_project_capacity or entitlement_summary.over_scan_capacity %}
         <div class="alert alert-warning mt-3 mb-0">
             Existing projects are retained. New creation or scanning may be restricted until usage is back within the effective allowance or the account is upgraded.
+        </div>
+        {% endif %}
+        {% if entitlement_summary.over_storage %}
+        <div class="alert alert-warning mt-3 mb-0" data-testid="storage-overage-copy">
+            Existing projects, media and QR codes remain available. New storage-consuming uploads are blocked until the user deletes or reduces media, purchases storage where available, or upgrades. Smaller replacements may be allowed when they reduce stored bytes.
         </div>
         {% endif %}
     </div>

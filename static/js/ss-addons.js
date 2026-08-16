@@ -32,6 +32,20 @@
     }
   }
 
+  function bytes(amount) {
+    const value = Number(amount || 0);
+    if (!Number.isFinite(value) || value <= 0) return '';
+    let size = value;
+    const units = ['bytes', 'KB', 'MB', 'GB', 'TB'];
+    for (let i = 0; i < units.length; i += 1) {
+      if (size < 1024 || i === units.length - 1) {
+        return (size % 1 === 0 ? String(size) : size.toFixed(1)) + ' ' + units[i];
+      }
+      size /= 1024;
+    }
+    return '';
+  }
+
   function el(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -65,7 +79,7 @@
    * config:
    *   root         container element (must contain [data-ss-addon-list] and
    *                [data-ss-addon-status])
-   *   addonType    'PROJECT_CAPACITY' | 'PROJECT_SERVICE_COVERAGE'
+   *   addonType    'PROJECT_CAPACITY' | 'PROJECT_SERVICE_COVERAGE' | 'ACCOUNT_STORAGE'
    *   projectId    required for project-targeted types, otherwise omitted
    *   csrfToken    value of {{ csrf_token() }}
    *   summaryUrl   authoritative state endpoint re-fetched after purchase
@@ -116,6 +130,9 @@
     card.appendChild(head);
 
     if (item.description) card.appendChild(el('p', 'ss-addon-item-desc', item.description));
+    if (config.addonType === 'ACCOUNT_STORAGE' && item.storage_bytes_delta) {
+      card.appendChild(el('p', 'ss-addon-item-desc', 'Adds ' + bytes(item.storage_bytes_delta) + ' account storage.'));
+    }
 
     const button = el('button', 'ss-addon-buy', 'Continue');
     button.type = 'button';
@@ -136,6 +153,10 @@
     if (item.description) lines.push(item.description);
     if (config.addonType === 'PROJECT_CAPACITY' && item.project_delta) {
       lines.push('Adds ' + item.project_delta + ' project slot(s) to your account.');
+    }
+    if (config.addonType === 'ACCOUNT_STORAGE' && item.storage_bytes_delta) {
+      lines.push('Adds ' + bytes(item.storage_bytes_delta) + ' account storage.');
+      lines.push('Existing projects and QR codes are not deleted when storage changes.');
     }
     if (config.addonType === 'PROJECT_SERVICE_COVERAGE') {
       if (item.validity_days_delta) lines.push('Extends coverage by ' + item.validity_days_delta + ' day(s).');
