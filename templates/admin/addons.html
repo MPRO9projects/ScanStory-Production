@@ -85,7 +85,8 @@
                         <td class="muted">
                             {% if item.scan_delta %}scans +{{ item.scan_delta }}<br>{% endif %}
                             {% if item.project_delta %}projects +{{ item.project_delta }}<br>{% endif %}
-                            {% if item.validity_days_delta %}days +{{ item.validity_days_delta }}{% endif %}
+                            {% if item.validity_days_delta %}days +{{ item.validity_days_delta }}<br>{% endif %}
+                            {% if item.storage_bytes_delta %}storage +{{ item.storage_bytes_delta }} bytes{% endif %}
                         </td>
                         <td><span class="pill {{ 'on' if item.is_active else 'off' }}">{{ 'Yes' if item.is_active else 'No' }}</span></td>
                         <td><span class="pill {{ 'on' if item.is_commercially_available else 'off' }}">{{ 'Yes' if item.is_commercially_available else 'No' }}</span></td>
@@ -123,6 +124,7 @@
                                         <div><label>Scan delta</label><input type="number" name="scan_delta" value="{{ item.scan_delta if item.scan_delta is not none else '' }}"></div>
                                         <div><label>Project delta</label><input type="number" name="project_delta" value="{{ item.project_delta if item.project_delta is not none else '' }}"></div>
                                         <div><label>Validity days delta</label><input type="number" name="validity_days_delta" value="{{ item.validity_days_delta if item.validity_days_delta is not none else '' }}"></div>
+                                        <div><label>Storage bytes delta</label><input type="number" name="storage_bytes_delta" value="{{ item.storage_bytes_delta if item.storage_bytes_delta is not none else '' }}"></div>
                                     </div>
                                     <div class="checks">
                                         <label><input type="checkbox" name="is_active" {% if item.is_active %}checked{% endif %}> Active</label>
@@ -163,6 +165,7 @@
                     <div><label>Scan delta <span class="muted">(EXTRA_SCANS)</span></label><input type="number" name="scan_delta"></div>
                     <div><label>Project delta <span class="muted">(PROJECT_CAPACITY)</span></label><input type="number" name="project_delta"></div>
                     <div><label>Validity days delta <span class="muted">(VALIDITY_EXTENSION / PROJECT_SERVICE_COVERAGE)</span></label><input type="number" name="validity_days_delta"></div>
+                    <div><label>Storage bytes delta <span class="muted">(ACCOUNT_STORAGE - in bytes)</span></label><input type="number" name="storage_bytes_delta"></div>
                 </div>
                 <div><label style="margin-top:14px;">Description</label><textarea name="description" rows="2"></textarea></div>
                 <div class="checks">
