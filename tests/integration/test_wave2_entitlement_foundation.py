@@ -440,9 +440,14 @@ def test_base_storage_entitlement_appears_in_resolver_but_is_not_metered(app_mod
     e = _ents(app_module, normal_user)
     assert e["base_storage_bytes"] == 10 * 1024 ** 3
     assert e["effective_storage_bytes"] == 10 * 1024 ** 3
-    # Wave 3 owns usage accounting; Wave 2 must not pretend to have it.
     assert e["purchased_storage_bytes"] == 0
-    assert e["storage_usage_tracked"] is False
+    # Wave 3 delivered the usage accounting this assertion was waiting for:
+    # the flag is now True and the usage fields are real (a fresh account with
+    # no media is simply at zero). See the Wave 3 suite for the full contract.
+    assert e["storage_usage_tracked"] is True
+    assert e["storage_used_bytes"] == 0
+    assert e["storage_remaining_bytes"] == 10 * 1024 ** 3
+    assert e["over_storage"] is False
 
 
 def test_storage_entitlement_uses_64_bit_column(app_module, db_session):

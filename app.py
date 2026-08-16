@@ -63,8 +63,9 @@ from models import (
     ProjectOwnershipTransfer, ProjectOwnershipClaim, ProjectServiceCoverage,
     ContentReport, CONTENT_REPORT_REASONS, CONTENT_REPORT_STATUSES,
     CONTENT_REPORT_ACTIONS, PaymentRefund, REFUND_STATUSES,
-    REFUND_RECONCILIATION_STATUSES,
+    REFUND_RECONCILIATION_STATUSES, MediaObject,
 )
+import storage_accounting as _storage
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 import entitlements as _ent
 from entitlements import (
@@ -1922,6 +1923,18 @@ def accept_project_ownership_transfer(transfer, acting_user=None, completed_by_a
     if project_current_owner_user_id(project) != transfer.from_owner_user_id:
         raise ValueError("Project owner changed after transfer initiation.")
 
+    # STORAGE CAPACITY IS CHECKED FIRST (Wave 3), before the project slot is
+    # reserved, so an insufficient-storage recipient needs no counter to be
+    # unwound. PENDING_CAPACITY already means "recipient lacks the capacity to
+    # accept"; storage is another capacity dimension, not a new state - the
+    # existing resume path re-runs this whole function once capacity appears.
+    # Nothing is deleted, no accounting moves, the sender stays the owner.
+    storage_ok, _project_bytes = evaluate_project_storage_transfer(project, recipient)
+    if not storage_ok:
+        transfer.status = "PENDING_CAPACITY"
+        db.session.flush()
+        return transfer
+
     if not _reserve_project_quota_atomic(recipient):
         transfer.status = "PENDING_CAPACITY"
         db.session.flush()
@@ -1936,6 +1949,9 @@ def accept_project_ownership_transfer(transfer, acting_user=None, completed_by_a
             retain_vendor_management=bool(manager_vendor),
             manager_vendor=manager_vendor,
         )
+        # SAME TRANSACTION as the ownership change: storage responsibility can
+        # never end up split from the project it belongs to.
+        _storage.move_project_storage_ownership(project.id, sender.id, recipient.id)
         now = get_utc_now()
         transfer.status = "COMPLETED"
         transfer.accepted_at = transfer.accepted_at or now
@@ -2916,10 +2932,18 @@ def user_entitlement_summary(user):
         "scan_unlimited": effective_scan_limit is None,
         "over_scan_capacity": over_scan_capacity,
         "max_pairs_per_project": ents["max_pairs_per_project"],
-        # Storage ENTITLEMENT only. Wave 2 has no usage accounting against it,
-        # so this must never be rendered as an "X of Y used" claim.
+        # Wave 3: usage is now REAL, so storage_usage_tracked is True and the
+        # Wave 2 "not tracked yet" disclaimer no longer renders. The numbers
+        # below are supplied for whichever checkpoint renders the storage meter;
+        # no template is changed here.
         "base_storage_display": format_bytes_display(ents["base_storage_bytes"]),
         "purchased_storage_display": format_bytes_display(ents["purchased_storage_bytes"]),
+        "admin_granted_storage_display": format_bytes_display(ents["admin_granted_storage_bytes"]),
+        "effective_storage_display": format_bytes_display(ents["effective_storage_bytes"]),
+        "storage_used_display": format_bytes_display(ents["storage_used_bytes"]),
+        "storage_remaining_display": format_bytes_display(ents["storage_remaining_bytes"]),
+        "over_storage": ents["over_storage"],
+        "storage_overage_display": format_bytes_display(ents["storage_overage_bytes"]),
         "storage_usage_tracked": ents["storage_usage_tracked"],
         "max_image_display": format_bytes_display(ents["image_policy"]["max_bytes"]),
         "max_video_display": format_bytes_display(ents["video_policy"]["max_bytes"]),
@@ -3587,6 +3611,130 @@ def _safe_media_path(directory, filename):
     return candidate
 
 
+# --------------------------------------------------------------------------------------------
+# Storage accounting glue (V1.1 Wave 3).
+#
+# MediaObject.storage_key is a stable, root-qualified pointer at the EXISTING
+# filesystem layout - "user/images/12_0.jpg", "admin/videos/12_0.mp4". The root
+# prefix is required because the user and admin trees reuse the same
+# {project_id}_{pair_index} filenames, so an unqualified name is ambiguous
+# across them. Nothing about the on-disk scheme changes; the ledger only points
+# at it.
+# --------------------------------------------------------------------------------------------
+MEDIA_STORAGE_ROOTS = {
+    "user": {"images": IMAGES_DIR, "videos": VIDEOS_DIR},
+    "admin": {"images": ADMIN_IMAGES_DIR, "videos": ADMIN_VIDEOS_DIR},
+}
+MEDIA_KIND_ROLES = {"images": _storage.MEDIA_ROLE_TRIGGER_IMAGE, "videos": _storage.MEDIA_ROLE_VIDEO}
+
+# Never names a byte figure: allowances are plan/add-on data, not a constant.
+STORAGE_LIMIT_MESSAGE = (
+    "Not enough storage on your account for this upload. "
+    "Delete media you no longer need, add storage, or upgrade your plan."
+)
+STORAGE_REPLACEMENT_OVER_LIMIT_MESSAGE = (
+    "Your account is over its storage allowance, so a replacement must be "
+    "smaller than the media it replaces."
+)
+
+
+class _ReplacementRejected(Exception):
+    """Internal control flow: a staged replacement failed policy; unwind cleanly."""
+
+
+def media_storage_root_name(project):
+    return "admin" if (project is not None and project.owner_admin_id) else "user"
+
+
+def build_media_storage_key(project, kind, filename):
+    """Ledger key for one retained file, or None if there is no such file."""
+    if not filename:
+        return None
+    name = os.path.basename(str(filename).replace("\\", "/"))
+    if not name or name in (".", ".."):
+        return None
+    return f"{media_storage_root_name(project)}/{kind}/{name}"
+
+
+def media_storage_abs_path(storage_key):
+    """Resolve a ledger key back to an absolute path, refusing traversal."""
+    parts = (storage_key or "").split("/")
+    if len(parts) != 3:
+        return None
+    root, kind, name = parts
+    directory = MEDIA_STORAGE_ROOTS.get(root, {}).get(kind)
+    if not directory:
+        return None
+    return _safe_media_path(directory, name)
+
+
+def project_storage_owner_ids(project):
+    """(owner_user_id, owner_admin_id) for storage responsibility.
+
+    Reuses the EXISTING ownership rule - project_current_owner_user_id() - so a
+    transferred or vendor-managed project's storage follows its current owner
+    rather than whoever created it. No second ownership system.
+    """
+    if project is not None and project.owner_admin_id:
+        return None, project.owner_admin_id
+    return project_current_owner_user_id(project), None
+
+
+def account_storage_state(user):
+    """(used_bytes, effective_allowance_bytes). None allowance = unenforced."""
+    if not user:
+        return 0, None
+    ents = user_entitlements(user)
+    return ents["storage_used_bytes"], ents["effective_storage_bytes"]
+
+
+def evaluate_project_storage_transfer(project, recipient):
+    """(ok, project_bytes) - reusable storage validation for an ownership move.
+
+    A callable primitive, NOT a route: the ownership-transfer HTTP surface does
+    not exist yet and building it is out of scope here. Whichever checkpoint
+    adds it calls this, then completes the move through
+    accept_project_ownership_transfer(), which already moves the accounting in
+    the same transaction as the ownership.
+    """
+    if project is None or recipient is None:
+        return False, 0
+    used, allowance = account_storage_state(recipient)
+    return _storage.evaluate_storage_transfer(project.id, used, allowance)
+
+
+def record_pair_media_objects(project, pair, image_bytes=None, video_bytes=None, source="upload"):
+    """Ledger rows for a newly persisted pair's retained media.
+
+    Only the trigger image and the video. The .npz recognition artifact, the
+    _work.jpg / _fast.mp4 derivatives and the QR PNG are server-generated, not
+    customer-uploaded, and are deliberately never given a row.
+    """
+    owner_user_id, owner_admin_id = project_storage_owner_ids(project)
+    created = []
+    for kind, filename, size in (
+        ("images", pair.image_filename, image_bytes),
+        ("videos", pair.video_filename, video_bytes),
+    ):
+        key = build_media_storage_key(project, kind, filename)
+        if not key or size is None:
+            continue
+        created.append(_storage.record_media_object(
+            storage_key=key,
+            size_bytes=size,
+            media_role=MEDIA_KIND_ROLES[kind],
+            owner_user_id=owner_user_id,
+            owner_admin_id=owner_admin_id,
+            project_id=project.id,
+            pair_id=pair.id,
+            source=source,
+            # Admin-owned media is retained and real, but no account is billed
+            # for it - there is no subscription behind an admin project.
+            counts_toward_quota=owner_user_id is not None,
+        ))
+    return created
+
+
 def _unlink_project_media(paths, project_id):
     """Remove media, returning the paths that could not be deleted.
 
@@ -3612,6 +3760,32 @@ def _unlink_project_media(paths, project_id):
     return failures
 
 
+def release_project_media_accounting(project_id, failed_paths=()):
+    """Free ledger bytes for a project's media whose files are genuinely gone.
+
+    `failed_paths` are the absolute paths _unlink_project_media() could not
+    remove; their rows stay ACTIVE and stay counted. Returns
+    (freed_bytes, retained_object_count).
+    """
+    freed_by_user = {}
+    retained = 0
+    for obj in _storage.active_media_objects(project_id=project_id):
+        path = media_storage_abs_path(obj.storage_key)
+        if path in failed_paths or (path and os.path.exists(path)):
+            retained += 1
+            app.logger.error(
+                "storage_release_blocked project_id=%s storage_key=%s reason=file_still_present",
+                project_id, obj.storage_key,
+            )
+            continue
+        _storage.mark_media_object_deleted(obj)
+        if obj.owner_user_id and obj.counts_toward_quota:
+            freed_by_user[obj.owner_user_id] = freed_by_user.get(obj.owner_user_id, 0) + int(obj.size_bytes or 0)
+    for user_id, freed in freed_by_user.items():
+        _storage.release_account_storage(user_id, freed)
+    return sum(freed_by_user.values()), retained
+
+
 def _delete_project_files_and_rows(project: Project):
     images_dir, videos_dir, features_dir, qr_dir = project_media_dirs(project)
     project_id = project.id
@@ -3634,6 +3808,15 @@ def _delete_project_files_and_rows(project: Project):
         targets.append(_safe_media_path(qr_dir, project.qr_code_filename))
 
     failures = _unlink_project_media(dict.fromkeys(p for p in targets if p), project_id)
+
+    # STORAGE IS FREED ONLY AFTER THE PHYSICAL DELETE SUCCEEDED (Wave 3).
+    # Deliberately AFTER _unlink_project_media and keyed off its per-path
+    # result, never before it and never unconditionally: a row whose file could
+    # not be removed stays ACTIVE and stays counted, so the account is never
+    # credited bytes that are still on disk. Reconciliation or a retried delete
+    # can free them later. Rerunning this is idempotent - an already-DELETED row
+    # is skipped and a missing file counts as a successful unlink.
+    release_project_media_accounting(project_id, set(failures))
 
     # Resumable upload sessions are audit history and are deliberately retained
     # with their references cleared rather than cascade-deleted (P0-5). The
@@ -3663,6 +3846,164 @@ def _delete_project_files_and_rows(project: Project):
             project_id, len(failures),
         )
     return failures
+
+
+def reconcile_storage_ledger(apply_changes=False):
+    """Discover pre-ledger media on disk and record it. Returns a report dict.
+
+    NEVER DELETES ANYTHING. It reads the filesystem and writes media_objects
+    rows plus the users.storage_used_bytes counter, nothing else - no customer
+    media is removed, moved or rewritten, and no MediaObject row is deleted.
+
+    Deterministic and idempotent: the unit of work is the (project, pair, role)
+    tuple, the dedup key is the ACTIVE storage_key, and a rerun finds every row
+    it created last time and reports it as already-reconciled instead of
+    double-counting it. Anything it cannot resolve honestly - a DB row whose
+    file is gone, a file with no DB row, a project with no determinable owner -
+    is REPORTED, never guessed at and never fabricated into bytes.
+    """
+    now = get_utc_now()
+    report = {
+        "discovered": 0, "created": 0, "already_reconciled": 0,
+        "missing_files": [], "orphan_files": [], "ambiguous_ownership": [],
+        "size_mismatches": [], "counter_drift": [], "errors": [],
+        "total_bytes_accounted": 0,
+    }
+    expected_keys = set()
+
+    rows = (
+        db.session.query(ProjectPair, Project)
+        .join(Project, ProjectPair.project_id == Project.id)
+        .order_by(ProjectPair.project_id.asc(), ProjectPair.pair_index.asc())
+        .all()
+    )
+    for pair, project in rows:
+        owner_user_id, owner_admin_id = project_storage_owner_ids(project)
+        if owner_user_id is None and owner_admin_id is None:
+            # No determinable billing account. Do not guess an owner.
+            report["ambiguous_ownership"].append(
+                {"project_id": project.id, "pair_id": pair.id, "reason": "no_resolvable_owner"}
+            )
+            continue
+
+        for kind, filename in (("images", pair.image_filename), ("videos", pair.video_filename)):
+            key = build_media_storage_key(project, kind, filename)
+            if not key:
+                continue
+            expected_keys.add(key)
+            path = media_storage_abs_path(key)
+            if not path or not os.path.exists(path):
+                report["missing_files"].append(
+                    {"project_id": project.id, "pair_id": pair.id, "storage_key": key}
+                )
+                continue
+            try:
+                size_bytes = os.path.getsize(path)
+            except OSError as exc:
+                report["errors"].append({"storage_key": key, "error": safe_error_summary(exc)})
+                continue
+
+            report["discovered"] += 1
+            report["total_bytes_accounted"] += size_bytes
+            existing = _storage.active_media_object_for_key(key)
+            if existing is not None:
+                report["already_reconciled"] += 1
+                if int(existing.size_bytes or 0) != size_bytes:
+                    report["size_mismatches"].append({
+                        "storage_key": key,
+                        "ledger_bytes": int(existing.size_bytes or 0),
+                        "disk_bytes": size_bytes,
+                    })
+                    if apply_changes:
+                        existing.size_bytes = size_bytes
+                        existing.reconciled_at = now
+                continue
+
+            report["created"] += 1
+            if apply_changes:
+                obj = _storage.record_media_object(
+                    storage_key=key,
+                    size_bytes=size_bytes,
+                    media_role=MEDIA_KIND_ROLES[kind],
+                    owner_user_id=owner_user_id,
+                    owner_admin_id=owner_admin_id,
+                    project_id=project.id,
+                    pair_id=pair.id,
+                    source="reconciliation",
+                    counts_toward_quota=owner_user_id is not None,
+                )
+                obj.reconciled_at = now
+
+    # Files on disk that no ProjectPair points at. Reported separately and
+    # never counted against anyone - an orphan has no owner to bill.
+    for root_name, kinds in MEDIA_STORAGE_ROOTS.items():
+        for kind, directory in kinds.items():
+            try:
+                names = os.listdir(directory)
+            except OSError:
+                continue
+            for name in names:
+                if not os.path.isfile(os.path.join(directory, name)):
+                    continue
+                key = f"{root_name}/{kind}/{name}"
+                if key not in expected_keys:
+                    report["orphan_files"].append(key)
+
+    if apply_changes:
+        db.session.flush()
+    for user in User.query.order_by(User.id.asc()).all():
+        calculated = _storage.account_storage_used_bytes(user.id)
+        stored = _storage.stored_storage_used_bytes(user)
+        if calculated != stored:
+            report["counter_drift"].append(
+                {"user_id": user.id, "stored": stored, "calculated": calculated}
+            )
+            if apply_changes:
+                user.storage_used_bytes = calculated
+
+    if apply_changes:
+        db.session.commit()
+    else:
+        db.session.rollback()
+    return report
+
+
+@app.cli.command("reconcile-storage")
+@click.option("--apply", "apply_changes", is_flag=True, default=False, help="Write ledger rows and counters.")
+@click.option("--dry-run", "dry_run", is_flag=True, default=False, help="Report only (the default).")
+def reconcile_storage_command(apply_changes, dry_run):
+    """Reconcile the media storage ledger against the filesystem.
+
+    Read-only by default. Deliberately NOT part of any Alembic migration:
+    the schema upgrade creates an empty table, and this command - run by an
+    operator, against a host that actually has the media volume mounted -
+    populates it. It never deletes customer media.
+    """
+    if dry_run and apply_changes:
+        raise click.UsageError("--dry-run and --apply are mutually exclusive.")
+    report = reconcile_storage_ledger(apply_changes=apply_changes)
+
+    click.echo("Mode: apply" if apply_changes else "Mode: dry-run")
+    click.echo(f"Media discovered on disk: {report['discovered']}")
+    click.echo(f"Ledger rows created: {report['created']}")
+    click.echo(f"Already reconciled: {report['already_reconciled']}")
+    click.echo(f"Total bytes accounted: {report['total_bytes_accounted']}")
+    for label, key in (
+        ("Missing files (DB row, no file)", "missing_files"),
+        ("Orphan files (file, no DB row)", "orphan_files"),
+        ("Ambiguous ownership", "ambiguous_ownership"),
+        ("Ledger/disk size mismatches", "size_mismatches"),
+        ("Account counter drift", "counter_drift"),
+        ("Errors", "errors"),
+    ):
+        entries = report[key]
+        click.echo(f"{label}: {len(entries)}")
+        for entry in entries[:20]:
+            click.echo(f"  - {entry}")
+        if len(entries) > 20:
+            click.echo(f"  ... and {len(entries) - 20} more")
+    if not apply_changes:
+        click.echo("Dry run: nothing was written. Re-run with --apply to persist.")
 
 
 def _quota_counter_rows():
@@ -6102,42 +6443,126 @@ def user_edit_project(project_id):
     _img_max, _img_dim, _img_px = image_limits(_ents)
     _vid_max, _vid_dur = video_limits(_ents)
 
-    for pair in pairs:
-        img_key = f"image_{pair.pair_index}"
-        vid_key = f"video_{pair.pair_index}"
-        new_image = request.files.get(img_key)
-        new_video = request.files.get(vid_key)
+    # STORAGE ACCOUNT for the replacement (Wave 3). Bytes are charged to the
+    # CURRENT owner, not the editing manager - a vendor replacing media on a
+    # transferred project spends the owner's allowance, matching who the ledger
+    # already bills. Usage/allowance are read once and then walked forward
+    # locally as each swap is approved, so a multi-pair edit cannot approve two
+    # growths that only fit individually.
+    storage_owner = User.query.get(project_current_owner_user_id(project)) if project_current_owner_user_id(project) else None
+    storage_used, storage_allowance = account_storage_state(storage_owner)
+    projected_used = storage_used
+    swaps = []
 
-        if new_image and new_image.filename:
-            try:
-                img_temp, _img_ext = validate_image(
-                    new_image, TMP_UPLOADS_DIR, _img_max, _img_dim, _img_px
+    # PHASE 1 - validate and decide. Nothing is written to disk, no old media is
+    # touched, and no expensive reprocessing is scheduled until every requested
+    # replacement has passed BOTH the per-file policy and the storage policy.
+    staged = []
+    try:
+        for pair in pairs:
+            new_image = request.files.get(f"image_{pair.pair_index}")
+            new_video = request.files.get(f"video_{pair.pair_index}")
+
+            for kind, upload, limits in (
+                ("images", new_image, (_img_max, _img_dim, _img_px)),
+                ("videos", new_video, (_vid_max, _vid_dur)),
+            ):
+                if not upload or not upload.filename:
+                    continue
+                filename = pair.image_filename if kind == "images" else pair.video_filename
+                if not filename:
+                    # Direct-QR pairs have no trigger image to replace.
+                    continue
+                label = "Image" if kind == "images" else "Video"
+                try:
+                    if kind == "images":
+                        temp_path, _ext = validate_image(upload, TMP_UPLOADS_DIR, *limits)
+                    else:
+                        temp_path, _ext = validate_video(upload, TMP_UPLOADS_DIR, *limits)
+                except UploadValidationError as exc:
+                    app.logger.warning(f"Replacement {kind} rejected (pair {pair.pair_index}): {exc.detail}")
+                    flash(f"{label} for pair {pair.pair_index + 1}: {exc.safe_message}", "error")
+                    raise _ReplacementRejected()
+                staged.append(temp_path)
+
+                storage_key = build_media_storage_key(project, kind, filename)
+                old_object = _storage.active_media_object_for_key(storage_key) if storage_key else None
+                old_bytes = int(getattr(old_object, "size_bytes", 0) or 0)
+                new_bytes = os.path.getsize(temp_path)
+
+                allowed, projected_used = _storage.evaluate_replacement(
+                    projected_used, storage_allowance, old_bytes, new_bytes
                 )
-            except UploadValidationError as exc:
-                app.logger.warning(f"Replacement image rejected (pair {pair.pair_index}): {exc.detail}")
-                flash(f"Image for pair {pair.pair_index + 1}: {exc.safe_message}", "error")
-                return redirect(url_for("user_edit_project_page", project_id=project_id))
-            img_path = os.path.join(IMAGES_DIR, pair.image_filename)
-            os.replace(img_temp, img_path)  # existing image only replaced after successful validation
-            standardize_uploaded_image(img_path, target_size=1200)
+                if not allowed:
+                    message = (
+                        STORAGE_REPLACEMENT_OVER_LIMIT_MESSAGE
+                        if storage_allowance is not None and storage_used > storage_allowance
+                        else STORAGE_LIMIT_MESSAGE
+                    )
+                    flash(f"{label} for pair {pair.pair_index + 1}: {message}", "error")
+                    raise _ReplacementRejected()
+
+                swaps.append({
+                    "pair": pair, "kind": kind, "temp_path": temp_path,
+                    "storage_key": storage_key, "old_object": old_object,
+                    "old_bytes": old_bytes, "new_bytes": new_bytes,
+                })
+    except _ReplacementRejected:
+        for temp_path in staged:
+            _safe_remove(temp_path)
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    # PHASE 2 - commit the approved swaps. os.replace onto the SAME storage key
+    # is the physical delete of the old bytes: it is atomic, and it succeeds or
+    # leaves the old file intact, so there is no window where accounting has
+    # been freed but the old media survives. QR, pair count and the project's
+    # grandfathered experience mode are untouched by all of this.
+    for swap in swaps:
+        pair, kind = swap["pair"], swap["kind"]
+        directory = IMAGES_DIR if kind == "images" else VIDEOS_DIR
+        filename = pair.image_filename if kind == "images" else pair.video_filename
+        final_path = os.path.join(directory, filename)
+        os.replace(swap["temp_path"], final_path)  # already-validated content only
+        if kind == "images":
+            standardize_uploaded_image(final_path, target_size=1200)
             pair.is_processed = False
             pair.processing_status = "uploaded"
             pair.feature_extraction_status = "pending"
             pair.processing_error = None
-            updated += 1
+        updated += 1
 
-        if new_video and new_video.filename:
-            try:
-                vid_temp, _vid_ext = validate_video(
-                    new_video, TMP_UPLOADS_DIR, _vid_max, _vid_dur
+        # standardize_uploaded_image() rewrites the file, so re-stat rather than
+        # trusting the pre-swap size - the ledger records the bytes that are
+        # actually on disk.
+        final_bytes = os.path.getsize(final_path)
+        if kind == "images":
+            pair.image_size = final_bytes
+        else:
+            pair.video_size = final_bytes
+        if swap["storage_key"]:
+            _storage.supersede_media_object(swap["old_object"])
+            # Flush the supersede BEFORE inserting the replacement row: both
+            # claim the same storage_key, and SQLAlchemy's unit of work emits
+            # INSERTs before UPDATEs, which would trip the
+            # uq_media_objects_active_storage_key partial unique index.
+            db.session.flush()
+            _storage.record_media_object(
+                storage_key=swap["storage_key"],
+                size_bytes=final_bytes,
+                media_role=MEDIA_KIND_ROLES[kind],
+                owner_user_id=getattr(storage_owner, "id", None),
+                project_id=project.id,
+                pair_id=pair.id,
+                counts_toward_quota=storage_owner is not None,
+            )
+            if storage_owner is not None:
+                # Net delta only. Negative deltas release; the growth case was
+                # already authorised by evaluate_replacement above, and the
+                # unconditional apply keeps the column consistent with the
+                # ledger rows written in this same transaction.
+                _storage.reserve_account_storage(
+                    storage_owner.id, final_bytes - swap["old_bytes"], None
                 )
-            except UploadValidationError as exc:
-                app.logger.warning(f"Replacement video rejected (pair {pair.pair_index}): {exc.detail}")
-                flash(f"Video for pair {pair.pair_index + 1}: {exc.safe_message}", "error")
-                return redirect(url_for("user_edit_project_page", project_id=project_id))
-            vid_path = os.path.join(VIDEOS_DIR, pair.video_filename)
-            os.replace(vid_temp, vid_path)  # existing video only replaced after successful validation
-            updated += 1
 
     db.session.commit()
 
@@ -6800,12 +7225,47 @@ def handle_upload():
         flash(exc.safe_message, "error")
         return redirect(url_for("user_create_project_page"))
 
+    # STORAGE GATE (Wave 3). Two separate checks, both of which must pass: the
+    # per-file policy above (bytes/duration/dimensions/pixels, already capped by
+    # the immutable server ceiling) and the account storage allowance here. A
+    # storage allowance never substitutes for a per-file limit and never
+    # relaxes one.
+    #
+    # The ENTIRE retained logical set is weighed at once - a multi-pair project
+    # is accepted or rejected whole, so we never persist pair 1 and then reject
+    # pair 2 leaving a half-created project with orphaned accounting.
+    #
+    # Sizes come from the validated temp files, i.e. the bytes that will
+    # actually be retained, not a client-declared length. This is the cheap
+    # PRECHECK; the authoritative atomic reservation runs inside the
+    # transaction below.
+    retained_bytes = []
+    for media in validated_media:
+        image_bytes = os.path.getsize(media["image_temp"]) if media.get("image_temp") else None
+        retained_bytes.append((image_bytes, os.path.getsize(media["video_temp"])))
+    total_new_storage_bytes = sum((image_bytes or 0) + video_bytes for image_bytes, video_bytes in retained_bytes)
+    storage_used, storage_allowance = account_storage_state(user)
+    if not _storage.can_consume(storage_used, storage_allowance, total_new_storage_bytes):
+        for media in validated_media:
+            _safe_remove(media.get("image_temp"))
+            _safe_remove(media["video_temp"])
+        flash(STORAGE_LIMIT_MESSAGE, "error")
+        return redirect(url_for("user_create_project_page"))
+
     # STEP 1-3: reserve quota, create project/pairs, and commit as one unit.
     # If DB insert or file save fails, rollback releases the reserved quota and saved files are removed.
     saved_paths = []
     pairs_data = []
+    created_pairs = []
     project = None
     try:
+        # AUTHORITATIVE storage reservation: one conditional UPDATE on the user
+        # row, so two concurrent uploads cannot both read the same headroom and
+        # both proceed. A rollback below releases it, exactly like the project
+        # slot - a failed upload never leaves permanent usage behind.
+        if not _storage.reserve_account_storage(user.id, total_new_storage_bytes, storage_allowance):
+            raise ValueError(STORAGE_LIMIT_MESSAGE)
+
         if not _reserve_project_quota_atomic(user):
             db.session.rollback()
             flash("Project limit reached. Please upgrade your plan.", "error")
@@ -6911,6 +7371,7 @@ def handle_upload():
                 processing_error=None,
             )
             db.session.add(pair)
+            created_pairs.append((pair, retained_bytes[i]))
 
             pairs_data.append({
                 "pair_index": i,
@@ -6920,6 +7381,12 @@ def handle_upload():
                 "original_video_name": video_file.filename,
                 "video_mime_type": video_file.mimetype,
             })
+
+        # Ledger rows for the retained media, in the SAME transaction as the
+        # reservation and the pair rows, so accounting can never be half-applied.
+        db.session.flush()
+        for pair, (image_bytes, video_bytes) in created_pairs:
+            record_pair_media_objects(project, pair, image_bytes=image_bytes, video_bytes=video_bytes)
 
         upload_timing["files_persisted_at"] = time.time()
         _upload_log("UPLOAD PERSIST DONE", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), duration_ms=round((upload_timing["files_persisted_at"] - request_start) * 1000))
@@ -7186,8 +7653,16 @@ app.config["RESUMABLE_UPLOAD_CHUNK_MAX_BYTES"] = RESUMABLE_UPLOAD_CHUNK_MAX_BYTE
 
 
 class _ResumableQuotaLimitReached(Exception):
-    """Internal control-flow marker only - never serialized to a client."""
-    pass
+    """Internal control-flow marker only - never serialized to a client.
+
+    Carries the safe client-facing code/message so the storage gate can reuse
+    the same rollback-and-report handler instead of duplicating it.
+    """
+
+    def __init__(self, code="PROJECT_LIMIT_REACHED", message="Project limit reached. Please upgrade your plan."):
+        super().__init__(code)
+        self.code = code
+        self.message = message
 
 
 def _upload_identity():
@@ -7823,8 +8298,18 @@ def _finalize_assemble_and_validate(session_row, user, admin):
     is_admin_owner = admin is not None
     saved_paths = []
     project_create_start = time.perf_counter()
+    retained_image_bytes = os.path.getsize(img_temp) if img_temp else None
+    retained_video_bytes = os.path.getsize(vid_temp)
+    total_new_storage_bytes = (retained_image_bytes or 0) + retained_video_bytes
+    _storage_used, storage_allowance = account_storage_state(user) if user else (0, None)
+
     try:
         if not is_admin_owner:
+            # Same authoritative atomic reservation as handle_upload(); a
+            # rollback in either except block below releases it. Admin-owned
+            # sessions bill no account and are recorded uncounted.
+            if not _storage.reserve_account_storage(user.id, total_new_storage_bytes, storage_allowance):
+                raise _ResumableQuotaLimitReached("STORAGE_LIMIT_REACHED", STORAGE_LIMIT_MESSAGE)
             if not _reserve_project_quota_atomic(user):
                 raise _ResumableQuotaLimitReached()
 
@@ -7906,17 +8391,22 @@ def _finalize_assemble_and_validate(session_row, user, admin):
         )
         db.session.add(pair)
         db.session.flush()
+        record_pair_media_objects(
+            project, pair,
+            image_bytes=os.path.getsize(img_path) if img_path else None,
+            video_bytes=os.path.getsize(vid_path),
+        )
 
         session_row.project_id = project.id
         session_row.pair_id = pair.id
         db.session.commit()
         project_create_duration_ms = _elapsed_ms(project_create_start)
-    except _ResumableQuotaLimitReached:
+    except _ResumableQuotaLimitReached as limit_exc:
         db.session.rollback()
         _safe_remove(img_temp)
         _safe_remove(vid_temp)
         session_row.status = "failed"
-        session_row.failure_code = "PROJECT_LIMIT_REACHED"
+        session_row.failure_code = limit_exc.code
         db.session.commit()
         project_create_duration_ms = _elapsed_ms(project_create_start)
         _log_upload_timing(
@@ -7933,9 +8423,9 @@ def _finalize_assemble_and_validate(session_row, user, admin):
             finalize_duration_ms=_elapsed_ms(finalize_start),
             recovered_existing_completion=False,
             status=session_row.status,
-            safe_error_code="PROJECT_LIMIT_REACHED",
+            safe_error_code=limit_exc.code,
         )
-        return _upload_api_error("PROJECT_LIMIT_REACHED", "Project limit reached. Please upgrade your plan.", 403)
+        return _upload_api_error(limit_exc.code, limit_exc.message, 403)
     except Exception as exc:
         db.session.rollback()
         for saved_path in saved_paths:
@@ -8292,7 +8782,7 @@ def admin_set_project_fallback_pair(project_id):
 # --------------------------------------------------------------------------------------------
 # Subscription & Payment Routes
 # --------------------------------------------------------------------------------------------
-ADDON_PURCHASABLE_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY", "PROJECT_SERVICE_COVERAGE"}
+ADDON_PURCHASABLE_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY", "PROJECT_SERVICE_COVERAGE", "ACCOUNT_STORAGE"}
 # Add-on types that target exactly one project. Everything else is
 # account-level and must NOT carry a project_id.
 ADDON_PROJECT_TARGETED_TYPES = {"PROJECT_SERVICE_COVERAGE"}
@@ -8311,6 +8801,7 @@ def _addon_catalog_payload(item):
         "scan_delta": item.scan_delta,
         "validity_days_delta": item.validity_days_delta,
         "project_delta": item.project_delta,
+        "storage_bytes_delta": item.storage_bytes_delta,
         "is_active": item.is_active,
         "is_commercially_available": item.is_commercially_available,
     }
@@ -8328,6 +8819,10 @@ def _addon_effect(item, quantity=1):
         # Reuses validity_days_delta as the catalog-driven duration; a
         # separate column would carry the same integer.
         return "PROJECT_SERVICE_COVERAGE", int(item.validity_days_delta or 0) * quantity
+    if item.addon_type == "ACCOUNT_STORAGE":
+        # Canonical quantity is BYTES, straight off the catalog row. No SKU
+        # size and no price is defaulted anywhere in the code.
+        return "ACCOUNT_STORAGE", int(item.storage_bytes_delta or 0) * quantity
     raise ValueError("Unsupported add-on type.")
 
 
@@ -8384,6 +8879,15 @@ def _apply_entitlement_transaction(user, entitlement_type, delta, source_type, s
         # above is the permanent audit trail (never deleted on lapse).
         if user.subscribed_project_limit not in (None, 0):
             user.subscribed_project_limit = int(user.subscribed_project_limit or 0) + int(delta)
+    elif entitlement_type == "ACCOUNT_STORAGE":
+        # Nothing materialized to bump: the effective storage allowance is
+        # composed at read time by get_effective_entitlements() from plan base +
+        # this ledger's purchased rows + this ledger's admin_grant rows, which
+        # is what keeps the three sources separately auditable and stops either
+        # from silently overwriting the other. The ledger row IS the entitlement.
+        # Purchased storage therefore survives upgrade, downgrade and lapse for
+        # free - no re-materialization path can drop it.
+        pass
     elif entitlement_type == "PROJECT_SERVICE_COVERAGE":
         apply_standalone_project_renewal(
             project,
@@ -8748,6 +9252,13 @@ def _apply_refund_reconciliation(refund):
             purchase.user.subscribed_scan_limit = int(purchase.user.subscribed_scan_limit or 0) - int(original.delta_value or 0)
         elif original.entitlement_type == "PROJECT_CAPACITY" and purchase.user.subscribed_project_limit not in (None, 0):
             purchase.user.subscribed_project_limit = int(purchase.user.subscribed_project_limit or 0) - int(original.delta_value or 0)
+        elif original.entitlement_type == "ACCOUNT_STORAGE":
+            # NON-DESTRUCTIVE BY CONSTRUCTION. The negative ledger row above is
+            # the whole reversal - there is no materialized column to unwind and
+            # no media is touched. If the account's usage now exceeds the
+            # reduced allowance it simply becomes over-storage: existing content
+            # keeps working, and only NEW consumption is blocked.
+            pass
         elif original.entitlement_type == "PROJECT_SERVICE_COVERAGE":
             coverage = _coverage_for_addon_purchase(purchase)
             if coverage and coverage.status == "ACTIVE":
@@ -12552,6 +13063,7 @@ def _addon_catalog_form_values(form, existing=None):
         scan_delta = _int_or_none("scan_delta")
         validity_days_delta = _int_or_none("validity_days_delta")
         project_delta = _int_or_none("project_delta")
+        storage_bytes_delta = _int_or_none("storage_bytes_delta")
     except (TypeError, ValueError):
         return None, "Price and delta values must be numbers."
 
@@ -12568,6 +13080,8 @@ def _addon_catalog_form_values(form, existing=None):
         "scan_delta": scan_delta,
         "validity_days_delta": validity_days_delta,
         "project_delta": project_delta,
+        # Bytes. The admin supplies the real SKU size; nothing is defaulted.
+        "storage_bytes_delta": storage_bytes_delta,
         "is_active": bool(form.get("is_active")),
         "is_commercially_available": bool(form.get("is_commercially_available")),
     }
@@ -12695,6 +13209,7 @@ def seed_addon_catalog_items(entries):
             "scan_delta": entry.get("scan_delta"),
             "validity_days_delta": entry.get("validity_days_delta"),
             "project_delta": entry.get("project_delta"),
+            "storage_bytes_delta": entry.get("storage_bytes_delta"),
             "is_active": bool(entry.get("is_active", True)),
             "is_commercially_available": bool(entry.get("is_commercially_available", True)),
         }
@@ -13694,6 +14209,55 @@ def admin_grant_extra_scans(user_id):
     flash(f"Granted {extra_scans} extra scans to user.", "success")
     return redirect(url_for("admin_user_scans", user_id=user_id))
 
+
+def grant_account_storage(admin, user, delta_bytes, reason=None):
+    """Governed admin storage grant. Positive grants, negative revokes.
+
+    Reuses the ledger mechanism admin scan/project grants already use, so the
+    three storage sources stay separately auditable: source_type='admin_grant'
+    here, 'addon_purchase'/'refund' for anything the customer paid for, and the
+    plan's own base_storage_bytes. Neither can overwrite the other because
+    get_effective_entitlements() sums them independently.
+
+    REVOCATION NEVER DELETES MEDIA. A negative delta only lowers the allowance;
+    if that puts the account over storage, existing content keeps working and
+    only new consumption is blocked.
+    """
+    delta = int(delta_bytes or 0)
+    if delta == 0:
+        raise ValueError("Storage grant must be a non-zero number of bytes.")
+    verb = "Granted" if delta > 0 else "Revoked"
+    activity = log_admin_activity(
+        admin.id, "account_storage_grant",
+        f"{verb} {abs(delta)} storage bytes for {user.email}",
+    )
+    tx, _replay = _apply_entitlement_transaction(
+        user,
+        "ACCOUNT_STORAGE",
+        delta,
+        source_type=_ent.ADMIN_GRANT_SOURCE_TYPE,
+        source_id=activity.id,
+        reason=reason or f"admin_grant_account_storage:admin={admin.id}",
+    )
+    return tx
+
+
+@app.route("/admin/users/<int:user_id>/grant-storage", methods=["POST"])
+@require_admin_permission("admin.users.manage")
+def admin_grant_account_storage(user_id):
+    admin = current_admin()
+    user = User.query.get_or_404(user_id)
+    delta_bytes = request.form.get("storage_bytes", type=int, default=0)
+    try:
+        grant_account_storage(admin, user, delta_bytes, reason=(request.form.get("reason") or "").strip() or None)
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("admin_view_user", user_id=user_id))
+    db.session.commit()
+    flash("Account storage entitlement updated.", "success")
+    return redirect(url_for("admin_view_user", user_id=user_id))
+
 @app.route("/admin/scans/<int:user_id>/lock-scanner", methods=["POST"])
 @require_admin_permission("admin.users.manage")
 def admin_lock_user_scanner(user_id):
@@ -14125,13 +14689,21 @@ def admin_handle_upload():
             processing_error=None
         )
         db.session.add(pair)
-        
+        db.session.flush()
+        # Ledger row so deletion/reconciliation see this media, recorded
+        # UNCOUNTED: an admin-owned project bills no subscriber account.
+        record_pair_media_objects(
+            project, pair,
+            image_bytes=os.path.getsize(img_path),
+            video_bytes=os.path.getsize(vid_path),
+        )
+
         pairs_data.append({
             "pair_index": i,
             "image_filename": img_filename,
             "video_filename": vid_filename
         })
-    
+
     db.session.commit()
     
     # Generate QR code

@@ -519,8 +519,9 @@ def test_user_profile_entitlement_summary_uses_backend_ledgers(
     assert "video up to 1 GB" in body
     assert "Storage allowance:" in body
     assert "2 GB" in body
-    # Wave 3 owns usage accounting - no "X of Y used" claim may appear.
-    assert "Storage usage is not measured yet" in body
+    # Wave 3 delivered usage accounting, so the "not measured yet" disclaimer
+    # this page carried through Wave 2 is now obsolete and must not render.
+    assert "Storage usage is not measured yet" not in body
 
     assert "Backend pending" not in body
 
