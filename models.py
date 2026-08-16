@@ -319,6 +319,13 @@ class User(db.Model):
     # Current usage counters
     projects_used = db.Column(db.Integer, default=0)
     scans_used = db.Column(db.Integer, default=0)
+    # V1.1 Wave 3 - ENFORCEMENT value for account storage, materialized for the
+    # same reason projects_used is: quota decisions are made inside a single
+    # conditional UPDATE, which a SUM(media_objects.size_bytes) subquery cannot
+    # give without a read-then-write race. media_objects stays the authoritative
+    # AUDIT ledger and `flask reconcile-storage` re-derives this column from it.
+    # BigInteger: byte counts overflow Integer at ~2.1GB.
+    storage_used_bytes = db.Column(db.BigInteger, nullable=False, default=0, server_default="0")
     
     # Razorpay integration
     razorpay_customer_id = db.Column(db.String(255), nullable=True)
@@ -797,9 +804,9 @@ class PaymentRefund(db.Model):
 # ---------------------------------------------------------------------
 # Self-service add-ons and entitlement ledger
 # ---------------------------------------------------------------------
-ADDON_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY", "PROJECT_SERVICE_COVERAGE"}
+ADDON_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY", "PROJECT_SERVICE_COVERAGE", "ACCOUNT_STORAGE"}
 ADDON_PURCHASE_STATUSES = {"pending", "fulfilled", "failed", "cancelled", "refunded"}
-ENTITLEMENT_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY", "PROJECT_SERVICE_COVERAGE"}
+ENTITLEMENT_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY", "PROJECT_SERVICE_COVERAGE", "ACCOUNT_STORAGE"}
 
 
 class AddonCatalog(db.Model):
@@ -810,7 +817,8 @@ class AddonCatalog(db.Model):
     # P0-2 reach production undetected. Keep these two in lockstep.
     __table_args__ = (
         db.CheckConstraint(
-            "addon_type IN ('EXTRA_SCANS', 'VALIDITY_EXTENSION', 'PROJECT_CAPACITY', 'PROJECT_SERVICE_COVERAGE')",
+            "addon_type IN ('EXTRA_SCANS', 'VALIDITY_EXTENSION', 'PROJECT_CAPACITY', "
+            "'PROJECT_SERVICE_COVERAGE', 'ACCOUNT_STORAGE')",
             name="ck_addon_catalog_type",
         ),
     )
@@ -825,6 +833,11 @@ class AddonCatalog(db.Model):
     scan_delta = db.Column(db.Integer, nullable=True)
     validity_days_delta = db.Column(db.Integer, nullable=True)
     project_delta = db.Column(db.Integer, nullable=True)
+    # Canonical ACCOUNT_STORAGE quantity, in BYTES. BigInteger because Integer
+    # caps at ~2.1GB and a storage SKU is routinely larger. The catalog row (or
+    # the Admin UI) supplies the real number - nothing here defaults a size or
+    # a price, same non-invented-values rule as every other add-on dimension.
+    storage_bytes_delta = db.Column(db.BigInteger, nullable=True)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     is_commercially_available = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
@@ -877,7 +890,9 @@ class EntitlementTransaction(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
     entitlement_type = db.Column(db.String(40), nullable=False, index=True)
-    delta_value = db.Column(db.Integer, nullable=False)
+    # BigInteger since Wave 3: ACCOUNT_STORAGE deltas are byte counts and an
+    # Integer column silently caps at ~2.1GB.
+    delta_value = db.Column(db.BigInteger, nullable=False)
     source_type = db.Column(db.String(40), nullable=False, index=True)
     source_id = db.Column(db.Integer, nullable=False, index=True)
     reason = db.Column(db.String(200), nullable=True)
@@ -1385,6 +1400,92 @@ class ProjectPair(db.Model):
         
         # Fall back to original
         return url_for("serve_video", project_id=self.project_id, image_id=self.pair_index)
+
+# ---------------------------------------------------------------------
+# Authoritative media storage ledger (V1.1 Wave 3)
+# ---------------------------------------------------------------------
+# WHAT COUNTS: retained, durable, customer-uploaded ScanStory media only -
+# trigger images and videos. Deliberately NOT counted, and therefore never
+# given a MediaObject row: generated QR images, .npz recognition artifacts,
+# derived *_work.jpg / *_fast.mp4 processing outputs, in-flight upload chunks
+# in tmp_uploads, logs, backups and app/static assets. Those are either
+# server-generated (the customer did not upload them and cannot control their
+# size) or ephemeral, so billing them would charge for our own pipeline.
+#
+# METADATA ONLY - no blob column. Bytes stay in the existing filesystem layout
+# (data/images, data/videos, data_admin/*); `storage_key` is the stable
+# root-qualified pointer back to them.
+MEDIA_OBJECT_ROLES = {"trigger_image", "video"}
+MEDIA_OBJECT_STATUSES = {"ACTIVE", "SUPERSEDED", "DELETED"}
+MEDIA_OBJECT_SOURCES = {"upload", "reconciliation"}
+
+
+class MediaObject(db.Model):
+    __tablename__ = "media_objects"
+    __table_args__ = (
+        db.Index("ix_media_objects_owner_status", "owner_user_id", "status"),
+        db.Index("ix_media_objects_project_status", "project_id", "status"),
+        # DEDUP KEY: at most one ACTIVE row may claim a given storage path.
+        # Partial so superseded/deleted history can retain the same key (a
+        # replacement reuses the exact filename via os.replace). Supported by
+        # both PostgreSQL and SQLite; declared for both so db.create_all() in
+        # the test suite builds the same constraint the migration ships.
+        db.Index(
+            "uq_media_objects_active_storage_key",
+            "storage_key",
+            unique=True,
+            postgresql_where=db.text("status = 'ACTIVE'"),
+            sqlite_where=db.text("status = 'ACTIVE'"),
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+
+    # WHO PAYS. Exactly one of these is set. owner_user_id follows the existing
+    # ownership rules (project_current_owner_user_id); admin-owned projects bill
+    # nobody, which is why owner_admin_id exists rather than a NULL owner.
+    owner_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    owner_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True, index=True)
+
+    # ON DELETE SET NULL, the pattern Wave 1 established in d4e8b2c6a0f3 for
+    # upload_sessions. A MediaObject is an accounting record: if a Project or
+    # ProjectPair disappears through an ORM cascade that bypasses the delete
+    # helper, the row must SURVIVE with its references cleared rather than be
+    # cascade-deleted, because deleting it would silently free storage for
+    # bytes that may still be on disk. _delete_project_files_and_rows() is what
+    # legitimately transitions these rows, and only after a successful unlink.
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True)
+    pair_id = db.Column(db.Integer, db.ForeignKey("project_pairs.id", ondelete="SET NULL"), nullable=True, index=True)
+
+    media_role = db.Column(db.String(30), nullable=False)
+    storage_key = db.Column(db.String(600), nullable=False)
+    size_bytes = db.Column(db.BigInteger, nullable=False, default=0)
+    counts_toward_quota = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
+    status = db.Column(db.String(20), nullable=False, default="ACTIVE", server_default="ACTIVE", index=True)
+    source = db.Column(db.String(20), nullable=False, default="upload", server_default="upload")
+
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    superseded_at = db.Column(db.DateTime, nullable=True)
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    reconciled_at = db.Column(db.DateTime, nullable=True)
+
+    owner_user = db.relationship("User", foreign_keys=[owner_user_id], lazy=True)
+
+    @validates("media_role")
+    def validate_media_role(self, key, value):
+        return _validate_value(value, MEDIA_OBJECT_ROLES, key)
+
+    @validates("status")
+    def validate_status(self, key, value):
+        return _validate_value((value or "ACTIVE").strip().upper(), MEDIA_OBJECT_STATUSES, key)
+
+    @validates("source")
+    def validate_source(self, key, value):
+        return _validate_value(value or "upload", MEDIA_OBJECT_SOURCES, key)
+
+    def __repr__(self):
+        return f"<MediaObject {self.storage_key} {self.status} {self.size_bytes}B>"
+
 
 # ---------------------------------------------------------------------
 # Scan logs with subscription enforcement
