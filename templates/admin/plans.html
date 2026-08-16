@@ -578,16 +578,16 @@
         <div class="card" data-testid="v11-plan-policy-contract">
             <h3 style="margin-bottom: 10px;">V1.1 Commercial Policy Contract</h3>
             <p class="policy-note">
-                This admin view surfaces operational plan fields that exist today: price, validity, project capacity,
-                scan allowance and pairs per project. Plan family, storage/media policy, per-experience entitlements
-                and lifecycle/revision status are shown as backend-pending instead of editable controls because those
-                fields are not present on SubscriptionPlan in this worktree.
+                This admin view surfaces operational plan fields that are editable here today: price, validity, project
+                capacity, scan allowance and pairs per project. Plan family, storage/media policy, per-experience
+                entitlements and lifecycle/revision status are stored on SubscriptionPlan and are read below as live
+                values, but they are read-only in this UI — no admin form writes them yet.
             </p>
             <div class="policy-panel">
                 <div class="policy-row"><span>Supported account types</span><span class="policy-value">Individual; Business / Vendor</span></div>
                 <div class="policy-row"><span>Supported experience labels</span><span class="policy-value">Direct QR; Detect Once; Tracked Overlay</span></div>
-                <div class="policy-row"><span>Plan-family field</span><span class="policy-value">{{ 'Available' if plan_family_contract_available else 'Backend pending' }}</span></div>
-                <div class="policy-row"><span>Storage/media policy fields</span><span class="policy-value">Backend pending</span></div>
+                <div class="policy-row"><span>Plan-family field</span><span class="policy-value">Live (read-only here)</span></div>
+                <div class="policy-row"><span>Storage/media policy fields</span><span class="policy-value">Live (read-only here)</span></div>
             </div>
         </div>
         
@@ -679,32 +679,31 @@
                     </div>
                 </div>
 
+                {% set media_policy = plan_media_policy_display(plan) %}
                 <div class="policy-panel">
                     <div class="policy-row">
                         <span>Plan family</span>
-                        <span class="policy-value">
-                            {% if plan_family_contract_available and plan.plan_family %}
-                                {{ plan.plan_family }}
-                            {% else %}
-                                Backend pending
-                            {% endif %}
-                        </span>
+                        <span class="policy-value">{{ plan_family_label(plan.plan_family) }}</span>
                     </div>
                     <div class="policy-row">
                         <span>Experience entitlements</span>
-                        <span class="policy-value">Direct QR; Detect Once; Tracked Overlay</span>
+                        <span class="policy-value">
+                            {% for option in plan_experience_options(plan) %}
+                            {{ option.label }} ({{ 'Included' if option.allowed else 'Not included' }}){% if not loop.last %}; {% endif %}
+                            {% endfor %}
+                        </span>
                     </div>
                     <div class="policy-row">
-                        <span>Base storage</span>
-                        <span class="policy-value">Backend pending</span>
+                        <span>Base storage allowance</span>
+                        <span class="policy-value">{{ media_policy.base_storage if media_policy.base_storage else 'Not specified' }}</span>
                     </div>
                     <div class="policy-row">
                         <span>Media policy</span>
-                        <span class="policy-value">Backend pending</span>
+                        <span class="policy-value">Image {{ media_policy.max_image }}; video {{ media_policy.max_video }}</span>
                     </div>
                     <div class="policy-row">
                         <span>Lifecycle/revision</span>
-                        <span class="policy-value">Backend pending</span>
+                        <span class="policy-value">{{ plan.lifecycle_status }} / rev {{ plan.plan_revision }}</span>
                     </div>
                 </div>
                 <div class="plan-actions">
