@@ -667,4 +667,20 @@ checkpoint.
   `data_admin/`, `routes_map.txt`, `server-tree.txt`, `windows_rq_worker.py`,
   test DBs, scratch files or credentials.
 
-COMMITS_PLACEHOLDER
+### Commits
+
+| Commit | Contents |
+| --- | --- |
+| `b2fb71f` | `fix(prod): close the nine V1.1 P0 production blockers` — all nine fixes, both migrations, the admin add-on surface, the Wave 1 regression tests and the migrated-schema lane, plus the config/doc updates |
+| `12417d1` | `docs(v1.1): add Wave 1 P0 implementation report` — this document and the audit status note |
+
+The split is deliberate and both commits are independently green. A four-way
+split by blocker was considered and rejected: the fixes share `app.py`,
+`activate_payment()`/`_delete_project_files_and_rows()` and a single regression
+test file, and P0-3's tests depend on P0-2 while P0-5's schema revision chains
+onto P0-2's — separating them would have produced broken intermediate commits,
+which the checkpoint brief explicitly rules out. This also matches the
+one-commit-per-checkpoint convention used by the preceding V1.1 commits on this
+branch.
+
+Working tree clean after both commits. `git diff --check` clean.
