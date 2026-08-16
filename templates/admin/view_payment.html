@@ -483,74 +483,9 @@
 
     <!-- Sidebar -->
     <div class="sidebar">
-        <div class="sidebar-section">
-            <div class="sidebar-title">Dashboard</div>
-            <a href="/admin/dashboard" class="sidebar-link">
-                <i class="fas fa-tachometer-alt"></i>
-                <span>Dashboard</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">User Management</div>
-            <a href="/admin/users" class="sidebar-link">
-                <i class="fas fa-users"></i>
-                <span>Users</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">Content</div>
-            <a href="/admin/projects" class="sidebar-link">
-                <i class="fas fa-project-diagram"></i>
-                <span>Projects</span>
-            </a>
-            <a href="/admin/scans" class="sidebar-link">
-                <i class="fas fa-search"></i>
-                <span>Scans</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">System</div>
-            {% if admin_can('superadmin.plans.manage') %}
-            <a href="/admin/plans" class="sidebar-link">
-                <i class="fas fa-list-alt"></i>
-                <span>Plans</span>
-            </a>
-            {% endif %}
-            <a href="/admin/subscriptions" class="sidebar-link">
-                <i class="fas fa-receipt"></i>
-                <span>Subscriptions</span>
-            </a>
-            <a href="/admin/payments" class="sidebar-link active">
-                <i class="fas fa-credit-card"></i>
-                <span>Payments</span>
-            </a>
-            {% if admin_can('superadmin.admins.manage') %}
-            <a href="/admin/admins" class="sidebar-link">
-                <i class="fas fa-user-shield"></i>
-                <span>Admin Management</span>
-            </a>
-            {% endif %}
-            {% if admin_can('superadmin.capacity.manage') %}
-            <a href="/admin/capacity" class="sidebar-link">
-                <i class="fas fa-gauge-high"></i>
-                <span>Capacity</span>
-            </a>
-            {% endif %}
-            {% if admin_can('superadmin.settings.manage') %}
-            <a href="/admin/settings" class="sidebar-link">
-                <i class="fas fa-cog"></i>
-                <span>Settings</span>
-            </a>
-            {% endif %}
-            <a href="/admin/activity-logs" class="sidebar-link">
-                <i class="fas fa-clipboard-list"></i>
-                <span>Activity Logs</span>
-            </a>
-        </div>
+        {% include "admin/_sidebar_links.html" %}
     </div>
+
 
     <!-- Main Content -->
     <div class="main-content">
@@ -944,19 +879,18 @@
                     <span class="info-value">{{ payment.payment_at.strftime('%d %b %Y, %I:%M:%S %p') }}</span>
                 </div>
                 {% endif %}
-
-                {% if payment.payment_details %}
                 <div style="margin-top: 15px;">
-                    <h4 style="margin-bottom: 10px;">Raw Payment Response</h4>
-                    <div style="background: rgba(255,255,255,0.04); color: #e6e6e9; padding: 15px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.16); font-family: monospace; font-size: 12px; max-height: 200px; overflow: auto;">
-                        {{ payment.payment_details|tojson|safe }}
+                    <h4 style="margin-bottom: 10px;">Gateway Diagnostics</h4>
+                    <div class="alert alert-info">
+                        Raw provider payloads are not displayed in the normal Admin UI. Use curated payment IDs,
+                        order references, status, amount, timestamps, refund status, and webhook history above for support.
                     </div>
                 </div>
-                {% endif %}
             </div>
         </div>
     </div>
 
+    {% include "admin/_admin_fetch_helper.html" %}
     <script>
         function toggleDropdown() {
             const dropdown = document.getElementById('userDropdown');
@@ -1011,12 +945,12 @@
                     headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF },
                     body: JSON.stringify({ reason: reason })
                 }).then(async function (response) {
-                    let payload = null;
-                    try { payload = await response.json(); } catch (e) { /* redirect / error page */ }
-                    if (!response.ok || !payload || !payload.success) {
+                    const result = await window.parseAdminJsonResponse(response);
+                    const payload = result.payload;
+                    if (!result.ok || !payload || !payload.success) {
                         msgEl.textContent = 'Refund could not be started'
                             + (payload && payload.code ? ' (' + payload.code + ').' : '.')
-                            + ' Reloading current status…';
+                            + ' ' + (result.message || 'Reloading current status.');
                     } else {
                         msgEl.textContent = 'Refund submitted. Reloading authoritative status…';
                     }

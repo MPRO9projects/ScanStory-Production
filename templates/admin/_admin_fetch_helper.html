@@ -1,0 +1,22 @@
+<script>
+  window.parseAdminJsonResponse = window.parseAdminJsonResponse || async function parseAdminJsonResponse(response) {
+    const contentType = response.headers.get('content-type') || '';
+    let payload = null;
+    if (contentType.indexOf('application/json') !== -1) {
+      try { payload = await response.json(); } catch (e) { payload = null; }
+    }
+
+    if (response.ok && payload) {
+      return { ok: true, payload: payload, message: null };
+    }
+
+    let message = 'Request failed. Refresh the page and try again.';
+    if (response.status === 400) {
+      message = 'Security token expired. Refresh the page and try again.';
+    } else if (response.status === 401 || response.status === 403 || response.redirected || !payload) {
+      message = 'Your admin session has expired. Please sign in again.';
+    }
+
+    return { ok: false, payload: payload, message: message };
+  };
+</script>

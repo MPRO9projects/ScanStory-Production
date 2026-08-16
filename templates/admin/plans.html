@@ -518,75 +518,9 @@
     
     <!-- Sidebar -->
     <div class="sidebar">
-        <div class="sidebar-section">
-            <div class="sidebar-title">Dashboard</div>
-            <a href="/admin/dashboard" class="sidebar-link">
-                <i class="fas fa-tachometer-alt"></i>
-                <span>Dashboard</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">User Management</div>
-            <a href="/admin/users" class="sidebar-link">
-                <i class="fas fa-users"></i>
-                <span>Users</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">Content</div>
-            <a href="/admin/projects" class="sidebar-link">
-                <i class="fas fa-project-diagram"></i>
-                <span>Projects</span>
-            </a>
-            <a href="/admin/scans" class="sidebar-link">
-                <i class="fas fa-search"></i>
-                <span>Scans</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">System</div>
-            {% if admin_can('superadmin.plans.manage') %}
-            <a href="/admin/plans" class="sidebar-link active">
-                <i class="fas fa-list-alt"></i>
-                <span>Plans</span>
-            </a>
-            {% endif %}
-            <a href="/admin/subscriptions" class="sidebar-link">
-                <i class="fas fa-receipt"></i>
-                <span>Subscriptions</span>
-            </a>
-            <a href="/admin/payments" class="sidebar-link">
-                <i class="fas fa-credit-card"></i>
-                <span>Payments</span>
-            </a>
-            {% if admin_can('superadmin.admins.manage') %}
-            <a href="/admin/admins" class="sidebar-link">
-                <i class="fas fa-user-shield"></i>
-                <span>Admin Management</span>
-            </a>
-            {% endif %}
-            {% if admin_can('superadmin.capacity.manage') %}
-            <a href="/admin/capacity" class="sidebar-link">
-                <i class="fas fa-gauge-high"></i>
-                <span>Capacity</span>
-            </a>
-            {% endif %}
-            {% if admin_can('superadmin.settings.manage') %}
-            <a href="/admin/settings" class="sidebar-link">
-                <i class="fas fa-cog"></i>
-                <span>Settings</span>
-            </a>
-            {% endif %}
-            <a href="/admin/activity-logs" class="sidebar-link">
-                <i class="fas fa-clipboard-list"></i>
-                <span>Activity Logs</span>
-            </a>
-        </div>
+        {% include "admin/_sidebar_links.html" %}
     </div>
-    
+
     <!-- Main Content -->
     <div class="main-content">
         <div class="page-header">
@@ -698,14 +632,14 @@
                     <form action="/admin/plans/{{ plan.id }}/toggle-status" method="POST" style="display:inline-block; margin:0;">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         {% if plan.is_active %}
-                        <button type="submit" class="btn btn-warning btn-sm" onclick="return confirm('Deactivate this plan? New subscribers will no longer be able to choose it.');">Deactivate</button>
+                        <button type="submit" class="btn btn-warning btn-sm" onclick="return confirm('Deactivate this plan? New subscribers will no longer be able to choose it. Existing subscriptions are not deleted.');">Deactivate</button>
                         {% else %}
                         <button type="submit" class="btn btn-success btn-sm" onclick="return confirm('Activate this plan?');">Activate</button>
                         {% endif %}
                     </form>
                     <form action="/admin/plans/{{ plan.id }}/delete" method="POST" style="display:inline-block; margin:0;">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Are you sure you want to delete this plan?');">Delete</button>
+                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this plan configuration? Historical payment and subscription records are not deleted by this UI, but this cannot be undone.');">Delete</button>
                     </form>
                 </div>
             </div>

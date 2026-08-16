@@ -127,6 +127,7 @@
 {% endblock %}
 
 {% block extra_js %}
+{% include "admin/_admin_fetch_helper.html" %}
 <script>
   (function () {
     const CSRF = "{{ csrf_token() }}";
@@ -171,12 +172,10 @@
       const url = '{{ url_for("admin_content_reports") }}' + (STATUS_FILTER ? '?status=' + encodeURIComponent(STATUS_FILTER) : '');
       fetch(url, { headers: { Accept: 'application/json' } })
         .then(async function (response) {
-          let payload = null;
-          try { payload = await response.json(); } catch (e) { /* redirect / error page */ }
-          if (!response.ok || !payload || !payload.success) {
-            // A denied admin route answers with an HTML redirect, not JSON, so
-            // there is nothing to parse - say so plainly instead of blanking.
-            rows.innerHTML = emptyRow('Could not load reports. Your session may have expired — reload the page.');
+          const result = await window.parseAdminJsonResponse(response);
+          const payload = result.payload;
+          if (!result.ok || !payload || !payload.success) {
+            rows.innerHTML = emptyRow(result.message || 'Could not load reports. Refresh the page and try again.');
             return;
           }
           render(payload.reports || []);
@@ -271,10 +270,10 @@
       })
         .then(async function (response) {
           submitBtn.disabled = false;
-          let payload = null;
-          try { payload = await response.json(); } catch (e) { /* not JSON */ }
-          if (!response.ok || !payload || !payload.success) {
-            errorBox.textContent = (payload && payload.error) || 'Could not save this decision.';
+          const result = await window.parseAdminJsonResponse(response);
+          const payload = result.payload;
+          if (!result.ok || !payload || !payload.success) {
+            errorBox.textContent = (payload && payload.error) || result.message || 'Could not save this decision.';
             errorBox.classList.remove('d-none');
             return;
           }

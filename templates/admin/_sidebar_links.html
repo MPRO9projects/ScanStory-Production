@@ -1,0 +1,58 @@
+<div class="sidebar-title">Dashboard</div>
+<a href="{{ url_for('admin_dashboard') }}" class="sidebar-link {% if request.endpoint == 'admin_dashboard' %}active{% endif %}" {% if request.endpoint == 'admin_dashboard' %}aria-current="page"{% endif %}>
+    <i class="fas fa-tachometer-alt" aria-hidden="true"></i><span>Dashboard</span>
+</a>
+
+<div class="sidebar-title">User Management</div>
+<a href="{{ url_for('admin_users') }}" class="sidebar-link {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_user_profiles', 'admin_view_user_dashboard') %}active{% endif %}" {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_user_profiles', 'admin_view_user_dashboard') %}aria-current="page"{% endif %}>
+    <i class="fas fa-users" aria-hidden="true"></i><span>Users</span>
+</a>
+
+<div class="sidebar-title">Content</div>
+<a href="{{ url_for('admin_projects') }}" class="sidebar-link {% if request.endpoint in ('admin_projects', 'admin_view_project', 'admin_my_projects') %}active{% endif %}" {% if request.endpoint in ('admin_projects', 'admin_view_project', 'admin_my_projects') %}aria-current="page"{% endif %}>
+    <i class="fas fa-project-diagram" aria-hidden="true"></i><span>Projects</span>
+</a>
+{% if admin_can('admin.reports.view') %}
+<a href="{{ url_for('admin_moderation_page') }}" class="sidebar-link {% if request.endpoint == 'admin_moderation_page' %}active{% endif %}" {% if request.endpoint == 'admin_moderation_page' %}aria-current="page"{% endif %}>
+    <i class="fas fa-flag" aria-hidden="true"></i><span>Content Reports</span>
+</a>
+{% endif %}
+<a href="{{ url_for('admin_scans') }}" class="sidebar-link {% if request.endpoint in ('admin_scans', 'admin_user_scans') %}active{% endif %}" {% if request.endpoint in ('admin_scans', 'admin_user_scans') %}aria-current="page"{% endif %}>
+    <i class="fas fa-search" aria-hidden="true"></i><span>Scans</span>
+</a>
+
+<div class="sidebar-title">System</div>
+{% if admin_can('superadmin.plans.manage') %}
+<a href="{{ url_for('admin_plans') }}" class="sidebar-link {% if request.endpoint in ('admin_plans', 'admin_add_plan', 'admin_edit_plan') %}active{% endif %}" {% if request.endpoint in ('admin_plans', 'admin_add_plan', 'admin_edit_plan') %}aria-current="page"{% endif %}>
+    <i class="fas fa-list-alt" aria-hidden="true"></i><span>Plans</span>
+</a>
+{% endif %}
+<a href="{{ url_for('admin_subscriptions') }}" class="sidebar-link {% if 'admin_subscriptions' in request.endpoint %}active{% endif %}" {% if 'admin_subscriptions' in request.endpoint %}aria-current="page"{% endif %}>
+    <i class="fas fa-receipt" aria-hidden="true"></i><span>Subscriptions</span>
+</a>
+<a href="{{ url_for('admin_payments') }}" class="sidebar-link {% if request.endpoint in ('admin_payments', 'admin_view_payment') %}active{% endif %}" {% if request.endpoint in ('admin_payments', 'admin_view_payment') %}aria-current="page"{% endif %}>
+    <i class="fas fa-credit-card" aria-hidden="true"></i><span>Payments</span>
+</a>
+{% if admin_can('superadmin.admins.manage') %}
+<a href="{{ url_for('admin_manage_admins') }}" class="sidebar-link {% if request.endpoint in ('admin_manage_admins', 'admin_add_admin', 'admin_edit_admin') %}active{% endif %}" {% if request.endpoint in ('admin_manage_admins', 'admin_add_admin', 'admin_edit_admin') %}aria-current="page"{% endif %}>
+    <i class="fas fa-user-shield" aria-hidden="true"></i><span>Admin Management</span>
+</a>
+{% endif %}
+{% if admin_can('superadmin.capacity.manage') %}
+<a href="{{ url_for('admin_capacity') }}" class="sidebar-link {% if request.endpoint == 'admin_capacity' %}active{% endif %}" {% if request.endpoint == 'admin_capacity' %}aria-current="page"{% endif %}>
+    <i class="fas fa-gauge-high" aria-hidden="true"></i><span>Capacity</span>
+</a>
+{% endif %}
+{% if admin_can('superadmin.operations.view') %}
+<a href="{{ url_for('admin_operations') }}" class="sidebar-link {% if request.endpoint == 'admin_operations' %}active{% endif %}" {% if request.endpoint == 'admin_operations' %}aria-current="page"{% endif %}>
+    <i class="fas fa-heart-pulse" aria-hidden="true"></i><span>Operations</span>
+</a>
+{% endif %}
+{% if admin_can('superadmin.settings.manage') %}
+<a href="{{ url_for('admin_settings') }}" class="sidebar-link {% if request.endpoint == 'admin_settings' %}active{% endif %}" {% if request.endpoint == 'admin_settings' %}aria-current="page"{% endif %}>
+    <i class="fas fa-cog" aria-hidden="true"></i><span>Settings</span>
+</a>
+{% endif %}
+<a href="{{ url_for('admin_activity_logs') }}" class="sidebar-link {% if request.endpoint == 'admin_activity_logs' %}active{% endif %}" {% if request.endpoint == 'admin_activity_logs' %}aria-current="page"{% endif %}>
+    <i class="fas fa-clipboard-list" aria-hidden="true"></i><span>Activity Logs</span>
+</a>

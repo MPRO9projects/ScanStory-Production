@@ -16,12 +16,21 @@
 <div class="row g-3 mb-4">
     <div class="col-lg-6">
         <div class="card h-100">
-            <div class="card-header">RQ / Worker</div>
+            <div class="card-header">RQ / Worker Configuration</div>
             <div class="card-body">
                 <dl class="row mb-0">
-                    <dt class="col-sm-5">Available</dt><dd class="col-sm-7">{{ "Yes" if rq_diagnostics.available else "No" }}</dd>
+                    <dt class="col-sm-5">Queue availability check</dt>
+                    <dd class="col-sm-7">
+                        {% if rq_diagnostics.mode == 'rq' and rq_diagnostics.available %}
+                        Reachable
+                        {% elif rq_diagnostics.mode == 'rq' %}
+                        Unavailable
+                        {% else %}
+                        Unknown / not verified
+                        {% endif %}
+                    </dd>
                     <dt class="col-sm-5">Mode</dt><dd class="col-sm-7">{{ rq_diagnostics.mode or "-" }}</dd>
-                    <dt class="col-sm-5">Redis configured</dt><dd class="col-sm-7">{{ "Yes" if rq_diagnostics.redis_configured else "No" }}</dd>
+                    <dt class="col-sm-5">Redis configuration</dt><dd class="col-sm-7">{{ "Configured" if rq_diagnostics.redis_configured else "Not configured" }}</dd>
                     <dt class="col-sm-5">Queue</dt><dd class="col-sm-7">{{ rq_diagnostics.queue_name or "-" }}</dd>
                     <dt class="col-sm-5">Pending</dt><dd class="col-sm-7">{{ rq_diagnostics.pending_count if rq_diagnostics.pending_count is not none else "-" }}</dd>
                     <dt class="col-sm-5">Running</dt><dd class="col-sm-7">{{ rq_diagnostics.running_count if rq_diagnostics.running_count is not none else "-" }}</dd>
@@ -30,6 +39,7 @@
                     <dt class="col-sm-5">Safe error</dt><dd class="col-sm-7 text-warning">{{ rq_diagnostics.error }}</dd>
                     {% endif %}
                 </dl>
+                <p class="text-muted small mt-3 mb-0">Configured Redis/RQ does not prove a worker is online; worker count is not reported by this backend yet.</p>
             </div>
         </div>
     </div>
@@ -38,8 +48,8 @@
             <div class="card-header">SMTP</div>
             <div class="card-body">
                 <dl class="row mb-0">
-                    <dt class="col-sm-5">Configured</dt><dd class="col-sm-7">{{ "Yes" if smtp_diagnostics.configured else "No" }}</dd>
-                    <dt class="col-sm-5">Host configured</dt><dd class="col-sm-7">{{ "Yes" if smtp_diagnostics.host_configured else "No" }}</dd>
+                    <dt class="col-sm-5">Configuration</dt><dd class="col-sm-7">{{ "Configured" if smtp_diagnostics.configured else "Not configured" }}</dd>
+                    <dt class="col-sm-5">Host configuration</dt><dd class="col-sm-7">{{ "Configured" if smtp_diagnostics.host_configured else "Not configured" }}</dd>
                     <dt class="col-sm-5">Port</dt><dd class="col-sm-7">{{ smtp_diagnostics.port or "-" }}</dd>
                     <dt class="col-sm-5">Security</dt><dd class="col-sm-7">{{ smtp_diagnostics.security or "-" }}</dd>
                     <dt class="col-sm-5">Timeout</dt><dd class="col-sm-7">{{ smtp_diagnostics.timeout_seconds or "-" }}s</dd>
@@ -48,6 +58,7 @@
                     <dt class="col-sm-5">Config warning</dt><dd class="col-sm-7 text-warning">{{ error }}</dd>
                     {% endfor %}
                 </dl>
+                <p class="text-muted small mt-3 mb-0">Configured SMTP does not prove email delivery; last-send success is not reported by this backend yet.</p>
             </div>
         </div>
     </div>
@@ -314,6 +325,7 @@
 </div>
 
 {% if admin_can('admin.payments.refund') %}
+{% include "admin/_admin_fetch_helper.html" %}
 <script>
   // Full refund only; no amount is sent because the endpoint accepts none.
   // The POST response is never rendered as the final state - reconciliation can
@@ -340,12 +352,12 @@
           headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF },
           body: JSON.stringify({ reason: reason })
         }).then(async function (response) {
-          let payload = null;
-          try { payload = await response.json(); } catch (e) { /* redirect / error page */ }
-          if (!response.ok || !payload || !payload.success) {
+          const result = await window.parseAdminJsonResponse(response);
+          const payload = result.payload;
+          if (!result.ok || !payload || !payload.success) {
             msgEl.textContent = 'Refund could not be started'
               + (payload && payload.code ? ' (' + payload.code + ').' : '.')
-              + ' Reloading current status…';
+              + ' ' + (result.message || 'Reloading current status.');
           } else {
             msgEl.textContent = 'Refund submitted. Reloading authoritative status…';
           }

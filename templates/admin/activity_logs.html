@@ -43,25 +43,7 @@
         <div>Welcome, {{ admin.name }}</div>
     </nav>
     <aside class="sidebar">
-        <a class="sidebar-link" href="/admin/dashboard">Dashboard</a>
-        <a class="sidebar-link" href="/admin/users">Users</a>
-        <a class="sidebar-link" href="/admin/projects">Projects</a>
-        <a class="sidebar-link" href="/admin/scans">Scans</a>
-        {% if admin_can('superadmin.plans.manage') %}
-        <a class="sidebar-link" href="/admin/plans">Plans</a>
-        {% endif %}
-        <a class="sidebar-link" href="/admin/subscriptions">Subscriptions</a>
-        <a class="sidebar-link" href="/admin/payments">Payments</a>
-        {% if admin_can('superadmin.admins.manage') %}
-        <a class="sidebar-link" href="/admin/admins">Admin Management</a>
-        {% endif %}
-        {% if admin_can('superadmin.capacity.manage') %}
-        <a class="sidebar-link" href="/admin/capacity">Capacity</a>
-        {% endif %}
-        {% if admin_can('superadmin.settings.manage') %}
-        <a class="sidebar-link" href="/admin/settings">Settings</a>
-        {% endif %}
-        <a class="sidebar-link active" href="/admin/activity-logs">Activity Logs</a>
+        {% include "admin/_sidebar_links.html" %}
     </aside>
     <main class="main-content">
         <div class="page-header">
