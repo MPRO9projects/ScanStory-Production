@@ -401,8 +401,9 @@ def test_pricing_page_shows_account_family_and_experience_contract_without_fake_
     # Real per-file media policy + real base storage ENTITLEMENT.
     assert "Image up to 50 MB; video up to 1 GB" in body
     assert "5 GB" in body
-    # Storage usage accounting is still Wave 3 - no used/available claim.
-    assert "storage usage is not measured or billed yet" in body
+    # Wave 3 storage accounting is real now; pricing copy must be non-destructive.
+    assert "Storage allowance is tracked against account media usage" in body
+    assert "media and QR codes are not deleted" in body
 
     # The pre-Wave-2 placeholders must be gone now that the fields are real.
     assert "Backend plan-family fields are not available" not in body
@@ -517,13 +518,97 @@ def test_user_profile_entitlement_summary_uses_backend_ledgers(
     # Real per-file media policy and base storage ENTITLEMENT from the resolver.
     assert "image up to 50 MB" in body
     assert "video up to 1 GB" in body
-    assert "Storage allowance:" in body
+    assert "Storage allowance:" not in body
+    assert "Base storage" in body
+    assert "Effective total" in body
     assert "2 GB" in body
     # Wave 3 delivered usage accounting, so the "not measured yet" disclaimer
     # this page carried through Wave 2 is now obsolete and must not render.
     assert "Storage usage is not measured yet" not in body
 
     assert "Backend pending" not in body
+
+
+def test_profile_shows_real_storage_breakdown_and_account_storage_addons(
+    client, app_module, db_session, login_user
+):
+    user = login_user
+    gb = 1024 * 1024 * 1024
+    plan = app_module.SubscriptionPlan(
+        plan_name="Storage UX Plan", plan_amount=499, duration_type="time", duration_value=1,
+        total_project_limit=5, total_scan_limit=100, max_pairs_per_project=2, is_active=True,
+        base_storage_bytes=5 * gb,
+    )
+    addon = app_module.AddonCatalog(
+        code="STORAGE_2GB", name="2 GB storage pack", description="Adds account storage",
+        addon_type="ACCOUNT_STORAGE", unit_amount=199, currency="INR", storage_bytes_delta=2 * gb,
+        is_active=True, is_commercially_available=True,
+    )
+    db_session.add_all([plan, addon])
+    db_session.commit()
+    user.subscription_id = plan.id
+    user.subscription_status = "active"
+    user.storage_used_bytes = 6 * gb
+    db_session.add_all([
+        app_module.EntitlementTransaction(
+            user_id=user.id, entitlement_type="ACCOUNT_STORAGE", delta_value=2 * gb,
+            source_type="addon_purchase", source_id=9101, reason="storage UX test",
+        ),
+        app_module.EntitlementTransaction(
+            user_id=user.id, entitlement_type="ACCOUNT_STORAGE", delta_value=1 * gb,
+            source_type="admin_grant", source_id=9102, reason="storage UX test",
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get("/profile")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert 'data-testid="storage-entitlement-summary"' in body
+    assert "Base storage" in body
+    assert "Purchased storage" in body
+    assert "Admin grant" in body
+    assert "Effective total" in body
+    assert "Used" in body
+    assert "Remaining" in body
+    assert "5 GB" in body
+    assert "6 GB" in body
+    assert "8 GB" in body
+    assert "2 GB" in body
+    assert "1 GB" in body
+    assert 'addonType: \'ACCOUNT_STORAGE\'' in body
+    assert "Storage usage is not measured yet" not in body
+
+
+def test_profile_over_storage_copy_is_truthful_and_non_destructive(
+    client, app_module, db_session, login_user
+):
+    user = login_user
+    gb = 1024 * 1024 * 1024
+    plan = app_module.SubscriptionPlan(
+        plan_name="Small Storage Plan", plan_amount=199, duration_type="time", duration_value=1,
+        total_project_limit=5, total_scan_limit=100, max_pairs_per_project=2, is_active=True,
+        base_storage_bytes=1 * gb,
+    )
+    db_session.add(plan)
+    db_session.commit()
+    user.subscription_id = plan.id
+    user.subscription_status = "active"
+    user.storage_used_bytes = 3 * gb
+    db_session.commit()
+
+    response = client.get("/profile")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert 'data-testid="storage-overage-copy"' in body
+    assert "over storage by" in body
+    assert "2 GB" in body
+    assert "Existing projects, media and QR codes remain available" in body
+    assert "New uploads that consume more storage are blocked" in body
+    assert "Smaller replacements may be allowed" in body
+    assert "automatically deleted" not in body
 
 
 def test_admin_user_views_show_backend_sourced_entitlement_and_grandfathering_copy(
@@ -555,3 +640,33 @@ def test_admin_user_views_show_backend_sourced_entitlement_and_grandfathering_co
         assert "Direct QR" in body
         assert "Detect Once" in body
         assert "Tracked Overlay" in body
+        assert "Storage Used" in body or "Storage Used / Remaining" in body
+        assert "storage usage is not tracked yet" not in body
+
+
+def test_admin_user_page_exposes_storage_grant_without_path_or_secret_leak(
+    client, login_admin, app_module, db_session, normal_user
+):
+    gb = 1024 * 1024 * 1024
+    normal_user.storage_used_bytes = 3 * gb
+    plan = app_module.SubscriptionPlan(
+        plan_name="Admin Storage Plan", plan_amount=199, duration_type="time", duration_value=1,
+        total_project_limit=5, total_scan_limit=100, max_pairs_per_project=2, is_active=True,
+        base_storage_bytes=1 * gb,
+    )
+    db_session.add(plan)
+    db_session.commit()
+    normal_user.subscription_id = plan.id
+    db_session.commit()
+
+    response = client.get(f"/admin/users/{normal_user.id}")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert 'data-testid="admin-storage-grant-form"' in body
+    assert f"/admin/users/{normal_user.id}/grant-storage" in body
+    assert 'name="storage_bytes"' in body
+    assert "Revocation never deletes media or QR codes" in body
+    assert "Existing projects, media and QR codes remain available" in body
+    assert "F:\\\\" not in body
+    assert "SECRET_KEY" not in body

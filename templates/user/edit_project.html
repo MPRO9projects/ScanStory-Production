@@ -390,10 +390,10 @@
       <p>Replace only the files you want to update. Empty fields will keep the current media.</p>
     </div>
 
-    <div class="info-banner">
-      <i class="fas fa-circle-info"></i>
-      <span>Uploading a new image or video will reprocess only that story pair. Your QR code stays the same.</span>
-    </div>
+  <div class="info-banner">
+    <i class="fas fa-circle-info"></i>
+      <span>Uploading a new image or video will reprocess only that story pair. Your QR code stays the same. If your account is over storage, smaller replacements may be allowed while equal or larger replacements can be blocked.</span>
+  </div>
 
     <form method="POST" enctype="multipart/form-data" action="{{ url_for('user_edit_project', project_id=project.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

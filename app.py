@@ -2880,6 +2880,18 @@ def format_bytes_display(value):
         size /= 1024
 
 
+def format_storage_bytes_display(value):
+    """Storage meter display. None means unenforced; zero is still real usage."""
+    if value is None:
+        return None
+    if int(value or 0) == 0:
+        return "0 bytes"
+    return format_bytes_display(value)
+
+
+app.jinja_env.globals.update(format_bytes_display=format_bytes_display)
+
+
 def plan_family_label(family):
     """Plan family -> display label. PLAN_FAMILY_* deliberately reuses the
     ACCOUNT_TYPE_* vocabulary (see models.py), so one label map serves both."""
@@ -2936,14 +2948,14 @@ def user_entitlement_summary(user):
         # Wave 2 "not tracked yet" disclaimer no longer renders. The numbers
         # below are supplied for whichever checkpoint renders the storage meter;
         # no template is changed here.
-        "base_storage_display": format_bytes_display(ents["base_storage_bytes"]),
-        "purchased_storage_display": format_bytes_display(ents["purchased_storage_bytes"]),
-        "admin_granted_storage_display": format_bytes_display(ents["admin_granted_storage_bytes"]),
-        "effective_storage_display": format_bytes_display(ents["effective_storage_bytes"]),
-        "storage_used_display": format_bytes_display(ents["storage_used_bytes"]),
-        "storage_remaining_display": format_bytes_display(ents["storage_remaining_bytes"]),
+        "base_storage_display": format_storage_bytes_display(ents["base_storage_bytes"]),
+        "purchased_storage_display": format_storage_bytes_display(ents["purchased_storage_bytes"]),
+        "admin_granted_storage_display": format_storage_bytes_display(ents["admin_granted_storage_bytes"]),
+        "effective_storage_display": format_storage_bytes_display(ents["effective_storage_bytes"]),
+        "storage_used_display": format_storage_bytes_display(ents["storage_used_bytes"]),
+        "storage_remaining_display": format_storage_bytes_display(ents["storage_remaining_bytes"]),
         "over_storage": ents["over_storage"],
-        "storage_overage_display": format_bytes_display(ents["storage_overage_bytes"]),
+        "storage_overage_display": format_storage_bytes_display(ents["storage_overage_bytes"]),
         "storage_usage_tracked": ents["storage_usage_tracked"],
         "max_image_display": format_bytes_display(ents["image_policy"]["max_bytes"]),
         "max_video_display": format_bytes_display(ents["video_policy"]["max_bytes"]),
@@ -9521,7 +9533,12 @@ def verify_addon_purchase(purchase_id):
 @app.route("/api/account/capacity", methods=["GET"])
 @login_required
 def account_capacity_summary():
-    return jsonify({"success": True, "capacity": project_capacity_summary(current_user())})
+    user = current_user()
+    return jsonify({
+        "success": True,
+        "capacity": project_capacity_summary(user),
+        "entitlement_summary": user_entitlement_summary(user),
+    })
 
 
 @app.route("/api/projects/<int:project_id>/coverage", methods=["GET"])
