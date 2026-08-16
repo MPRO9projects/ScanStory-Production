@@ -21,6 +21,32 @@ ACCOUNT_TYPE_INDIVIDUAL = "INDIVIDUAL"
 ACCOUNT_TYPE_BUSINESS_VENDOR = "BUSINESS_VENDOR"
 USER_ACCOUNT_TYPES = {ACCOUNT_TYPE_INDIVIDUAL, ACCOUNT_TYPE_BUSINESS_VENDOR}
 
+# One SubscriptionPlan architecture serves both account types - a plan simply
+# declares which family it is sold to. Deliberately reuses the account-type
+# vocabulary so `plan.plan_family == user.account_type` is a direct comparison.
+PLAN_FAMILY_INDIVIDUAL = ACCOUNT_TYPE_INDIVIDUAL
+PLAN_FAMILY_BUSINESS_VENDOR = ACCOUNT_TYPE_BUSINESS_VENDOR
+PLAN_FAMILIES = {PLAN_FAMILY_INDIVIDUAL, PLAN_FAMILY_BUSINESS_VENDOR}
+
+# Smallest sound plan-lifecycle foundation (Wave 2). It governs *purchasability*
+# only; it never retroactively changes what an existing subscriber agreed to.
+# That historical record lives in PaymentOrder.plan_policy_snapshot_json, which
+# is written at activation time. See the Wave 2 report for the residual risk
+# (this is a version *marker* + snapshot, not full immutable plan revisions).
+PLAN_STATUS_DRAFT = "DRAFT"
+PLAN_STATUS_ACTIVE = "ACTIVE"
+PLAN_STATUS_CLOSED_FOR_NEW_PURCHASE = "CLOSED_FOR_NEW_PURCHASE"
+PLAN_STATUS_ARCHIVED = "ARCHIVED"
+PLAN_LIFECYCLE_STATUSES = {
+    PLAN_STATUS_DRAFT,
+    PLAN_STATUS_ACTIVE,
+    PLAN_STATUS_CLOSED_FOR_NEW_PURCHASE,
+    PLAN_STATUS_ARCHIVED,
+}
+# Only these may back a NEW purchase. Existing subscribers on any other status
+# keep running - lifecycle is never destructive.
+PLAN_PURCHASABLE_STATUSES = {PLAN_STATUS_ACTIVE}
+
 
 # ---------F------------------------------------------------------------
 # Subscription Plans
@@ -48,7 +74,63 @@ class SubscriptionPlan(db.Model):
     # Limits (admin configurable)
     total_project_limit = db.Column(db.Integer, default=1)
     total_scan_limit = db.Column(db.Integer, default=100)
-    
+
+    # -----------------------------------------------------------------
+    # Wave 2 commercial policy fields.
+    #
+    # EVERY new column below defaults to something that preserves the
+    # CURRENT behaviour of every already-existing plan row. Nothing here
+    # invents a commercial number:
+    #   * plan_family      -> INDIVIDUAL (the only product that existed).
+    #   * media policy     -> NULL, meaning "this plan adds no restriction
+    #                         of its own", so the immutable server safety
+    #                         ceiling in entitlements.py remains the only
+    #                         effective limit - exactly today's behaviour.
+    #   * experience flags -> True, because today every plan can create
+    #                         every experience/playback combination.
+    #   * base_storage_bytes -> NULL ("unspecified"), because no storage
+    #                         entitlement has ever been sold or enforced.
+    # -----------------------------------------------------------------
+    plan_family = db.Column(
+        db.String(30),
+        nullable=False,
+        default=PLAN_FAMILY_INDIVIDUAL,
+        server_default=PLAN_FAMILY_INDIVIDUAL,
+        index=True,
+    )
+    lifecycle_status = db.Column(
+        db.String(40),
+        nullable=False,
+        default=PLAN_STATUS_ACTIVE,
+        server_default=PLAN_STATUS_ACTIVE,
+        index=True,
+    )
+    # Bumped by admin edits to live commercial policy so a purchase-time
+    # snapshot can be traced back to the definition it was sold under.
+    plan_revision = db.Column(db.Integer, nullable=False, default=1, server_default="1")
+
+    # Per-file media policy. NULL = no plan-specific cap (server ceiling only).
+    # These mirror the arguments upload_validation.validate_image/validate_video
+    # actually take, so there is no field that enforcement cannot consume.
+    # BigInteger for every byte count: Integer caps at ~2.1GB (Wave 1 audit).
+    max_image_bytes = db.Column(db.BigInteger, nullable=True)
+    max_video_bytes = db.Column(db.BigInteger, nullable=True)
+    max_video_duration_seconds = db.Column(db.Integer, nullable=True)
+    max_image_dimension_px = db.Column(db.Integer, nullable=True)
+    max_image_pixels = db.Column(db.BigInteger, nullable=True)
+
+    # Base ACCOUNT storage allowance for this plan, in bytes. Wave 2 models the
+    # ENTITLEMENT only - there is deliberately no usage accounting against it
+    # yet (no MediaObject, no storage_bytes_used). That is Wave 3.
+    base_storage_bytes = db.Column(db.BigInteger, nullable=True)
+
+    # Experience entitlements - govern whether this plan may CREATE or CHANGE
+    # INTO a mode. They never revoke an already-created project's mode.
+    allow_direct_qr = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
+    allow_detect_once = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
+    allow_tracked_overlay = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
+
+
     # Additional plan metadata
     features_json = db.Column(db.Text, default="[]")
     is_active = db.Column(db.Boolean, default=True)
@@ -64,7 +146,20 @@ class SubscriptionPlan(db.Model):
     created_by = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True)
 
     # Relationships
-    users = db.relationship("User", backref="subscription_plan", lazy=True)
+    # foreign_keys is now REQUIRED: User gained a second FK to this table
+    # (User.pending_plan_id), so the join is otherwise ambiguous.
+    users = db.relationship(
+        "User",
+        backref="subscription_plan",
+        lazy=True,
+        foreign_keys="User.subscription_id",
+    )
+    pending_users = db.relationship(
+        "User",
+        backref="pending_subscription_plan",
+        lazy=True,
+        foreign_keys="User.pending_plan_id",
+    )
     payment_orders = db.relationship("PaymentOrder", backref="plan", lazy=True)
 
     @property
@@ -118,6 +213,54 @@ class SubscriptionPlan(db.Model):
     def effective_price(self):
         return self.offer_price if self.offer_price else self.plan_amount
 
+    @validates("plan_family")
+    def validate_plan_family(self, key, value):
+        return _validate_value((value or PLAN_FAMILY_INDIVIDUAL).strip().upper(), PLAN_FAMILIES, key)
+
+    @validates("lifecycle_status")
+    def validate_lifecycle_status(self, key, value):
+        return _validate_value((value or PLAN_STATUS_ACTIVE).strip().upper(), PLAN_LIFECYCLE_STATUSES, key)
+
+    @property
+    def is_purchasable(self):
+        """Whether a NEW purchase may be made against this plan.
+
+        `is_active` stays the pre-existing admin visibility switch; the
+        lifecycle gate is additive so no existing plan changes behaviour.
+        """
+        return bool(self.is_active) and self.lifecycle_status in PLAN_PURCHASABLE_STATUSES
+
+    def policy_snapshot(self):
+        """The commercial policy a subscriber is agreeing to, right now.
+
+        Persisted onto PaymentOrder at activation so a later admin edit to
+        this plan cannot silently rewrite what past customers bought.
+        """
+        return {
+            "plan_id": self.id,
+            "plan_name": self.plan_name,
+            "plan_revision": int(self.plan_revision or 1),
+            "plan_family": self.plan_family,
+            "lifecycle_status": self.lifecycle_status,
+            "total_project_limit": self.total_project_limit,
+            "total_scan_limit": self.total_scan_limit,
+            "max_pairs_per_project": self.max_pairs_per_project,
+            "duration_type": self.duration_type,
+            "duration_value": self.duration_value,
+            "plan_amount": self.plan_amount,
+            "offer_price": self.offer_price,
+            "currency": self.currency,
+            "max_image_bytes": self.max_image_bytes,
+            "max_video_bytes": self.max_video_bytes,
+            "max_video_duration_seconds": self.max_video_duration_seconds,
+            "max_image_dimension_px": self.max_image_dimension_px,
+            "max_image_pixels": self.max_image_pixels,
+            "base_storage_bytes": self.base_storage_bytes,
+            "allow_direct_qr": bool(self.allow_direct_qr),
+            "allow_detect_once": bool(self.allow_detect_once),
+            "allow_tracked_overlay": bool(self.allow_tracked_overlay),
+        }
+
     def __repr__(self):
         return f"<SubscriptionPlan {self.plan_name} ₹{self.effective_price}>"
 
@@ -158,6 +301,17 @@ class User(db.Model):
     subscription_expires_at = db.Column(db.DateTime, nullable=True)
     subscription_status = db.Column(db.String(20), default="trial")  # trial/active/expired/limit_reached
     
+    # Pending (deferred) plan change - the downgrade lifecycle (Wave 2).
+    # A confirmed paid change to a LOWER commercial policy is never applied
+    # mid-term; it is parked here and applied at the current term's natural
+    # expiry by apply_pending_plan_change_if_due(), which is invoked from the
+    # existing check_user_limits() request gate. No new cron/job system.
+    pending_plan_id = db.Column(db.Integer, db.ForeignKey("subscription_plans.id"), nullable=True)
+    pending_plan_effective_at = db.Column(db.DateTime, nullable=True)
+    # ponytail: no FK back to the originating payment_orders row - that would
+    # make users <-> payment_orders a cyclic FK pair needing use_alter. The
+    # order is already discoverable via PaymentOrder(user_id, plan_id).
+
     # Subscription limits at time of purchase
     subscribed_project_limit = db.Column(db.Integer, default=1)
     subscribed_scan_limit = db.Column(db.Integer, default=100)
@@ -424,7 +578,24 @@ class PaymentOrder(db.Model):
     # Plan limits at purchase time
     purchased_project_limit = db.Column(db.Integer, nullable=True)
     purchased_scan_limit = db.Column(db.Integer, nullable=True)
-    
+
+    # Full commercial policy the subscriber actually agreed to, captured at
+    # activation (SubscriptionPlan.policy_snapshot()). This is what makes an
+    # admin edit to a live plan non-destructive to history: the plan row may
+    # move on, this record does not. NULL on every pre-Wave-2 order, which
+    # simply means "no snapshot was captured" - never "no policy applied".
+    plan_policy_snapshot_json = db.Column(db.Text, nullable=True)
+    # Deferred plan changes (downgrades) record where they landed.
+    is_deferred_plan_change = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+
+    @property
+    def plan_policy_snapshot(self):
+        try:
+            return json.loads(self.plan_policy_snapshot_json or "{}")
+        except Exception:
+            return {}
+
+
     # Subscription period
     subscription_start = db.Column(db.DateTime, nullable=True)
     subscription_end = db.Column(db.DateTime, nullable=True)
