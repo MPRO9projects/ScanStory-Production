@@ -140,7 +140,7 @@
                             {% if target_admin.id != admin.id and target_admin.is_active %}
                                 <a href="{{ url_for('admin_toggle_admin_status', admin_id=target_admin.id) }}" 
                                    class="btn btn-warning me-2" 
-                                   onclick="return confirm('Are you sure you want to deactivate this admin?')">
+                                   onclick="return confirm('Deactivate this admin account? This prevents future login and does not delete audit history.')">
                                     <i class="fas fa-user-slash me-1"></i>Deactivate
                                 </a>
                             {% elif target_admin.id != admin.id and not target_admin.is_active %}
@@ -329,7 +329,7 @@
     // Delete confirmation
     function confirmDelete() {
         const adminName = "{{ target_admin.name or target_admin.email }}";
-        return confirm(`Are you sure you want to permanently delete admin "${adminName}"? This action cannot be undone.`);
+        return confirm(`Permanently delete admin "${adminName}"? This cannot be undone. Use deactivate for routine access suspension.`);
     }
     
     // Auto-generate password suggestion

@@ -588,74 +588,9 @@
     
     <!-- Sidebar -->
     <div class="sidebar">
-        <div class="sidebar-section">
-            <div class="sidebar-title">Dashboard</div>
-            <a href="/admin/dashboard" class="sidebar-link">
-                <i>📊</i>
-                <span>Dashboard</span>
-            </a>
-        </div>
-        
-        <div class="sidebar-section">
-            <div class="sidebar-title">User Management</div>
-            <a href="/admin/users" class="sidebar-link active">
-                <i>&#128101;</i>
-                <span>Users</span>
-            </a>
-        </div>
-        
-        <div class="sidebar-section">
-            <div class="sidebar-title">Content</div>
-            <a href="/admin/projects" class="sidebar-link">
-                <i>📁</i>
-                <span>Projects</span>
-            </a>
-            <a href="/admin/scans" class="sidebar-link">
-                <i>&#128269;</i>
-                <span>Scans</span>
-            </a>
-        </div>
-        
-        <div class="sidebar-section">
-            <div class="sidebar-title">System</div>
-            {% if admin_can('superadmin.plans.manage') %}
-            <a href="/admin/plans" class="sidebar-link">
-                <i>📋</i>
-                <span>Plans</span>
-            </a>
-            {% endif %}
-            <a href="/admin/subscriptions" class="sidebar-link">
-                <i>&#129534;</i>
-                <span>Subscriptions</span>
-            </a>
-            <a href="/admin/payments" class="sidebar-link">
-                <i>💳</i>
-                <span>Payments</span>
-            </a>
-            {% if admin_can('superadmin.admins.manage') %}
-            <a href="/admin/admins" class="sidebar-link">
-                <i>🛡️</i>
-                <span>Admin Management</span>
-            </a>
-            {% endif %}
-            {% if admin_can('superadmin.capacity.manage') %}
-            <a href="/admin/capacity" class="sidebar-link">
-                <i>⚡</i>
-                <span>Capacity</span>
-            </a>
-            {% endif %}
-            {% if admin_can('superadmin.settings.manage') %}
-            <a href="/admin/settings" class="sidebar-link">
-                <i>⚙️</i>
-                <span>Settings</span>
-            </a>
-            {% endif %}
-            <a href="/admin/activity-logs" class="sidebar-link">
-                <i>&#128203;</i>
-                <span>Activity Logs</span>
-            </a>
-        </div>
+        {% include "admin/_sidebar_links.html" %}
     </div>
+
     
     <!-- Main Content -->
     <div class="main-content">
@@ -724,7 +659,7 @@
                 {% else %}
                 <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="btn btn-danger" onclick="return confirm('Are you sure you want to block this user?')">Block User</button>
+                    <button type="submit" class="btn btn-danger" onclick="return confirm('Block this user? Login and scanning are blocked; projects, payments, and audit history are not deleted.')">Block User</button>
                 </form>
                 {% endif %}
                 

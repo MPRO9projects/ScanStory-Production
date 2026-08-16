@@ -128,6 +128,28 @@ def test_view_payment_page_links_to_webhook_history(client, login_admin, app_mod
     assert f"/admin/webhook-events?order_id={payment.id}".encode() in response.data
 
 
+def test_view_payment_page_does_not_dump_raw_gateway_payload(client, login_admin, app_module, db_session, normal_user):
+    plan = app_module.SubscriptionPlan.query.filter_by(is_trial_plan=False).first()
+    payment = app_module.PaymentOrder(
+        user_id=normal_user.id, plan=plan, order_id="privacy-order-1",
+        amount=100, total_amount=100, currency="INR", status="success",
+        razorpay_order_id="order_visible_safe", razorpay_payment_id="pay_visible_safe",
+        payment_at=app_module.dt.utcnow(),
+    )
+    db_session.add(payment)
+    db_session.commit()
+
+    response = client.get(f"/admin/payments/{payment.id}")
+    assert response.status_code == 200
+    body = response.data.decode()
+    assert "Gateway Diagnostics" in body
+    assert "order_visible_safe" in body
+    assert "pay_visible_safe" in body
+    template_source = open("templates/admin/view_payment.html", encoding="utf-8").read()
+    assert "payment.payment_details|tojson|safe" not in template_source
+    assert "Raw Payment Response" not in template_source
+
+
 # ---------------------------------------------------------------------------
 # Task 4: orphaned project/plan actions
 # ---------------------------------------------------------------------------
@@ -158,6 +180,23 @@ def test_admin_plans_page_has_toggle_status_button(client, login_admin, app_modu
     assert response.status_code == 200
     assert f'action="/admin/plans/{plan.id}/toggle-status"'.encode() in response.data
     assert b"Deactivate" in response.data
+    assert b"Existing subscriptions are not deleted" in response.data
+
+
+def test_admin_edit_plan_warns_about_live_entitlement_impact(client, login_admin, app_module, db_session):
+    plan = app_module.SubscriptionPlan(
+        plan_name="Impact Warning Plan", plan_amount=199, duration_type="time", duration_value=1,
+        total_project_limit=3, total_scan_limit=30, max_pairs_per_project=2, is_active=True,
+    )
+    db_session.add(plan)
+    db_session.commit()
+
+    response = client.get(f"/admin/plans/{plan.id}/edit")
+    assert response.status_code == 200
+    body = response.data.decode()
+    assert "Live plan impact" in body
+    assert "Project and scan limits are materialized" in body
+    assert "pairs-per-project is read live" in body
 
 
 def test_admin_toggle_plan_status_route_works_from_ui_form(client, login_admin, app_module, db_session):
@@ -223,6 +262,10 @@ def test_admin_settings_dead_fields_are_disabled(client, login_admin):
     site_name_tag = body.split('id="site_name"', 1)[1].split(">", 1)[0]
     assert "disabled" in site_name_tag
     assert "Not active in V1" in body
+    assert 'id="generalForm"' not in body
+    assert 'id="paymentForm"' not in body
+    assert 'id="securityForm"' not in body
+    assert 'role="group" aria-label="General settings read-only"' in body
 
 
 def test_admin_settings_trial_fields_still_editable_and_persisted(client, login_admin, app_module):
@@ -262,3 +305,55 @@ def test_scanner_page_for_suspended_project_returns_styled_404(client, app_modul
     assert "suspended or unavailable" in body
     assert "SCANSTORY" in body
     assert "<html" in body.lower()  # styled page, not the old bare-text tuple body
+
+
+def test_standalone_admin_sidebar_exposes_current_navigation_for_superadmin(client, login_admin):
+    response = client.get("/admin/payments")
+    assert response.status_code == 200
+    body = response.data.decode()
+    for label in (
+        "Dashboard", "Users", "Projects", "Content Reports", "Scans",
+        "Plans", "Subscriptions", "Payments", "Admin Management",
+        "Capacity", "Operations", "Settings", "Activity Logs",
+    ):
+        assert f"<span>{label}</span>" in body
+
+
+def test_admin_json_fetch_sites_use_resilient_non_json_helper():
+    for path in (
+        "templates/admin/moderation.html",
+        "templates/admin/operations.html",
+        "templates/admin/view_payment.html",
+    ):
+        html = open(path, encoding="utf-8").read()
+        assert 'include "admin/_admin_fetch_helper.html"' in html
+        assert "parseAdminJsonResponse(response)" in html
+
+    helper = open("templates/admin/_admin_fetch_helper.html", encoding="utf-8").read()
+    assert "Security token expired. Refresh the page and try again." in helper
+    assert "Your admin session has expired. Please sign in again." in helper
+
+
+def test_operations_page_distinguishes_configured_from_healthy(client, login_admin):
+    response = client.get("/admin/operations")
+    assert response.status_code == 200
+    body = response.data.decode()
+    assert "Queue availability check" in body
+    assert "Unknown / not verified" in body or "Reachable" in body or "Unavailable" in body
+    assert "does not prove a worker is online" in body
+    assert "does not prove email delivery" in body
+
+
+def test_destructive_admin_copy_distinguishes_suspend_delete_deactivate(client, login_admin, secondary_admin, project_with_pair):
+    project, _pair = project_with_pair
+    project_response = client.get(f"/admin/projects/{project.id}")
+    assert project_response.status_code == 200
+    project_body = project_response.data.decode()
+    assert "payments are not deleted or refunded" in project_body
+    assert "This is not a suspension and cannot be undone" in project_body
+
+    admins_response = client.get("/admin/admins")
+    assert admins_response.status_code == 200
+    admins_body = admins_response.data.decode()
+    assert "does not delete audit history" in admins_body
+    assert "Use deactivate for routine access suspension" in admins_body

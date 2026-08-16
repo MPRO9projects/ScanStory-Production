@@ -534,64 +534,9 @@
 
     <!-- Sidebar -->
     <div class="sidebar">
-        <div class="sidebar-section">
-            <div class="sidebar-title">Dashboard</div>
-            <a href="/admin/dashboard" class="sidebar-link">
-                <i>&#128202;</i>
-                <span>Dashboard</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">User Management</div>
-            <a href="/admin/users" class="sidebar-link active">
-                <i>&#128101;</i>
-                <span>Users</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">Content</div>
-            <a href="/admin/projects" class="sidebar-link">
-                <i>&#128193;</i>
-                <span>Projects</span>
-            </a>
-            <a href="/admin/scans" class="sidebar-link">
-                <i>&#128269;</i>
-                <span>Scans</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">System</div>
-            <a href="/admin/plans" class="sidebar-link">
-                <i>&#128203;</i>
-                <span>Plans</span>
-            </a>
-            <a href="/admin/subscriptions" class="sidebar-link">
-                <i>&#129534;</i>
-                <span>Subscriptions</span>
-            </a>
-            <a href="/admin/payments" class="sidebar-link">
-                <i>&#128179;</i>
-                <span>Payments</span>
-            </a>
-            {% if admin_can('superadmin.admins.manage') %}
-            <a href="/admin/admins" class="sidebar-link">
-                <i>&#128737;</i>
-                <span>Admin Management</span>
-            </a>
-            {% endif %}
-            <a href="/admin/settings" class="sidebar-link">
-                <i>&#9881;</i>
-                <span>Settings</span>
-            </a>
-            <a href="/admin/activity-logs" class="sidebar-link">
-                <i>&#128203;</i>
-                <span>Activity Logs</span>
-            </a>
-        </div>
+        {% include "admin/_sidebar_links.html" %}
     </div>
+
         <!-- Main Content -->
     <div class="main-content">
         <div class="page-header">
@@ -725,14 +670,14 @@
                                     {% if not user.is_blocked %}
                                     <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="btn btn-warning btn-sm" onclick="return confirm('Block this user? They will not be able to login or scan.')">
+                                        <button type="submit" class="btn btn-warning btn-sm" onclick="return confirm('Block this user? Login and scanning are blocked; projects, payments, and audit history are not deleted.')">
                                             <i>&#128274;</i> Block
                                         </button>
                                     </form>
                                     {% else %}
                                     <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                                        <button type="submit" class="btn btn-success btn-sm" onclick="return confirm('Unblock this user? They will be able to login and scan again.')">
+                                        <button type="submit" class="btn btn-success btn-sm" onclick="return confirm('Unblock this user? Login and scanning access can resume; ownership and payment history are unchanged.')">
                                             <i>&#128275;</i> Unblock
                                         </button>
                                     </form>

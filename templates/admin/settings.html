@@ -517,75 +517,9 @@
     
     <!-- Sidebar -->
     <div class="sidebar">
-        <div class="sidebar-section">
-            <div class="sidebar-title">Dashboard</div>
-            <a href="/admin/dashboard" class="sidebar-link">
-                <i class="fas fa-tachometer-alt"></i>
-                <span>Dashboard</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">User Management</div>
-            <a href="/admin/users" class="sidebar-link">
-                <i class="fas fa-users"></i>
-                <span>Users</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">Content</div>
-            <a href="/admin/projects" class="sidebar-link">
-                <i class="fas fa-project-diagram"></i>
-                <span>Projects</span>
-            </a>
-            <a href="/admin/scans" class="sidebar-link">
-                <i class="fas fa-search"></i>
-                <span>Scans</span>
-            </a>
-        </div>
-
-        <div class="sidebar-section">
-            <div class="sidebar-title">System</div>
-            {% if admin_can('superadmin.plans.manage') %}
-            <a href="/admin/plans" class="sidebar-link">
-                <i class="fas fa-list-alt"></i>
-                <span>Plans</span>
-            </a>
-            {% endif %}
-            <a href="/admin/subscriptions" class="sidebar-link">
-                <i class="fas fa-receipt"></i>
-                <span>Subscriptions</span>
-            </a>
-            <a href="/admin/payments" class="sidebar-link">
-                <i class="fas fa-credit-card"></i>
-                <span>Payments</span>
-            </a>
-            {% if admin_can('superadmin.admins.manage') %}
-            <a href="/admin/admins" class="sidebar-link">
-                <i class="fas fa-user-shield"></i>
-                <span>Admin Management</span>
-            </a>
-            {% endif %}
-            {% if admin_can('superadmin.capacity.manage') %}
-            <a href="/admin/capacity" class="sidebar-link">
-                <i class="fas fa-gauge-high"></i>
-                <span>Capacity</span>
-            </a>
-            {% endif %}
-            {% if admin_can('superadmin.settings.manage') %}
-            <a href="/admin/settings" class="sidebar-link active">
-                <i class="fas fa-cog"></i>
-                <span>Settings</span>
-            </a>
-            {% endif %}
-            <a href="/admin/activity-logs" class="sidebar-link">
-                <i class="fas fa-clipboard-list"></i>
-                <span>Activity Logs</span>
-            </a>
-        </div>
+        {% include "admin/_sidebar_links.html" %}
     </div>
-    
+
     <!-- Main Content -->
     <div class="main-content">
         <div class="page-header">
@@ -620,7 +554,7 @@
                 These fields are stored but not read anywhere else in ScanStory V1 yet - changing them here would have no effect on the live app, so the controls are shown read-only rather than implying they do something.
             </div>
 
-            <form id="generalForm">
+            <div id="generalSettings" role="group" aria-label="General settings read-only">
                 <div class="form-row">
                     <div class="form-group">
                         <label for="site_name">Site Name</label>
@@ -673,7 +607,7 @@
                         <span>Allow new users to register</span>
                     </div>
                 </div>
-            </form>
+            </div>
         </div>
         
         <!-- Trial Settings -->
@@ -717,7 +651,7 @@
                 These toggles are not wired to the live Razorpay integration yet - the app currently reads its Razorpay/live-vs-test behavior from server environment configuration, not from these stored values. Shown read-only to avoid implying a switch here changes payment behavior.
             </div>
 
-            <form id="paymentForm">
+            <div id="paymentSettings" role="group" aria-label="Payment settings read-only">
                 <div class="form-group">
                     <label>Enable Razorpay Payments</label>
                     <div style="display: flex; align-items: center; gap: 15px; margin-top: 8px;">
@@ -742,7 +676,7 @@
                         </label>
                     </div>
                 </div>
-            </form>
+            </div>
         </div>
         
         <!-- Security Settings -->
@@ -755,7 +689,7 @@
                 These fields are not read anywhere else in ScanStory V1 yet (admin login lockout uses its own fixed policy, and there is no app-level session-timeout enforcement wired to this value). Shown read-only rather than implying a save here changes account security behavior.
             </div>
 
-            <form id="securityForm">
+            <div id="securitySettings" role="group" aria-label="Security settings read-only">
                 <div class="form-row">
                     <div class="form-group">
                         <label for="session_timeout">Session Timeout (minutes)</label>
@@ -791,7 +725,7 @@
                         <span>Send email notification for new logins</span>
                     </div>
                 </div>
-            </form>
+            </div>
         </div>
     </div>
 
