@@ -537,7 +537,8 @@
                         <i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Effective Entitlement
                     </h2>
                     <p class="ss-domain-note" style="margin-top:0;">
-                        This read-only summary comes from the backend plan, usage and entitlement ledger fields.
+                        This read-only summary is resolved server-side from your plan, usage and entitlement ledger.
+                        Nothing on this page recalculates an allowance.
                     </p>
                     <ul class="ss-slots" data-testid="effective-entitlement-summary" role="list">
                         <li>
@@ -545,7 +546,7 @@
                             <span class="ss-slots-label">Account type</span>
                         </li>
                         <li>
-                            <span class="ss-slots-value">{{ entitlement_summary.plan_family if entitlement_summary.plan_family_available and entitlement_summary.plan_family else "Backend pending" }}</span>
+                            <span class="ss-slots-value">{{ entitlement_summary.plan_family_label }}</span>
                             <span class="ss-slots-label">Plan family</span>
                         </li>
                         <li>
@@ -561,11 +562,30 @@
                             <span class="ss-slots-label">Pairs / project</span>
                         </li>
                     </ul>
-                    <div class="flex flex-wrap gap-2 mt-4" aria-label="Available experience modes">
+                    <div class="flex flex-wrap gap-2 mt-4" aria-label="Experience modes on your plan">
                         {% for option in entitlement_summary.allowed_experiences %}
-                        <span class="status-badge status-active">{{ option.label }}</span>
+                        <span class="status-badge {{ 'status-active' if option.allowed else 'status-inactive' }}">
+                            {{ option.label }} — {{ 'Included' if option.allowed else 'Not included' }}
+                        </span>
                         {% endfor %}
                     </div>
+                    <p class="ss-domain-note" style="margin-top:1rem;">
+                        Per-file limits on your plan: image up to {{ entitlement_summary.max_image_display }},
+                        video up to {{ entitlement_summary.max_video_display }}.
+                        Storage allowance:
+                        {% if entitlement_summary.base_storage_display %}{{ entitlement_summary.base_storage_display }}{% else %}not specified on your plan{% endif %}.
+                        {% if not entitlement_summary.storage_usage_tracked %}
+                        Storage usage is not measured yet, so no used/available figure is shown against this allowance.
+                        {% endif %}
+                    </p>
+                    {% if entitlement_summary.pending_plan_name %}
+                    <p class="ss-domain-note" style="margin-top:1rem;">
+                        A plan change to <strong>{{ entitlement_summary.pending_plan_name }}</strong> is scheduled for your next
+                        plan-term boundary{% if entitlement_summary.pending_plan_effective_at %} ({{ entitlement_summary.pending_plan_effective_at.strftime('%d %b %Y') }}){% endif %}.
+                        Your current entitlements run unchanged until then, and no project, media or QR code is deleted by the change.
+                        Playback modes on existing ScanStories keep working even if the new plan does not include them.
+                    </p>
+                    {% endif %}
                     {% if entitlement_summary.over_project_capacity or entitlement_summary.over_scan_capacity %}
                     <p class="ss-domain-note" style="margin-top:1rem;">
                         Existing projects are retained. New creation or scanning may be restricted until usage is back within the effective allowance or the account is upgraded.

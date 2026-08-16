@@ -691,7 +691,7 @@
                 <div class="glass rounded-2xl p-4">
                     <div class="text-white/50 text-xs uppercase font-black tracking-widest">Plan Family</div>
                     <div class="text-white font-black mt-1">
-                        {{ entitlement_summary.plan_family if entitlement_summary.plan_family_available and entitlement_summary.plan_family else "Backend pending" }}
+                        {{ entitlement_summary.plan_family_label }}
                     </div>
                 </div>
                 <div class="glass rounded-2xl p-4">
@@ -713,9 +713,9 @@
                     <div class="text-white font-black mt-1">{{ entitlement_summary.max_pairs_per_project }}</div>
                 </div>
             </div>
-            <div class="flex flex-wrap gap-2 mt-5" aria-label="Available experience modes">
+            <div class="flex flex-wrap gap-2 mt-5" aria-label="Experience modes on this plan">
                 {% for option in entitlement_summary.allowed_experiences %}
-                <span class="badge">{{ option.label }}</span>
+                <span class="badge">{{ option.label }} — {{ 'Included' if option.allowed else 'Not included' }}</span>
                 {% endfor %}
             </div>
             {% if entitlement_summary.over_project_capacity or entitlement_summary.over_scan_capacity %}

@@ -365,7 +365,23 @@ def test_destructive_admin_copy_distinguishes_suspend_delete_deactivate(client, 
 # V1.1 Wave 2: Commercial UX/admin presentation
 # ---------------------------------------------------------------------------
 
-def test_pricing_page_shows_account_family_and_experience_contract_without_fake_plan_family(client):
+def test_pricing_page_shows_account_family_and_experience_contract_without_fake_plan_family(
+    client, app_module, db_session
+):
+    """The pricing page must render the plan's REAL Wave 2 entitlement fields
+    (plan_family, allow_* experience flags, base_storage_bytes, media policy) -
+    not a hardcoded family list and not the pre-Wave-2 'backend pending' copy.
+    """
+    vendor_plan = app_module.SubscriptionPlan(
+        plan_name="Vendor Direct QR Plan", plan_amount=999, duration_type="time", duration_value=1,
+        total_project_limit=10, total_scan_limit=1000, max_pairs_per_project=3, is_active=True,
+        plan_family="BUSINESS_VENDOR",
+        allow_direct_qr=True, allow_detect_once=False, allow_tracked_overlay=False,
+        base_storage_bytes=5 * 1024 * 1024 * 1024,
+    )
+    db_session.add(vendor_plan)
+    db_session.commit()
+
     response = client.get("/pricing")
     assert response.status_code == 200
     body = response.data.decode()
@@ -377,8 +393,21 @@ def test_pricing_page_shows_account_family_and_experience_contract_without_fake_
     assert "Detect Once" in body
     assert "Tracked Overlay" in body
     assert "Object Tracking" not in body
-    assert "Backend plan-family fields are not available" in body
-    assert "without inventing family-specific limits" in body
+
+    # Real per-plan experience entitlements: this plan allows ONLY Direct QR,
+    # so the other two must render as explicitly not included.
+    assert "Tracked Overlay, Detect Once" in body
+    assert "Not included" in body
+    # Real per-file media policy + real base storage ENTITLEMENT.
+    assert "Image up to 50 MB; video up to 1 GB" in body
+    assert "5 GB" in body
+    # Storage usage accounting is still Wave 3 - no used/available claim.
+    assert "storage usage is not measured or billed yet" in body
+
+    # The pre-Wave-2 placeholders must be gone now that the fields are real.
+    assert "Backend plan-family fields are not available" not in body
+    assert "Backend pending" not in body
+    assert "without inventing family-specific limits" not in body
 
 
 def test_pricing_upgrade_downgrade_copy_is_non_destructive(client):
@@ -401,8 +430,10 @@ def test_admin_plan_pages_expose_policy_contract_without_unbacked_inputs(client,
         assert "Direct QR" in body
         assert "Detect Once" in body
         assert "Tracked Overlay" in body
-        assert "Backend pending" in body
         assert "Object Tracking" not in body
+        # The fields exist on SubscriptionPlan now, so the stale placeholder
+        # must be gone - but they are still read-only in this UI.
+        assert "Backend pending" not in body
 
         for forbidden_input in (
             'name="plan_family"',
@@ -414,11 +445,30 @@ def test_admin_plan_pages_expose_policy_contract_without_unbacked_inputs(client,
         ):
             assert forbidden_input not in body
 
+    # The plans list renders each plan's REAL policy fields, read-only.
+    listing = client.get("/admin/plans").data.decode()
+    assert "Individual" in listing
+    assert "Live (read-only here)" in listing
+    assert "ACTIVE / rev 1" in listing
+    assert "Image 50 MB; video 1 GB" in listing
+
 
 def test_user_profile_entitlement_summary_uses_backend_ledgers(
     client, app_module, db_session, login_user
 ):
     user = login_user
+    # A BUSINESS_VENDOR plan on an INDIVIDUAL account: the page must show the
+    # plan's real plan_family, which proves it is not an account_type proxy.
+    plan = app_module.SubscriptionPlan(
+        plan_name="Profile Entitlement Plan", plan_amount=499, duration_type="time", duration_value=1,
+        total_project_limit=5, total_scan_limit=100, max_pairs_per_project=2, is_active=True,
+        plan_family="BUSINESS_VENDOR",
+        allow_direct_qr=True, allow_detect_once=True, allow_tracked_overlay=False,
+        base_storage_bytes=2 * 1024 * 1024 * 1024,
+    )
+    db_session.add(plan)
+    db_session.commit()
+    user.subscription_id = plan.id
     user.subscription_status = "active"
     user.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
     user.subscribed_project_limit = 7
@@ -450,13 +500,29 @@ def test_user_profile_entitlement_summary_uses_backend_ledgers(
     body = response.data.decode()
 
     assert "Effective Entitlement" in body
+    # Base vs purchased capacity stays distinguishable, never one opaque total.
     assert "Project Slots" in body
     assert "Plan slots" in body
     assert "Purchased slots" in body
-    assert "Direct QR" in body
-    assert "Detect Once" in body
-    assert "Tracked Overlay" in body
-    assert "Backend pending" in body
+
+    # Real plan_family from the backend resolver, distinct from account_type.
+    assert "Business / Vendor" in body
+    assert "Individual" in body  # the account type, still rendered separately
+
+    # Real experience entitlement flags, per mode.
+    assert "Direct QR — Included" in body
+    assert "Detect Once — Included" in body
+    assert "Tracked Overlay — Not included" in body
+
+    # Real per-file media policy and base storage ENTITLEMENT from the resolver.
+    assert "image up to 50 MB" in body
+    assert "video up to 1 GB" in body
+    assert "Storage allowance:" in body
+    assert "2 GB" in body
+    # Wave 3 owns usage accounting - no "X of Y used" claim may appear.
+    assert "Storage usage is not measured yet" in body
+
+    assert "Backend pending" not in body
 
 
 def test_admin_user_views_show_backend_sourced_entitlement_and_grandfathering_copy(

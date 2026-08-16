@@ -2827,33 +2827,81 @@ V11_EXPERIENCE_PRESENTATION = (
 )
 
 
+def plan_experience_options(plan):
+    """Per-plan experience presentation, annotated with the plan's REAL
+    entitlement flags via the central resolver's allowed_playback_modes()."""
+    modes = _ent.allowed_playback_modes(plan)
+    return [
+        dict(option, allowed=option["playback_mode"] in modes)
+        for option in V11_EXPERIENCE_PRESENTATION
+    ]
+
+
+def plan_media_policy_display(plan):
+    """Effective per-file media policy for a plan, hard ceiling already applied
+    by entitlements.cap(). Never re-derived here."""
+    return {
+        "max_image": format_bytes_display(_ent.cap(getattr(plan, "max_image_bytes", None), _ent.MAX_IMAGE_SIZE)),
+        "max_video": format_bytes_display(_ent.cap(getattr(plan, "max_video_bytes", None), _ent.MAX_VIDEO_SIZE)),
+        "base_storage": format_bytes_display(getattr(plan, "base_storage_bytes", None)),
+    }
+
+
 def _limit_display_value(value):
     if value in (None, 0, 999999):
         return "Unlimited"
     return str(int(value))
 
 
-def user_entitlement_summary(user):
-    """Read-only UX summary from existing entitlement/plan fields.
+def format_bytes_display(value):
+    """Byte count -> short human string. None/0 -> None ("not specified")."""
+    if value in (None, 0):
+        return None
+    size = float(value)
+    for unit in ("bytes", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{size:.10g} {unit}"
+        size /= 1024
 
-    This is presentation glue only. Enforcement remains in the existing quota,
-    payment, add-on and project-creation services.
+
+def plan_family_label(family):
+    """Plan family -> display label. PLAN_FAMILY_* deliberately reuses the
+    ACCOUNT_TYPE_* vocabulary (see models.py), so one label map serves both."""
+    key = (family or ACCOUNT_TYPE_INDIVIDUAL).upper()
+    return ACCOUNT_TYPE_LABELS.get(key, key)
+
+
+def user_entitlement_summary(user):
+    """Read-only UX summary of what this account may currently do.
+
+    Every commercial value here is READ from the central resolver
+    (entitlements.get_effective_entitlements via user_entitlements) - this
+    function never re-derives plan math, and enforcement stays in the existing
+    quota, payment, add-on and project-creation services.
     """
     if not user:
         return None
-    plan = getattr(user, "subscription_plan", None)
+    ents = user_entitlements(user)
+    # ponytail: the base/purchased split stays sourced from
+    # project_capacity_summary / purchased_scan_capacity, which split the
+    # MATERIALIZED (enforced) column. The resolver's base_* fields are the plan
+    # row's own numbers, which can legitimately differ after an admin edits a
+    # per-user limit - displaying those would show a "plan + purchased" pair
+    # that does not add up to the total on the same screen.
     project_capacity = project_capacity_summary(user)
     purchased_scans = purchased_scan_capacity(user)
-    effective_scan_limit_value = user.subscribed_scan_limit
-    effective_scan_limit = None if effective_scan_limit_value in (None, 0, 999999) else int(effective_scan_limit_value)
-    scans_used = int(user.scans_used or 0)
+    effective_scan_limit = ents["effective_scan_limit"]
+    scans_used = ents["scans_used"]
     over_scan_capacity = False if effective_scan_limit is None else scans_used > effective_scan_limit
+    pending_plan = getattr(user, "pending_subscription_plan", None)
     return {
         "account_type_label": account_type_label(user),
         "plan_name": user.current_plan_name,
-        "subscription_status": user.subscription_status,
-        "plan_family_available": hasattr(SubscriptionPlan, "plan_family"),
-        "plan_family": getattr(plan, "plan_family", None) if plan else None,
+        "subscription_status": ents["subscription_status"],
+        "plan_family": ents["plan_family"],
+        "plan_family_label": plan_family_label(ents["plan_family"]),
+        "plan_lifecycle_status": ents["plan_lifecycle_status"],
+        "plan_revision": ents["plan_revision"],
         "base_project_limit": project_capacity["base_project_limit"],
         "purchased_project_capacity": project_capacity["purchased_project_capacity"],
         "effective_project_limit": project_capacity["effective_project_limit"],
@@ -2867,18 +2915,31 @@ def user_entitlement_summary(user):
         "scans_used": scans_used,
         "scan_unlimited": effective_scan_limit is None,
         "over_scan_capacity": over_scan_capacity,
-        "max_pairs_per_project": get_plan_pairs_limit(user),
-        "base_storage_available": hasattr(SubscriptionPlan, "base_storage_bytes"),
-        "media_policy_available": any(
-            hasattr(SubscriptionPlan, field)
-            for field in ("media_policy_json", "media_policy", "max_upload_bytes", "max_video_bytes")
-        ),
-        "experience_entitlements_available": any(
-            hasattr(SubscriptionPlan, field)
-            for field in ("experience_entitlements_json", "allowed_experiences_json", "allowed_experience_types")
-        ),
-        "allowed_experiences": list(V11_EXPERIENCE_PRESENTATION),
+        "max_pairs_per_project": ents["max_pairs_per_project"],
+        # Storage ENTITLEMENT only. Wave 2 has no usage accounting against it,
+        # so this must never be rendered as an "X of Y used" claim.
+        "base_storage_display": format_bytes_display(ents["base_storage_bytes"]),
+        "purchased_storage_display": format_bytes_display(ents["purchased_storage_bytes"]),
+        "storage_usage_tracked": ents["storage_usage_tracked"],
+        "max_image_display": format_bytes_display(ents["image_policy"]["max_bytes"]),
+        "max_video_display": format_bytes_display(ents["video_policy"]["max_bytes"]),
+        # Real per-plan experience entitlements, straight off the resolver.
+        "allowed_experiences": [
+            dict(option, allowed=option["playback_mode"] in ents["allowed_playback_modes"])
+            for option in V11_EXPERIENCE_PRESENTATION
+        ],
+        "pending_plan_name": getattr(pending_plan, "plan_name", None),
+        "pending_plan_effective_at": ents["pending_plan_effective_at"],
     }
+
+
+# Defined here rather than in the constants block above because these read the
+# Wave 2 plan-policy helpers, which are declared just above.
+app.jinja_env.globals.update(
+    plan_family_label=plan_family_label,
+    plan_experience_options=plan_experience_options,
+    plan_media_policy_display=plan_media_policy_display,
+)
 
 
 def _reserve_project_quota_atomic(user):
@@ -9042,7 +9103,6 @@ def pricing_page():
         dev_test_entitled=has_dev_test_entitlement(user),
         entitlement_summary=user_entitlement_summary(user),
         v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-        plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
     )
 
 
@@ -9059,8 +9119,7 @@ def subscribe_page():
                          get_system_config=get_system_config,
                          dev_test_entitled=has_dev_test_entitlement(user),
                          entitlement_summary=user_entitlement_summary(user),
-                         v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-                         plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"))
+                         v11_experience_options=V11_EXPERIENCE_PRESENTATION)
 
 def activate_payment(payment_order):
     """Idempotently activate a subscription for a PaymentOrder whose Razorpay
@@ -12113,7 +12172,6 @@ def admin_plans():
         admin=admin,
         plans=plans,
         v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-        plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
     )
 @app.route("/admin/project/<int:project_id>/preview")
 @admin_required
@@ -12147,7 +12205,6 @@ def admin_add_plan():
             "admin/add_plan.html",
             admin=admin,
             v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-            plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
         )
     
     try:
@@ -12207,7 +12264,6 @@ def admin_add_plan():
                 "admin/add_plan.html",
                 admin=admin,
                 v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-                plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
             )
 
         try:
@@ -12220,7 +12276,6 @@ def admin_add_plan():
                 "admin/add_plan.html",
                 admin=admin,
                 v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-                plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
             )
         
         # Handle features
@@ -12277,7 +12332,6 @@ def admin_add_plan():
             "admin/add_plan.html",
             admin=admin,
             v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-            plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
         )
 
 
@@ -12294,7 +12348,6 @@ def admin_edit_plan(plan_id):
                 admin=admin,
                 plan=plan,
                 v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-                plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
             )
         
         # Get form data with proper handling of empty values

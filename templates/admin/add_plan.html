@@ -437,10 +437,11 @@
         <div class="card">
             <div class="alert alert-warning" data-testid="v11-plan-editor-contract">
                 <strong>V1.1 plan policy status:</strong>
-                This form edits only fields currently backed by SubscriptionPlan: price, validity, project capacity,
-                scan allowance and pairs per project. Plan family, base storage, media policy, experience entitlements
-                and lifecycle/revision status are Backend pending and are intentionally not editable here.
-                Supported V1.1 experience labels are Direct QR, Detect Once and Tracked Overlay.
+                This form edits price, validity, project capacity, scan allowance and pairs per project.
+                Plan family, base storage allowance, media policy, experience entitlements and lifecycle/revision
+                status are live SubscriptionPlan fields, but no admin form writes them yet — a new plan takes their
+                safe defaults (Individual family, all experience modes included, no plan-specific media or storage cap).
+                Review them on the Plans list. Supported V1.1 experience labels are Direct QR, Detect Once and Tracked Overlay.
             </div>
             <form method="POST" action="/admin/plans/add">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
