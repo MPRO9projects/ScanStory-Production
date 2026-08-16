@@ -84,9 +84,9 @@
             </td>
             <td class="small">
               {% if row.capacity_block %}
-                <div>Storage OK: {{ row.capacity_block.storage_ok }}</div>
-                <div>Slot OK: {{ row.capacity_block.project_slot_ok }}</div>
-                <div>Project bytes: {{ row.capacity_block.project_bytes }}</div>
+                <div><strong>Storage</strong>: {{ 'available' if row.capacity_block.storage_ok else 'blocked' }}</div>
+                <div><strong>Project slot</strong>: {{ 'available' if row.capacity_block.project_slot_ok else 'blocked' }}</div>
+                <div><strong>Project bytes</strong>: {{ row.capacity_block.project_bytes }}</div>
                 <div class="text-muted">Checked {{ row.capacity_block.checked_at }}</div>
               {% else %}
                 <span class="text-muted">&mdash;</span>
@@ -95,18 +95,32 @@
             <td>{{ audit_cell(row.audit) }}</td>
             <td class="text-end">
               {% if admin_can('admin.ownership.manage') %}
-                {% for action, label, style in [
-                    ('complete', 'Complete', 'btn-outline-primary'),
-                    ('dispute', 'Dispute', 'btn-outline-warning'),
-                    ('release-dispute', 'Release', 'btn-outline-secondary'),
-                    ('cancel', 'Cancel', 'btn-outline-danger')] %}
-                <form method="POST" class="d-inline"
-                      action="{{ url_for('admin_resolve_ownership_transfer', transfer_id=row.transfer.id, action=action) }}">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <input type="hidden" name="reason" value="">
-                  <button type="submit" class="btn btn-sm {{ style }} mb-1">{{ label }}</button>
-                </form>
-                {% endfor %}
+                {% if row.transfer.status in ['PENDING_ACCEPTANCE', 'PENDING_CAPACITY'] %}
+                  {% for action, label, style in [
+                      ('complete', 'Complete', 'btn-outline-primary'),
+                      ('dispute', 'Dispute', 'btn-outline-warning'),
+                      ('cancel', 'Cancel', 'btn-outline-danger')] %}
+                  <form method="POST" class="mb-1"
+                        action="{{ url_for('admin_resolve_ownership_transfer', transfer_id=row.transfer.id, action=action) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="text" name="reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Reason for {{ label|lower }}">
+                    <button type="submit" class="btn btn-sm {{ style }} mb-1">{{ label }}</button>
+                  </form>
+                  {% endfor %}
+                {% elif row.transfer.status == 'DISPUTED' %}
+                  {% for action, label, style in [
+                      ('release-dispute', 'Release dispute', 'btn-outline-secondary'),
+                      ('cancel', 'Cancel', 'btn-outline-danger')] %}
+                  <form method="POST" class="mb-1"
+                        action="{{ url_for('admin_resolve_ownership_transfer', transfer_id=row.transfer.id, action=action) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="text" name="reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Reason for {{ label|lower }}">
+                    <button type="submit" class="btn btn-sm {{ style }} mb-1">{{ label }}</button>
+                  </form>
+                  {% endfor %}
+                {% else %}
+                  <span class="text-muted small">No available action</span>
+                {% endif %}
               {% else %}
                 <span class="text-muted small">Read-only</span>
               {% endif %}
@@ -160,15 +174,20 @@
             <td>{{ audit_cell(row.audit) }}</td>
             <td class="text-end">
               {% if admin_can('admin.ownership.manage') %}
+              {% if row.claim.status in ['OPEN', 'VENDOR_NOTIFIED', 'APPROVED_BY_VENDOR', 'PENDING_ADMIN_REVIEW'] %}
               <form method="POST" action="{{ url_for('admin_approve_ownership_claim', claim_id=row.claim.id) }}" class="mb-1">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="text" name="decision_reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)">
+                <input type="text" name="decision_reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Approval reason">
                 <button type="submit" class="btn btn-sm btn-outline-primary">Approve</button>
               </form>
               <form method="POST" action="{{ url_for('admin_reject_ownership_claim', claim_id=row.claim.id) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="text" name="decision_reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Rejection reason">
                 <button type="submit" class="btn btn-sm btn-outline-danger">Reject</button>
               </form>
+              {% else %}
+                <span class="text-muted small">No available decision</span>
+              {% endif %}
               {% else %}
                 <span class="text-muted small">Read-only</span>
               {% endif %}

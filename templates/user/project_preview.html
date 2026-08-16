@@ -222,8 +222,18 @@
       </h2>
 
       <dl class="ss-domain-grid">
+        {% if ownership.creator and (not ownership.owner or ownership.creator.id != ownership.owner.id or ownership.manager or ownership.beneficiary or ownership.transfer or ownership.claims) %}
         <div class="ss-domain-row">
-          <dt>Owner</dt>
+          <dt>Creator</dt>
+          <dd>
+            {% if ownership.viewer_is_creator %}You
+            {% elif ownership.creator %}{{ ownership.creator.full_name or ownership.creator.email }}
+            {% else %}Not recorded{% endif %}
+          </dd>
+        </div>
+        {% endif %}
+        <div class="ss-domain-row">
+          <dt>Current owner</dt>
           <dd>
             {% if ownership.viewer_is_owner %}You
             {% elif ownership.owner %}{{ ownership.owner.full_name or ownership.owner.email }}
@@ -267,10 +277,11 @@
         </p>
         {% elif ownership.transfer.status == 'PENDING_CAPACITY' %}
         <p class="ss-domain-note">
-          The recipient accepted but does not have a free project slot yet, so the handover is
-          waiting. Nothing has been cancelled or moved: this ScanStory stays live, keeps the same
-          QR code, and keeps any coverage that belongs to it. It will complete once the recipient
-          has an available slot.
+          The recipient accepted, but the backend says their account does not have enough project
+          and/or storage capacity yet. Ownership has not changed: the current owner stays
+          authoritative, this ScanStory stays live, the media and QR code remain intact, and
+          coverage remains recorded. The handover can complete only when the backend confirms the
+          recipient has enough capacity.
         </p>
         {% elif ownership.transfer.status == 'COMPLETED' %}
         <p class="ss-domain-note">
@@ -309,15 +320,39 @@
       </div>
       {% endif %}
 
-      {% if not admin_view and ownership.viewer_is_owner and not ownership.transfer_is_active %}
-      {# Honest gap, not a dead control: there is no HTTP endpoint behind
-         transfer initiation or ownership-review requests in this build, so
-         no button is offered that would do nothing. #}
-      <p class="ss-domain-note">
-        Handing this ScanStory over to someone else is not something you can start from here yet.
-        When it is available, the QR code and all media stay the same, coverage bought for this
-        ScanStory travels with it, and your project slot is only released once the handover finishes.
-      </p>
+      {% if not admin_view %}
+      <div class="ss-domain-row mt-4">
+        <span class="ss-domain-label">Ownership actions</span>
+        <div class="ss-domain-value">
+          <a class="ss-action-button" href="{{ url_for('ownership_center') }}">
+            <i class="fas fa-user-shield" aria-hidden="true"></i>
+            Open ownership center
+          </a>
+          <p class="ss-domain-note" style="margin-top:10px;">
+            Use the ownership center for handovers, accept/reject/cancel/retry actions and review responses.
+            The backend completes ownership changes only after the required people and capacity checks pass.
+          </p>
+        </div>
+      </div>
+
+      {% if not ownership.viewer_is_owner and not ownership.viewer_active_claim %}
+      <form class="ss-domain-row mt-3" method="POST" action="{{ url_for('submit_project_ownership_claim', project_id=project.id) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="ss-domain-label" for="ownershipClaimEvidence">Request ownership review</label>
+        <div class="ss-domain-value">
+          <textarea id="ownershipClaimEvidence" name="evidence_summary" rows="3" maxlength="2000" placeholder="Share the context the ScanStory team should review." style="width:100%; min-height:90px;"></textarea>
+          <button class="ss-action-button mt-2" type="submit">
+            <i class="fas fa-file-circle-question" aria-hidden="true"></i>
+            Submit review request
+          </button>
+          <p class="ss-domain-note" style="margin-top:10px;">
+            Submitting a claim does not transfer ownership. It creates a review request only.
+          </p>
+        </div>
+      </form>
+      {% elif ownership.viewer_active_claim %}
+      <p class="ss-domain-note">You already have an active ownership review request for this ScanStory.</p>
+      {% endif %}
       {% endif %}
     </section>
     {% endif %}
