@@ -633,6 +633,16 @@ ENTITLEMENT_TYPES = {"EXTRA_SCANS", "VALIDITY_EXTENSION", "PROJECT_CAPACITY", "P
 
 class AddonCatalog(db.Model):
     __tablename__ = "addon_catalog"
+    # Mirrors ck_addon_catalog_type in the migration chain. It was absent here,
+    # so db.create_all() (what the test suite builds) produced a schema WITHOUT
+    # the constraint while production shipped WITH it - the exact drift that let
+    # P0-2 reach production undetected. Keep these two in lockstep.
+    __table_args__ = (
+        db.CheckConstraint(
+            "addon_type IN ('EXTRA_SCANS', 'VALIDITY_EXTENSION', 'PROJECT_CAPACITY', 'PROJECT_SERVICE_COVERAGE')",
+            name="ck_addon_catalog_type",
+        ),
+    )
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     code = db.Column(db.String(80), unique=True, nullable=False, index=True)
@@ -1979,8 +1989,16 @@ class UploadSession(db.Model):
     client_checksum_sha256 = db.Column(db.String(64), nullable=True)
     computed_checksum_sha256 = db.Column(db.String(64), nullable=True)
 
-    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
-    pair_id = db.Column(db.Integer, db.ForeignKey("project_pairs.id"), nullable=True, index=True)
+    # ondelete="SET NULL" (P0-5): an UploadSession is operational/audit history
+    # and must SURVIVE deletion of the project it produced, but it must not
+    # block that deletion either. Without this, PostgreSQL raised IntegrityError
+    # on a routine project delete; SQLite's default non-enforcement hid it.
+    project_id = db.Column(
+        db.Integer, db.ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    pair_id = db.Column(
+        db.Integer, db.ForeignKey("project_pairs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     failure_code = db.Column(db.String(50), nullable=True)
 

@@ -322,8 +322,12 @@ def test_reconcile_payment_activations_apply_activates_entitlement_once(app_modu
     assert user.subscription_status == "active"
     assert user.subscribed_project_limit == paid_plan.total_project_limit
     assert user.subscribed_scan_limit == paid_plan.total_scan_limit
-    assert user.projects_used == 0
-    assert user.scans_used == 0
+    # Wave 1 P0-1: activation no longer zeroes the usage counters. Those columns
+    # are what _reserve_project_quota_atomic / _consume_scan_quota_atomic gate
+    # against, so resetting them handed the user a fresh full allowance on top
+    # of the projects they already owned.
+    assert user.projects_used == 4
+    assert user.scans_used == 9
     assert app_module.PaymentReservation.query.get(reservation.id).status == "activated"
 
     first_end = refreshed_order.subscription_end

@@ -32,11 +32,16 @@ def _migration_app(tmp_path, name):
     return app
 
 
-def test_admin_refunds_migration_is_current_head():
+def test_admin_refunds_migration_is_in_the_single_linear_chain():
+    # No longer the head: Wave 1 added c3f7a1d5e9b4 and d4e8b2c6a0f3 on top.
+    # What must stay true is that the chain is single-headed and that this
+    # revision keeps its place in it.
     script = _script_directory()
     revision = script.get_revision(REFUND_REVISION)
-    assert script.get_current_head() == REFUND_REVISION
     assert revision.down_revision == PRIOR_REVISION
+    assert len(script.get_heads()) == 1
+    ancestry = {r.revision for r in script.iterate_revisions(script.get_current_head(), "base")}
+    assert REFUND_REVISION in ancestry
 
 
 def test_admin_refunds_upgrade_adds_refund_schema(tmp_path):

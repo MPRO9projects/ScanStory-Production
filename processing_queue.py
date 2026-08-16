@@ -80,7 +80,10 @@ def queue_available():
         return False
     mode = queue_mode()
     if mode in {"fake", "inline"}:
-        return True
+        # Fail closed in production (P0-6). 'fake' creates the ProcessingJob row
+        # and never runs anything; reporting that as an available queue is what
+        # let /ready stay green over a dead pipeline.
+        return not queue_required()
     return bool(os.environ.get("REDIS_URL"))
 
 

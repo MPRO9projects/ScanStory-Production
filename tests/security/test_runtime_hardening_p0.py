@@ -79,6 +79,10 @@ def test_flask_debug_env_enables_debug_outside_testing(monkeypatch, tmp_path):
     monkeypatch.setenv("FLASK_DEBUG", "1")
     monkeypatch.setenv("FLASK_SECRET_KEY", "hardening-test-secret")
     monkeypatch.setenv("SCANSTORY_TESTING", "0")
+    # Wave 1 P0-6: a non-testing runtime must now declare which environment it
+    # is, so a deploy that sets nothing can no longer boot silently into queue
+    # mode 'fake'. This test is exercising development-mode debug, so it says so.
+    monkeypatch.setenv("FLASK_ENV", "development")
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://user:pw@localhost:5432/scanstory_dev")
     monkeypatch.setenv("SCANSTORY_SKIP_STARTUP_BOOTSTRAP", "1")
     for name in list(sys.modules):

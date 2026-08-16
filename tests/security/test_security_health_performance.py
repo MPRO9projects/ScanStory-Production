@@ -30,7 +30,11 @@ def test_healthz_is_minimal_and_ready_checks_database(client, monkeypatch):
 
     ready = client.get("/ready")
     assert ready.status_code == 200
-    assert ready.get_json() == {"status": "ready", "checks": {"database": "ok"}}
+    # Wave 1 P0-6: /ready now reports the resolved queue mode. The test runtime
+    # is non-production, so fake mode remains ready - just no longer silent.
+    payload = ready.get_json()
+    assert payload["status"] == "ready"
+    assert payload["checks"]["database"] == "ok"
     assert ready.headers["Cache-Control"] == "no-store"
 
 

@@ -74,8 +74,36 @@ Classifications:
 | Queue | `SCANSTORY_QUEUE_MODE` | required in production, no safe default | Must be `rq` in production. `fake`/`inline` are development/test only. |
 | Queue | `RQ_QUEUE_NAME` | optional, safe default | RQ queue name, default `scanstory-processing`. |
 | Upload | `SCANSTORY_RESUMABLE_CHUNK_MAX_BYTES` | optional, safe default | Max raw request body accepted by the resumable chunk route; default 1 MiB. Reverse proxy request-body limits for `/api/uploads/sessions/*/chunk` must allow at least this value and should not greatly exceed it. |
-| Future limiter | `RATE_LIMIT_REDIS_URL` | future, secret, not yet active | Required before horizontal scale/shared limiter. |
+| Rate limiting | `RATE_LIMIT_REDIS_URL` | **required in multi-worker production**, secret, no safe default | Now read by `rate_limit.build_limiter()`. Without it the limiter is process-local, so every published limit becomes `limit x worker count` and resets on every rolling restart. When set, the limiter **fails closed**: if Redis is unreachable the limited endpoints return 429 with `Retry-After` rather than becoming unlimited. |
+| Upload | `MAX_CONTENT_LENGTH` | optional, safe derived default | Absolute whole-request ingest ceiling. Always applied; when unset it is derived as `((MAX_VIDEO_UPLOAD_BYTES + MAX_IMAGE_UPLOAD_BYTES) x MAX_PAIRS_PER_PROJECT_CEILING) + 8 MiB`. |
+| Upload | `MAX_REQUEST_BODY_BYTES` | optional, safe default `67108864` | Per-request cap for every endpoint that is not a multi-pair upload route. Oversized bodies are rejected with 413 before parsing. |
+| Upload | `MAX_PAIRS_PER_PROJECT_CEILING` | optional, safe default `10` | Sizing input for the absolute ceiling only. |
+| Add-ons | `ADDON_CATALOG_SEED_FILE` / `ADDON_CATALOG_SEED_JSON` | optional | Explicit input for `flask seed-addon-catalog`. Prices and quantities are never defaulted by the application. |
 | Razorpay | `RAZORPAY_WEBHOOK_SECRET` | required for webhook reconciliation, secret, production-only, no safe default | Dedicated Razorpay webhook secret, separate from `RAZORPAY_KEY_SECRET` with no fallback between them. `POST /webhooks/razorpay` fails closed (rejects, processes nothing) when this is absent/empty. |
+
+## Reverse-Proxy Ingest Contract (SERVER-TEAM-VERIFY)
+
+The application now bounds absolute ingest itself, but the proxy is still the
+first and cheapest rejection point and the two sides must not contradict each
+other. **These values must be confirmed against the deployed Nginx
+configuration and evidenced back; nothing here is a measurement of the current
+production host.**
+
+| Location | Directive | Required relationship |
+| --- | --- | --- |
+| `location /upload`, `location /projects/*/edit`, `location /admin/projects/upload` | `client_max_body_size` | Must be **>= the app's `MAX_CONTENT_LENGTH`**. If the proxy value is lower, legitimate multi-pair uploads fail at the proxy with an opaque 413 and the application never sees them. |
+| `location /api/uploads/sessions/*/chunk` | `client_max_body_size` | Must be **>= `SCANSTORY_RESUMABLE_CHUNK_MAX_BYTES`** (default 1 MiB) and should not greatly exceed it. |
+| Server default (all other locations) | `client_max_body_size` | Should be **<= `MAX_REQUEST_BODY_BYTES`** (default 64 MiB). |
+| All upload locations | `proxy_read_timeout`, `proxy_send_timeout`, `client_body_timeout` | Must accommodate the slowest supported upload. A 1 GiB video at 0.5 Mbps takes hours; if these are shorter, resumable chunking is what makes the upload completable and the timeouts still need to cover a single chunk comfortably. |
+
+Ordering guarantee inside the application: the per-endpoint cap runs in
+`before_request` on `Content-Length` only, so an oversized body is rejected
+**before** any multipart parsing, decode or disk spooling. Per-file validation
+still runs after spooling (unavoidable for multipart), which is exactly why the
+outer bounds above matter.
+
+Outstanding server-team questions: Q17 (`client_max_body_size` values), Q18
+(proxy timeouts), Q59 (`RATE_LIMIT_REDIS_URL` provisioning).
 
 ## Current Integrated Runtime Constants
 
@@ -99,7 +127,12 @@ so staging checks do not certify the wrong behavior.
 | Public media cache | `public, max-age=3600`; suspended media may remain in a browser cache until expiry. |
 | OpenCV static cache | `public, max-age=31536000, immutable`; service worker only intercepts `/static/js/opencv*`. |
 | CSP image sources | self/data/blob plus `https://images.pexels.com`; no broad `https:` or `*` image source. |
-| Rate limiter | Process-local memory only; not shared across workers and reset on process restart. |
+| Rate limiter | Redis-backed and shared across workers when `RATE_LIMIT_REDIS_URL` is set (required for multi-worker production); process-local in-memory fallback otherwise. Redis-unavailable policy is **fail closed**. |
+| Admin login limit | `20` attempts per `900` seconds per client IP, plus `10` per `900` seconds per identity+IP. |
+| Admin forgot-password limit | `10` per `3600` seconds per client IP, plus `3` per `3600` seconds per identity+IP. |
+| Login identity limit | `15` attempts per `900` seconds per identity+IP, in addition to the IP limit. |
+| Absolute request ingest ceiling | `MAX_CONTENT_LENGTH`; derived default `11270094848` bytes (~10.5 GiB) with shipped per-file limits. Never unbounded. |
+| Default per-request body cap | `MAX_REQUEST_BODY_BYTES`, default `67108864` bytes, for all non-multi-pair-upload endpoints. |
 | Razorpay webhook route | `POST /webhooks/razorpay`; unauthenticated/no-session, `@csrf.exempt`, not covered by `request_limiter`; authenticity is `X-Razorpay-Signature` HMAC-SHA256 verification against `RAZORPAY_WEBHOOK_SECRET` only. |
 | Razorpay webhook supported events | `payment.captured` only; every other validly-signed event type is acknowledged with zero mutation. |
 

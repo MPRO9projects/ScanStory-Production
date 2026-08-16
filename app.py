@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import calendar
 import shutil
 import mimetypes
 import threading
@@ -10,7 +11,7 @@ import razorpay
 from functools import lru_cache, wraps
 from datetime import datetime as dt, timedelta
 from flask import (
-    Flask, request, redirect, url_for, session,
+    Flask, request, redirect, url_for, session, make_response,
     jsonify, flash, send_from_directory, render_template, abort, has_request_context
 )
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -65,13 +66,14 @@ from models import (
     REFUND_RECONCILIATION_STATUSES,
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
-from rate_limit import limiter as request_limiter
+from rate_limit import identity_digest, limiter as request_limiter
 from processing_queue import (
     QueueUnavailable,
     active_project_job,
     enqueue_project_pair_processing,
     queue_config_summary,
     queue_mode,
+    queue_required,
     processing_job_status_payload,
     redis_ready_check,
     retry_failed_job,
@@ -111,6 +113,18 @@ app.config['WTF_CSRF_CHECK_DEFAULT'] = True
 app.config['WTF_CSRF_HEADERS'] = ["X-CSRFToken", "X-CSRF-Token"]
 
 
+def _runtime_environment_declared():
+    """True when the deployment has explicitly stated which environment it is.
+
+    Any non-blank value counts (development, staging, production, ...); the
+    point is that the operator made a statement, not which statement.
+    """
+    for key in ("SCANSTORY_PRODUCTION", "APP_ENV", "ENV", "FLASK_ENV"):
+        if (os.environ.get(key) or "").strip():
+            return True
+    return False
+
+
 def _validate_required_runtime_config():
     """Fail fast on missing required runtime-security configuration.
 
@@ -142,6 +156,24 @@ def _validate_required_runtime_config():
             missing.append("SESSION_COOKIE_SECURE=true")
         if os.environ.get("SCANSTORY_DEV_TESTING") == "1":
                 missing.append("SCANSTORY_DEV_TESTING=0")
+        # SCANSTORY_TESTING=1 on a production host permits SQLite (see the
+        # database branch above) and forces queue mode 'fake', i.e. total silent
+        # degradation. It belongs in the prohibition list beside
+        # SCANSTORY_DEV_TESTING and was simply missing (P0-6 / ANM-52).
+        if SCANSTORY_TESTING:
+            missing.append("SCANSTORY_TESTING=0")
+    elif not SCANSTORY_TESTING and not _runtime_environment_declared():
+        # P0-6: production was detected only by an opt-IN flag, so a deploy that
+        # set none of SCANSTORY_PRODUCTION / APP_ENV / ENV / FLASK_ENV booted
+        # happily into queue mode 'fake' - jobs created, nothing ever run, and
+        # /ready still 200. Refuse to boot ambiguously instead: a non-testing
+        # runtime must state which environment it is. This cannot be bypassed by
+        # omission, which was the whole failure mode.
+        raise RuntimeError(
+            "Runtime environment is not declared. Set one of SCANSTORY_PRODUCTION, "
+            "APP_ENV, ENV or FLASK_ENV (e.g. APP_ENV=production or "
+            "FLASK_ENV=development) before starting the app (see .env.example)."
+        )
     _smtp_timeout_seconds()
     if os.environ.get("SMTP_PORT"):
         _smtp_port()
@@ -274,10 +306,26 @@ RATE_LIMITS = {
     "scanner_opencv_telemetry": (30, 60),
     "upload": (8, 3600),
     "login_ip": (80, 900),
+    "login_identity": (15, 900),
     "register_ip": (30, 3600),
     "forgot_password_ip": (30, 3600),
     "resend_otp_ip": (20, 3600),
     "content_report": (5, 3600),
+    # P0-8. /admin/login and /admin/forgot-password had NO request-layer limit
+    # at all: admin login was protected only by a per-email DB lockout (useless
+    # against distributed spray across many admin emails) and admin
+    # forgot-password was an unlimited OTP-mail trigger that bypassed the
+    # _resend_otp throttles entirely.
+    #
+    # Two buckets per route, deliberately: a per-IP bucket stops one host
+    # spraying many identities, and a tighter identity+IP bucket carries the
+    # real per-account limit. Keying the tight bucket on identity+IP rather than
+    # identity alone means one abusive client cannot deny an entire NAT'd
+    # network, and cannot lock a known admin out from elsewhere.
+    "admin_login_ip": (20, 900),
+    "admin_login_identity": (10, 900),
+    "admin_forgot_password_ip": (10, 3600),
+    "admin_forgot_password_identity": (3, 3600),
 }
 
 
@@ -285,6 +333,13 @@ def _rate_limit_key(scope, *parts):
     clean = [scope, _client_ip()]
     clean.extend(str(part or "-")[:120] for part in parts)
     return ":".join(clean)
+
+
+def _rate_limited_html(template, retry_after, message="Too many attempts. Please try again later."):
+    flash(message, "error")
+    response = make_response(render_template(template), 429)
+    response.headers["Retry-After"] = str(retry_after)
+    return response
 
 
 def _check_rate_limit(scope, key):
@@ -592,6 +647,14 @@ def _readiness_checks():
         if not redis_ready_check():
             return {"database": "ok", "queue": "unavailable"}
         checks["queue"] = "ok"
+    elif queue_required():
+        # P0-6: fake/inline skip the Redis probe entirely, so readiness used to
+        # report 200 precisely when no upload would ever be processed. In a
+        # production runtime any non-rq mode is a not-ready condition, never a
+        # reason to skip the check.
+        return {"database": "ok", "queue": "unavailable"}
+    else:
+        checks["queue"] = mode
     return checks
 
 
@@ -1499,6 +1562,7 @@ ADMIN_ROLE_PERMISSIONS = {
         "admin.reports.manage",
         "superadmin.admins.manage",
         "superadmin.plans.manage",
+        "superadmin.addons.manage",
         "superadmin.settings.manage",
         "superadmin.capacity.manage",
         "superadmin.audit.view",
@@ -1510,6 +1574,7 @@ HIGH_IMPACT_PERMISSIONS = {
     "admin.payments.refund",
     "superadmin.admins.manage",
     "superadmin.plans.manage",
+    "superadmin.addons.manage",
     "superadmin.settings.manage",
     "superadmin.capacity.manage",
     "superadmin.audit.view",
@@ -2112,6 +2177,21 @@ def project_public_access_state(project, now=None):
         best_source = "OWNER_SUBSCRIPTION"
         best_until = owner.subscription_expires_at
         has_indefinite = best_until is None
+    elif project.owner_admin_id and not project_current_owner_user_id(project):
+        # Admin-owned projects (platform demo/preview rows) carry ownership on
+        # owner_admin_id, so they can never establish OWNER_SUBSCRIPTION coverage
+        # and were permanently unavailable at all 13 enforcement surfaces (P0-9).
+        # They are platform-operated rather than customer-billed: coverage is the
+        # owning Admin account being active, which is a real authorization fact
+        # rather than a synthesized paid User subscription. project.is_active is
+        # still checked above, so admin suspension keeps working unchanged, and
+        # the branch is deliberately gated on there being NO user owner so a
+        # transferred-to-user project is judged by the user rule only.
+        owner_admin = Admin.query.get(project.owner_admin_id)
+        if owner_admin and owner_admin.is_active:
+            best_source = "ADMIN_OWNED"
+            best_until = None
+            has_indefinite = True
 
     for coverage in _project_specific_coverage_candidates(project, now):
         if coverage.coverage_end is None:
@@ -2625,6 +2705,45 @@ def reconciled_project_limit(user, plan_project_limit):
     if plan_project_limit in (None, 0):
         return plan_project_limit
     return int(plan_project_limit) + purchased_project_capacity(user)
+
+
+def _add_calendar_months(start, months):
+    """Add whole calendar months, clamping to the last valid day of the target
+    month (31 Jan + 1 month -> 28/29 Feb). stdlib only; no dateutil dependency.
+    """
+    months = int(months or 0)
+    if months <= 0:
+        return start
+    total = (start.year * 12 + (start.month - 1)) + months
+    year, month = divmod(total, 12)
+    month += 1
+    day = min(start.day, calendar.monthrange(year, month)[1])
+    return start.replace(year=year, month=month, day=day)
+
+
+def purchased_scan_capacity(user):
+    """Auditable sum of EXTRA_SCANS entitlement deltas for this user.
+
+    Exact mirror of purchased_project_capacity: scans were the neglected twin
+    of projects (P0-1) - the ledger was written correctly by add-on fulfilment
+    but nothing ever re-added it when a plan re-synced the materialized column.
+    """
+    if not user:
+        return 0
+    total = db.session.query(
+        func.coalesce(func.sum(EntitlementTransaction.delta_value), 0)
+    ).filter(
+        EntitlementTransaction.user_id == user.id,
+        EntitlementTransaction.entitlement_type == "EXTRA_SCANS",
+    ).scalar()
+    return int(total or 0)
+
+
+def reconciled_scan_limit(user, plan_scan_limit):
+    """Base plan scan allowance + purchased EXTRA_SCANS. None/0 = unlimited."""
+    if plan_scan_limit in (None, 0):
+        return plan_scan_limit
+    return int(plan_scan_limit) + purchased_scan_capacity(user)
 
 
 def effective_project_limit(user):
@@ -3182,32 +3301,115 @@ def enforce_subscription(view):
 # --------------------------------------------------------------------------------------------
 # Project delete helper
 # --------------------------------------------------------------------------------------------
+def project_media_dirs(project):
+    """(images, videos, features, qr) resolved from ACTUAL project ownership.
+
+    P0-4: the delete helper used to hard-code the USER directories, so for an
+    admin-owned project (which writes to data_admin/*) os.path.exists() was
+    False for every path, nothing was ever unlinked, and 100% of its media was
+    orphaned permanently and silently. Ownership - not the calling route -
+    decides the directory set, matching processing_operations._dirs_for_project.
+    """
+    if project is not None and project.owner_admin_id:
+        return ADMIN_IMAGES_DIR, ADMIN_VIDEOS_DIR, ADMIN_FEATURES_DIR, ADMIN_QR_DIR
+    return IMAGES_DIR, VIDEOS_DIR, FEATURES_DIR, QR_DIR
+
+
+def _safe_media_path(directory, filename):
+    """Join a stored filename onto a media root, refusing to escape that root.
+
+    These names are server-generated ({project_id}_{index}.ext), but they are
+    persisted in the database and are never re-validated on read, so the delete
+    path must not trust them to be traversal-free.
+    """
+    if not filename:
+        return None
+    name = os.path.basename(str(filename).replace("\\", "/"))
+    if not name or name in (".", ".."):
+        return None
+    root = os.path.abspath(directory)
+    candidate = os.path.abspath(os.path.join(root, name))
+    if os.path.dirname(candidate) != root:
+        return None
+    return candidate
+
+
+def _unlink_project_media(paths, project_id):
+    """Remove media, returning the paths that could not be deleted.
+
+    A missing file is a success (deletion is idempotent and re-runnable). A real
+    failure - permission denied, file locked - is logged with the basename only
+    and reported to the caller instead of being swallowed by `except: pass`,
+    which previously hid genuine failures on the user path too (ANM-06).
+    """
+    failures = []
+    for path in paths:
+        if not path:
+            continue
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failures.append(path)
+            app.logger.error(
+                "project_media_unlink_failed project_id=%s file=%s error=%s",
+                project_id, os.path.basename(path), safe_error_summary(exc),
+            )
+    return failures
+
+
 def _delete_project_files_and_rows(project: Project):
-    pairs = ProjectPair.query.filter_by(project_id=project.id).all()
+    images_dir, videos_dir, features_dir, qr_dir = project_media_dirs(project)
+    project_id = project.id
+    pairs = ProjectPair.query.filter_by(project_id=project_id).all()
+
+    targets = []
     for pair in pairs:
-        img_path = os.path.join(IMAGES_DIR, pair.image_filename) if pair.image_filename else None
-        vid_path = os.path.join(VIDEOS_DIR, pair.video_filename)
-        npz_path = os.path.join(FEATURES_DIR, f"{project.id}_{pair.pair_index}.npz")
-        for path in (img_path, vid_path, npz_path):
-            if path and os.path.exists(path):
-                try:
-                    os.remove(path)
-                except Exception:
-                    pass
-        db.session.delete(pair)
-    
+        targets.append(_safe_media_path(images_dir, pair.image_filename))
+        targets.append(_safe_media_path(videos_dir, pair.video_filename))
+        targets.append(_safe_media_path(features_dir, f"{project_id}_{pair.pair_index}.npz"))
+        # Derived artifacts that the old helper never removed at all.
+        targets.append(_safe_media_path(images_dir, f"{project_id}_{pair.pair_index}_work.jpg"))
+        if pair.video_filename:
+            stem = os.path.splitext(os.path.basename(str(pair.video_filename)))[0]
+            targets.append(_safe_media_path(videos_dir, f"{stem}_fast.mp4"))
+
     if project.qr_code_path:
-        qr_file = os.path.basename(project.qr_code_path)
-        qr_path = os.path.join(QR_DIR, qr_file)
-        if os.path.exists(qr_path):
-            try:
-                os.remove(qr_path)
-            except Exception:
-                pass
-    
+        targets.append(_safe_media_path(qr_dir, os.path.basename(project.qr_code_path)))
+    if getattr(project, "qr_code_filename", None):
+        targets.append(_safe_media_path(qr_dir, project.qr_code_filename))
+
+    failures = _unlink_project_media(dict.fromkeys(p for p in targets if p), project_id)
+
+    # Resumable upload sessions are audit history and are deliberately retained
+    # with their references cleared rather than cascade-deleted (P0-5). The
+    # schema now also enforces ON DELETE SET NULL for the paths that bypass
+    # this helper; doing it explicitly here keeps behaviour identical on a
+    # SQLite database running without PRAGMA foreign_keys=ON.
+    session_conditions = [UploadSession.project_id == project_id]
+    pair_ids = [pair.id for pair in pairs]
+    if pair_ids:
+        session_conditions.append(UploadSession.pair_id.in_(pair_ids))
+    UploadSession.query.filter(or_(*session_conditions)).update(
+        {UploadSession.project_id: None, UploadSession.pair_id: None},
+        synchronize_session=False,
+    )
+
+    for pair in pairs:
+        db.session.delete(pair)
     db.session.delete(project)
     db.session.commit()
     load_features.cache_clear()
+
+    if failures:
+        # Rows are gone but some bytes remain. Surfaced as an operational signal
+        # (never to the end user) so the orphan is detectable rather than silent.
+        app.logger.error(
+            "project_delete_incomplete_media_cleanup project_id=%s orphaned_files=%d",
+            project_id, len(failures),
+        )
+    return failures
 
 
 def _quota_counter_rows():
@@ -3559,13 +3761,77 @@ MAX_IMAGE_PIXELS = int(os.environ.get("MAX_IMAGE_PIXELS", 40_000_000))
 # Optional; unset/0 disables the duration check entirely.
 MAX_VIDEO_DURATION_SECONDS = int(os.environ.get("MAX_VIDEO_DURATION_SECONDS", "0") or "0") or None
 
-# Whole-request body cap. Left unset by default (Flask's existing, unchanged
-# behavior) since a single legitimate multi-pair upload can legitimately
-# approach MAX_VIDEO_SIZE * pairs-per-project; only apply a cap when an
-# operator explicitly opts in via env (see .env.example).
+# ---------------------------------------------------------------------------
+# Whole-request ingest cap (P0-7).
+#
+# Previously MAX_CONTENT_LENGTH was left unset by default, so absolute ingest
+# was UNBOUNDED at every layer this repository controls, and per-file size is
+# only checked after the body has been fully spooled to disk. A single small
+# global cap is not correct either: a legitimate multi-pair project create can
+# genuinely approach MAX_VIDEO_SIZE x pairs-per-project.
+#
+# The contract implemented here is two-tier:
+#   1. A finite ABSOLUTE ceiling derived from the hard per-file limits already
+#      enforced in this codebase, applied globally by Flask/Werkzeug (which
+#      rejects on Content-Length before the body is read).
+#   2. A much smaller DEFAULT per-request cap applied in before_request to every
+#      endpoint that is not a known large-multipart upload route, so an
+#      oversized body is rejected early instead of being spooled.
+# Both are env-overridable; the reverse-proxy side of the contract is documented
+# in docs/production/README.md (client_max_body_size is SERVER-TEAM-VERIFY).
+# ---------------------------------------------------------------------------
+# Hard ceiling on pairs any plan may configure, used only for sizing the cap.
+MAX_PAIRS_PER_PROJECT_CEILING = int(os.environ.get("MAX_PAIRS_PER_PROJECT_CEILING", "10") or "10")
+_MULTIPART_OVERHEAD_BYTES = 8 * 1024 * 1024
+ABSOLUTE_MAX_REQUEST_BYTES = (
+    (MAX_VIDEO_SIZE + MAX_IMAGE_SIZE) * max(1, MAX_PAIRS_PER_PROJECT_CEILING)
+    + _MULTIPART_OVERHEAD_BYTES
+)
 _max_content_length_env = os.environ.get("MAX_CONTENT_LENGTH")
 if _max_content_length_env:
-    app.config["MAX_CONTENT_LENGTH"] = int(_max_content_length_env)
+    ABSOLUTE_MAX_REQUEST_BYTES = int(_max_content_length_env)
+app.config["MAX_CONTENT_LENGTH"] = ABSOLUTE_MAX_REQUEST_BYTES
+
+# Everything that is not a creator/admin multipart upload route.
+DEFAULT_MAX_REQUEST_BYTES = int(
+    os.environ.get("MAX_REQUEST_BODY_BYTES", str(64 * 1024 * 1024)) or str(64 * 1024 * 1024)
+)
+# Endpoints legitimately allowed to send a full multi-pair body.
+LARGE_UPLOAD_ENDPOINTS = {
+    "handle_upload",              # POST /upload  (multi-pair project create)
+    "user_edit_project",          # POST /projects/<id>/edit (pair replacement)
+    "admin_handle_upload",        # POST /admin/projects/upload
+}
+
+
+def _endpoint_body_limit(endpoint):
+    if endpoint in LARGE_UPLOAD_ENDPOINTS:
+        return ABSOLUTE_MAX_REQUEST_BYTES
+    return min(DEFAULT_MAX_REQUEST_BYTES, ABSOLUTE_MAX_REQUEST_BYTES)
+
+
+@app.before_request
+def _enforce_request_body_limit():
+    """Reject oversized bodies before any decode/parse/spool work happens.
+
+    Runs on Content-Length only. The resumable chunk route keeps its own
+    dedicated 413 (it is bounded by RESUMABLE_UPLOAD_CHUNK_MAX_BYTES and is far below
+    the default cap), so this never contradicts it.
+    """
+    declared = request.content_length
+    if not declared:
+        return None
+    limit = _endpoint_body_limit(request.endpoint)
+    if declared <= limit:
+        return None
+    response = jsonify({
+        "success": False,
+        "code": "REQUEST_TOO_LARGE",
+        "error": "Upload is too large.",
+        "max_bytes": limit,
+    })
+    response.status_code = 413
+    return response
 
 MAX_WORKERS = min(8, (os.cpu_count() or 4))
 
@@ -5882,10 +6148,19 @@ def login():
     email = (request.form.get("email") or "").strip().lower()
     password = request.form.get("password") or ""
 
+    # Per-IP bucket (existing) plus an identity+IP bucket, so a single abusive
+    # client is throttled per account it targets without the looser network-wide
+    # limit having to be tightened for everyone behind the same NAT (P0-8).
     ok, retry_after = _check_rate_limit("login_ip", _rate_limit_key("login"))
+    if ok:
+        ok, retry_after = _check_rate_limit(
+            "login_identity", _rate_limit_key("login_identity", identity_digest(email))
+        )
     if not ok:
         flash("Too many login attempts from this network. Please wait and try again.", "error")
-        return render_template("user/login.html"), 429
+        response = make_response(render_template("user/login.html"), 429)
+        response.headers["Retry-After"] = str(retry_after)
+        return response
 
     user = User.query.filter_by(email=email).first()
 
@@ -8604,7 +8879,12 @@ def activate_payment(payment_order):
 
     now = dt.utcnow()
     if plan.duration_type == "time":
-        subscription_end = now + timedelta(days=plan.duration_value * 30)
+        # Real calendar months, not duration_value * 30 (P0-1 / ANM-41): a plan
+        # whose duration_display advertises "1 Year" (duration_value == 12)
+        # granted 360 days. Chaining unused validity from an existing paid term
+        # onto an early upgrade is a separate, genuinely ambiguous commercial
+        # decision and is deliberately NOT changed here - see the Wave 1 report.
+        subscription_end = _add_calendar_months(now, plan.duration_value or 0)
     else:
         subscription_end = now + timedelta(days=365 * 10)  # count-based plans: far future date
 
@@ -8635,9 +8915,15 @@ def activate_payment(payment_order):
     user.subscription_expires_at = subscription_end
     user.subscription_status = "active"
     user.subscribed_project_limit = reconciled_project_limit(user, plan.total_project_limit)
-    user.subscribed_scan_limit = plan.total_scan_limit
-    user.projects_used = 0
-    user.scans_used = 0
+    user.subscribed_scan_limit = reconciled_scan_limit(user, plan.total_scan_limit)
+    # projects_used / scans_used are deliberately NOT reset here (P0-1).
+    # They are the materialized usage counters that _reserve_project_quota_atomic
+    # and _consume_scan_quota_atomic gate against inside a single conditional
+    # UPDATE. Zeroing them on every paid activation handed a user a fresh full
+    # allowance on top of the projects they already own, bypassing the capacity
+    # gate for real, and it did so on renewal/repurchase of the SAME plan too.
+    # The counters already track reality and are decremented on project delete,
+    # so the correct action on activation is to leave them alone.
 
     trial = TrialDetails.query.filter_by(user_id=user.id).first()
     if trial:
@@ -10854,6 +11140,19 @@ def admin_login_route():
     
     email = (request.form.get("email") or "").strip().lower()
     password = request.form.get("password") or ""
+
+    # P0-8: request-layer limiting before any DB lookup or password hashing.
+    # Only the (hashed) email identity is ever used in a key - never the
+    # submitted password.
+    ok, retry_after = _check_rate_limit("admin_login_ip", _rate_limit_key("admin_login"))
+    if ok:
+        ok, retry_after = _check_rate_limit(
+            "admin_login_identity",
+            _rate_limit_key("admin_login_identity", identity_digest(email)),
+        )
+    if not ok:
+        return _rate_limited_html("admin/login.html", retry_after)
+
     admin = Admin.query.filter_by(email=email).first()
     generic_error = "Invalid email or password."
 
@@ -10898,8 +11197,26 @@ def admin_forgot_password():
         return render_template("admin/forgot_password.html")
     
     email = (request.form.get("email") or "").strip().lower()
+
+    # P0-8: this route calls _create_otp directly, bypassing the _resend_otp
+    # throttles, so without a limit it is an unlimited authenticated-mail
+    # trigger (mail bomb + OTP churn). Limited before any OTP is created.
+    ok, retry_after = _check_rate_limit(
+        "admin_forgot_password_ip", _rate_limit_key("admin_forgot_password")
+    )
+    if ok:
+        ok, retry_after = _check_rate_limit(
+            "admin_forgot_password_identity",
+            _rate_limit_key("admin_forgot_password_identity", identity_digest(email)),
+        )
+    if not ok:
+        return _rate_limited_html(
+            "admin/forgot_password.html", retry_after,
+            "Too many password reset requests. Please try again later.",
+        )
+
     admin = Admin.query.filter_by(email=email).first()
-    
+
     if admin:
         code = _create_otp(email, "admin_reset_password", minutes=10)
         otp_rec = _latest_otp(email, "admin_reset_password")
@@ -11810,6 +12127,252 @@ def admin_toggle_plan_status(plan_id):
     
     flash(f"Plan {status} successfully.", "success")
     return redirect(url_for("admin_plans"))
+
+# --------------------------------------------------------------------------------------------
+# Admin Routes - Add-on catalogue (P0-3)
+#
+# The AddonCatalog table shipped with purchase, fulfilment, entitlement-ledger
+# and refund-reversal flows all built on it, but nothing anywhere constructed a
+# row: no seed, no migration insert, no Admin route. On a freshly migrated
+# production database GET /api/addons/catalog therefore returned [] forever and
+# the whole add-on product was dark, operable only by hand-editing the database.
+#
+# These routes are the governed surface. Prices and quantities are NEVER
+# invented in code - they are entered by a Super Admin here, or supplied as
+# explicit configured input to the `seed-addon-catalog` CLI below.
+# --------------------------------------------------------------------------------------------
+ADDON_CATALOG_EDITABLE_TYPES = ADDON_PURCHASABLE_TYPES
+
+
+def _addon_catalog_form_values(form, existing=None):
+    """Parse and validate the Admin add-on form. Returns (values, error)."""
+    code = (form.get("code") or "").strip()
+    name = (form.get("name") or "").strip()
+    addon_type = (form.get("addon_type") or "").strip().upper()
+    description = (form.get("description") or "").strip() or None
+    currency = (form.get("currency") or "INR").strip().upper()[:3] or "INR"
+
+    if not code or not name:
+        return None, "Code and name are required."
+    if addon_type not in ADDON_CATALOG_EDITABLE_TYPES:
+        return None, "Unsupported add-on type."
+
+    def _int_or_none(field):
+        raw = (form.get(field) or "").strip()
+        if raw == "":
+            return None
+        return int(raw)
+
+    try:
+        unit_amount = float((form.get("unit_amount") or "").strip())
+        scan_delta = _int_or_none("scan_delta")
+        validity_days_delta = _int_or_none("validity_days_delta")
+        project_delta = _int_or_none("project_delta")
+    except (TypeError, ValueError):
+        return None, "Price and delta values must be numbers."
+
+    if unit_amount <= 0:
+        return None, "Unit amount must be greater than zero."
+
+    values = {
+        "code": code,
+        "name": name,
+        "description": description,
+        "addon_type": addon_type,
+        "unit_amount": unit_amount,
+        "currency": currency,
+        "scan_delta": scan_delta,
+        "validity_days_delta": validity_days_delta,
+        "project_delta": project_delta,
+        "is_active": bool(form.get("is_active")),
+        "is_commercially_available": bool(form.get("is_commercially_available")),
+    }
+
+    # Reuse the exact same effect resolution the purchase path uses, so an item
+    # that would be rejected at checkout can never be saved as available.
+    probe = AddonCatalog(**{k: v for k, v in values.items() if k != "code"}, code=code)
+    try:
+        _entitlement_type, delta = _addon_effect(probe, 1)
+    except ValueError:
+        return None, "Unsupported add-on type."
+    if delta <= 0:
+        return None, "This add-on type needs a positive quantity for its effect field."
+
+    duplicate = AddonCatalog.query.filter(AddonCatalog.code == code)
+    if existing is not None:
+        duplicate = duplicate.filter(AddonCatalog.id != existing.id)
+    if duplicate.first():
+        return None, "That add-on code is already in use."
+
+    return values, None
+
+
+@app.route("/admin/addons", methods=["GET"])
+@require_admin_permission("superadmin.addons.manage")
+def admin_addons():
+    admin = current_admin()
+    items = AddonCatalog.query.order_by(AddonCatalog.id.asc()).all()
+    purchase_counts = dict(
+        db.session.query(AddonPurchase.catalog_id, func.count(AddonPurchase.id))
+        .group_by(AddonPurchase.catalog_id)
+        .all()
+    )
+    return render_template(
+        "admin/addons.html",
+        admin=admin,
+        items=items,
+        purchase_counts=purchase_counts,
+        addon_types=sorted(ADDON_CATALOG_EDITABLE_TYPES),
+    )
+
+
+@app.route("/admin/addons/create", methods=["POST"])
+@require_admin_permission("superadmin.addons.manage")
+def admin_create_addon():
+    admin = current_admin()
+    values, error = _addon_catalog_form_values(request.form)
+    if error:
+        flash(error, "error")
+        return redirect(url_for("admin_addons"))
+
+    item = AddonCatalog(**values)
+    db.session.add(item)
+    db.session.commit()
+    log_admin_activity(admin.id, "addon_create", f"Created add-on: {item.code} ({item.addon_type})")
+    flash("Add-on created.", "success")
+    return redirect(url_for("admin_addons"))
+
+
+@app.route("/admin/addons/<int:catalog_id>/edit", methods=["POST"])
+@require_admin_permission("superadmin.addons.manage")
+def admin_edit_addon(catalog_id):
+    admin = current_admin()
+    item = AddonCatalog.query.get_or_404(catalog_id)
+    values, error = _addon_catalog_form_values(request.form, existing=item)
+    if error:
+        flash(error, "error")
+        return redirect(url_for("admin_addons"))
+
+    for key, value in values.items():
+        setattr(item, key, value)
+    db.session.commit()
+    log_admin_activity(admin.id, "addon_edit", f"Edited add-on: {item.code}")
+    flash("Add-on updated.", "success")
+    return redirect(url_for("admin_addons"))
+
+
+@app.route("/admin/addons/<int:catalog_id>/toggle", methods=["POST"])
+@require_admin_permission("superadmin.addons.manage")
+def admin_toggle_addon(catalog_id):
+    """Soft-deactivate only.
+
+    There is deliberately NO delete route: AddonPurchase and the entitlement
+    ledger reference catalog rows by id and the refund-reversal path re-reads
+    them, so a hard delete would orphan purchase history and break refunds.
+    Deactivating removes the item from the commercial API and nothing else.
+    """
+    admin = current_admin()
+    item = AddonCatalog.query.get_or_404(catalog_id)
+    field = (request.form.get("field") or "is_active").strip()
+    if field not in ("is_active", "is_commercially_available"):
+        flash("Unsupported add-on field.", "error")
+        return redirect(url_for("admin_addons"))
+
+    setattr(item, field, not bool(getattr(item, field)))
+    db.session.commit()
+    state = "enabled" if getattr(item, field) else "disabled"
+    log_admin_activity(admin.id, "addon_toggle", f"{state} {field} for add-on: {item.code}")
+    flash(f"Add-on {field.replace('_', ' ')} {state}.", "success")
+    return redirect(url_for("admin_addons"))
+
+
+def seed_addon_catalog_items(entries):
+    """Idempotent upsert of catalog rows keyed on `code`. Returns (created, updated).
+
+    Deliberately takes explicit caller-supplied entries: add-on prices and
+    quantities are a commercial decision and are never hard-coded here.
+    """
+    created = 0
+    updated = 0
+    for entry in entries:
+        code = (entry.get("code") or "").strip()
+        if not code:
+            raise ValueError("every add-on entry needs a 'code'")
+        addon_type = (entry.get("addon_type") or "").strip().upper()
+        if addon_type not in ADDON_CATALOG_EDITABLE_TYPES:
+            raise ValueError(f"unsupported addon_type for {code}: {addon_type or '(missing)'}")
+
+        fields = {
+            "name": entry.get("name") or code,
+            "description": entry.get("description"),
+            "addon_type": addon_type,
+            "unit_amount": float(entry["unit_amount"]),
+            "currency": (entry.get("currency") or "INR").strip().upper()[:3],
+            "scan_delta": entry.get("scan_delta"),
+            "validity_days_delta": entry.get("validity_days_delta"),
+            "project_delta": entry.get("project_delta"),
+            "is_active": bool(entry.get("is_active", True)),
+            "is_commercially_available": bool(entry.get("is_commercially_available", True)),
+        }
+
+        item = AddonCatalog.query.filter_by(code=code).first()
+        if item:
+            for key, value in fields.items():
+                setattr(item, key, value)
+            updated += 1
+        else:
+            db.session.add(AddonCatalog(code=code, **fields))
+            created += 1
+    db.session.commit()
+    return created, updated
+
+
+@app.cli.command("seed-addon-catalog")
+@click.option("--file", "source_file", default=None, help="Path to a JSON array of add-on definitions.")
+@click.option("--apply", "apply_changes", is_flag=True, default=False, help="Write changes (default is dry-run).")
+def seed_addon_catalog_command(source_file, apply_changes):
+    """Bootstrap the add-on catalogue from explicit configured input.
+
+    Source is --file, or the ADDON_CATALOG_SEED_FILE / ADDON_CATALOG_SEED_JSON
+    environment variables. Running it twice is a no-op beyond refreshing fields
+    (upsert keyed on `code`), so it is safe in a deploy script. It refuses to
+    invent prices: with no configured source it explains what to provide and
+    exits non-zero.
+    """
+    raw = None
+    path = source_file or os.environ.get("ADDON_CATALOG_SEED_FILE")
+    if path:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = handle.read()
+    elif os.environ.get("ADDON_CATALOG_SEED_JSON"):
+        raw = os.environ["ADDON_CATALOG_SEED_JSON"]
+
+    if not raw:
+        click.echo(
+            "No add-on catalogue source configured. Provide --file, "
+            "ADDON_CATALOG_SEED_FILE or ADDON_CATALOG_SEED_JSON (a JSON array of "
+            "{code, name, addon_type, unit_amount, ...}), or create items in the "
+            "Admin UI at /admin/addons. Prices and quantities are a commercial "
+            "decision and are never defaulted."
+        )
+        raise SystemExit(2)
+
+    entries = json.loads(raw)
+    if not isinstance(entries, list):
+        click.echo("Add-on catalogue source must be a JSON array.")
+        raise SystemExit(2)
+
+    if not apply_changes:
+        existing = {item.code for item in AddonCatalog.query.all()}
+        would_create = [e.get("code") for e in entries if e.get("code") not in existing]
+        click.echo(f"Dry run. Entries: {len(entries)}  Would create: {len(would_create)}  "
+                   f"Would update: {len(entries) - len(would_create)}")
+        click.echo("Re-run with --apply to write.")
+        return
+
+    created, updated = seed_addon_catalog_items(entries)
+    click.echo(f"Add-on catalogue seeded. Created: {created}  Updated: {updated}")
+
 
 # --------------------------------------------------------------------------------------------
 # Admin Routes - Module 6: Subscription Management

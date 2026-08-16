@@ -541,6 +541,9 @@ def test_paid_plan_activation_preserves_plan_limits(client, app_module, normal_u
     assert refreshed.subscription_status == "active"
     assert refreshed.subscribed_project_limit == paid_plan.total_project_limit
     assert refreshed.subscribed_scan_limit == paid_plan.total_scan_limit
+    # Wave 1 P0-1: usage is carried through activation rather than zeroed. This
+    # user starts at 0 and consumes nothing here, so 0 is still the expected
+    # value - now because it was preserved, not because it was reset.
     assert refreshed.projects_used == 0
     assert refreshed.scans_used == 0
     assert order.subscription_start is not None
