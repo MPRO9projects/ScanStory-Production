@@ -66,6 +66,13 @@ from models import (
     REFUND_RECONCILIATION_STATUSES,
 )
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
+import entitlements as _ent
+from entitlements import (
+    get_effective_entitlements,
+    image_limits,
+    is_downgrade,
+    video_limits,
+)
 from rate_limit import identity_digest, limiter as request_limiter
 from processing_queue import (
     QueueUnavailable,
@@ -2347,7 +2354,10 @@ def log_admin_activity(admin_id, activity_type, description):
         description=description
     )
     db.session.add(activity)
-    db.session.commit()    
+    db.session.commit()
+    # Returned so callers that need a stable, auditable id to key an
+    # entitlement ledger row against (admin grants) can use it.
+    return activity
 # ============================================
 # PROJECT DISPLAY NUMBER HELPER
 # ============================================
@@ -2746,6 +2756,26 @@ def reconciled_scan_limit(user, plan_scan_limit):
     return int(plan_scan_limit) + purchased_scan_capacity(user)
 
 
+_UNSET = object()
+
+
+def materialize_plan_entitlements(user, plan_project_limit=_UNSET, plan_scan_limit=_UNSET):
+    """The ONE place the materialized entitlement columns are ever written.
+
+    Wave 1 established that these columns must always be rebuilt as
+    "base plan allowance + entitlement ledger", never assigned a bare plan or
+    admin number, or purchased capacity is silently destroyed (P0-1). Wave 2
+    added two more writers (deferred plan changes, admin scan-limit edits), so
+    the rule is now enforced by having exactly one function that does it.
+
+    Omitted arguments leave that column untouched.
+    """
+    if plan_project_limit is not _UNSET:
+        user.subscribed_project_limit = reconciled_project_limit(user, plan_project_limit)
+    if plan_scan_limit is not _UNSET:
+        user.subscribed_scan_limit = reconciled_scan_limit(user, plan_scan_limit)
+
+
 def effective_project_limit(user):
     """The one capacity number every project-capacity check must use.
 
@@ -2815,6 +2845,12 @@ def _lock_project_for_pair_quota(project_id):
 
 def _reserve_pair_slots_for_project(project_id, requested_pairs, max_pairs):
     if max_pairs is None:
+        return True, None
+    if not requested_pairs:
+        # This gate is about GROWTH. Adding zero pairs cannot exceed any limit,
+        # and an over-limit grandfathered project must stay editable - replacing
+        # media on an existing pair is count-neutral and must never be blocked
+        # just because the project already sits above the current plan limit.
         return True, None
     project = _lock_project_for_pair_quota(project_id)
     existing_pairs = ProjectPair.query.filter_by(project_id=project.id).count()
@@ -3070,18 +3106,45 @@ def _validate_project_experience_playback(experience_type, playback_mode):
     raise ValueError("Playback mode is not supported for this experience type")
 
 
-def _resolve_project_experience_playback(experience_type_value=None, playback_mode_value=None):
+EXPERIENCE_MODE_LABELS = {
+    "direct": "Direct QR",
+    "detect_once": "Detect Once",
+    "tracked_overlay": "Tracked Overlay",
+}
+
+
+def _enforce_experience_entitlement(playback_mode, user):
+    """Plan gate on CREATING or CHANGING INTO an experience/playback mode.
+
+    Only ever called from create/change paths, which is precisely what makes
+    grandfathering work: an already-created project is never re-checked, so a
+    downgrade that removes an entitlement leaves existing projects running.
+    """
+    if user is None:
+        return
+    ents = user_entitlements(user)
+    if playback_mode not in ents["allowed_playback_modes"]:
+        label = EXPERIENCE_MODE_LABELS.get(playback_mode, playback_mode)
+        raise ValueError(f"Your current plan does not include {label}.")
+
+
+def _resolve_project_experience_playback(experience_type_value=None, playback_mode_value=None, user=None):
     experience_type = (experience_type_value or "image_video").strip().lower()
     if experience_type not in PROJECT_EXPERIENCE_TYPES:
         raise ValueError("Unsupported experience type")
     playback_mode = _normalize_playback_mode(playback_mode_value)
     playback_mode = playback_mode or _default_playback_mode_for_experience(experience_type)
+    # Combination validity first: an invalid experience/playback pairing must
+    # still be rejected as invalid, regardless of what the plan entitles.
     _validate_project_experience_playback(experience_type, playback_mode)
+    _enforce_experience_entitlement(playback_mode, user)
     return experience_type, playback_mode
 
 
-def _parse_project_playback_mode(experience_type):
-    return _resolve_project_experience_playback(experience_type, request.form.get("playback_mode"))[1]
+def _parse_project_playback_mode(experience_type, user=None):
+    return _resolve_project_experience_playback(
+        experience_type, request.form.get("playback_mode"), user=user
+    )[1]
 
 
 def _direct_qr_marker_meta():
@@ -3102,21 +3165,22 @@ def _direct_qr_marker_meta():
     }
 
 
+def user_entitlements(user):
+    """The one entitlement view for this user. Wraps the central resolver so
+    call sites never have to remember to pass the dev-test override."""
+    return get_effective_entitlements(user, unlimited_override=has_dev_test_entitlement(user))
+
+
 def get_plan_pairs_limit(user):
-    """Return the configured max pairs per project for the user's current plan."""
+    """Max pairs per project for this user's plan, hard-ceiling applied.
+
+    Delegates to the central resolver (entitlements.plan_pairs_limit) so the
+    min(plan, MAX_PAIRS_PER_PROJECT_CEILING) rule exists in exactly one place.
+    None still means "unlimited / not configured", unchanged.
+    """
     if has_dev_test_entitlement(user):
         return None
-    plan = getattr(user, "subscription_plan", None)
-    if not plan:
-        return None
-    try:
-        max_pairs = plan.max_pairs_per_project
-        if max_pairs is None:
-            return None
-        max_pairs = int(max_pairs)
-        return max_pairs if max_pairs > 0 else None
-    except (TypeError, ValueError):
-        return None
+    return _ent.plan_pairs_limit(getattr(user, "subscription_plan", None))
 
 
 DEV_TEST_USER_EMAILS = tuple(f"scanstorytest{i:02d}@gmail.com" for i in range(1, 11))
@@ -3218,6 +3282,55 @@ def has_dev_test_entitlement(user):
     return entitled
 
 
+def apply_pending_plan_change_if_due(user):
+    """Apply a deferred (downgrade) plan change once its term boundary passes.
+
+    Attached to the existing request-time limit gate rather than a new cron:
+    check_user_limits() already runs on every gated user action and already
+    handles term expiry, so it IS this codebase's term-boundary hook.
+
+    KNOWN CEILING (documented, not hidden): a user who never returns is not
+    transitioned until their next gated request. That is harmless here because
+    an unapplied downgrade only ever leaves the account on a HIGHER allowance,
+    never a lower one, and no billing is driven off this field.
+    ponytail: move to a scheduled sweep only if a background job ever needs
+    the downgraded state without a user request.
+
+    Strictly additive: it changes plan and allowances, and deletes nothing.
+    Projects, media, pairs, QR codes and existing playback modes are untouched;
+    they simply become grandfathered under the new, lower entitlements.
+    """
+    if not user or not user.pending_plan_id or not user.pending_plan_effective_at:
+        return False
+    if user.pending_plan_effective_at > dt.utcnow():
+        return False
+
+    plan = SubscriptionPlan.query.get(user.pending_plan_id)
+    if not plan:
+        # Plan vanished - drop the pending change rather than trap the account.
+        user.pending_plan_id = None
+        user.pending_plan_effective_at = None
+        db.session.commit()
+        return False
+
+    now = dt.utcnow()
+    user.subscription_id = plan.id
+    user.subscription_taken_at = now
+    if plan.duration_type == "time":
+        user.subscription_expires_at = _add_calendar_months(now, plan.duration_value or 0)
+    else:
+        user.subscription_expires_at = now + timedelta(days=365 * 10)
+    user.subscription_status = "active"
+    # Purchased and admin-granted ledger entitlement survives the downgrade -
+    # the user paid for it separately from the plan.
+    materialize_plan_entitlements(user, plan.total_project_limit, plan.total_scan_limit)
+    user.pending_plan_id = None
+    user.pending_plan_effective_at = None
+    db.session.commit()
+    app.logger.info(f"pending_plan_change_applied user_id={user.id} plan_id={plan.id}")
+    return True
+
+
 def check_user_limits(user):
     """
     Single source of truth enforcement:
@@ -3226,6 +3339,9 @@ def check_user_limits(user):
     """
     if user.is_blocked:
         return False, url_for("login"), "Account is blocked"
+
+    # Term-boundary processing hook for deferred downgrades (Wave 2).
+    apply_pending_plan_change_if_due(user)
 
     if has_dev_test_entitlement(user):
         return True, None, None
@@ -3753,13 +3869,22 @@ def delete_dev_test_users_command(dry_run, confirm):
 # --------------------------------------------------------------------------------------------
 # CV/QR functions (same as before)
 # --------------------------------------------------------------------------------------------
-# Per-file upload limits (P0D) - env-overridable, same defaults as before.
-MAX_IMAGE_SIZE = int(os.environ.get("MAX_IMAGE_UPLOAD_BYTES", 50 * 1024 * 1024))
-MAX_VIDEO_SIZE = int(os.environ.get("MAX_VIDEO_UPLOAD_BYTES", 1 * 1024 * 1024 * 1024))
-MAX_IMAGE_DIMENSION_PX = int(os.environ.get("MAX_IMAGE_DIMENSION_PX", 8000))
-MAX_IMAGE_PIXELS = int(os.environ.get("MAX_IMAGE_PIXELS", 40_000_000))
+# Per-file upload limits (P0D). These are the IMMUTABLE SERVER SAFETY CEILINGS
+# and now live in entitlements.py so the resolver and these upload paths share
+# one definition rather than two that can drift. They are deployment config,
+# never admin-editable plan fields: a plan can only ever lower them, via
+# entitlements.cap() -> min(plan policy, ceiling).
+# Re-exported here under their original names ONLY for sizing the absolute
+# request cap below (an import-time computation) and for tests that compare
+# against the value. They are import-time SNAPSHOTS, so every enforcement site
+# reads _ent.MAX_* / the resolver at call time instead - entitlements.py is the
+# single canonical definition and therefore the only correct patch point.
+MAX_IMAGE_SIZE = _ent.MAX_IMAGE_SIZE
+MAX_VIDEO_SIZE = _ent.MAX_VIDEO_SIZE
+MAX_IMAGE_DIMENSION_PX = _ent.MAX_IMAGE_DIMENSION_PX
+MAX_IMAGE_PIXELS = _ent.MAX_IMAGE_PIXELS
 # Optional; unset/0 disables the duration check entirely.
-MAX_VIDEO_DURATION_SECONDS = int(os.environ.get("MAX_VIDEO_DURATION_SECONDS", "0") or "0") or None
+MAX_VIDEO_DURATION_SECONDS = _ent.MAX_VIDEO_DURATION_SECONDS
 
 # ---------------------------------------------------------------------------
 # Whole-request ingest cap (P0-7).
@@ -3780,8 +3905,9 @@ MAX_VIDEO_DURATION_SECONDS = int(os.environ.get("MAX_VIDEO_DURATION_SECONDS", "0
 # Both are env-overridable; the reverse-proxy side of the contract is documented
 # in docs/production/README.md (client_max_body_size is SERVER-TEAM-VERIFY).
 # ---------------------------------------------------------------------------
-# Hard ceiling on pairs any plan may configure, used only for sizing the cap.
-MAX_PAIRS_PER_PROJECT_CEILING = int(os.environ.get("MAX_PAIRS_PER_PROJECT_CEILING", "10") or "10")
+# Hard ceiling on pairs any plan may configure (also enforced per-plan by
+# entitlements.plan_pairs_limit); used here to size the absolute request cap.
+MAX_PAIRS_PER_PROJECT_CEILING = _ent.MAX_PAIRS_PER_PROJECT_CEILING
 _MULTIPART_OVERHEAD_BYTES = 8 * 1024 * 1024
 ABSOLUTE_MAX_REQUEST_BYTES = (
     (MAX_VIDEO_SIZE + MAX_IMAGE_SIZE) * max(1, MAX_PAIRS_PER_PROJECT_CEILING)
@@ -5830,6 +5956,13 @@ def user_edit_project(project_id):
     pairs = ProjectPair.query.filter_by(project_id=project_id).order_by(ProjectPair.pair_index).all()
     updated = 0
 
+    # Replacement media must satisfy the CURRENT per-file policy (grandfathering
+    # protects what is already stored, never what is newly uploaded). Replacing
+    # a pair is count-neutral, so no pair-limit check belongs on this path.
+    _ents = user_entitlements(user)
+    _img_max, _img_dim, _img_px = image_limits(_ents)
+    _vid_max, _vid_dur = video_limits(_ents)
+
     for pair in pairs:
         img_key = f"image_{pair.pair_index}"
         vid_key = f"video_{pair.pair_index}"
@@ -5839,7 +5972,7 @@ def user_edit_project(project_id):
         if new_image and new_image.filename:
             try:
                 img_temp, _img_ext = validate_image(
-                    new_image, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+                    new_image, TMP_UPLOADS_DIR, _img_max, _img_dim, _img_px
                 )
             except UploadValidationError as exc:
                 app.logger.warning(f"Replacement image rejected (pair {pair.pair_index}): {exc.detail}")
@@ -5857,7 +5990,7 @@ def user_edit_project(project_id):
         if new_video and new_video.filename:
             try:
                 vid_temp, _vid_ext = validate_video(
-                    new_video, TMP_UPLOADS_DIR, MAX_VIDEO_SIZE, MAX_VIDEO_DURATION_SECONDS
+                    new_video, TMP_UPLOADS_DIR, _vid_max, _vid_dur
                 )
             except UploadValidationError as exc:
                 app.logger.warning(f"Replacement video rejected (pair {pair.pair_index}): {exc.detail}")
@@ -6442,7 +6575,7 @@ def handle_upload():
     name = request.form.get("name", "Untitled Project")
     try:
         experience_type = _parse_project_experience_type()
-        playback_mode = _parse_project_playback_mode(experience_type)
+        playback_mode = _parse_project_playback_mode(experience_type, user=user)
     except ValueError as exc:
         flash(str(exc), "error")
         return redirect(url_for("user_create_project_page"))
@@ -6497,6 +6630,9 @@ def handle_upload():
     # consume project/pair quota. All-or-nothing: every pair in the request
     # must validate before any of them are persisted.
     validated_media = []
+    _ents = user_entitlements(user)
+    _img_max, _img_dim, _img_px = image_limits(_ents)
+    _vid_max, _vid_dur = video_limits(_ents)
     try:
         for i, video_file in enumerate(videos):
             image_file = images[i] if experience_type == "image_video" else None
@@ -6504,14 +6640,14 @@ def handle_upload():
             if image_file is not None:
                 try:
                     img_temp, img_ext = validate_image(
-                        image_file, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+                        image_file, TMP_UPLOADS_DIR, _img_max, _img_dim, _img_px
                     )
                 except UploadValidationError as exc:
                     app.logger.warning(f"Upload rejected (image, pair {i}, upload_id={upload_id}): {exc.detail}")
                     raise
             try:
                 vid_temp, vid_ext = validate_video(
-                    video_file, TMP_UPLOADS_DIR, MAX_VIDEO_SIZE, MAX_VIDEO_DURATION_SECONDS
+                    video_file, TMP_UPLOADS_DIR, _vid_max, _vid_dur
                 )
             except UploadValidationError as exc:
                 _safe_remove(img_temp)
@@ -7170,6 +7306,7 @@ def create_upload_session():
         experience_type, playback_mode = _resolve_project_experience_playback(
             payload.get("experience_type"),
             payload.get("playback_mode"),
+            user=user,  # None for an admin-owned upload: admins are not plan-gated.
         )
     except ValueError as exc:
         return _upload_api_error("INVALID_EXPERIENCE_PLAYBACK", str(exc), 400)
@@ -7184,9 +7321,14 @@ def create_upload_session():
         return _upload_api_error("INVALID_SIZE", "image_size and video_size must be positive for Image → Video; Direct QR may omit image bytes.", 400)
     if experience_type == "direct_qr" and image_size != 0:
         return _upload_api_error("INVALID_SIZE", "Direct QR resumable uploads must not include marker image bytes.", 400)
-    if image_size > MAX_IMAGE_SIZE:
+    # Plan policy, hard-capped by the server ceiling. Admin-owned sessions have
+    # no plan, so they fall back to the ceiling exactly as before.
+    _sess_ents = user_entitlements(user) if user else None
+    _sess_max_image = _sess_ents["image_policy"]["max_bytes"] if _sess_ents else _ent.MAX_IMAGE_SIZE
+    _sess_max_video = _sess_ents["video_policy"]["max_bytes"] if _sess_ents else _ent.MAX_VIDEO_SIZE
+    if _sess_max_image is not None and image_size > _sess_max_image:
         return _upload_api_error("IMAGE_TOO_LARGE", "Declared image size exceeds the allowed limit.", 400)
-    if video_size > MAX_VIDEO_SIZE:
+    if _sess_max_video is not None and video_size > _sess_max_video:
         return _upload_api_error("VIDEO_TOO_LARGE", "Declared video size exceeds the allowed limit.", 400)
 
     expected_total_size = image_size + video_size
@@ -7480,6 +7622,13 @@ def _finalize_assemble_and_validate(session_row, user, admin):
         return fail("INVALID_EXPERIENCE_PLAYBACK", str(exc), 400)
 
     validation_start = time.perf_counter()
+    # Same plan-effective policy as the direct upload path; admin-owned
+    # sessions have no plan and fall back to the server ceiling.
+    _fin_ents = user_entitlements(user) if user else None
+    _img_max, _img_dim, _img_px = (
+        image_limits(_fin_ents) if _fin_ents else (_ent.MAX_IMAGE_SIZE, _ent.MAX_IMAGE_DIMENSION_PX, _ent.MAX_IMAGE_PIXELS)
+    )
+    _vid_max, _vid_dur = video_limits(_fin_ents) if _fin_ents else (_ent.MAX_VIDEO_SIZE, _ent.MAX_VIDEO_DURATION_SECONDS)
     image_view = _BoundedFileView(combined_path, 0, session_row.image_size) if experience_type == "image_video" else None
     video_view = _BoundedFileView(combined_path, session_row.image_size, session_row.video_size)
     img_temp = vid_temp = img_ext = vid_ext = None
@@ -7493,7 +7642,7 @@ def _finalize_assemble_and_validate(session_row, user, admin):
             )
             try:
                 img_temp, img_ext = validate_image(
-                    image_storage, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+                    image_storage, TMP_UPLOADS_DIR, _img_max, _img_dim, _img_px
                 )
             except UploadValidationError as exc:
                 image_error = exc
@@ -7506,7 +7655,7 @@ def _finalize_assemble_and_validate(session_row, user, admin):
             )
             try:
                 vid_temp, vid_ext = validate_video(
-                    video_storage, TMP_UPLOADS_DIR, MAX_VIDEO_SIZE, MAX_VIDEO_DURATION_SECONDS
+                    video_storage, TMP_UPLOADS_DIR, _vid_max, _vid_dur
                 )
             except UploadValidationError as exc:
                 video_error = exc
@@ -8878,13 +9027,39 @@ def activate_payment(payment_order):
         }
 
     now = dt.utcnow()
+    user = User.query.get(payment_order.user_id)
+    current_plan = getattr(user, "subscription_plan", None)
+
+    # ---------------------------------------------------------------
+    # Wave 2: is this a downgrade? A confirmed paid change to a LOWER
+    # commercial policy is never applied mid-term - it is parked on the user
+    # and applied at the current term's natural expiry by
+    # apply_pending_plan_change_if_due(). Nothing is rolled back or deleted.
+    # A downgrade with no paid term left to wait for is just an ordinary
+    # activation, so it applies immediately.
+    # ---------------------------------------------------------------
+    has_paid_term_remaining = bool(
+        user
+        and user.subscription_status == "active"
+        and user.subscription_expires_at
+        and user.subscription_expires_at > now
+    )
+    defer_change = has_paid_term_remaining and is_downgrade(current_plan, plan)
+
     if plan.duration_type == "time":
         # Real calendar months, not duration_value * 30 (P0-1 / ANM-41): a plan
         # whose duration_display advertises "1 Year" (duration_value == 12)
-        # granted 360 days. Chaining unused validity from an existing paid term
-        # onto an early upgrade is a separate, genuinely ambiguous commercial
-        # decision and is deliberately NOT changed here - see the Wave 1 report.
+        # granted 360 days.
         subscription_end = _add_calendar_months(now, plan.duration_value or 0)
+        # Wave 2 (deferred from Wave 1): CHAIN unused paid validity. An early
+        # upgrade must not silently discard the remainder of a term the user
+        # already paid for, so the new term is appended to it rather than
+        # replacing it. Only paid ("active") time chains - a trial has no paid
+        # validity to preserve. Computed BEFORE the conditional order UPDATE
+        # below, whose "was still pending" guard is what keeps a replayed
+        # activation from chaining a second time.
+        if has_paid_term_remaining and not defer_change:
+            subscription_end += (user.subscription_expires_at - now)
     else:
         subscription_end = now + timedelta(days=365 * 10)  # count-based plans: far future date
 
@@ -8897,6 +9072,8 @@ def activate_payment(payment_order):
             PaymentOrder.payment_at: now,
             PaymentOrder.subscription_start: now,
             PaymentOrder.subscription_end: subscription_end,
+            PaymentOrder.plan_policy_snapshot_json: json.dumps(plan.policy_snapshot(), sort_keys=True, default=str),
+            PaymentOrder.is_deferred_plan_change: defer_change,
         },
         synchronize_session=False,
     )
@@ -8909,13 +9086,43 @@ def activate_payment(payment_order):
             return {"success": True, "order_id": fresh_order.order_id, "plan_name": plan.plan_name, "replay": True}
         return {"success": False, "error": "Payment order is not pending", "code": "ORDER_NOT_PENDING"}
 
-    user = User.query.get(payment_order.user_id)
+    if defer_change:
+        # Downgrade: the purchase is confirmed and recorded, but the LOWER
+        # policy does not touch this account until the paid term it already
+        # holds runs out. Current plan, limits, projects, media, pairs and
+        # playback modes are all left exactly as they are - a downgrade is
+        # never destructive and never applies retroactively.
+        user.pending_plan_id = plan.id
+        user.pending_plan_effective_at = user.subscription_expires_at
+        if reservation:
+            PaymentReservation.query.filter(
+                PaymentReservation.id == reservation.id,
+                PaymentReservation.status == "reserved",
+            ).update({PaymentReservation.status: "activated"}, synchronize_session=False)
+        db.session.commit()
+        app.logger.info(
+            f"payment_activated_deferred_downgrade order_id={payment_order.id} "
+            f"user_id={user.id} plan_id={plan.id} effective_at={user.pending_plan_effective_at}"
+        )
+        return {
+            "success": True,
+            "order_id": payment_order.order_id,
+            "plan_name": plan.plan_name,
+            "replay": False,
+            "deferred": True,
+            "effective_at": user.pending_plan_effective_at,
+        }
+
     user.subscription_id = plan.id
     user.subscription_taken_at = now
     user.subscription_expires_at = subscription_end
     user.subscription_status = "active"
-    user.subscribed_project_limit = reconciled_project_limit(user, plan.total_project_limit)
-    user.subscribed_scan_limit = reconciled_scan_limit(user, plan.total_scan_limit)
+    materialize_plan_entitlements(user, plan.total_project_limit, plan.total_scan_limit)
+    # An immediate (upgrade / like-for-like) change supersedes any downgrade
+    # that was still parked and waiting for the old term to end - that term no
+    # longer exists in the form it was scheduled against.
+    user.pending_plan_id = None
+    user.pending_plan_effective_at = None
     # projects_used / scans_used are deliberately NOT reset here (P0-1).
     # They are the materialized usage counters that _reserve_project_quota_atomic
     # and _consume_scan_quota_atomic gate against inside a single conditional
@@ -13252,8 +13459,12 @@ def admin_update_scan_limit(user_id):
         return redirect(url_for("admin_user_scans", user_id=user_id))
     
     old_limit = user.subscribed_scan_limit
-    user.subscribed_scan_limit = new_scan_limit
-    
+    # The admin sets the BASE plan allowance. Purchased EXTRA_SCANS and prior
+    # admin grants live in the entitlement ledger and are re-added on top -
+    # writing new_scan_limit straight into the column used to silently delete
+    # entitlement the user had actually paid for (same class of bug as P0-1).
+    materialize_plan_entitlements(user, plan_scan_limit=new_scan_limit)
+
     # If user was at limit and we increased it, update status
     if user.subscription_status == "limit_reached":
         if user.subscribed_scan_limit in (None, 0) or user.remaining_scans > 0:
@@ -13279,14 +13490,30 @@ def admin_grant_extra_scans(user_id):
     if extra_scans <= 0:
         flash("Please enter a positive number of scans.", "error")
         return redirect(url_for("admin_user_scans", user_id=user_id))
-    
-    user.subscribed_scan_limit += extra_scans
+
+    # Admin grants are now auditable ledger rows, not a bare += on the
+    # materialized column. Without the ledger row the grant was erased by the
+    # next plan activation (reconciled_scan_limit rebuilds the column from
+    # plan + ledger). source_type keeps it distinguishable from purchased
+    # entitlement in the resolver, so neither can silently overwrite the other.
+    activity = log_admin_activity(
+        admin.id, "extra_scans_grant", f"Granted {extra_scans} extra scans to {user.email}"
+    )
+    _apply_entitlement_transaction(
+        user,
+        "EXTRA_SCANS",
+        extra_scans,
+        source_type=_ent.ADMIN_GRANT_SOURCE_TYPE,
+        source_id=activity.id,
+        reason=f"admin_grant_extra_scans:admin={admin.id}",
+    )
+    if user.subscription_status == "limit_reached" and (
+        user.subscribed_scan_limit in (None, 0) or user.remaining_scans > 0
+    ):
+        user.subscription_status = "active"
     db.session.commit()
-    
-    # Log activity
-    log_admin_activity(admin.id, "extra_scans_grant",
-                      f"Granted {extra_scans} extra scans to {user.email}")
-    
+
+
     flash(f"Granted {extra_scans} extra scans to user.", "success")
     return redirect(url_for("admin_user_scans", user_id=user_id))
 
@@ -13646,14 +13873,14 @@ def admin_handle_upload():
         for i, (image_file, video_file) in enumerate(zip(images, videos)):
             try:
                 img_temp, img_ext = validate_image(
-                    image_file, TMP_UPLOADS_DIR, MAX_IMAGE_SIZE, MAX_IMAGE_DIMENSION_PX, MAX_IMAGE_PIXELS
+                    image_file, TMP_UPLOADS_DIR, _ent.MAX_IMAGE_SIZE, _ent.MAX_IMAGE_DIMENSION_PX, _ent.MAX_IMAGE_PIXELS
                 )
             except UploadValidationError as exc:
                 app.logger.warning(f"Admin upload rejected (image, pair {i}): {exc.detail}")
                 raise
             try:
                 vid_temp, vid_ext = validate_video(
-                    video_file, TMP_UPLOADS_DIR, MAX_VIDEO_SIZE, MAX_VIDEO_DURATION_SECONDS
+                    video_file, TMP_UPLOADS_DIR, _ent.MAX_VIDEO_SIZE, _ent.MAX_VIDEO_DURATION_SECONDS
                 )
             except UploadValidationError as exc:
                 _safe_remove(img_temp)
