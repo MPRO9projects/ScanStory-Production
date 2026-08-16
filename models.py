@@ -1180,6 +1180,10 @@ class ProjectOwnershipClaim(db.Model):
     reviewed_by_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True, index=True)
     decision_reason = db.Column(db.Text, nullable=True)
     transfer_id = db.Column(db.Integer, db.ForeignKey("project_ownership_transfers.id"), nullable=True, index=True)
+    # V1.1 Wave 4: append-only governed-transition trail (actor, state change,
+    # vendor response note). Same shape and same purpose as the transfer row's
+    # metadata_json - never secrets, never filesystem paths.
+    metadata_json = db.Column(db.Text, nullable=True)
 
     project = db.relationship("Project", backref=db.backref("ownership_claims", lazy=True))
     claimant_user = db.relationship("User", foreign_keys=[claimant_user_id], lazy=True)
