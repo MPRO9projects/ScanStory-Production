@@ -1,0 +1,186 @@
+{#
+  V1.1 Wave 4 - ownership actions surface.
+
+  Deliberately plain. This page exists because the backend transfer/claim
+  routes now exist and a transfer RECIPIENT has nowhere else to accept from
+  (they do not manage the project yet, so the project detail page is not
+  reachable for them). Visual design of the ownership panels belongs to the
+  UI checkpoint that owns project_preview.html - this page is the functional
+  surface those controls can later be wired into, not a competing design.
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ScanStory Ownership</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px;
+           background: #0b0b14; color: #f3f3f7; line-height: 1.55; }
+    main { max-width: 940px; margin: 0 auto; }
+    h1 { font-size: 1.6rem; margin: 0 0 4px; }
+    h2 { font-size: 1.1rem; margin: 32px 0 8px; }
+    p.lead { color: #a5a5b8; margin: 0 0 24px; }
+    section { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+              border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    .row { border-top: 1px solid rgba(255,255,255,0.08); padding: 12px 0; }
+    .row:first-of-type { border-top: 0; }
+    .muted { color: #9a9ab0; font-size: 0.85rem; }
+    .status { display: inline-block; font-size: 0.75rem; padding: 2px 8px; border-radius: 999px;
+              background: rgba(255,255,255,0.1); }
+    form { display: inline-block; margin: 8px 8px 0 0; }
+    input[type=text], input[type=email], textarea, select {
+      background: rgba(0,0,0,0.35); color: #f3f3f7; border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 6px; padding: 7px 9px; font: inherit; min-width: 220px; }
+    button { background: #ff007a; color: #fff; border: 0; border-radius: 6px;
+             padding: 8px 14px; font: inherit; cursor: pointer; }
+    button.secondary { background: rgba(255,255,255,0.14); }
+    .flash { border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; }
+    .flash.error { background: rgba(255,60,60,0.18); }
+    .flash.success { background: rgba(60,200,120,0.18); }
+    a { color: #00d4ff; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>ScanStory ownership</h1>
+  <p class="lead">
+    Handing a ScanStory over is always explicit and always reviewed by the people involved.
+    The QR code, media and scanner link never change when ownership moves.
+    <a href="{{ url_for('projects_page') }}">Back to my ScanStories</a>
+  </p>
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% for category, message in messages %}
+      <div class="flash {{ 'error' if category == 'error' else 'success' }}">{{ message }}</div>
+    {% endfor %}
+  {% endwith %}
+
+  <h2>Handovers waiting for you</h2>
+  <section>
+    {% if not incoming %}
+      <p class="muted">Nothing is waiting for your acceptance.</p>
+    {% endif %}
+    {% for transfer in incoming %}
+      <div class="row">
+        <strong>{{ (projects_by_id.get(transfer.project_id).name if projects_by_id.get(transfer.project_id) else 'ScanStory #' ~ transfer.project_id) }}</strong>
+        <span class="status">{{ PROJECT_TRANSFER_STATUS_LABELS.get(transfer.status, transfer.status) }}</span>
+        <div class="muted">Request #{{ transfer.id }}</div>
+        {% set block = capacity_blocks.get(transfer.id) %}
+        {% if block %}
+          <div class="muted">
+            Not enough room in your account yet -
+            {% if not block.storage_ok %}storage{% endif %}
+            {% if not block.storage_ok and not block.project_slot_ok %} and {% endif %}
+            {% if not block.project_slot_ok %}available ScanStory slots{% endif %}.
+            Nothing has been moved or deleted; free up capacity and try again.
+          </div>
+        {% endif %}
+        <form method="POST" action="{{ url_for('accept_ownership_transfer_route', transfer_id=transfer.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit">{{ 'Try again' if transfer.status == 'PENDING_CAPACITY' else 'Accept handover' }}</button>
+        </form>
+        <form method="POST" action="{{ url_for('reject_ownership_transfer_route', transfer_id=transfer.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="secondary">Decline</button>
+        </form>
+      </div>
+    {% endfor %}
+  </section>
+
+  <h2>Handovers you started</h2>
+  <section>
+    {% if not outgoing %}
+      <p class="muted">You have no handovers in progress.</p>
+    {% endif %}
+    {% for transfer in outgoing %}
+      <div class="row">
+        <strong>{{ (projects_by_id.get(transfer.project_id).name if projects_by_id.get(transfer.project_id) else 'ScanStory #' ~ transfer.project_id) }}</strong>
+        <span class="status">{{ PROJECT_TRANSFER_STATUS_LABELS.get(transfer.status, transfer.status) }}</span>
+        <div class="muted">Request #{{ transfer.id }} - you keep this ScanStory and its project slot until the handover finishes.</div>
+        <form method="POST" action="{{ url_for('cancel_ownership_transfer_route', transfer_id=transfer.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="secondary">Withdraw</button>
+        </form>
+      </div>
+    {% endfor %}
+  </section>
+
+  <h2>Hand a ScanStory to someone else</h2>
+  <section>
+    {% if not transferable %}
+      <p class="muted">None of your ScanStories are available to hand over right now.</p>
+    {% else %}
+      {# One form per ScanStory: the project id is part of the URL, so no
+         client-side action rewriting and nothing to tamper with. #}
+      {% for project in transferable %}
+      <div class="row">
+        <strong>{{ project.name }}</strong>
+        <form method="POST" action="{{ url_for('start_project_ownership_transfer', project_id=project.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <label class="muted" for="recipient{{ project.id }}">Recipient account email</label>
+          <input type="email" id="recipient{{ project.id }}" name="recipient_email" required placeholder="owner@example.com">
+          <label class="muted"><input type="checkbox" name="retain_vendor_management" value="1"> Keep managing it</label>
+          <button type="submit">Send handover request</button>
+        </form>
+      </div>
+      {% endfor %}
+      <p class="muted">
+        The recipient has to accept, and their account has to have room for the ScanStory and its files.
+        Nothing moves until both are true.
+      </p>
+    {% endif %}
+  </section>
+
+  <h2>Ownership review requests about your ScanStories</h2>
+  <section>
+    {% if not incoming_claims %}
+      <p class="muted">No one has asked to review ownership of your ScanStories.</p>
+    {% endif %}
+    {% for claim in incoming_claims %}
+      <div class="row">
+        <strong>{{ (projects_by_id.get(claim.project_id).name if projects_by_id.get(claim.project_id) else 'ScanStory #' ~ claim.project_id) }}</strong>
+        <span class="status">{{ PROJECT_CLAIM_STATUS_LABELS.get(claim.status, claim.status) }}</span>
+        <div class="muted">Request #{{ claim.id }}{% if claim.evidence_summary %} - {{ claim.evidence_summary }}{% endif %}</div>
+        <form method="POST" action="{{ url_for('respond_ownership_claim_route', claim_id=claim.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="decision" value="accept">
+          <button type="submit">Agree to hand over</button>
+        </form>
+        <form method="POST" action="{{ url_for('respond_ownership_claim_route', claim_id=claim.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="hidden" name="decision" value="refuse">
+          <button type="submit" class="secondary">Disagree - send to ScanStory team</button>
+        </form>
+      </div>
+    {% endfor %}
+  </section>
+
+  <h2>Your ownership review requests</h2>
+  <section>
+    {% if not my_claims %}
+      <p class="muted">You have not asked to review ownership of any ScanStory.</p>
+    {% endif %}
+    {% for claim in my_claims %}
+      <div class="row">
+        <strong>{{ (projects_by_id.get(claim.project_id).name if projects_by_id.get(claim.project_id) else 'ScanStory #' ~ claim.project_id) }}</strong>
+        <span class="status">{{ PROJECT_CLAIM_STATUS_LABELS.get(claim.status, claim.status) }}</span>
+        <div class="muted">Request #{{ claim.id }}</div>
+        {% if claim.status in ['OPEN', 'VENDOR_NOTIFIED', 'PENDING_ADMIN_REVIEW', 'APPROVED_BY_VENDOR'] %}
+        <form method="POST" action="{{ url_for('cancel_ownership_claim_route', claim_id=claim.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="secondary">Withdraw request</button>
+        </form>
+        {% endif %}
+      </div>
+    {% endfor %}
+    <p class="muted">
+      A review request is never a transfer. A person checks every one, and ownership only changes
+      through a handover the receiving account accepts.
+    </p>
+  </section>
+</main>
+</body>
+</html>

@@ -334,6 +334,10 @@ RATE_LIMITS = {
     "admin_login_identity": (10, 900),
     "admin_forgot_password_ip": (10, 3600),
     "admin_forgot_password_identity": (3, 3600),
+    # V1.1 Wave 4. Filing an ownership review request names another account's
+    # project, so it is the one ownership mutation worth a bucket; the rest are
+    # already scoped to a row the caller is a party to.
+    "ownership_claim": (10, 3600),
 }
 
 
@@ -1556,6 +1560,8 @@ ADMIN_ROLE_PERMISSIONS = {
         "admin.processing.view",
         "admin.reports.view",
         "admin.reports.manage",
+        "admin.ownership.view",
+        "admin.ownership.manage",
     },
     "superadmin": {
         "admin.dashboard.view",
@@ -1568,6 +1574,8 @@ ADMIN_ROLE_PERMISSIONS = {
         "admin.processing.view",
         "admin.reports.view",
         "admin.reports.manage",
+        "admin.ownership.view",
+        "admin.ownership.manage",
         "superadmin.admins.manage",
         "superadmin.plans.manage",
         "superadmin.addons.manage",
@@ -1908,16 +1916,183 @@ def initiate_project_ownership_transfer(project, initiated_by_user, recipient_us
     )
     db.session.add(transfer)
     db.session.flush()
+    _record_ownership_event(
+        transfer,
+        "transfer_initiated",
+        actor_user=initiated_by_user,
+        reason=reason,
+        project_id=project.id,
+        from_owner_user_id=current_owner_id,
+        to_user_id=recipient_user.id,
+        retain_vendor_management=bool(retain_vendor_management),
+    )
+    db.session.flush()
     return transfer
 
 
+# ---------------------------------------------------------------------------
+# V1.1 Wave 4: governed ownership transitions.
+#
+# CONCURRENCY. Every state change below goes through one conditional UPDATE
+# gated on the row's CURRENT status - the same primitive shape as Wave 1's
+# _atomic_increment_user_counter and Wave 3's reserve_account_storage. A second
+# concurrent (or duplicated) request matches zero rows and no-ops, so ownership
+# can never move twice, a recipient slot can never be consumed twice, and
+# MediaObject rows can never be re-owned twice.
+#
+# AUDIT. metadata_json carries the append-only transition trail. Actor ids,
+# states and the capacity numbers that were actually checked - never secrets,
+# never filesystem paths.
+# ---------------------------------------------------------------------------
+_TRANSFER_RESUMABLE_STATUSES = ("PENDING_ACCEPTANCE", "PENDING_CAPACITY")
+
+
+def _ownership_metadata(record):
+    try:
+        data = json.loads(record.metadata_json) if record.metadata_json else {}
+    except (TypeError, ValueError):
+        data = {}
+    return data if isinstance(data, dict) else {}
+
+
+def _record_ownership_event(record, action, actor_user=None, admin=None, reason=None,
+                            capacity_block=None, **detail):
+    data = _ownership_metadata(record)
+    trail = data.get("audit")
+    if not isinstance(trail, list):
+        trail = []
+    entry = {
+        "action": action,
+        "at": get_utc_now().isoformat(),
+        "status": record.status,
+        "actor_user_id": getattr(actor_user, "id", None),
+        "actor_admin_id": getattr(admin, "id", None),
+    }
+    if reason:
+        entry["reason"] = str(reason)[:500]
+    entry.update(detail)
+    trail.append(entry)
+    # ponytail: bounded trail. 40 transitions is far more than any real
+    # ownership dispute produces; swap for a dedicated table if that stops
+    # being true.
+    data["audit"] = trail[-40:]
+    if capacity_block is not None:
+        data["capacity_block"] = capacity_block
+    record.metadata_json = json.dumps(data)
+    return record
+
+
+def _transition_ownership_row(model, record, from_statuses, to_status, **columns):
+    """Conditional UPDATE gated on current status. True only for the winner.
+
+    A duplicate/concurrent caller matches zero rows and gets False, which every
+    caller below turns into an idempotent no-op rather than a second effect.
+    """
+    values = {model.status: to_status}
+    values.update({getattr(model, key): value for key, value in columns.items()})
+    updated = model.query.filter(
+        model.id == record.id,
+        model.status.in_(tuple(from_statuses)),
+    ).update(values, synchronize_session=False)
+    if updated != 1:
+        return False
+    record.status = to_status
+    for key, value in columns.items():
+        setattr(record, key, value)
+    return True
+
+
+def _transition_transfer(transfer, from_statuses, to_status, **columns):
+    return _transition_ownership_row(ProjectOwnershipTransfer, transfer, from_statuses, to_status, **columns)
+
+
+def _transition_claim(claim, from_statuses, to_status, **columns):
+    return _transition_ownership_row(ProjectOwnershipClaim, claim, from_statuses, to_status, **columns)
+
+
+def transfer_capacity_snapshot(transfer):
+    """The recorded reason a transfer is parked, without re-deriving it."""
+    return _ownership_metadata(transfer).get("capacity_block") if transfer else None
+
+
+def ownership_audit_trail(record):
+    return _ownership_metadata(record).get("audit") or [] if record else []
+
+
+def evaluate_transfer_capacity(project, recipient):
+    """Both capacity dimensions for one transfer-in, as plain numbers.
+
+    Project capacity reuses the Wave 1 effective-limit helpers; storage reuses
+    Wave 3's evaluate_project_storage_transfer() unmodified. Read-only - it
+    reserves nothing, so it is safe to call from a GET.
+    """
+    storage_ok, project_bytes = evaluate_project_storage_transfer(project, recipient)
+    used, allowance = account_storage_state(recipient)
+    project_limit = effective_project_limit(recipient)
+    projects_used = int(getattr(recipient, "projects_used", 0) or 0)
+    slot_ok = has_dev_test_entitlement(recipient) or not _limit_reached(project_limit, projects_used)
+    return {
+        "storage_ok": bool(storage_ok),
+        "project_slot_ok": bool(slot_ok),
+        "project_bytes": int(project_bytes or 0),
+        "recipient_storage_used_bytes": int(used or 0),
+        "recipient_storage_allowance_bytes": allowance,
+        "recipient_project_limit": project_limit,
+        "recipient_projects_used": projects_used,
+        "checked_at": get_utc_now().isoformat(),
+    }
+
+
+def _park_transfer_pending_capacity(transfer, snapshot, actor_user=None, admin=None):
+    """Non-destructive stall. Nothing has moved and nothing will be unwound.
+
+    PENDING_CAPACITY already meant "the recipient cannot absorb this yet" for
+    project slots; storage is a second capacity DIMENSION, not a second state,
+    so the snapshot records WHICH dimension failed and at what values. Retrying
+    re-runs accept_project_ownership_transfer() on the SAME row.
+    """
+    _transition_transfer(transfer, _TRANSFER_RESUMABLE_STATUSES, "PENDING_CAPACITY")
+    _record_ownership_event(
+        transfer,
+        "transfer_pending_capacity",
+        actor_user=actor_user,
+        admin=admin,
+        capacity_block=snapshot,
+        **{k: snapshot[k] for k in ("storage_ok", "project_slot_ok", "project_bytes")},
+    )
+    db.session.flush()
+    return transfer
+
+
+def _mark_claims_transfer_completed(transfer):
+    for claim in ProjectOwnershipClaim.query.filter(
+        ProjectOwnershipClaim.transfer_id == transfer.id,
+        ProjectOwnershipClaim.status != "TRANSFER_COMPLETED",
+    ).all():
+        if _transition_claim(claim, (claim.status,), "TRANSFER_COMPLETED"):
+            _record_ownership_event(claim, "claim_transfer_completed", transfer_id=transfer.id)
+
+
 def accept_project_ownership_transfer(transfer, acting_user=None, completed_by_admin=None):
-    if transfer.status not in {"PENDING_ACCEPTANCE", "PENDING_CAPACITY"}:
+    """Complete a transfer if - and only if - BOTH capacity dimensions allow it.
+
+    Idempotent: an already-COMPLETED transfer returns unchanged, and two
+    concurrent acceptances leave exactly one ownership transition behind.
+    """
+    if transfer.status == "COMPLETED":
+        return transfer
+    if transfer.status not in _TRANSFER_RESUMABLE_STATUSES:
         raise ValueError("Transfer is not pending acceptance.")
     if acting_user is None and completed_by_admin is None:
         raise PermissionError("Transfer acceptance requires the recipient or an admin override.")
     if acting_user is not None and acting_user.id != transfer.to_user_id:
         raise PermissionError("Only the intended recipient can accept this transfer.")
+
+    if transfer.expires_at and get_utc_now() > transfer.expires_at:
+        if _transition_transfer(transfer, _TRANSFER_RESUMABLE_STATUSES, "EXPIRED"):
+            _record_ownership_event(transfer, "transfer_expired", actor_user=acting_user, admin=completed_by_admin)
+            db.session.flush()
+        raise ValueError("This transfer has expired.")
 
     project = Project.query.get(transfer.project_id)
     recipient = User.query.get(transfer.to_user_id)
@@ -1929,23 +2104,35 @@ def accept_project_ownership_transfer(transfer, acting_user=None, completed_by_a
 
     # STORAGE CAPACITY IS CHECKED FIRST (Wave 3), before the project slot is
     # reserved, so an insufficient-storage recipient needs no counter to be
-    # unwound. PENDING_CAPACITY already means "recipient lacks the capacity to
-    # accept"; storage is another capacity dimension, not a new state - the
-    # existing resume path re-runs this whole function once capacity appears.
-    # Nothing is deleted, no accounting moves, the sender stays the owner.
-    storage_ok, _project_bytes = evaluate_project_storage_transfer(project, recipient)
-    if not storage_ok:
-        transfer.status = "PENDING_CAPACITY"
-        db.session.flush()
-        return transfer
+    # unwound. Nothing is deleted, no accounting moves, the sender stays the
+    # owner and keeps their slot until the transfer TRULY completes.
+    snapshot = evaluate_transfer_capacity(project, recipient)
+    if not snapshot["storage_ok"]:
+        return _park_transfer_pending_capacity(transfer, snapshot, actor_user=acting_user, admin=completed_by_admin)
 
     if not _reserve_project_quota_atomic(recipient):
-        transfer.status = "PENDING_CAPACITY"
-        db.session.flush()
-        return transfer
+        snapshot["project_slot_ok"] = False
+        return _park_transfer_pending_capacity(transfer, snapshot, actor_user=acting_user, admin=completed_by_admin)
 
     try:
-        sender.projects_used = max(0, int(sender.projects_used or 0) - 1)
+        now = get_utc_now()
+        # THE GATE. Everything below happens exactly once per transfer because
+        # only one caller can move the row out of a resumable status.
+        if not _transition_transfer(
+            transfer,
+            _TRANSFER_RESUMABLE_STATUSES,
+            "COMPLETED",
+            accepted_at=transfer.accepted_at or now,
+            completed_at=now,
+            completed_by_admin_id=completed_by_admin.id if completed_by_admin else None,
+        ):
+            # A concurrent acceptance already won. Hand back the slot this
+            # attempt reserved and report the winner's state, untouched.
+            _release_project_quota_atomic(recipient)
+            db.session.expire(transfer)
+            return transfer
+
+        _release_project_quota_atomic(sender)
         manager_vendor = sender if transfer.retain_vendor_management and is_business_vendor(sender) else None
         set_project_current_owner(
             project,
@@ -1954,18 +2141,74 @@ def accept_project_ownership_transfer(transfer, acting_user=None, completed_by_a
             manager_vendor=manager_vendor,
         )
         # SAME TRANSACTION as the ownership change: storage responsibility can
-        # never end up split from the project it belongs to.
-        _storage.move_project_storage_ownership(project.id, sender.id, recipient.id)
-        now = get_utc_now()
-        transfer.status = "COMPLETED"
-        transfer.accepted_at = transfer.accepted_at or now
-        transfer.completed_at = now
-        transfer.completed_by_admin_id = completed_by_admin.id if completed_by_admin else None
+        # never end up split from the project it belongs to. Files are not
+        # copied or moved - only the MediaObject rows change account.
+        moved_bytes = _storage.move_project_storage_ownership(project.id, sender.id, recipient.id)
+        _record_ownership_event(
+            transfer,
+            "transfer_completed",
+            actor_user=acting_user,
+            admin=completed_by_admin,
+            project_id=project.id,
+            from_owner_user_id=sender.id,
+            to_user_id=recipient.id,
+            moved_bytes=int(moved_bytes or 0),
+            manager_vendor_user_id=project.manager_vendor_user_id,
+        )
+        _mark_claims_transfer_completed(transfer)
         db.session.flush()
         return transfer
     except Exception:
         db.session.rollback()
         raise
+
+
+def reject_project_ownership_transfer(transfer, acting_user, reason=None):
+    """Recipient declines. CANCELLED is the existing terminal state for
+    "this handover will not happen"; the trail records that it was a decline
+    rather than a withdrawal, so no new status code is invented."""
+    if acting_user is None or acting_user.id != transfer.to_user_id:
+        raise PermissionError("Only the intended recipient can decline this transfer.")
+    if not _transition_transfer(transfer, _TRANSFER_RESUMABLE_STATUSES, "CANCELLED", cancelled_at=get_utc_now()):
+        raise ValueError("This transfer is no longer pending.")
+    _record_ownership_event(transfer, "transfer_rejected", actor_user=acting_user, reason=reason)
+    db.session.flush()
+    return transfer
+
+
+def cancel_project_ownership_transfer(transfer, acting_user=None, admin=None, reason=None):
+    """Sender/initiator withdraws, or an admin resolves a dispute by cancelling."""
+    if admin is None:
+        if acting_user is None or acting_user.id not in {transfer.from_owner_user_id, transfer.initiated_by_user_id}:
+            raise PermissionError("Only the sender or an admin can cancel this transfer.")
+    allowed = _TRANSFER_RESUMABLE_STATUSES + (("DISPUTED",) if admin is not None else ())
+    if not _transition_transfer(transfer, allowed, "CANCELLED", cancelled_at=get_utc_now()):
+        raise ValueError("This transfer is no longer cancellable.")
+    _record_ownership_event(transfer, "transfer_cancelled", actor_user=acting_user, admin=admin, reason=reason)
+    db.session.flush()
+    return transfer
+
+
+def mark_project_transfer_disputed(transfer, admin, reason=None):
+    """Freeze a transfer for manual review. The CURRENT owner stays authoritative."""
+    if admin is None:
+        raise PermissionError("Only an admin can mark a transfer disputed.")
+    if not _transition_transfer(transfer, _TRANSFER_RESUMABLE_STATUSES, "DISPUTED"):
+        raise ValueError("Only a pending transfer can be disputed.")
+    _record_ownership_event(transfer, "transfer_disputed", admin=admin, reason=reason)
+    db.session.flush()
+    return transfer
+
+
+def release_project_transfer_dispute(transfer, admin, reason=None):
+    """Return a disputed transfer to the normal pending flow. Never auto-resolves ownership."""
+    if admin is None:
+        raise PermissionError("Only an admin can resolve a dispute.")
+    if not _transition_transfer(transfer, ("DISPUTED",), "PENDING_ACCEPTANCE"):
+        raise ValueError("This transfer is not disputed.")
+    _record_ownership_event(transfer, "transfer_dispute_released", admin=admin, reason=reason)
+    db.session.flush()
+    return transfer
 
 
 def create_project_ownership_claim(project, claimant_user, evidence_summary=None, evidence_json=None):
@@ -1990,10 +2233,83 @@ def create_project_ownership_claim(project, claimant_user, evidence_summary=None
     )
     db.session.add(claim)
     db.session.flush()
+    _record_ownership_event(claim, "claim_submitted", actor_user=claimant_user, project_id=project.id)
+    db.session.flush()
+    return claim
+
+
+def user_can_respond_to_claim(user, claim):
+    """Backend-enforced vendor scope: only this project's current owner or its
+    explicit managing vendor, and never the claimant themselves."""
+    if not user or not claim or claim.claimant_user_id == user.id:
+        return False
+    return user_can_manage_project(user, Project.query.get(claim.project_id))
+
+
+def respond_to_project_ownership_claim(claim, acting_user, accept, response_note=None):
+    """The current owner / managing vendor answers a claim.
+
+    Accepting is CONSENT, not a transfer: it opens a normal governed transfer
+    that the claimant must still accept and that still has to pass both
+    capacity checks. Refusing never closes the claim unilaterally - it escalates
+    to Admin review, because the counterparty is not the adjudicator.
+    """
+    if not claim:
+        raise ValueError("Claim is required.")
+    if not user_can_respond_to_claim(acting_user, claim):
+        raise PermissionError("Only this project's current owner or managing vendor can respond to this claim.")
+    if claim.status not in PROJECT_ACTIVE_CLAIM_STATUSES:
+        raise ValueError("Claim is not active.")
+    project = Project.query.get(claim.project_id)
+    claimant = User.query.get(claim.claimant_user_id)
+    if not project or not claimant:
+        raise ValueError("Claim project or claimant no longer exists.")
+
+    now = get_utc_now()
+    target = "APPROVED_BY_VENDOR" if accept else "PENDING_ADMIN_REVIEW"
+    if not _transition_claim(
+        claim,
+        PROJECT_ACTIVE_CLAIM_STATUSES,
+        target,
+        vendor_notified_at=claim.vendor_notified_at or now,
+    ):
+        return claim, None
+
+    transfer = None
+    if accept:
+        transfer = initiate_project_ownership_transfer(
+            project,
+            initiated_by_user=acting_user,
+            recipient_user=claimant,
+            retain_vendor_management=False,
+            reason="Current owner accepted an ownership review request.",
+        )
+        claim.transfer_id = transfer.id
+    _record_ownership_event(
+        claim,
+        "claim_vendor_accepted" if accept else "claim_vendor_refused",
+        actor_user=acting_user,
+        reason=response_note,
+        transfer_id=transfer.id if transfer else None,
+    )
+    db.session.flush()
+    return claim, transfer
+
+
+def cancel_project_ownership_claim(claim, acting_user, reason=None):
+    if not claim or not acting_user or claim.claimant_user_id != acting_user.id:
+        raise PermissionError("Only the claimant can withdraw this request.")
+    if not _transition_claim(claim, PROJECT_ACTIVE_CLAIM_STATUSES, "CANCELLED"):
+        raise ValueError("Claim is not active.")
+    _record_ownership_event(claim, "claim_cancelled", actor_user=acting_user, reason=reason)
+    db.session.flush()
     return claim
 
 
 def approve_project_ownership_claim_by_admin(claim, admin, decision_reason=None):
+    """Approval alone NEVER moves ownership: it opens a governed transfer that
+    still has to pass both capacity checks, so an approved claim against a full
+    recipient lands in PENDING_CAPACITY rather than forcing an invalid move."""
     if not claim or not admin:
         raise ValueError("Claim and admin are required.")
     if claim.status not in PROJECT_ACTIVE_CLAIM_STATUSES:
@@ -2002,20 +2318,94 @@ def approve_project_ownership_claim_by_admin(claim, admin, decision_reason=None)
     claimant = User.query.get(claim.claimant_user_id)
     if not project or not claimant:
         raise ValueError("Claim project or claimant no longer exists.")
+    # The LIVE current owner, not the snapshot taken when the claim was filed -
+    # ownership may have moved legitimately since.
+    owner_id = project_current_owner_user_id(project)
+    if not _transition_claim(
+        claim,
+        PROJECT_ACTIVE_CLAIM_STATUSES,
+        "APPROVED_BY_ADMIN",
+        reviewed_at=get_utc_now(),
+        reviewed_by_admin_id=admin.id,
+        decision_reason=decision_reason,
+    ):
+        raise ValueError("Claim is not active.")
     transfer = initiate_project_ownership_transfer(
         project,
-        initiated_by_user=User.query.get(claim.current_owner_user_id),
+        initiated_by_user=User.query.get(owner_id),
         recipient_user=claimant,
         retain_vendor_management=False,
         reason="Admin-approved ownership recovery claim.",
-    ) if claim.current_owner_user_id else None
-    claim.status = "APPROVED_BY_ADMIN"
-    claim.reviewed_at = get_utc_now()
-    claim.reviewed_by_admin_id = admin.id
-    claim.decision_reason = decision_reason
+    ) if owner_id else None
     claim.transfer_id = transfer.id if transfer else None
+    _record_ownership_event(
+        claim,
+        "claim_approved_by_admin",
+        admin=admin,
+        reason=decision_reason,
+        transfer_id=transfer.id if transfer else None,
+    )
     db.session.flush()
     return claim, transfer
+
+
+def reject_project_ownership_claim_by_admin(claim, admin, decision_reason=None):
+    if not claim or not admin:
+        raise ValueError("Claim and admin are required.")
+    if not _transition_claim(
+        claim,
+        PROJECT_ACTIVE_CLAIM_STATUSES,
+        "REJECTED",
+        reviewed_at=get_utc_now(),
+        reviewed_by_admin_id=admin.id,
+        decision_reason=decision_reason,
+    ):
+        raise ValueError("Claim is not active.")
+    _record_ownership_event(claim, "claim_rejected_by_admin", admin=admin, reason=decision_reason)
+    db.session.flush()
+    return claim
+
+
+def can_convert_to_individual(user):
+    """(ok, reason) for a BUSINESS_VENDOR -> INDIVIDUAL downgrade.
+
+    Validation foundation only - there is no account-conversion HTTP route in
+    this build, so this exists to be called by one rather than to be a second
+    place where the rule is written. Nothing is deleted either way: a blocked
+    downgrade just stays a vendor account.
+    """
+    if not user:
+        return False, "Unknown account."
+    if not is_business_vendor(user):
+        return True, None
+    managed = Project.query.filter(Project.manager_vendor_user_id == user.id).count()
+    if managed:
+        return False, f"{managed} project(s) still list this account as the managing vendor."
+    active_transfers = ProjectOwnershipTransfer.query.filter(
+        ProjectOwnershipTransfer.status.in_(PROJECT_ACTIVE_TRANSFER_STATUSES),
+        or_(
+            ProjectOwnershipTransfer.from_owner_user_id == user.id,
+            ProjectOwnershipTransfer.to_user_id == user.id,
+            ProjectOwnershipTransfer.initiated_by_user_id == user.id,
+        ),
+    ).count()
+    if active_transfers:
+        return False, f"{active_transfers} ownership transfer(s) are still in progress."
+    open_claims = (
+        ProjectOwnershipClaim.query.join(Project, Project.id == ProjectOwnershipClaim.project_id)
+        .filter(
+            ProjectOwnershipClaim.status.in_(PROJECT_ACTIVE_CLAIM_STATUSES),
+            or_(
+                Project.current_owner_user_id == user.id,
+                Project.manager_vendor_user_id == user.id,
+                ProjectOwnershipClaim.claimant_user_id == user.id,
+            ),
+        )
+        .count()
+    )
+    if open_claims:
+        return False, f"{open_claims} ownership review request(s) are still open."
+    return True, None
 
 
 def _project_specific_coverage_candidates(project, now):
@@ -2994,6 +3384,22 @@ def _reserve_project_quota_atomic(user):
         user.subscription_status = "limit_reached"
         db.session.flush()
     return reserved
+
+
+def _release_project_quota_atomic(user):
+    """Give one project slot back. The exact mirror of the reservation above.
+
+    Clamped at zero the same way release_account_storage() clamps bytes, and it
+    skips dev-test accounts because _reserve_project_quota_atomic() never
+    incremented one - releasing there would drive the counter negative-ward.
+    """
+    if not user or has_dev_test_entitlement(user):
+        return
+    used = func.coalesce(User.projects_used, 0)
+    User.query.filter(User.id == user.id).update(
+        {User.projects_used: case((used < 1, 0), else_=used - 1)},
+        synchronize_session=False,
+    )
 
 
 def _consume_scan_quota_atomic(user):
@@ -6408,6 +6814,308 @@ def download_project_qr(project_id):
         as_attachment=True,
         download_name=_build_qr_download_filename(project)
     )
+
+# ===========================================================================
+# V1.1 Wave 4: ownership transfer / claim HTTP surface.
+#
+# Every mutation is POST and therefore CSRF-protected by the app-wide
+# CSRFProtect (no @csrf.exempt anywhere in this block - these are ordinary
+# authenticated browser forms). Authorization is re-derived from the row on
+# every request, never from the form, so guessing a transfer or claim id gets
+# a 404 rather than someone else's project.
+# ===========================================================================
+def _notify_ownership(to_user, subject, message):
+    """Best-effort ownership notification. NEVER blocks the transaction.
+
+    Matches the existing payment-success pattern exactly: transactional
+    correctness has already been committed by the time this runs, and a dead
+    SMTP server must not undo an ownership transfer.
+    """
+    email = (getattr(to_user, "email", "") or "").strip()
+    if not email:
+        return
+    try:
+        send_email_smtp(
+            email,
+            f"ScanStory - {subject}",
+            "<html><body style=\"font-family:Arial,sans-serif;padding:20px;\">"
+            f"<p>{message}</p>"
+            "<p style=\"color:#888;font-size:12px;\">You can review this from your ScanStory account.</p>"
+            "</body></html>",
+        )
+    except Exception as exc:  # pragma: no cover - depends on live SMTP
+        print(f"Failed to send ownership notification: {exc}")
+
+
+def _transfer_for_party(transfer_id, user):
+    """A transfer row only if this user is actually a party to it."""
+    transfer = ProjectOwnershipTransfer.query.get(transfer_id)
+    if not transfer or not user or user.id not in {
+        transfer.from_owner_user_id, transfer.to_user_id, transfer.initiated_by_user_id
+    }:
+        abort(404)
+    return transfer
+
+
+def _claim_for_party(claim_id, user):
+    claim = ProjectOwnershipClaim.query.get(claim_id)
+    if not claim or not user:
+        abort(404)
+    if claim.claimant_user_id != user.id and not user_can_respond_to_claim(user, claim):
+        abort(404)
+    return claim
+
+
+def _ownership_flash_redirect(exc=None, ok_message=None):
+    if exc is not None:
+        flash(str(exc) or "That ownership action is not available.", "error")
+    elif ok_message:
+        flash(ok_message, "success")
+    return redirect(url_for("ownership_center"))
+
+
+@app.route("/ownership", methods=["GET"])
+@login_required
+def ownership_center():
+    """The one place a user can see and act on ownership state.
+
+    A transfer RECIPIENT does not manage the project yet, so the project detail
+    page cannot be that place - they would have nowhere to accept from.
+    """
+    user = current_user()
+    incoming = ProjectOwnershipTransfer.query.filter(
+        ProjectOwnershipTransfer.to_user_id == user.id,
+        ProjectOwnershipTransfer.status.in_(PROJECT_ACTIVE_TRANSFER_STATUSES),
+    ).order_by(ProjectOwnershipTransfer.id.desc()).all()
+    outgoing = ProjectOwnershipTransfer.query.filter(
+        or_(
+            ProjectOwnershipTransfer.from_owner_user_id == user.id,
+            ProjectOwnershipTransfer.initiated_by_user_id == user.id,
+        ),
+        ProjectOwnershipTransfer.status.in_(PROJECT_ACTIVE_TRANSFER_STATUSES),
+    ).order_by(ProjectOwnershipTransfer.id.desc()).all()
+
+    blocked_transfer_ids = {t.id for t in incoming if t.status == "PENDING_CAPACITY"}
+    capacity_blocks = {t.id: transfer_capacity_snapshot(t) for t in incoming if t.id in blocked_transfer_ids}
+
+    busy_project_ids = {
+        row.project_id
+        for row in ProjectOwnershipTransfer.query.filter(
+            ProjectOwnershipTransfer.status.in_(PROJECT_ACTIVE_TRANSFER_STATUSES)
+        ).all()
+    }
+    transferable = [
+        project
+        for project in Project.query.filter(project_user_access_filter(user.id))
+        .order_by(Project.id.desc()).limit(100).all()
+        if project.id not in busy_project_ids and user_can_transfer_project(user, project)
+    ]
+
+    my_claims = ProjectOwnershipClaim.query.filter(
+        ProjectOwnershipClaim.claimant_user_id == user.id
+    ).order_by(ProjectOwnershipClaim.id.desc()).limit(25).all()
+    incoming_claims = [
+        claim
+        for claim in ProjectOwnershipClaim.query.filter(
+            ProjectOwnershipClaim.status.in_(PROJECT_ACTIVE_CLAIM_STATUSES)
+        ).order_by(ProjectOwnershipClaim.id.desc()).limit(100).all()
+        if user_can_respond_to_claim(user, claim)
+    ]
+
+    projects_by_id = {
+        p.id: p
+        for p in Project.query.filter(
+            Project.id.in_(
+                {t.project_id for t in incoming + outgoing}
+                | {c.project_id for c in my_claims + incoming_claims}
+            )
+        ).all()
+    } if (incoming or outgoing or my_claims or incoming_claims) else {}
+
+    return render_template(
+        "user/ownership.html",
+        user=user,
+        incoming=incoming,
+        outgoing=outgoing,
+        transferable=transferable,
+        my_claims=my_claims,
+        incoming_claims=incoming_claims,
+        projects_by_id=projects_by_id,
+        capacity_blocks=capacity_blocks,
+    )
+
+
+@app.route("/projects/<int:project_id>/transfer", methods=["POST"])
+@login_required
+def start_project_ownership_transfer(project_id):
+    user = current_user()
+    project = Project.query.get(project_id)
+    if not user_can_transfer_project(user, project):
+        abort(404)
+    recipient_email = (request.form.get("recipient_email") or "").strip().lower()
+    recipient = User.query.filter(func.lower(User.email) == recipient_email).first() if recipient_email else None
+    if not recipient:
+        return _ownership_flash_redirect(ValueError("No ScanStory account exists for that email address."))
+    try:
+        transfer = initiate_project_ownership_transfer(
+            project,
+            initiated_by_user=user,
+            recipient_user=recipient,
+            retain_vendor_management=bool(request.form.get("retain_vendor_management")),
+            reason=(request.form.get("reason") or "").strip()[:500] or None,
+        )
+        db.session.commit()
+    except (ValueError, PermissionError) as exc:
+        db.session.rollback()
+        return _ownership_flash_redirect(exc)
+    _notify_ownership(
+        recipient,
+        "A ScanStory is being handed over to you",
+        f"{user.email} has offered to transfer the ScanStory \"{project.name}\" to your account.",
+    )
+    return _ownership_flash_redirect(ok_message=f"Transfer request sent to {recipient.email}. Reference #{transfer.id}.")
+
+
+@app.route("/ownership/transfers/<int:transfer_id>/accept", methods=["POST"])
+@app.route("/ownership/transfers/<int:transfer_id>/retry", methods=["POST"])
+@login_required
+def accept_ownership_transfer_route(transfer_id):
+    """Accept, and re-attempt a PENDING_CAPACITY transfer, are the same call.
+
+    Retry is not a separate lifecycle - it re-runs the identical gated
+    completion against the SAME row, which is what makes it idempotent.
+    """
+    user = current_user()
+    transfer = _transfer_for_party(transfer_id, user)
+    if user.id != transfer.to_user_id:
+        abort(404)
+    try:
+        result = accept_project_ownership_transfer(transfer, acting_user=user)
+        db.session.commit()
+    except (ValueError, PermissionError) as exc:
+        db.session.rollback()
+        return _ownership_flash_redirect(exc)
+    if result.status == "COMPLETED":
+        _notify_ownership(
+            User.query.get(result.from_owner_user_id),
+            "Ownership handover completed",
+            f"The ScanStory you offered has been accepted. Transfer #{result.id} is complete.",
+        )
+        return _ownership_flash_redirect(ok_message="Ownership transferred. The QR code and all media are unchanged.")
+    return _ownership_flash_redirect(
+        ok_message="Nothing was moved: your account cannot absorb this ScanStory yet. "
+                   "Free up capacity and try again - this request stays open."
+    )
+
+
+@app.route("/ownership/transfers/<int:transfer_id>/reject", methods=["POST"])
+@login_required
+def reject_ownership_transfer_route(transfer_id):
+    user = current_user()
+    transfer = _transfer_for_party(transfer_id, user)
+    try:
+        reject_project_ownership_transfer(transfer, user, reason=(request.form.get("reason") or "").strip()[:500] or None)
+        db.session.commit()
+    except (ValueError, PermissionError) as exc:
+        db.session.rollback()
+        return _ownership_flash_redirect(exc)
+    _notify_ownership(
+        User.query.get(transfer.from_owner_user_id),
+        "Ownership handover declined",
+        f"Transfer #{transfer.id} was declined by the recipient. Nothing about the ScanStory changed.",
+    )
+    return _ownership_flash_redirect(ok_message="Transfer declined.")
+
+
+@app.route("/ownership/transfers/<int:transfer_id>/cancel", methods=["POST"])
+@login_required
+def cancel_ownership_transfer_route(transfer_id):
+    user = current_user()
+    transfer = _transfer_for_party(transfer_id, user)
+    try:
+        cancel_project_ownership_transfer(
+            transfer, acting_user=user, reason=(request.form.get("reason") or "").strip()[:500] or None
+        )
+        db.session.commit()
+    except (ValueError, PermissionError) as exc:
+        db.session.rollback()
+        return _ownership_flash_redirect(exc)
+    return _ownership_flash_redirect(ok_message="Transfer withdrawn.")
+
+
+@app.route("/projects/<int:project_id>/ownership-claim", methods=["POST"])
+@login_required
+def submit_project_ownership_claim(project_id):
+    user = current_user()
+    ok, retry_after = _check_rate_limit("ownership_claim", _rate_limit_key("ownership_claim", user.id))
+    if not ok:
+        flash(f"Too many ownership review requests. Try again in {retry_after} seconds.", "error")
+        return redirect(url_for("ownership_center"))
+    project = Project.query.get(project_id)
+    if not project or project.owner_admin_id:
+        abort(404)
+    try:
+        claim = create_project_ownership_claim(
+            project,
+            user,
+            evidence_summary=(request.form.get("evidence_summary") or "").strip()[:2000] or None,
+        )
+        db.session.commit()
+    except (ValueError, PermissionError) as exc:
+        db.session.rollback()
+        return _ownership_flash_redirect(exc)
+    owner = User.query.get(project_current_owner_user_id(project))
+    _notify_ownership(
+        owner,
+        "Someone has asked to review ownership of a ScanStory",
+        f"An ownership review request (#{claim.id}) was filed for \"{project.name}\". "
+        "Nothing changes unless you agree or the ScanStory team approves it.",
+    )
+    return _ownership_flash_redirect(
+        ok_message=f"Request #{claim.id} submitted. A person reviews every request - nothing moves on its own."
+    )
+
+
+@app.route("/ownership/claims/<int:claim_id>/respond", methods=["POST"])
+@login_required
+def respond_ownership_claim_route(claim_id):
+    user = current_user()
+    claim = _claim_for_party(claim_id, user)
+    accept = (request.form.get("decision") or "").strip().lower() == "accept"
+    try:
+        claim, transfer = respond_to_project_ownership_claim(
+            claim, user, accept, response_note=(request.form.get("note") or "").strip()[:500] or None
+        )
+        db.session.commit()
+    except (ValueError, PermissionError) as exc:
+        db.session.rollback()
+        return _ownership_flash_redirect(exc)
+    _notify_ownership(
+        User.query.get(claim.claimant_user_id),
+        "Your ownership review request has a response",
+        "The current owner agreed - accept the handover from your account to finish it."
+        if accept else
+        "The current owner did not agree. The ScanStory team will review your request.",
+    )
+    return _ownership_flash_redirect(
+        ok_message="Handover opened for the claimant to accept." if accept
+        else "Refused. The request now goes to the ScanStory team for review."
+    )
+
+
+@app.route("/ownership/claims/<int:claim_id>/cancel", methods=["POST"])
+@login_required
+def cancel_ownership_claim_route(claim_id):
+    user = current_user()
+    claim = _claim_for_party(claim_id, user)
+    try:
+        cancel_project_ownership_claim(claim, user)
+        db.session.commit()
+    except (ValueError, PermissionError) as exc:
+        db.session.rollback()
+        return _ownership_flash_redirect(exc)
+    return _ownership_flash_redirect(ok_message="Request withdrawn.")
+
 
 @app.route("/projects/delete/<int:project_id>", methods=["POST"])
 @login_required
@@ -14012,6 +14720,148 @@ def admin_review_content_report(report_id):
         + (f": {resolution_reason[:150]}" if resolution_reason else ""),
     )
     return jsonify({"success": True, "report": _content_report_payload(report)})
+
+
+# ===========================================================================
+# V1.1 Wave 4: Admin ownership review.
+#
+# Manual adjudication only. Nothing here infers ownership from an email match,
+# QR possession or a beneficiary field, and an approved claim still has to pass
+# both capacity checks before ownership actually moves.
+# ===========================================================================
+def _admin_ownership_redirect(message=None, category="success"):
+    if message:
+        flash(message, category)
+    return redirect(url_for("admin_ownership_page"))
+
+
+def _ownership_party_label(user_id):
+    user = User.query.get(user_id) if user_id else None
+    return user.email if user else None
+
+
+def _admin_transfer_row(transfer):
+    project = Project.query.get(transfer.project_id)
+    return {
+        "transfer": transfer,
+        "project": project,
+        "created_by": _ownership_party_label(project.created_by_user_id if project else None),
+        "current_owner": _ownership_party_label(project_current_owner_user_id(project) if project else None),
+        "manager_vendor": _ownership_party_label(project.manager_vendor_user_id if project else None),
+        "beneficiary": _ownership_party_label(project.beneficiary_user_id if project else None),
+        "from_owner": _ownership_party_label(transfer.from_owner_user_id),
+        "to_user": _ownership_party_label(transfer.to_user_id),
+        "capacity_block": transfer_capacity_snapshot(transfer),
+        "audit": ownership_audit_trail(transfer),
+    }
+
+
+def _admin_claim_row(claim):
+    project = Project.query.get(claim.project_id)
+    return {
+        "claim": claim,
+        "project": project,
+        "claimant": _ownership_party_label(claim.claimant_user_id),
+        "current_owner": _ownership_party_label(project_current_owner_user_id(project) if project else None),
+        "manager_vendor": _ownership_party_label(project.manager_vendor_user_id if project else None),
+        "audit": ownership_audit_trail(claim),
+    }
+
+
+@app.route("/admin/ownership", methods=["GET"])
+@require_admin_permission("admin.ownership.view")
+def admin_ownership_page():
+    transfers = (
+        ProjectOwnershipTransfer.query.order_by(ProjectOwnershipTransfer.id.desc())
+        .limit(admin_page_size()).all()
+    )
+    claims = (
+        ProjectOwnershipClaim.query.order_by(ProjectOwnershipClaim.id.desc())
+        .limit(admin_page_size()).all()
+    )
+    return render_template(
+        "admin/ownership.html",
+        transfer_rows=[_admin_transfer_row(t) for t in transfers],
+        claim_rows=[_admin_claim_row(c) for c in claims],
+    )
+
+
+@app.route("/admin/ownership/claims/<int:claim_id>/approve", methods=["POST"])
+@require_admin_permission("admin.ownership.manage")
+def admin_approve_ownership_claim(claim_id):
+    admin = current_admin()
+    claim = ProjectOwnershipClaim.query.get_or_404(claim_id)
+    reason = (request.form.get("decision_reason") or "").strip()[:500] or None
+    try:
+        claim, transfer = approve_project_ownership_claim_by_admin(claim, admin, reason)
+        db.session.commit()
+    except (ValueError, PermissionError) as exc:
+        db.session.rollback()
+        return _admin_ownership_redirect(str(exc), "error")
+    log_admin_activity(
+        admin.id,
+        "ownership_claim_review",
+        f"Claim {claim.id} (project {claim.project_id}) -> APPROVED_BY_ADMIN"
+        + (f", transfer {transfer.id} opened" if transfer else ", no live owner to transfer from")
+        + (f": {reason}" if reason else ""),
+    )
+    return _admin_ownership_redirect(
+        "Claim approved. Ownership still moves only once the recipient accepts and has capacity."
+    )
+
+
+@app.route("/admin/ownership/claims/<int:claim_id>/reject", methods=["POST"])
+@require_admin_permission("admin.ownership.manage")
+def admin_reject_ownership_claim(claim_id):
+    admin = current_admin()
+    claim = ProjectOwnershipClaim.query.get_or_404(claim_id)
+    reason = (request.form.get("decision_reason") or "").strip()[:500] or None
+    try:
+        reject_project_ownership_claim_by_admin(claim, admin, reason)
+        db.session.commit()
+    except (ValueError, PermissionError) as exc:
+        db.session.rollback()
+        return _admin_ownership_redirect(str(exc), "error")
+    log_admin_activity(
+        admin.id,
+        "ownership_claim_review",
+        f"Claim {claim.id} (project {claim.project_id}) -> REJECTED" + (f": {reason}" if reason else ""),
+    )
+    return _admin_ownership_redirect("Claim rejected. The current owner is unchanged.")
+
+
+@app.route("/admin/ownership/transfers/<int:transfer_id>/<action>", methods=["POST"])
+@require_admin_permission("admin.ownership.manage")
+def admin_resolve_ownership_transfer(transfer_id, action):
+    admin = current_admin()
+    transfer = ProjectOwnershipTransfer.query.get_or_404(transfer_id)
+    reason = (request.form.get("reason") or "").strip()[:500] or None
+    previous = transfer.status
+    handlers = {
+        "dispute": lambda: mark_project_transfer_disputed(transfer, admin, reason),
+        "release-dispute": lambda: release_project_transfer_dispute(transfer, admin, reason),
+        "cancel": lambda: cancel_project_ownership_transfer(transfer, admin=admin, reason=reason),
+        # Admin override of the ACCEPTANCE step only. The capacity gates are
+        # still enforced - an admin cannot force an oversized project onto an
+        # account that cannot hold it.
+        "complete": lambda: accept_project_ownership_transfer(transfer, completed_by_admin=admin),
+    }
+    if action not in handlers:
+        abort(404)
+    try:
+        handlers[action]()
+        db.session.commit()
+    except (ValueError, PermissionError) as exc:
+        db.session.rollback()
+        return _admin_ownership_redirect(str(exc), "error")
+    log_admin_activity(
+        admin.id,
+        "ownership_transfer_review",
+        f"Transfer {transfer.id} (project {transfer.project_id}) {previous} -> {transfer.status}"
+        f" [{action}] from user {transfer.from_owner_user_id} to user {transfer.to_user_id}"
+        + (f": {reason}" if reason else ""),
+    )
+    return _admin_ownership_redirect(f"Transfer {transfer.id} is now {transfer.status}.")
 
 
 @app.route("/admin/projects/<int:project_id>/service-coverage/grant", methods=["POST"])
