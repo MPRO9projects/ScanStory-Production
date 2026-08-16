@@ -675,6 +675,57 @@
             </div>
         </section>
 
+        {% if entitlement_summary %}
+        <section class="glass card mb-10" data-aos="fade-up" data-aos-delay="120" data-testid="effective-entitlement-summary">
+            <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-5">
+                <div>
+                    <h2 class="text-xl font-black uppercase tracking-widest text-[12px] text-white/70">Effective Entitlement</h2>
+                    <p class="text-white/60 text-sm mt-2">Backend-sourced account limits and V1.1 experience availability.</p>
+                </div>
+                <span class="badge">
+                    <i class="fa-solid fa-id-card" aria-hidden="true"></i>
+                    {{ entitlement_summary.account_type_label }}
+                </span>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="glass rounded-2xl p-4">
+                    <div class="text-white/50 text-xs uppercase font-black tracking-widest">Plan Family</div>
+                    <div class="text-white font-black mt-1">
+                        {{ entitlement_summary.plan_family if entitlement_summary.plan_family_available and entitlement_summary.plan_family else "Backend pending" }}
+                    </div>
+                </div>
+                <div class="glass rounded-2xl p-4">
+                    <div class="text-white/50 text-xs uppercase font-black tracking-widest">Project Slots</div>
+                    <div class="text-white font-black mt-1">
+                        {% if entitlement_summary.project_unlimited %}Unlimited{% else %}{{ entitlement_summary.effective_project_limit }} total{% endif %}
+                    </div>
+                    <div class="text-white/50 text-xs mt-1">Plan {{ entitlement_summary.base_project_limit if not entitlement_summary.project_unlimited else "Unlimited" }} + purchased {{ entitlement_summary.purchased_project_capacity }}</div>
+                </div>
+                <div class="glass rounded-2xl p-4">
+                    <div class="text-white/50 text-xs uppercase font-black tracking-widest">Scan Allowance</div>
+                    <div class="text-white font-black mt-1">
+                        {% if entitlement_summary.scan_unlimited %}Unlimited{% else %}{{ entitlement_summary.effective_scan_limit }} total{% endif %}
+                    </div>
+                    <div class="text-white/50 text-xs mt-1">Plan {{ entitlement_summary.base_scan_limit if not entitlement_summary.scan_unlimited else "Unlimited" }} + purchased {{ entitlement_summary.purchased_scan_capacity }}</div>
+                </div>
+                <div class="glass rounded-2xl p-4">
+                    <div class="text-white/50 text-xs uppercase font-black tracking-widest">Pairs / Project</div>
+                    <div class="text-white font-black mt-1">{{ entitlement_summary.max_pairs_per_project }}</div>
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-2 mt-5" aria-label="Available experience modes">
+                {% for option in entitlement_summary.allowed_experiences %}
+                <span class="badge">{{ option.label }}</span>
+                {% endfor %}
+            </div>
+            {% if entitlement_summary.over_project_capacity or entitlement_summary.over_scan_capacity %}
+            <div class="mt-5 p-4 rounded-2xl border border-yellow-400/30 bg-yellow-400/10 text-yellow-100 text-sm">
+                Existing projects are retained. New creation or scanning may be restricted until usage is back within the effective allowance or the account is upgraded.
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
         <!-- Recent Projects Section -->
         <section class="mb-10" data-aos="fade-up">
             <div class="flex items-center justify-between mb-6">

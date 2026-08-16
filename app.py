@@ -2775,6 +2775,82 @@ def project_capacity_summary(user):
     }
 
 
+V11_EXPERIENCE_PRESENTATION = (
+    {
+        "experience_type": "image_video",
+        "playback_mode": "tracked_overlay",
+        "label": "Tracked Overlay",
+        "description": "Image-to-video recognition with a tracked overlay.",
+    },
+    {
+        "experience_type": "image_video",
+        "playback_mode": "detect_once",
+        "label": "Detect Once",
+        "description": "Image-to-video recognition that opens the video after detection.",
+    },
+    {
+        "experience_type": "direct_qr",
+        "playback_mode": "direct",
+        "label": "Direct QR",
+        "description": "QR opens video directly without requiring a target image.",
+    },
+)
+
+
+def _limit_display_value(value):
+    if value in (None, 0, 999999):
+        return "Unlimited"
+    return str(int(value))
+
+
+def user_entitlement_summary(user):
+    """Read-only UX summary from existing entitlement/plan fields.
+
+    This is presentation glue only. Enforcement remains in the existing quota,
+    payment, add-on and project-creation services.
+    """
+    if not user:
+        return None
+    plan = getattr(user, "subscription_plan", None)
+    project_capacity = project_capacity_summary(user)
+    purchased_scans = purchased_scan_capacity(user)
+    effective_scan_limit_value = user.subscribed_scan_limit
+    effective_scan_limit = None if effective_scan_limit_value in (None, 0, 999999) else int(effective_scan_limit_value)
+    scans_used = int(user.scans_used or 0)
+    over_scan_capacity = False if effective_scan_limit is None else scans_used > effective_scan_limit
+    return {
+        "account_type_label": account_type_label(user),
+        "plan_name": user.current_plan_name,
+        "subscription_status": user.subscription_status,
+        "plan_family_available": hasattr(SubscriptionPlan, "plan_family"),
+        "plan_family": getattr(plan, "plan_family", None) if plan else None,
+        "base_project_limit": project_capacity["base_project_limit"],
+        "purchased_project_capacity": project_capacity["purchased_project_capacity"],
+        "effective_project_limit": project_capacity["effective_project_limit"],
+        "projects_used": project_capacity["projects_used"],
+        "projects_remaining": project_capacity["projects_remaining"],
+        "project_unlimited": project_capacity["unlimited"],
+        "over_project_capacity": project_capacity["over_capacity"],
+        "base_scan_limit": None if effective_scan_limit is None else max(0, effective_scan_limit - purchased_scans),
+        "purchased_scan_capacity": purchased_scans,
+        "effective_scan_limit": effective_scan_limit,
+        "scans_used": scans_used,
+        "scan_unlimited": effective_scan_limit is None,
+        "over_scan_capacity": over_scan_capacity,
+        "max_pairs_per_project": get_plan_pairs_limit(user),
+        "base_storage_available": hasattr(SubscriptionPlan, "base_storage_bytes"),
+        "media_policy_available": any(
+            hasattr(SubscriptionPlan, field)
+            for field in ("media_policy_json", "media_policy", "max_upload_bytes", "max_video_bytes")
+        ),
+        "experience_entitlements_available": any(
+            hasattr(SubscriptionPlan, field)
+            for field in ("experience_entitlements_json", "allowed_experiences_json", "allowed_experience_types")
+        ),
+        "allowed_experiences": list(V11_EXPERIENCE_PRESENTATION),
+    }
+
+
 def _reserve_project_quota_atomic(user):
     if has_dev_test_entitlement(user):
         return True
@@ -5573,6 +5649,7 @@ def dashboard():
             trial=trial,
             admin_view=admin_view,  # Pass this to template if needed
             dev_test_entitled=dev_test_entitled,
+            entitlement_summary=user_entitlement_summary(user),
         )
         
     except Exception as e:
@@ -5682,6 +5759,7 @@ def user_profile():
         # Every slot number on screen comes from this one authoritative
         # summary - the page never derives a total or a remainder itself.
         capacity=project_capacity_summary(user),
+        entitlement_summary=user_entitlement_summary(user),
         get_system_config=get_system_config
     )
 
@@ -8807,7 +8885,16 @@ def pricing_page():
     """Public pricing page — no login required. Passes user=None for guests."""
     plans = SubscriptionPlan.query.filter_by(is_active=True).order_by(SubscriptionPlan.display_order.asc()).all()
     user = current_user()  # None for guests, User object if logged in
-    return render_template("user/subscribe.html", plans=plans, user=user, get_system_config=get_system_config, dev_test_entitled=has_dev_test_entitlement(user))
+    return render_template(
+        "user/subscribe.html",
+        plans=plans,
+        user=user,
+        get_system_config=get_system_config,
+        dev_test_entitled=has_dev_test_entitlement(user),
+        entitlement_summary=user_entitlement_summary(user),
+        v11_experience_options=V11_EXPERIENCE_PRESENTATION,
+        plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
+    )
 
 
 @app.route("/subscribe", methods=["GET"])
@@ -8821,7 +8908,10 @@ def subscribe_page():
                          plans=plans, 
                          user=user,
                          get_system_config=get_system_config,
-                         dev_test_entitled=has_dev_test_entitlement(user))
+                         dev_test_entitled=has_dev_test_entitlement(user),
+                         entitlement_summary=user_entitlement_summary(user),
+                         v11_experience_options=V11_EXPERIENCE_PRESENTATION,
+                         plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"))
 
 def activate_payment(payment_order):
     """Idempotently activate a subscription for a PaymentOrder whose Razorpay
@@ -11633,7 +11723,8 @@ def admin_view_user(user_id):
                          projects=projects,
                          payments=payments,
                          scan_history=scan_history,
-                         trial=trial)
+                         trial=trial,
+                         entitlement_summary=user_entitlement_summary(user))
 
 @app.route("/admin/users/<int:user_id>/dashboard", methods=["GET"])
 @require_admin_permission("admin.users.view")
@@ -11686,6 +11777,7 @@ def admin_view_user_dashboard(user_id):
         failed_scans=failed_scans,
         recent_projects=recent_projects,
         recent_scans=recent_scans,
+        entitlement_summary=user_entitlement_summary(user),
     )
 
 
@@ -11809,7 +11901,13 @@ def admin_add_user_scans(user_id):
 def admin_plans():
     admin = current_admin()
     plans = SubscriptionPlan.query.order_by(SubscriptionPlan.display_order.asc()).all()
-    return render_template("admin/plans.html", admin=admin, plans=plans)
+    return render_template(
+        "admin/plans.html",
+        admin=admin,
+        plans=plans,
+        v11_experience_options=V11_EXPERIENCE_PRESENTATION,
+        plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
+    )
 @app.route("/admin/project/<int:project_id>/preview")
 @admin_required
 def admin_project_preview(project_id):
@@ -11838,7 +11936,12 @@ def admin_add_plan():
     admin = current_admin()
     
     if request.method == "GET":
-        return render_template("admin/add_plan.html", admin=admin)
+        return render_template(
+            "admin/add_plan.html",
+            admin=admin,
+            v11_experience_options=V11_EXPERIENCE_PRESENTATION,
+            plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
+        )
     
     try:
         # Get form data with proper handling
@@ -11893,7 +11996,12 @@ def admin_add_plan():
         pairs_limit_str = request.form.get("max_pairs_per_project", "").strip()
         if not pairs_limit_str:
             flash("Pairs allowed per project is required and must be a positive integer.", "error")
-            return render_template("admin/add_plan.html", admin=admin)
+            return render_template(
+                "admin/add_plan.html",
+                admin=admin,
+                v11_experience_options=V11_EXPERIENCE_PRESENTATION,
+                plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
+            )
 
         try:
             max_pairs_per_project = int(pairs_limit_str)
@@ -11901,7 +12009,12 @@ def admin_add_plan():
                 raise ValueError()
         except ValueError:
             flash("Pairs allowed per project must be a positive integer.", "error")
-            return render_template("admin/add_plan.html", admin=admin)
+            return render_template(
+                "admin/add_plan.html",
+                admin=admin,
+                v11_experience_options=V11_EXPERIENCE_PRESENTATION,
+                plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
+            )
         
         # Handle features
         features = request.form.get("features", "").strip()
@@ -11953,7 +12066,12 @@ def admin_add_plan():
         traceback.print_exc()
         db.session.rollback()
         flash(f"Error creating plan: {str(e)}", "error")
-        return render_template("admin/add_plan.html", admin=admin)
+        return render_template(
+            "admin/add_plan.html",
+            admin=admin,
+            v11_experience_options=V11_EXPERIENCE_PRESENTATION,
+            plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
+        )
 
 
 @app.route("/admin/plans/<int:plan_id>/edit", methods=["GET", "POST"])
@@ -11964,7 +12082,13 @@ def admin_edit_plan(plan_id):
         plan = SubscriptionPlan.query.get_or_404(plan_id)
         
         if request.method == "GET":
-            return render_template("admin/edit_plan.html", admin=admin, plan=plan)
+            return render_template(
+                "admin/edit_plan.html",
+                admin=admin,
+                plan=plan,
+                v11_experience_options=V11_EXPERIENCE_PRESENTATION,
+                plan_family_contract_available=hasattr(SubscriptionPlan, "plan_family"),
+            )
         
         # Get form data with proper handling of empty values
         plan_name = (request.form.get("plan_name") or "").strip()

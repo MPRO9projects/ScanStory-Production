@@ -8,6 +8,8 @@ crash) is covered separately in tests/security/test_otp_security.py.
 These are route/template-level smoke tests only - no scanner CV/recognition
 code is touched or exercised here.
 """
+from datetime import datetime, timedelta
+
 import pytest
 
 
@@ -357,3 +359,132 @@ def test_destructive_admin_copy_distinguishes_suspend_delete_deactivate(client, 
     admins_body = admins_response.data.decode()
     assert "does not delete audit history" in admins_body
     assert "Use deactivate for routine access suspension" in admins_body
+
+
+# ---------------------------------------------------------------------------
+# V1.1 Wave 2: Commercial UX/admin presentation
+# ---------------------------------------------------------------------------
+
+def test_pricing_page_shows_account_family_and_experience_contract_without_fake_plan_family(client):
+    response = client.get("/pricing")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert "V1.1 Account Families" in body
+    assert "Individual" in body
+    assert "Business / Vendor" in body
+    assert "Direct QR" in body
+    assert "Detect Once" in body
+    assert "Tracked Overlay" in body
+    assert "Object Tracking" not in body
+    assert "Backend plan-family fields are not available" in body
+    assert "without inventing family-specific limits" in body
+
+
+def test_pricing_upgrade_downgrade_copy_is_non_destructive(client):
+    response = client.get("/pricing")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert "Upgrades take effect after confirmed payment" in body
+    assert "Downgrades are scheduled for the next plan-term boundary" in body
+    assert "do not delete existing projects" in body
+    assert "Changes take effect immediately" not in body
+
+
+def test_admin_plan_pages_expose_policy_contract_without_unbacked_inputs(client, login_admin, plan):
+    for path in ("/admin/plans", "/admin/plans/add", f"/admin/plans/{plan.id}/edit"):
+        response = client.get(path)
+        assert response.status_code == 200
+        body = response.data.decode()
+        assert "V1.1" in body
+        assert "Direct QR" in body
+        assert "Detect Once" in body
+        assert "Tracked Overlay" in body
+        assert "Backend pending" in body
+        assert "Object Tracking" not in body
+
+        for forbidden_input in (
+            'name="plan_family"',
+            'name="base_storage"',
+            'name="media_policy"',
+            'name="experience_entitlements"',
+            'name="lifecycle_status"',
+            'name="revision_status"',
+        ):
+            assert forbidden_input not in body
+
+
+def test_user_profile_entitlement_summary_uses_backend_ledgers(
+    client, app_module, db_session, login_user
+):
+    user = login_user
+    user.subscription_status = "active"
+    user.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
+    user.subscribed_project_limit = 7
+    user.subscribed_scan_limit = 120
+    user.projects_used = 3
+    user.scans_used = 4
+    db_session.add_all([
+        app_module.EntitlementTransaction(
+            user_id=user.id,
+            entitlement_type="PROJECT_CAPACITY",
+            delta_value=2,
+            source_type="test",
+            source_id=2001,
+            reason="profile summary test",
+        ),
+        app_module.EntitlementTransaction(
+            user_id=user.id,
+            entitlement_type="EXTRA_SCANS",
+            delta_value=20,
+            source_type="test",
+            source_id=2002,
+            reason="profile summary test",
+        ),
+    ])
+    db_session.commit()
+
+    response = client.get("/profile")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert "Effective Entitlement" in body
+    assert "Project Slots" in body
+    assert "Plan slots" in body
+    assert "Purchased slots" in body
+    assert "Direct QR" in body
+    assert "Detect Once" in body
+    assert "Tracked Overlay" in body
+    assert "Backend pending" in body
+
+
+def test_admin_user_views_show_backend_sourced_entitlement_and_grandfathering_copy(
+    client, login_admin, app_module, db_session, normal_user
+):
+    normal_user.subscription_status = "active"
+    normal_user.subscription_expires_at = datetime.utcnow() + timedelta(days=30)
+    normal_user.subscribed_project_limit = 3
+    normal_user.subscribed_scan_limit = 10
+    normal_user.projects_used = 5
+    normal_user.scans_used = 12
+    db_session.add(app_module.EntitlementTransaction(
+        user_id=normal_user.id,
+        entitlement_type="PROJECT_CAPACITY",
+        delta_value=1,
+        source_type="test",
+        source_id=3001,
+        reason="admin summary test",
+    ))
+    db_session.commit()
+
+    for path in (f"/admin/users/{normal_user.id}", f"/admin/users/{normal_user.id}/dashboard"):
+        response = client.get(path)
+        assert response.status_code == 200
+        body = response.data.decode()
+        assert "Effective Entitlement" in body
+        assert "Plan 2 + purchased 1" in body
+        assert "Existing projects are retained" in body
+        assert "Direct QR" in body
+        assert "Detect Once" in body
+        assert "Tracked Overlay" in body
