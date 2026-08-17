@@ -10,10 +10,34 @@
 
 `GET /ready`
 
-- HTTP 200 when the database is ready.
-- HTTP 503 when the database is unavailable.
+- HTTP 200 when the database is ready, the queue is usable, and — in `rq` mode —
+  at least one live RQ worker is attached to the processing queue.
+- HTTP 503 when the database is unavailable, the queue is unavailable, or
+  `rq` mode is configured with **zero usable workers**.
 - `Cache-Control: no-store`.
 - Must not expose exception text, database URLs, paths, or credentials.
+- Response shape: `{"status": "ready"|"not_ready", "checks": {...}}`. In `rq`
+  mode `checks` carries `queue`, `workers` (`ok` / `unavailable`) and
+  `usable_worker_count` (a count only — never worker names, hostnames or job
+  payloads).
+
+### Worker requirement (V1.1 P1-3)
+
+**Production MUST run the RQ worker process, and MUST monitor it.** A reachable
+Redis with no worker attached accepts uploads and processes none; before this
+change `/ready` reported 200 in exactly that state.
+
+- Start the worker alongside the web process:
+  `python -m flask --app app` is *not* enough — run `python rq_worker.py`
+  (same `REDIS_URL`, `SCANSTORY_QUEUE_MODE=rq`, `RQ_QUEUE_NAME`) as its own
+  supervised service, with automatic restart.
+- Worker liveness is derived from RQ's own heartbeat. A worker whose last
+  heartbeat is older than `RQ_WORKER_STALE_AFTER_SECONDS` (default 420s) is not
+  counted as usable.
+- `checks.workers == "not_applicable"` means a non-`rq` queue mode
+  (`fake`/`inline`). That is a supported non-production mode only; the runtime
+  config validation already refuses to boot a production-flagged deployment in
+  any mode other than `rq`.
 
 ## Recommended Probes
 
@@ -32,7 +56,10 @@
   spikes can indicate a misconfigured secret or a probing attempt).
 - Razorpay webhook `failed` processing-status alert (`unknown_order`,
   `amount_mismatch`, `currency_mismatch`, `payment_id_conflict`).
-- Queue monitoring is future until Redis/RQ exists.
+- **RQ worker-count alert: alert immediately when `/ready` reports
+  `checks.workers == "unavailable"` or `usable_worker_count == 0`.** This is the
+  "queue accepts jobs, nothing runs them" condition.
+- Worker process supervision alert (process exited / restart loop).
 
 ## Suggested Initial Thresholds
 

@@ -770,6 +770,8 @@ def test_p0_6_ready_returns_503_when_redis_is_down_in_rq_mode(client, app_module
 def test_p0_6_ready_is_green_for_a_valid_rq_configuration(client, app_module, monkeypatch):
     monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "rq")
     monkeypatch.setattr(app_module, "redis_ready_check", lambda: True)
+    # V1.1 P1-3: a valid rq configuration now also means "a worker is attached".
+    monkeypatch.setattr(app_module, "queue_worker_state", lambda: ("ok", 2))
 
     response = client.get("/ready")
 
