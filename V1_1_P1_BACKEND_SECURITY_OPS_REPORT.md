@@ -19,7 +19,7 @@ audit's HIGH findings. No scanner work. No frontend redesign.
 
 ## 2. Ending HEAD
 
-`e9eeeab` after the code and test commits; final commit adds docs + this report
+`fbb2271c6738c5cd5f9bdc9f8ea4cd46e7c9b5f9`
 (see §3 for the full list — the docs commit is the last one).
 
 ## 3. Commits made
@@ -28,7 +28,7 @@ audit's HIGH findings. No scanner work. No frontend redesign.
 |---|---|
 | `a486f63` | `fix(v1.1): harden P1 backend security and operations` |
 | `e9eeeab` | `test(v1.1): cover P1 backend security and operations` |
-| (final) | `docs(v1.1): require worker monitoring and report P1 backend hardening` |
+| `fbb2271` | `docs(v1.1): require worker monitoring and report P1 backend hardening` |
 
 **Why three commits and not the suggested six.** All ten items' production code
 lives in exactly two files (`app.py`, `processing_queue.py`). Splitting them into
