@@ -36,11 +36,14 @@ def _migration_app(tmp_path, name):
     return app
 
 
-def test_storage_revision_is_the_single_new_head():
+def test_storage_revision_remains_in_single_linear_chain():
+    # STORAGE_REVISION is the Wave 3 migration. Later waves (Wave 4's
+    # a9d3c7e1b502 and onward) legitimately extend the chain past it, so this
+    # no longer asserts STORAGE_REVISION is the current head - only that it
+    # stays correctly placed in one linear chain with no branch created.
     script = _script_directory()
     revision = script.get_revision(STORAGE_REVISION)
     assert revision.down_revision == PRIOR_REVISION
-    assert script.get_current_head() == STORAGE_REVISION
     assert len(script.get_heads()) == 1
 
 

@@ -177,7 +177,7 @@ def test_migrated_schema_still_rejects_an_invalid_addon_type(migrated_app):
             _exec(
                 "INSERT INTO addon_catalog "
                 "(code, name, addon_type, unit_amount, currency, is_active, is_commercially_available) "
-                "VALUES ('bad', 'bad', 'ACCOUNT_STORAGE', 1.0, 'INR', :active, :available)",
+                "VALUES ('bad', 'bad', 'NOT_A_REAL_ADDON', 1.0, 'INR', :active, :available)",
                 active=True, available=True,
             )
             shared_db.session.commit()
