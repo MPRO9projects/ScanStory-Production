@@ -6,9 +6,36 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import dotenv
 import numpy as np
 import pytest
 from werkzeug.security import generate_password_hash
+
+
+@pytest.fixture(autouse=True)
+def _ignore_on_disk_dotenv(monkeypatch):
+    """Stop app.py's import-time load_dotenv() from resurrecting deleted env vars.
+
+    app.py calls load_dotenv() at module scope, so EVERY fresh `import app` in
+    this suite re-reads whatever untracked .env happens to sit above the CWD.
+    load_dotenv only skips names already present in os.environ - a name a test
+    deliberately DELETED counts as absent, so the file puts it straight back.
+
+    Concretely: test_v11_final_security_deployment._reload_app deletes
+    SECURITY_CSP_ENFORCE to prove production enforces CSP by default; a .env
+    line "SECURITY_CSP_ENFORCE=0" is reloaded during the fresh import and
+    startup validation then fails with
+    "Missing required environment variable(s): SECURITY_CSP_ENFORCE=1".
+    The same hole hands DATABASE_URL / RAZORPAY_* back to isolated_app and
+    _reimport_app_with_real_csrf, which also delete them on purpose.
+
+    Nothing legitimate depends on it: no .env is tracked in the repo and the
+    suite sets all of its own environment. test_runtime_hardening_p0 already
+    patched this out locally in two places; doing it once here covers every
+    re-import helper instead. app.py rebinds `load_dotenv` from the dotenv
+    module on each import, so patching the attribute is what takes effect.
+    """
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *args, **kwargs: False)
 
 
 def _assert_under(child, parent):

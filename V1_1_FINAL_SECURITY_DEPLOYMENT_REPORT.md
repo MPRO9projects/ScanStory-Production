@@ -369,3 +369,102 @@ Not counted as closed by this lane:
 ## 26. Final verdict
 
 FINAL SECURITY HARDENING COMPLETE — READY FOR AUTHORITATIVE REGRESSION AFTER UI MERGE
+
+## 27. Cross-lane CSP test isolation (post-merge certification)
+
+Investigated at HEAD `04cbe39c743d3c4407bbc4ce2658b9cb88c155d4`, branch
+`agent/v1.1-platform-admin`, after the authoritative 9-file cross-lane batch
+reported `293 passed, 1 failed` twice with
+`tests/security/test_v11_final_security_deployment.py::test_production_csp_enforces_by_default`
+failing on `RuntimeError: Missing required environment variable(s): SECURITY_CSP_...`.
+
+### 27.1 Root cause: on-disk `.env` resurrecting a deliberately deleted variable
+
+The contamination is **not** test-ordering and **not** an application bug. It is
+`load_dotenv()` at `app.py:103`, which runs at module scope on **every** fresh
+`import app` performed by the test suite.
+
+`load_dotenv()` skips names that are already present in `os.environ`, but a name
+a test **deliberately deleted** counts as absent — so the on-disk file writes it
+straight back in.
+
+`_reload_app` (`tests/security/test_v11_final_security_deployment.py:40-48`)
+deletes `SECURITY_CSP_ENFORCE` via
+`_reload_app(monkeypatch, tmp_path, {"SECURITY_CSP_ENFORCE": None})`
+(line 153) precisely to prove production **enforces CSP by default**. During the
+fresh `importlib.import_module("app")` on line 48, `load_dotenv()` reloads
+`SECURITY_CSP_ENFORCE=0` from an untracked `.env` above the CWD. `app.py:165`
+then sees an explicit `0` instead of an absent value, `env_flag(...)` returns
+`False`, and startup validation (`app.py:254-258`) aborts the import.
+
+Reproduced byte-for-byte identically to the certification failure by placing a
+one-line `.env` containing `SECURITY_CSP_ENFORCE=0` at the worktree root:
+
+```
+E  RuntimeError: Missing required environment variable(s): SECURITY_CSP_ENFORCE=1.
+   Set them before starting the app (see .env.example).
+app.py:255: RuntimeError
+1 failed
+```
+
+The same hole hands `DATABASE_URL` and `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET`
+back to `isolated_app` (`tests/conftest.py`) and to
+`_reimport_app_with_real_csrf` (`tests/security/test_csrf_and_headers.py:20`),
+both of which `delenv` exactly those names on purpose.
+
+### 27.2 Why the isolated test passed and the batch failed
+
+`.env` is untracked, so it exists in some checkouts/hosts and not others, and
+`find_dotenv()` resolves it relative to the CWD. The failure therefore tracks
+**where and how pytest was invoked**, not which tests preceded it. This also
+explains why the defect survived two certification runs while every in-code
+search for a leaking fixture came up empty: there is no contaminating test.
+This lane's own worktree carries no `.env` (only `.env.example`), which is why
+the unmodified 9-file batch passes here at `294 passed` — see 27.4.
+
+Honest scope note: with a hostile `.env` present the test fails **alone** too,
+so the mechanism is environmental, not order-dependent. No test-ordering
+contamination was found; the batch was re-run in the exact authoritative order
+and in reversed security-file order, both clean.
+
+### 27.3 Fix (test-only)
+
+`tests/conftest.py` — one autouse fixture, `_ignore_on_disk_dotenv`, neutralizes
+`dotenv.load_dotenv` for the whole suite. `app.py` rebinds `load_dotenv` from the
+`dotenv` module on each import, so patching the module attribute is what takes
+effect. Applied once at the shared boundary rather than in each of the four
+independent re-import helpers; `tests/security/test_runtime_hardening_p0.py`
+already patched it out locally in two places (lines 17-18 and 121-122) and
+documented this exact hazard, so this generalizes an established pattern instead
+of inventing one.
+
+Nothing legitimate regresses: no `.env` is tracked in the repository and the
+suite sets all of its own environment.
+
+**No application code was touched.** `app.py:165` (`SECURITY_CSP_ENFORCE`
+required in production) and `app.py:670`
+(`CSP_ENFORCE = env_flag("SECURITY_CSP_ENFORCE", default=runtime_production_mode_flag_active())`)
+are unchanged. Startup validation was not weakened, no test was skipped or
+xfailed, and no test order was changed.
+
+### 27.4 Validation
+
+| Check | Result |
+| --- | --- |
+| `test_production_csp_enforces_by_default` alone, hostile `.env` present, BEFORE fix | 1 failed (exact certification error) |
+| `test_production_csp_enforces_by_default` alone, hostile `.env` present, AFTER fix | 1 passed |
+| `test_v11_final_security_deployment.py` + `test_runtime_hardening_p0.py`, hostile `.env` present, AFTER fix | 43 passed |
+| `test_v11_final_ui_completion.py` + the CSP test (minimal predecessor probe) | 37 passed |
+| Reversed security-file order (`test_runtime_hardening_p0.py` first) | 43 passed |
+| Exact 9-file cross-lane batch, BEFORE fix, no `.env` | 294 passed |
+| Exact 9-file cross-lane batch, AFTER fix | 294 passed |
+
+Proof that production CSP behavior was not weakened: `test_production_rejects_disabled_or_report_only_csp`
+(production must reject `SECURITY_CSP_ENFORCE=0`) and
+`test_production_csp_enforces_by_default` (production enforces when the variable
+is absent) both pass in the same runs, including with a hostile
+`SECURITY_CSP_ENFORCE=0` on disk — the fix stops the test environment from lying
+about the variable, it does not change how the application reads it.
+
+Environment: pytest 8.3.4, no `pytest-xdist` and no `pytest-randomly` installed,
+so file order is exactly as given on the command line.
