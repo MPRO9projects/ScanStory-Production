@@ -12,6 +12,9 @@ Pillow<=10.4.0
 qrcode<=7.4.2
 ffmpeg-python<=0.2.0
 razorpay<=2.16.0
+# Imported directly by app.py (reCAPTCHA verification). Declared explicitly
+# rather than relied on as a razorpay transitive dependency.
+requests<=2.34.2
 Flask-Admin<=1.6.1
 flask-wtf<=1.1.1
 sqlalchemy<=2.0.27

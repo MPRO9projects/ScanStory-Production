@@ -67,3 +67,46 @@ def database_backend_name(database_url):
         return make_url(database_url).get_backend_name()
     except Exception as exc:
         raise RuntimeError("DATABASE_URL must be a valid SQLAlchemy database URL.") from exc
+
+
+# This project ships psycopg v3 ("psycopg[binary]" in requirements.txt) and
+# psycopg2 is not installed. SQLAlchemy resolves a bare "postgresql://" URL to
+# its DEFAULT PostgreSQL DBAPI, which is psycopg2 - so a URL that passed the
+# "is this postgresql?" check still exploded at first connect with
+# ModuleNotFoundError. Managed providers hand out exactly those bare URLs (and
+# Heroku-style "postgres://", which SQLAlchemy 2 rejects outright), so the fix
+# is to pin the driver here rather than to install a second DBAPI.
+POSTGRES_DRIVER_URL_PREFIX = "postgresql+psycopg"
+_POSTGRES_BACKEND_ALIASES = ("postgres", "postgresql")
+
+
+def normalize_database_url(database_url):
+    """Pin a PostgreSQL URL to the declared psycopg v3 driver.
+
+    Rewrites ONLY the scheme, by string surgery on the part before "://". The
+    credential/host/path/query remainder is passed through byte for byte, so a
+    percent-encoded password cannot be decoded, re-encoded or corrupted on the
+    way through. Non-PostgreSQL URLs (sqlite, mysql, blank) are returned
+    untouched. An explicitly requested non-psycopg driver is a hard error
+    instead of a silent surprise at first connect.
+
+    Never logs, echoes or embeds the URL - error text names the driver only.
+    """
+    raw = (database_url or "").strip()
+    if not raw:
+        return database_url
+    scheme, separator, remainder = raw.partition("://")
+    if not separator:
+        return database_url
+    backend, _, driver = scheme.partition("+")
+    if backend.strip().lower() not in _POSTGRES_BACKEND_ALIASES:
+        return database_url
+    driver = driver.strip().lower()
+    if driver and driver != "psycopg":
+        raise RuntimeError(
+            f"Unsupported PostgreSQL driver '{driver}' in the database URL. "
+            "ScanStory runs on psycopg v3; use "
+            f"'{POSTGRES_DRIVER_URL_PREFIX}://' (a bare 'postgresql://' or "
+            "'postgres://' URL is normalized to it automatically)."
+        )
+    return f"{POSTGRES_DRIVER_URL_PREFIX}://{remainder}"
