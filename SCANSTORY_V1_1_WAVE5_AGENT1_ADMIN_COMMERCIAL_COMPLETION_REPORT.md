@@ -37,7 +37,7 @@ Agent 2's parallel work added **no migration**, so `a9d3c7e1b502` remained the h
 
 ## 2. Ending commit(s)
 
-`fdf6712` — `feat(v1.1): complete admin commercial governance` (single Wave 5 commit).
+`23ccc9d8b8d8dac1b600c164cc04f223204c2833` — `feat(v1.1): complete admin commercial governance` (single Wave 5 commit).
 
 ## 3. Files changed
 
