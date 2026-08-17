@@ -844,6 +844,30 @@
                 </div>
                 <div class="info-label">Revocation never deletes media or QR codes; it can put the account over storage and block new storage-consuming uploads.</div>
             </form>
+            <form method="POST" action="{{ url_for('admin_grant_project_capacity', user_id=user.id) }}" class="mt-3" data-testid="admin-project-capacity-grant-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="info-label">Admin project-slot grant or revocation</div>
+                <div class="d-flex gap-2 flex-wrap">
+                    <input class="form-control" type="number" name="project_slots" placeholder="5 or -5" required>
+                    <input class="form-control" type="text" name="reason" placeholder="Reason">
+                    <button class="btn btn-warning" type="submit" onclick="return confirm('Update this user project capacity? No project is deleted by a revocation.');">Update project slots</button>
+                </div>
+                <div class="info-label">Purchased capacity and the plan allowance are separate sources and are never overwritten. Revocation deletes no project.</div>
+            </form>
+            <form method="POST" action="{{ url_for('admin_set_account_type', user_id=user.id) }}" class="mt-3" data-testid="admin-account-type-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="info-label">Account type (currently {{ entitlement_summary.account_type_label }})</div>
+                <div class="d-flex gap-2 flex-wrap">
+                    <select class="form-control" name="account_type">
+                        {% for value, label in ACCOUNT_TYPE_LABELS.items() %}
+                        <option value="{{ value }}" {% if (user.account_type or 'INDIVIDUAL')|upper==value %}selected{% endif %}>{{ label }}</option>
+                        {% endfor %}
+                    </select>
+                    <input class="form-control" type="text" name="reason" placeholder="Reason">
+                    <button class="btn btn-warning" type="submit" onclick="return confirm('Change this account type? Projects, media, QR codes, purchases and history are all preserved.');">Set account type</button>
+                </div>
+                <div class="info-label">Converting to Individual is refused while the account still manages vendor projects, has transfers in progress or has open ownership reviews.</div>
+            </form>
         </div>
         {% endif %}
         

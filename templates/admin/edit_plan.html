@@ -637,6 +637,88 @@ Email support" rows="5">{% if plan.features_list %}{% for feature in plan.featur
                     </div>
                 </div>
 
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="plan_family">Plan Family</label>
+                        <select id="plan_family" name="plan_family" class="form-control">
+                            {% for family in plan_families %}
+                            <option value="{{ family }}" {% if plan.plan_family==family %}selected{% endif %}>{{
+                                plan_family_label(family) }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="lifecycle_status">Lifecycle Status</label>
+                        <select id="lifecycle_status" name="lifecycle_status" class="form-control">
+                            {% for status in plan_lifecycle_statuses %}
+                            <option value="{{ status }}" {% if plan.lifecycle_status==status %}selected{% endif %}>{{
+                                status }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="help-text">Currently revision {{ plan.plan_revision }}. Only ACTIVE plans can be
+                            newly purchased; existing subscribers are never affected.</div>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="base_storage_bytes" class="optional">Base Account Storage (bytes)</label>
+                        <input type="number" id="base_storage_bytes" name="base_storage_bytes" class="form-control"
+                            min="0" value="{{ plan.base_storage_bytes if plan.base_storage_bytes is not none else '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="max_image_bytes" class="optional">Max Image Size (bytes)</label>
+                        <input type="number" id="max_image_bytes" name="max_image_bytes" class="form-control" min="1"
+                            value="{{ plan.max_image_bytes if plan.max_image_bytes is not none else '' }}">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="max_video_bytes" class="optional">Max Video Size (bytes)</label>
+                        <input type="number" id="max_video_bytes" name="max_video_bytes" class="form-control" min="1"
+                            value="{{ plan.max_video_bytes if plan.max_video_bytes is not none else '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="max_video_duration_seconds" class="optional">Max Video Duration (seconds)</label>
+                        <input type="number" id="max_video_duration_seconds" name="max_video_duration_seconds"
+                            class="form-control" min="1"
+                            value="{{ plan.max_video_duration_seconds if plan.max_video_duration_seconds is not none else '' }}">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="max_image_dimension_px" class="optional">Max Image Dimension (px)</label>
+                        <input type="number" id="max_image_dimension_px" name="max_image_dimension_px"
+                            class="form-control" min="1"
+                            value="{{ plan.max_image_dimension_px if plan.max_image_dimension_px is not none else '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="max_image_pixels" class="optional">Max Image Pixels</label>
+                        <input type="number" id="max_image_pixels" name="max_image_pixels" class="form-control" min="1"
+                            value="{{ plan.max_image_pixels if plan.max_image_pixels is not none else '' }}">
+                    </div>
+                </div>
+
+                <input type="hidden" name="plan_experience_form" value="1">
+                <div class="form-check">
+                    <input type="checkbox" id="allow_tracked_overlay" name="allow_tracked_overlay"
+                        class="form-check-input" {% if plan.allow_tracked_overlay %}checked{% endif %}>
+                    <label for="allow_tracked_overlay" class="form-check-label">Allow Tracked Overlay</label>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" id="allow_detect_once" name="allow_detect_once" class="form-check-input" {%
+                        if plan.allow_detect_once %}checked{% endif %}>
+                    <label for="allow_detect_once" class="form-check-label">Allow Detect Once</label>
+                </div>
+                <div class="form-check">
+                    <input type="checkbox" id="allow_direct_qr" name="allow_direct_qr" class="form-check-input" {% if
+                        plan.allow_direct_qr %}checked{% endif %}>
+                    <label for="allow_direct_qr" class="form-check-label">Allow Direct QR</label>
+                </div>
+
+                <input type="hidden" name="plan_flags_form" value="1">
                 <div class="form-check">
                     <input type="checkbox" id="is_popular" name="is_popular" class="form-check-input" {% if
                         plan.is_popular %}checked{% endif %}>

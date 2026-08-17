@@ -578,16 +578,17 @@
         <div class="card" data-testid="v11-plan-policy-contract">
             <h3 style="margin-bottom: 10px;">V1.1 Commercial Policy Contract</h3>
             <p class="policy-note">
-                This admin view surfaces operational plan fields that are editable here today: price, validity, project
-                capacity, scan allowance and pairs per project. Plan family, storage/media policy, per-experience
-                entitlements and lifecycle/revision status are stored on SubscriptionPlan and are read below as live
-                values, but they are read-only in this UI — no admin form writes them yet.
+                This admin view governs the whole commercial plan definition: price, validity, project capacity, scan
+                allowance, pairs per project, plan family, storage and per-file media policy, per-experience
+                entitlements and lifecycle status. Every value is validated server-side. Editing commercial policy
+                bumps the plan revision; historical payment snapshots are never rewritten.
             </p>
             <div class="policy-panel">
                 <div class="policy-row"><span>Supported account types</span><span class="policy-value">Individual; Business / Vendor</span></div>
                 <div class="policy-row"><span>Supported experience labels</span><span class="policy-value">Direct QR; Detect Once; Tracked Overlay</span></div>
-                <div class="policy-row"><span>Plan-family field</span><span class="policy-value">Live (read-only here)</span></div>
-                <div class="policy-row"><span>Storage/media policy fields</span><span class="policy-value">Live (read-only here)</span></div>
+                <div class="policy-row"><span>Plan-family field</span><span class="policy-value">Live (editable on add/edit)</span></div>
+                <div class="policy-row"><span>Storage/media policy fields</span><span class="policy-value">Live (editable on add/edit)</span></div>
+                <div class="policy-row"><span>Lifecycle</span><span class="policy-value">Only ACTIVE plans can be newly purchased</span></div>
             </div>
         </div>
         
@@ -716,9 +717,18 @@
                         <button type="submit" class="btn btn-success btn-sm" onclick="return confirm('Activate this plan?');">Activate</button>
                         {% endif %}
                     </form>
+                    <form action="/admin/plans/{{ plan.id }}/lifecycle" method="POST" style="display:inline-flex; gap:6px; margin:0;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <select name="lifecycle_status" class="btn btn-secondary btn-sm" style="padding:4px 8px;">
+                            {% for status in ['DRAFT', 'ACTIVE', 'CLOSED_FOR_NEW_PURCHASE', 'ARCHIVED'] %}
+                            <option value="{{ status }}" {% if plan.lifecycle_status==status %}selected{% endif %}>{{ status }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn btn-secondary btn-sm" onclick="return confirm('Change this plan lifecycle status? Only new purchases are affected. Existing subscribers keep their term, projects, media and QR codes.');">Set</button>
+                    </form>
                     <form action="/admin/plans/{{ plan.id }}/delete" method="POST" style="display:inline-block; margin:0;">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this plan configuration? Historical payment and subscription records are not deleted by this UI, but this cannot be undone.');">Delete</button>
+                        <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete this plan configuration? Deletion is refused for any plan referenced by a subscriber, a pending plan change or a payment order - archive it instead.');">Delete</button>
                     </form>
                 </div>
             </div>
