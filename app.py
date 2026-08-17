@@ -14687,8 +14687,6 @@ def admin_view_project(project_id):
                          total_scans=total_scans,
                          successful_scans=successful_scans,
                          failed_scans=failed_scans,
-                         ownership=project_ownership_context(project, None),
-                         coverage=project_coverage_summary(project),
                          safe_qr_filename=_safe_display_filename(project.qr_code_filename or project.qr_code_path),
                          qr_ready=bool(project.qr_code_path or project.qr_code_filename))
 
