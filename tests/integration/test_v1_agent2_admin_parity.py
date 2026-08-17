@@ -921,12 +921,56 @@ def test_user_ownership_page_wires_real_transfer_actions_and_capacity_copy(
     assert "project slot" in body
     assert "Ownership has not changed" in body
     assert "media plus QR remain intact" in body
+    assert "This handover is under manual ScanStory review" not in body
     assert f'action="/ownership/transfers/{outgoing.id}/cancel"' in body
     assert f'action="/projects/{transferable_project.id}/transfer"' in body
     assert 'name="recipient_email"' in body
     assert 'name="retain_vendor_management"' in body
     assert 'name="reason"' in body
     assert f"/ownership/transfers/{completed.id}/" not in body
+
+
+def test_user_navigation_exposes_ownership_center(
+    client, login_user
+):
+    pages = ["/dashboard", "/projects", "/profile"]
+
+    for path in pages:
+        response = client.get(path)
+        assert response.status_code == 200
+        body = response.data.decode()
+        assert 'href="/ownership"' in body
+        assert "Ownership" in body
+
+
+def test_ownership_center_disputed_state_is_review_only(
+    client, app_module, db_session, normal_user
+):
+    sender = _user(app_module, db_session, "dispute-sender@example.com", "Dispute Sender")
+    project = app_module.Project(name="Disputed Handover", owner_user_id=sender.id, current_owner_user_id=sender.id)
+    db_session.add(project)
+    db_session.flush()
+    disputed = app_module.ProjectOwnershipTransfer(
+        project_id=project.id,
+        initiated_by_user_id=sender.id,
+        from_owner_user_id=sender.id,
+        to_user_id=normal_user.id,
+        status="DISPUTED",
+    )
+    db_session.add(disputed)
+    db_session.commit()
+
+    with client.session_transaction() as sess:
+        sess["user_id"] = normal_user.id
+
+    response = client.get("/ownership")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert "under manual ScanStory review" in body
+    assert f'action="/ownership/transfers/{disputed.id}/accept"' not in body
+    assert f'action="/ownership/transfers/{disputed.id}/reject"' not in body
+    assert f'action="/ownership/transfers/{disputed.id}/retry"' not in body
 
 
 def test_user_ownership_page_wires_claim_response_and_cancellation(
@@ -1020,6 +1064,11 @@ def test_admin_project_view_links_to_real_ownership_review(
     assert "Claims do not transfer ownership by themselves" in body
     assert "Coverage/service state is separate from ownership state" in body
     assert 'href="/admin/ownership"' in body
+    assert f'action="/admin/projects/{project.id}/service-coverage/grant"' in body
+    assert 'id="coverageGrantDays"' in body
+    assert 'id="coverageGrantReason"' in body
+    assert "Grant service coverage to this project?" in body
+    assert "Coverage could not be granted" in body
     assert "backend action routes are available" not in body
     assert "F:\\\\" not in body
     assert "SECRET_KEY" not in body
@@ -1077,9 +1126,46 @@ def test_admin_ownership_page_wires_state_aware_real_actions(
     assert f'action="/admin/ownership/transfers/{pending.id}/dispute"' in body
     assert f'action="/admin/ownership/transfers/{pending.id}/cancel"' in body
     assert f'action="/admin/ownership/transfers/{disputed.id}/release-dispute"' in body
+    assert "ownership-affecting admin action" in body
+    assert "Approval opens a governed handover" in body
+    assert "The current owner remains unchanged" in body
     assert f'action="/admin/ownership/transfers/{completed.id}/complete"' not in body
     assert f'action="/admin/ownership/claims/{claim.id}/approve"' in body
     assert f'action="/admin/ownership/claims/{claim.id}/reject"' in body
     assert f'action="/admin/ownership/claims/{terminal_claim.id}/approve"' not in body
     assert 'name="decision_reason"' in body
     assert 'name="reason"' in body
+
+
+def test_project_preview_expired_coverage_is_distinct_from_suspension(
+    client, login_user, app_module, db_session, project_with_pair
+):
+    project, _pair = project_with_pair
+    project.is_active = True
+    normal_user = login_user
+    normal_user.subscription_status = "expired"
+    normal_user.subscription_expires_at = datetime.utcnow() - timedelta(days=2)
+    db_session.commit()
+
+    response = client.get(f"/project/{project.id}/preview")
+    assert response.status_code == 200
+    body = response.data.decode()
+
+    assert "Coverage expired" in body
+    assert "public viewer is not live because coverage has expired" in body
+    assert "project, QR code and media have not been deleted" in body
+    assert "suspended after a review" not in body
+
+
+def test_admin_templates_include_mobile_table_hardening():
+    base = open("templates/admin/base.html", encoding="utf-8").read()
+    view_project = open("templates/admin/view_project.html", encoding="utf-8").read()
+    addons = open("templates/admin/addons.html", encoding="utf-8").read()
+
+    assert ".table-responsive" in base
+    assert ".table-container" in base
+    assert "min-width: 760px" in base
+    assert "-webkit-overflow-scrolling: touch" in view_project
+    assert "min-width: 760px" in view_project
+    assert ".table-scroll table" in addons
+    assert "min-width: 860px" in addons

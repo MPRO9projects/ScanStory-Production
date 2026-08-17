@@ -457,6 +457,12 @@
         
         .table-container {
             overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .table-container .table,
+        .table-container table {
+            min-width: 760px;
         }
         
         .table {
@@ -484,6 +490,41 @@
         
         .table tbody tr:hover {
             background: rgba(255,255,255,0.03);
+        }
+
+        .coverage-grant-form {
+            display: grid;
+            grid-template-columns: minmax(120px, 0.5fr) minmax(220px, 1.5fr) auto;
+            gap: 12px;
+            align-items: end;
+            margin-top: 20px;
+            padding: 16px;
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 10px;
+            background: rgba(255,255,255,0.035);
+        }
+
+        .coverage-grant-form label {
+            display: grid;
+            gap: 6px;
+            color: rgba(255,255,255,0.65);
+            font-size: 13px;
+        }
+
+        .coverage-grant-form input {
+            width: 100%;
+            padding: 9px 10px;
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.16);
+            background: #050505;
+            color: #e6e6e9;
+        }
+
+        .coverage-grant-status {
+            grid-column: 1 / -1;
+            min-height: 20px;
+            color: rgba(255,255,255,0.72);
+            font-size: 13px;
         }
         
         @media (max-width: 992px) {
@@ -529,6 +570,10 @@
                 flex-direction: column;
                 align-items: flex-start;
                 gap: 15px;
+            }
+
+            .coverage-grant-form {
+                grid-template-columns: 1fr;
             }
             
             .pair-item {
@@ -720,7 +765,24 @@
                     <div class="info-row"><span class="info-label">Renewal Eligible</span><span class="info-value">{{ 'Yes' if coverage.renewal_eligible else coverage.renewal_blocked_code or 'No' }}</span></div>
                 </div>
             </div>
-            <table style="width:100%; margin-top:16px;">
+            {% if admin_can('superadmin.capacity.manage') %}
+            <form class="coverage-grant-form" id="coverageGrantForm"
+                  method="POST"
+                  action="{{ url_for('admin_grant_project_coverage', project_id=project.id) }}"
+                  data-confirm-message="Grant service coverage to this project? This affects public availability but does not change ownership, payments or subscription history.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label for="coverageGrantDays">Days
+                    <input id="coverageGrantDays" type="number" name="days" min="1" step="1" required inputmode="numeric" placeholder="30">
+                </label>
+                <label for="coverageGrantReason">Reason
+                    <input id="coverageGrantReason" type="text" name="reason" required maxlength="500" autocomplete="off" placeholder="Support-approved extension">
+                </label>
+                <button type="submit" class="btn btn-primary">Grant Coverage</button>
+                <p class="coverage-grant-status" id="coverageGrantStatus" role="status" aria-live="polite"></p>
+            </form>
+            {% endif %}
+            <div class="table-container" style="margin-top:16px;">
+            <table class="table">
                 <thead>
                     <tr><th>ID</th><th>Source</th><th>Start</th><th>End</th><th>Status</th><th>Granted By</th><th>Reason</th></tr>
                 </thead>
@@ -740,6 +802,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
         </div>
 
         <div class="card">
@@ -804,7 +867,37 @@
     <script>
         function toggleDropdown() { const dropdown = document.getElementById('userDropdown'); dropdown.classList.toggle('show'); }
         window.onclick = function(event) { if (!event.target.matches('.user-menu span')) { const dropdowns = document.querySelectorAll('.dropdown-menu'); dropdowns.forEach(dropdown => { if (dropdown.classList.contains('show')) { dropdown.classList.remove('show'); } }); } };
-        document.addEventListener('DOMContentLoaded', function() { const alerts = document.querySelectorAll('.alert'); alerts.forEach(alert => { setTimeout(() => { alert.style.transition = 'opacity 0.5s'; alert.style.opacity = '0'; setTimeout(() => alert.remove(), 500); }, 5000); }); });
+        document.addEventListener('DOMContentLoaded', function() {
+            const alerts = document.querySelectorAll('.alert');
+            alerts.forEach(alert => { setTimeout(() => { alert.style.transition = 'opacity 0.5s'; alert.style.opacity = '0'; setTimeout(() => alert.remove(), 500); }, 5000); });
+
+            const coverageForm = document.getElementById('coverageGrantForm');
+            if (!coverageForm) return;
+            const status = document.getElementById('coverageGrantStatus');
+            coverageForm.addEventListener('submit', async function(event) {
+                event.preventDefault();
+                if (!window.confirm(coverageForm.dataset.confirmMessage)) return;
+                const submit = coverageForm.querySelector('button[type="submit"]');
+                submit.disabled = true;
+                status.textContent = 'Granting coverage...';
+                try {
+                    const response = await fetch(coverageForm.action, {
+                        method: 'POST',
+                        body: new FormData(coverageForm),
+                        credentials: 'same-origin'
+                    });
+                    const payload = await response.json().catch(() => ({}));
+                    if (!response.ok || !payload.success) {
+                        throw new Error(payload.error || 'Coverage could not be granted. Check the duration and reason, then try again.');
+                    }
+                    status.textContent = 'Coverage granted. Reloading project details...';
+                    window.location.reload();
+                } catch (error) {
+                    status.textContent = error.message || 'Coverage could not be granted. Try again.';
+                    submit.disabled = false;
+                }
+            });
+        });
     </script>
 </body>
 </html>

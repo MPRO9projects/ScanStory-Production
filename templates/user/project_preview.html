@@ -184,6 +184,12 @@
         for is still recorded. Buying coverage will not lift a suspension &mdash; contact support
         if you think this was a mistake.
       </p>
+      {% elif not coverage.is_live %}
+      <p class="ss-domain-note">
+        This ScanStory's public viewer is not live because coverage has expired or no valid
+        coverage is available. Your project, QR code and media have not been deleted.
+        Renew coverage when eligible to make the existing QR destination live again.
+      </p>
       {% endif %}
 
       {% if not admin_view and not coverage.is_suspended %}

@@ -39,7 +39,8 @@
         details summary { cursor: pointer; color: #9a9aa5; font-size: 13px; }
         .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
         .muted { color: #6f6f79; font-size: 12px; }
-        .table-scroll { overflow-x: auto; }
+        .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .table-scroll table { min-width: 860px; }
     </style>
 </head>
 <body class="ss-admin-scope">
