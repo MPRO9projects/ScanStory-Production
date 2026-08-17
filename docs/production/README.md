@@ -47,8 +47,8 @@ Classifications:
 | Flask/session | `FLASK_SECRET_KEY` | required, secret, no safe default | Must be unique per environment. |
 | Flask/session | `SESSION_COOKIE_SECURE` | required in production, production-only, safe default for local only | Set to `1` behind HTTPS. |
 | Flask/session | `SECURITY_HSTS_ENABLED` | optional, production-only, safe default | Enable only after HTTPS is verified. |
-| Flask/session | `SECURITY_CSP_ENABLED` | optional, safe default | Controls CSP header emission. |
-| Flask/session | `SECURITY_CSP_ENFORCE` | optional, production-only, safe default | Enforce only after browser certification. |
+| Flask/session | `SECURITY_CSP_ENABLED` | required enabled in production, safe local default | Controls CSP header emission. Production startup rejects `0`. |
+| Flask/session | `SECURITY_CSP_ENFORCE` | required enabled in production, safe local default report-only | Production defaults to enforcing CSP and rejects explicit report-only mode. |
 | Database | `DATABASE_URL` | required, secret, production-only, no safe default | Production PostgreSQL URL. Startup rejects SQLite or non-PostgreSQL URLs in production. |
 | Database | `TEST_DATABASE_URL` | optional, staging/local, secret if remote | Disposable/local test DB only. |
 | Razorpay | `RAZORPAY_KEY_ID` | required for payments, secret, production-only/staging-only, no safe default | Use test-mode value in staging. |
