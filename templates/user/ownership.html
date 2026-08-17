@@ -51,6 +51,8 @@
     .flash.error { background: rgba(255,60,60,0.18); }
     .flash.success { background: rgba(60,200,120,0.18); }
     a { color: #00d4ff; }
+    .top-links { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+    .top-links a { min-height: 40px; display: inline-flex; align-items: center; }
     @media (max-width: 620px) {
       body { padding: 14px; }
       section { padding: 14px; }
@@ -61,6 +63,11 @@
 </head>
 <body>
 <main>
+  <nav class="top-links" aria-label="Account">
+    <a href="{{ url_for('dashboard') }}">Dashboard</a>
+    <a href="{{ url_for('projects_page') }}">My Stories</a>
+    <a href="{{ url_for('user_profile') }}">Profile</a>
+  </nav>
   <h1>ScanStory ownership</h1>
   <p class="lead">
     Handing a ScanStory over is always explicit and always reviewed by the people involved.
@@ -96,6 +103,13 @@
             {% if block.checked_at %}<div class="muted">Last checked {{ block.checked_at }}</div>{% endif %}
           </div>
         {% endif %}
+        {% if transfer.status == 'PENDING_ACCEPTANCE' %}
+          <p class="muted">Accepting starts the final backend check. Ownership moves only after project and storage capacity pass.</p>
+        {% elif transfer.status == 'PENDING_CAPACITY' %}
+          <p class="muted">Retry uses this same handover. It does not create a new request or change ownership unless the backend checks pass.</p>
+        {% elif transfer.status == 'DISPUTED' %}
+          <p class="muted">This handover is under manual ScanStory review. Ownership has not changed and recipient actions are paused.</p>
+        {% endif %}
         <div class="actions">
         {% if transfer.status == 'PENDING_CAPACITY' %}
         <form method="POST" action="/ownership/transfers/{{ transfer.id }}/retry" onsubmit="return confirm('Retry this handover after freeing capacity? Ownership only changes if the backend checks pass.');">
@@ -107,7 +121,7 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit">Accept handover</button>
         </form>
-        <form method="POST" action="{{ url_for('reject_ownership_transfer_route', transfer_id=transfer.id) }}">
+        <form method="POST" action="{{ url_for('reject_ownership_transfer_route', transfer_id=transfer.id) }}" onsubmit="return confirm('Decline this handover? Ownership will remain with the current owner.');">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="reason" value="Recipient declined from ownership center.">
           <button type="submit" class="secondary">Decline</button>
@@ -128,6 +142,11 @@
         <strong>{{ (projects_by_id.get(transfer.project_id).name if projects_by_id.get(transfer.project_id) else 'ScanStory #' ~ transfer.project_id) }}</strong>
         <span class="status">{{ PROJECT_TRANSFER_STATUS_LABELS.get(transfer.status, transfer.status) }}</span>
         <div class="muted">Request #{{ transfer.id }} - you keep this ScanStory and its project slot until the handover finishes.</div>
+        {% if transfer.status == 'PENDING_CAPACITY' %}
+        <p class="muted">The recipient accepted, but their account still needs project and/or storage capacity. Media and QR remain intact under the current owner.</p>
+        {% elif transfer.status == 'DISPUTED' %}
+        <p class="muted">Manual review is in progress. No ownership change has completed.</p>
+        {% endif %}
         {% if transfer.status in ['PENDING_ACCEPTANCE', 'PENDING_CAPACITY'] %}
         <div class="actions">
         <form method="POST" action="{{ url_for('cancel_ownership_transfer_route', transfer_id=transfer.id) }}" onsubmit="return confirm('Withdraw this handover request? Ownership will remain unchanged.');">

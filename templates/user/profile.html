@@ -414,6 +414,12 @@
             </div>
 
             <div class="flex gap-2">
+                <a class="ss-btn ss-btn-secondary ss-btn-sm hidden sm:flex" href="{{ url_for('ownership_center') }}">
+                    <i class="fas fa-right-left" aria-hidden="true"></i> <span class="hidden md:inline">Ownership</span>
+                </a>
+                <a class="ss-btn ss-btn-secondary ss-btn-sm sm:hidden" href="{{ url_for('ownership_center') }}" aria-label="Ownership Center">
+                    <i class="fas fa-right-left" aria-hidden="true"></i>
+                </a>
                 <a class="ss-btn ss-btn-secondary ss-btn-sm hidden sm:flex" href="{{ url_for('subscribe_page') }}">
                     <i class="fas fa-crown" aria-hidden="true"></i> <span class="hidden md:inline">Upgrade</span>
                 </a>

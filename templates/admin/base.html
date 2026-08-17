@@ -207,6 +207,18 @@
         }
         .table td { border-color: var(--ss-border, rgba(255,255,255,0.08)); }
 
+        .table-responsive,
+        .table-container {
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .table-responsive > .table,
+        .table-container > .table,
+        .table-container > table {
+            min-width: 760px;
+        }
+
         .badge-admin {
             padding: 0.35rem 0.65rem;
             border-radius: 999px;

@@ -101,6 +101,7 @@
                       ('dispute', 'Dispute', 'btn-outline-warning'),
                       ('cancel', 'Cancel', 'btn-outline-danger')] %}
                   <form method="POST" class="mb-1"
+                        onsubmit="return confirm('{{ label }} transfer #{{ row.transfer.id }}? This is an ownership-affecting admin action and the backend will record the reason.');"
                         action="{{ url_for('admin_resolve_ownership_transfer', transfer_id=row.transfer.id, action=action) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="text" name="reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Reason for {{ label|lower }}">
@@ -112,6 +113,7 @@
                       ('release-dispute', 'Release dispute', 'btn-outline-secondary'),
                       ('cancel', 'Cancel', 'btn-outline-danger')] %}
                   <form method="POST" class="mb-1"
+                        onsubmit="return confirm('{{ label }} transfer #{{ row.transfer.id }}? This is an ownership-affecting admin action and the backend will record the reason.');"
                         action="{{ url_for('admin_resolve_ownership_transfer', transfer_id=row.transfer.id, action=action) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="text" name="reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Reason for {{ label|lower }}">
@@ -175,12 +177,14 @@
             <td class="text-end">
               {% if admin_can('admin.ownership.manage') %}
               {% if row.claim.status in ['OPEN', 'VENDOR_NOTIFIED', 'APPROVED_BY_VENDOR', 'PENDING_ADMIN_REVIEW'] %}
-              <form method="POST" action="{{ url_for('admin_approve_ownership_claim', claim_id=row.claim.id) }}" class="mb-1">
+              <form method="POST" action="{{ url_for('admin_approve_ownership_claim', claim_id=row.claim.id) }}" class="mb-1"
+                    onsubmit="return confirm('Approve claim #{{ row.claim.id }}? Approval opens a governed handover; ownership still changes only after acceptance and capacity checks.');">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="text" name="decision_reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Approval reason">
                 <button type="submit" class="btn btn-sm btn-outline-primary">Approve</button>
               </form>
-              <form method="POST" action="{{ url_for('admin_reject_ownership_claim', claim_id=row.claim.id) }}">
+              <form method="POST" action="{{ url_for('admin_reject_ownership_claim', claim_id=row.claim.id) }}"
+                    onsubmit="return confirm('Reject claim #{{ row.claim.id }}? The current owner remains unchanged and the decision is recorded.');">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="text" name="decision_reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Rejection reason">
                 <button type="submit" class="btn btn-sm btn-outline-danger">Reject</button>
