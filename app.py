@@ -37,7 +37,7 @@ import requests
 import click
 
 from sqlalchemy import or_, desc, func, and_, case, text, inspect
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import aliased
 
 from core.config import (
@@ -64,6 +64,8 @@ from models import (
     ContentReport, CONTENT_REPORT_REASONS, CONTENT_REPORT_STATUSES,
     CONTENT_REPORT_ACTIONS, PaymentRefund, REFUND_STATUSES,
     REFUND_RECONCILIATION_STATUSES, MediaObject,
+    PLAN_FAMILIES, PLAN_LIFECYCLE_STATUSES, PLAN_PURCHASABLE_STATUSES,
+    USER_ACCOUNT_TYPES,
 )
 import storage_accounting as _storage
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
@@ -3301,6 +3303,18 @@ def plan_family_label(family):
     return ACCOUNT_TYPE_LABELS.get(key, key)
 
 
+def purchasable_plans_query():
+    """Plans a NEW purchase may be made against - the query form of
+    SubscriptionPlan.is_purchasable, which was previously dead code: every
+    customer-facing listing filtered on is_active alone, so a DRAFT or
+    CLOSED_FOR_NEW_PURCHASE plan was still on sale. Existing subscribers are
+    untouched; this only governs what can be newly bought."""
+    return SubscriptionPlan.query.filter(
+        SubscriptionPlan.is_active.is_(True),
+        SubscriptionPlan.lifecycle_status.in_(sorted(PLAN_PURCHASABLE_STATUSES)),
+    )
+
+
 def user_entitlement_summary(user):
     """Read-only UX summary of what this account may currently do.
 
@@ -6060,7 +6074,7 @@ def _process_pair_upload_simple(project_id: int, i: int, image_file, video_file)
 @app.route("/", methods=["GET"])
 def landing():
     # Fetch only active plans for landing page, ordered by display order
-    plans = SubscriptionPlan.query.filter_by(is_active=True).order_by(SubscriptionPlan.display_order.asc()).all()
+    plans = purchasable_plans_query().order_by(SubscriptionPlan.display_order.asc()).all()
     return render_template("user/landing.html", plans=plans)
 
 @app.route("/terms")
@@ -9599,7 +9613,10 @@ def _apply_entitlement_transaction(user, entitlement_type, delta, source_type, s
 
     if entitlement_type == "EXTRA_SCANS":
         if user.subscribed_scan_limit not in (None, 0):
-            user.subscribed_scan_limit = int(user.subscribed_scan_limit or 0) + int(delta)
+            # Clamped at zero: a negative adjustment (admin revoke) lowers the
+            # allowance but must never drive the materialized column negative,
+            # which _limit_reached would read as "unlimited".
+            user.subscribed_scan_limit = max(0, int(user.subscribed_scan_limit or 0) + int(delta))
     elif entitlement_type == "VALIDITY_EXTENSION":
         base = user.subscription_expires_at if user.subscription_expires_at and user.subscription_expires_at > now else now
         user.subscription_expires_at = base + timedelta(days=int(delta))
@@ -9609,8 +9626,9 @@ def _apply_entitlement_transaction(user, entitlement_type, delta, source_type, s
         # Reusable account-level slot capacity, never a one-use creation
         # token: it raises the materialized effective limit and the ledger row
         # above is the permanent audit trail (never deleted on lapse).
+        # Clamped at zero for the same reason EXTRA_SCANS is.
         if user.subscribed_project_limit not in (None, 0):
-            user.subscribed_project_limit = int(user.subscribed_project_limit or 0) + int(delta)
+            user.subscribed_project_limit = max(0, int(user.subscribed_project_limit or 0) + int(delta))
     elif entitlement_type == "ACCOUNT_STORAGE":
         # Nothing materialized to bump: the effective storage allowance is
         # composed at read time by get_effective_entitlements() from plan base +
@@ -10341,7 +10359,7 @@ def report_project_content(project_id):
 @app.route("/pricing")
 def pricing_page():
     """Public pricing page — no login required. Passes user=None for guests."""
-    plans = SubscriptionPlan.query.filter_by(is_active=True).order_by(SubscriptionPlan.display_order.asc()).all()
+    plans = purchasable_plans_query().order_by(SubscriptionPlan.display_order.asc()).all()
     user = current_user()  # None for guests, User object if logged in
     return render_template(
         "user/subscribe.html",
@@ -10359,7 +10377,7 @@ def pricing_page():
 def subscribe_page():
     """Show subscription plans"""
     user = current_user()
-    plans = SubscriptionPlan.query.filter_by(is_active=True).order_by(SubscriptionPlan.display_order.asc()).all()
+    plans = purchasable_plans_query().order_by(SubscriptionPlan.display_order.asc()).all()
     
     return render_template("user/subscribe.html", 
                          plans=plans, 
@@ -10567,7 +10585,10 @@ def create_razorpay_order():
         return jsonify({"success": False, "error": "Plan ID required"})
 
     plan = SubscriptionPlan.query.get(plan_id)
-    if not plan or not plan.is_active or plan.is_trial_plan:
+    # is_purchasable folds in the Wave 2 lifecycle gate on top of is_active, so
+    # a DRAFT / CLOSED_FOR_NEW_PURCHASE / ARCHIVED plan can no longer be bought
+    # by posting its id directly at this endpoint.
+    if not plan or not plan.is_purchasable or plan.is_trial_plan:
         return jsonify({"success": False, "error": "Invalid plan"})
 
     # Check if Razorpay is configured
@@ -13443,321 +13464,355 @@ def admin_project_preview(project_id):
                          project=project,
                          pairs=pairs,
                          is_admin=True)
+# --------------------------------------------------------------------------------------------
+# Admin Routes - Plan catalogue governance (Wave 5)
+#
+# Wave 2 added the real commercial policy columns to SubscriptionPlan
+# (plan_family, lifecycle_status, plan_revision, per-file media policy,
+# base_storage_bytes, per-experience entitlements) and plans.html renders them,
+# but the Admin FORMS never wrote a single one of them and the add/edit routes
+# accepted any number, including negatives. One shared parser now governs both
+# routes so a plan cannot be created through one door that the other would
+# reject.
+# --------------------------------------------------------------------------------------------
+_PLAN_UNSET = object()
+
+# Fields that describe WHAT WAS SOLD. Changing any of them bumps plan_revision
+# so a PaymentOrder policy snapshot stays traceable to the definition it was
+# sold under. Presentation-only fields (name, description, features, ordering,
+# popularity) deliberately do NOT bump it.
+PLAN_REVISION_TRACKED_FIELDS = (
+    "plan_family", "lifecycle_status", "plan_amount", "offer_price", "currency",
+    "duration_type", "duration_value", "trial_days", "total_project_limit",
+    "total_scan_limit", "max_pairs_per_project", "max_image_bytes",
+    "max_video_bytes", "max_video_duration_seconds", "max_image_dimension_px",
+    "max_image_pixels", "base_storage_bytes", "allow_direct_qr",
+    "allow_detect_once", "allow_tracked_overlay",
+)
+PLAN_DURATION_TYPES = ("time", "count")
+
+
+def _plan_number_field(form, field, cast=int, minimum=0):
+    """(value, error). _PLAN_UNSET when the field was not submitted at all, so
+    an older or partial form can never blank a column it does not render."""
+    if field not in form:
+        return _PLAN_UNSET, None
+    raw = (form.get(field) or "").strip()
+    if raw == "" or raw.lower() == "unlimited":
+        return None, None
+    try:
+        value = cast(raw)
+    except (TypeError, ValueError):
+        return None, f"{field.replace('_', ' ').capitalize()} must be a number."
+    if minimum is not None and value < minimum:
+        return None, f"{field.replace('_', ' ').capitalize()} cannot be less than {minimum}."
+    return value, None
+
+
+def _plan_form_values(form, existing=None):
+    """Parse and validate the Admin plan form. Returns (values, error).
+
+    Only keys actually present in the submitted form appear in `values`, so an
+    edit never silently resets a column the form did not render.
+    """
+    values = {}
+
+    plan_name = (form.get("plan_name") or "").strip()
+    if existing is None and not plan_name:
+        return None, "Plan name is required."
+    if plan_name:
+        values["plan_name"] = plan_name
+    if "plan_description" in form:
+        values["plan_description"] = (form.get("plan_description") or "").strip() or None
+
+    if "currency" in form:
+        values["currency"] = (form.get("currency") or "INR").strip().upper()[:10] or "INR"
+
+    if "duration_type" in form:
+        duration_type = (form.get("duration_type") or "").strip().lower()
+        if duration_type not in PLAN_DURATION_TYPES:
+            return None, "Unsupported duration type."
+        values["duration_type"] = duration_type
+
+    if "plan_family" in form:
+        plan_family = (form.get("plan_family") or "").strip().upper()
+        if plan_family not in PLAN_FAMILIES:
+            return None, "Unsupported plan family."
+        values["plan_family"] = plan_family
+
+    if "lifecycle_status" in form:
+        lifecycle_status = (form.get("lifecycle_status") or "").strip().upper()
+        if lifecycle_status not in PLAN_LIFECYCLE_STATUSES:
+            return None, "Unsupported plan lifecycle status."
+        values["lifecycle_status"] = lifecycle_status
+
+    numeric_fields = (
+        ("plan_amount", float, 0),
+        ("offer_price", float, 0),
+        ("duration_value", int, 1),
+        ("trial_days", int, 0),
+        ("display_order", int, 0),
+        ("max_video_duration_seconds", int, 1),
+        ("max_image_dimension_px", int, 1),
+        ("max_image_bytes", int, 1),
+        ("max_video_bytes", int, 1),
+        ("max_image_pixels", int, 1),
+        ("base_storage_bytes", int, 0),
+    )
+    for field, cast, minimum in numeric_fields:
+        value, error = _plan_number_field(form, field, cast=cast, minimum=minimum)
+        if error:
+            return None, error
+        if value is not _PLAN_UNSET:
+            values[field] = value
+
+    # Unlimited checkboxes keep their long-standing meaning: NULL column.
+    for field, unlimited_field in (
+        ("total_project_limit", "unlimited_projects"),
+        ("total_scan_limit", "unlimited_scans"),
+    ):
+        if form.get(unlimited_field) == "on":
+            values[field] = None
+            continue
+        value, error = _plan_number_field(form, field, cast=int, minimum=0)
+        if error:
+            return None, error
+        if value is not _PLAN_UNSET:
+            values[field] = value
+
+    pairs_raw = (form.get("max_pairs_per_project") or "").strip()
+    if existing is None or pairs_raw or "max_pairs_per_project" in form:
+        if not pairs_raw:
+            return None, "Pairs allowed per project is required and must be a positive integer."
+        try:
+            pairs_value = int(pairs_raw)
+        except (TypeError, ValueError):
+            return None, "Pairs allowed per project must be a positive integer."
+        if pairs_value < 1:
+            return None, "Pairs allowed per project must be a positive integer."
+        values["max_pairs_per_project"] = pairs_value
+
+    if "features" in form:
+        features = (form.get("features") or "").strip()
+        values["features_json"] = json.dumps([f.strip() for f in features.split("\n") if f.strip()])
+
+    # Checkbox groups. An unchecked box is simply absent from a POST, so each
+    # group carries a hidden marker; without the marker the existing values are
+    # left alone rather than silently cleared.
+    if form.get("plan_flags_form"):
+        values["is_popular"] = form.get("is_popular") == "on"
+        values["is_active"] = form.get("is_active") == "on"
+    if form.get("plan_experience_form"):
+        values["allow_direct_qr"] = form.get("allow_direct_qr") == "on"
+        values["allow_detect_once"] = form.get("allow_detect_once") == "on"
+        values["allow_tracked_overlay"] = form.get("allow_tracked_overlay") == "on"
+        if not any(
+            values[flag] for flag in ("allow_direct_qr", "allow_detect_once", "allow_tracked_overlay")
+        ):
+            return None, "A plan must allow at least one experience."
+
+    offer = values.get("offer_price", getattr(existing, "offer_price", None))
+    amount = values.get("plan_amount", getattr(existing, "plan_amount", None))
+    if offer is not None and amount is not None and float(offer) > float(amount):
+        return None, "Offer price cannot exceed the plan amount."
+
+    return values, None
+
+
+def _apply_plan_values(plan, values):
+    """Write parsed values onto a plan and report whether commercial policy moved."""
+    changed_policy = False
+    for key, value in values.items():
+        if key in PLAN_REVISION_TRACKED_FIELDS and getattr(plan, key, None) != value:
+            changed_policy = True
+        setattr(plan, key, value)
+    return changed_policy
+
+
 @app.route("/admin/plans/add", methods=["GET", "POST"])
 @require_admin_permission("superadmin.plans.manage")
 def admin_add_plan():
     admin = current_admin()
-    
-    if request.method == "GET":
+
+    def _render(error=None):
+        if error:
+            flash(error, "error")
         return render_template(
             "admin/add_plan.html",
             admin=admin,
             v11_experience_options=V11_EXPERIENCE_PRESENTATION,
+            plan_families=sorted(PLAN_FAMILIES),
+            plan_lifecycle_statuses=sorted(PLAN_LIFECYCLE_STATUSES),
         )
-    
+
+    if request.method == "GET":
+        return _render()
+
+    values, error = _plan_form_values(request.form)
+    if error:
+        return _render(error)
+
     try:
-        # Get form data with proper handling
-        plan_name = (request.form.get("plan_name") or "").strip()
-        
-        # Handle description (optional)
-        plan_description = (request.form.get("plan_description") or "").strip()
-        
-        # Handle amount (optional)
-        plan_amount_str = request.form.get("plan_amount", "").strip()
-        plan_amount = float(plan_amount_str) if plan_amount_str else 0
-        
-        # Handle offer price (optional)
-        offer_price_str = request.form.get("offer_price", "").strip()
-        offer_price = float(offer_price_str) if offer_price_str else None
-        
-        # Handle currency
-        currency = request.form.get("currency", "INR")
-        
-        # Handle duration
-        duration_type = request.form.get("duration_type", "time")
-        duration_value_str = request.form.get("duration_value", "").strip()
-        duration_value = int(duration_value_str) if duration_value_str else None
-        
-        # Handle trial days (NEW)
-        trial_days_str = request.form.get("trial_days", "").strip()
-        trial_days = int(trial_days_str) if trial_days_str else None
-        
-        # Handle project limit (optional) - Store None for unlimited
-        project_limit_str = request.form.get("total_project_limit", "").strip()
-        unlimited_project = request.form.get("unlimited_projects") == "on"
-        
-        if unlimited_project:
-            total_project_limit = None  # NULL in database for unlimited
-        elif project_limit_str and project_limit_str.lower() != "unlimited":
-            total_project_limit = int(project_limit_str)
-        else:
-            total_project_limit = None  # NULL for unlimited
-        
-        # Handle scan limit (optional) - Store None for unlimited
-        scan_limit_str = request.form.get("total_scan_limit", "").strip()
-        unlimited_scan = request.form.get("unlimited_scans") == "on"
-        
-        if unlimited_scan:
-            total_scan_limit = None  # NULL in database for unlimited
-        elif scan_limit_str and scan_limit_str.lower() != "unlimited":
-            total_scan_limit = int(scan_limit_str)
-        else:
-            total_scan_limit = None  # NULL for unlimited
-
-        # Handle pairs allowed per project (required)
-        pairs_limit_str = request.form.get("max_pairs_per_project", "").strip()
-        if not pairs_limit_str:
-            flash("Pairs allowed per project is required and must be a positive integer.", "error")
-            return render_template(
-                "admin/add_plan.html",
-                admin=admin,
-                v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-            )
-
-        try:
-            max_pairs_per_project = int(pairs_limit_str)
-            if max_pairs_per_project < 1:
-                raise ValueError()
-        except ValueError:
-            flash("Pairs allowed per project must be a positive integer.", "error")
-            return render_template(
-                "admin/add_plan.html",
-                admin=admin,
-                v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-            )
-        
-        # Handle features
-        features = request.form.get("features", "").strip()
-        if features:
-            features_list = [f.strip() for f in features.split("\n") if f.strip()]
-        else:
-            features_list = []
-        
-        # Handle checkboxes
-        is_popular = request.form.get("is_popular") == "on"
-        is_active = request.form.get("is_active") == "on"
-        
-        # Handle display order
-        display_order_str = request.form.get("display_order", "").strip()
-        display_order = int(display_order_str) if display_order_str else 0
-        
-        # Create plan
-        plan = SubscriptionPlan(
-            plan_name=plan_name,
-            plan_description=plan_description,
-            max_pairs_per_project=max_pairs_per_project,
-            plan_amount=plan_amount,
-            offer_price=offer_price,
-            currency=currency,
-            duration_type=duration_type,
-            duration_value=duration_value,
-            trial_days=trial_days,
-            total_project_limit=total_project_limit,
-            total_scan_limit=total_scan_limit,
-            features_json=json.dumps(features_list),
-            is_popular=is_popular,
-            is_active=is_active,
-            display_order=display_order,
-            created_by=admin.id
-        )
-        
+        plan = SubscriptionPlan(created_by=admin.id)
+        _apply_plan_values(plan, values)
         db.session.add(plan)
         db.session.commit()
-        
-        # Log activity
-        log_admin_activity(admin.id, "plan_add", f"Added new plan: {plan_name}")
-        
-        flash("Plan created successfully.", "success")
-        return redirect(url_for("admin_plans"))
-        
-    except Exception as e:
-        print(f"❌ Error in admin_add_plan: {e}")
-        import traceback
-        traceback.print_exc()
+    except (ValueError, SQLAlchemyError) as exc:
         db.session.rollback()
-        flash(f"Error creating plan: {str(e)}", "error")
-        return render_template(
-            "admin/add_plan.html",
-            admin=admin,
-            v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-        )
+        app.logger.warning("admin_add_plan rejected: %s", exc)
+        return _render("Plan configuration was rejected. Check the values and try again.")
+
+    log_admin_activity(
+        admin.id,
+        "plan_add",
+        f"Added plan {plan.id} ({plan.plan_name}) family={plan.plan_family} "
+        f"lifecycle={plan.lifecycle_status} rev={plan.plan_revision}",
+    )
+    db.session.commit()
+    flash("Plan created successfully.", "success")
+    return redirect(url_for("admin_plans"))
 
 
 @app.route("/admin/plans/<int:plan_id>/edit", methods=["GET", "POST"])
 @require_admin_permission("superadmin.plans.manage")
 def admin_edit_plan(plan_id):
+    admin = current_admin()
+    plan = SubscriptionPlan.query.get_or_404(plan_id)
+
+    if request.method == "GET":
+        return render_template(
+            "admin/edit_plan.html",
+            admin=admin,
+            plan=plan,
+            v11_experience_options=V11_EXPERIENCE_PRESENTATION,
+            plan_families=sorted(PLAN_FAMILIES),
+            plan_lifecycle_statuses=sorted(PLAN_LIFECYCLE_STATUSES),
+        )
+
+    values, error = _plan_form_values(request.form, existing=plan)
+    if error:
+        flash(error, "error")
+        return redirect(url_for("admin_edit_plan", plan_id=plan.id))
+
+    before = {key: getattr(plan, key, None) for key in PLAN_REVISION_TRACKED_FIELDS}
     try:
-        admin = current_admin()
-        plan = SubscriptionPlan.query.get_or_404(plan_id)
-        
-        if request.method == "GET":
-            return render_template(
-                "admin/edit_plan.html",
-                admin=admin,
-                plan=plan,
-                v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-            )
-        
-        # Get form data with proper handling of empty values
-        plan_name = (request.form.get("plan_name") or "").strip()
-        if plan_name:
-            plan.plan_name = plan_name
-        
-        description = (request.form.get("plan_description") or "").strip()
-        if description:
-            plan.plan_description = description
-        
-        # Handle amount (optional)
-        plan_amount_str = request.form.get("plan_amount", "").strip()
-        if plan_amount_str:
-            try:
-                plan.plan_amount = float(plan_amount_str)
-            except ValueError:
-                pass
-        
-        # Handle offer price (optional)
-        offer_price_str = request.form.get("offer_price", "").strip()
-        if offer_price_str:
-            try:
-                plan.offer_price = float(offer_price_str)
-            except ValueError:
-                pass
-        
-        # Handle duration type and value
-        duration_type = request.form.get("duration_type")
-        if duration_type:
-            plan.duration_type = duration_type
-        duration_value_str = request.form.get("duration_value", "").strip()
-        if duration_value_str:
-            try:
-                plan.duration_value = int(duration_value_str)
-            except ValueError:
-                pass
-        
-        # Handle trial days
-        trial_days_str = request.form.get("trial_days", "").strip()
-        if trial_days_str:
-            try:
-                plan.trial_days = int(trial_days_str)
-            except ValueError:
-                pass
-        
-        # Handle project limit (optional) - Store None for unlimited
-        project_limit_str = request.form.get("total_project_limit", "").strip()
-        unlimited_project = request.form.get("unlimited_projects") == "on"
-        
-        if unlimited_project:
-            plan.total_project_limit = None  # NULL for unlimited
-        elif project_limit_str and project_limit_str.lower() != "unlimited":
-            try:
-                plan.total_project_limit = int(project_limit_str)
-            except ValueError:
-                pass
-        
-        # Handle scan limit (optional) - Store None for unlimited
-        scan_limit_str = request.form.get("total_scan_limit", "").strip()
-        unlimited_scan = request.form.get("unlimited_scans") == "on"
-        
-        if unlimited_scan:
-            plan.total_scan_limit = None  # NULL for unlimited
-        elif scan_limit_str and scan_limit_str.lower() != "unlimited":
-            try:
-                plan.total_scan_limit = int(scan_limit_str)
-            except ValueError:
-                pass
-
-        # Handle pairs allowed per project (required)
-        pairs_limit_str = request.form.get("max_pairs_per_project", "").strip()
-        if not pairs_limit_str:
-            flash("Pairs allowed per project is required and must be a positive integer.", "error")
-            return redirect(url_for("admin_edit_plan", plan_id=plan.id))
-
-        try:
-            parsed_pairs = int(pairs_limit_str)
-            if parsed_pairs < 1:
-                raise ValueError()
-            plan.max_pairs_per_project = parsed_pairs
-        except ValueError:
-            flash("Pairs allowed per project must be a positive integer.", "error")
-            return redirect(url_for("admin_edit_plan", plan_id=plan.id))
-        
-        # Handle features (optional)
-        features = request.form.get("features", "").strip()
-        if features:
-            features_list = [f.strip() for f in features.split("\n") if f.strip()]
-            plan.features_json = json.dumps(features_list)
-        
-        # Handle checkboxes
-        plan.is_popular = request.form.get("is_popular") == "on"
-        plan.is_active = request.form.get("is_active") == "on"
-        
-        # Handle display order
-        display_order_str = request.form.get("display_order", "").strip()
-        if display_order_str:
-            try:
-                plan.display_order = int(display_order_str)
-            except ValueError:
-                pass
-        
+        # Historical commercial contracts are NOT touched: PaymentOrder carries
+        # its own policy snapshot taken at activation, so editing the live plan
+        # can never rewrite what a past customer bought. The revision bump is
+        # what makes the two distinguishable afterwards.
+        if _apply_plan_values(plan, values):
+            plan.plan_revision = int(plan.plan_revision or 1) + 1
         db.session.commit()
-        
-        # Log activity
-        log_admin_activity(admin.id, "plan_edit", f"Edited plan: {plan.plan_name}")
-        
-        flash("Plan updated successfully.", "success")
-        return redirect(url_for("admin_plans"))
-        
-    except Exception as e:
-        print(f"❌ Error in admin_edit_plan: {e}")
-        import traceback
-        traceback.print_exc()
-        flash(f"Error updating plan: {str(e)}", "error")
-        return redirect(url_for("admin_plans"))
+    except (ValueError, SQLAlchemyError) as exc:
+        db.session.rollback()
+        app.logger.warning("admin_edit_plan rejected for plan %s: %s", plan_id, exc)
+        flash("Plan configuration was rejected. Check the values and try again.", "error")
+        return redirect(url_for("admin_edit_plan", plan_id=plan_id))
+
+    moved = [
+        f"{key}: {before[key]} -> {getattr(plan, key, None)}"
+        for key in PLAN_REVISION_TRACKED_FIELDS
+        if before[key] != getattr(plan, key, None)
+    ]
+    log_admin_activity(
+        admin.id,
+        "plan_edit",
+        f"Edited plan {plan.id} ({plan.plan_name}) rev={plan.plan_revision}"
+        + (f"; {'; '.join(moved)[:400]}" if moved else "; presentation only"),
+    )
+    db.session.commit()
+    flash("Plan updated successfully.", "success")
+    return redirect(url_for("admin_plans"))
+
+
+def plan_commercial_references(plan):
+    """Everything that would be orphaned by hard-deleting this plan."""
+    return {
+        "subscribers": User.query.filter_by(subscription_id=plan.id).count(),
+        "pending_changes": User.query.filter_by(pending_plan_id=plan.id).count(),
+        "payment_orders": PaymentOrder.query.filter_by(plan_id=plan.id).count(),
+    }
+
 
 @app.route("/admin/plans/<int:plan_id>/delete", methods=["POST"])
 @require_admin_permission("superadmin.plans.manage")
 def admin_delete_plan(plan_id):
-    try:
-        print(f"🔍 DELETE ROUTE CALLED for plan_id: {plan_id}")
-        admin = current_admin()
-        plan = SubscriptionPlan.query.get_or_404(plan_id)
-        print(f"🔍 Plan found: {plan.plan_name}")
-        
-        # Check if plan is in use
-        user_count = User.query.filter_by(subscription_id=plan.id).count()
-        if user_count > 0:
-            flash(f"Cannot delete plan. It is currently used by {user_count} users.", "error")
-            return redirect(url_for("admin_plans"))
-        
-        # Log activity before deletion
-        log_admin_activity(admin.id, "plan_delete", f"Deleted plan: {plan.plan_name}")
-        
-        db.session.delete(plan)
-        db.session.commit()
-        
-        flash("Plan deleted successfully.", "success")
+    """Hard delete only for a plan nothing commercial has ever referenced.
+
+    The pre-Wave-5 check looked at User.subscription_id alone, so a plan whose
+    every subscriber had since moved on could still be deleted out from under
+    the PaymentOrder rows that reference it by id - destroying the audit trail
+    for money already taken. Referenced plans are archived instead.
+    """
+    admin = current_admin()
+    plan = SubscriptionPlan.query.get_or_404(plan_id)
+    references = plan_commercial_references(plan)
+    if any(references.values()):
+        detail = ", ".join(f"{count} {name.replace('_', ' ')}" for name, count in references.items() if count)
+        flash(
+            f"Cannot delete this plan: {detail} still reference it. "
+            "Archive it instead - archiving stops new purchases and keeps history intact.",
+            "error",
+        )
         return redirect(url_for("admin_plans"))
-    except Exception as e:
-        print(f"❌ Error in delete route: {e}")
-        import traceback
-        traceback.print_exc()
-        flash(f"Error deleting plan: {str(e)}", "error")
-        return redirect(url_for("admin_plans"))
+
+    log_admin_activity(admin.id, "plan_delete", f"Deleted unreferenced plan {plan.id} ({plan.plan_name})")
+    db.session.delete(plan)
+    db.session.commit()
+    flash("Plan deleted successfully.", "success")
+    return redirect(url_for("admin_plans"))
+
 
 @app.route("/admin/plans/<int:plan_id>/toggle-status", methods=["POST"])
 @require_admin_permission("superadmin.plans.manage")
 def admin_toggle_plan_status(plan_id):
     admin = current_admin()
     plan = SubscriptionPlan.query.get_or_404(plan_id)
-    
+
     plan.is_active = not plan.is_active
     db.session.commit()
-    
-    # Log activity
+
     status = "activated" if plan.is_active else "deactivated"
-    log_admin_activity(admin.id, "plan_toggle", f"{status} plan: {plan.plan_name}")
-    
+    log_admin_activity(admin.id, "plan_toggle", f"{status} plan {plan.id} ({plan.plan_name})")
+    db.session.commit()
+
     flash(f"Plan {status} successfully.", "success")
+    return redirect(url_for("admin_plans"))
+
+
+@app.route("/admin/plans/<int:plan_id>/lifecycle", methods=["POST"])
+@require_admin_permission("superadmin.plans.manage")
+def admin_set_plan_lifecycle(plan_id):
+    """Move a plan along its lifecycle without touching anything else.
+
+    ARCHIVED / CLOSED_FOR_NEW_PURCHASE are non-destructive by construction:
+    they only stop NEW purchases (SubscriptionPlan.is_purchasable). Existing
+    subscribers keep their term, their projects, their media and their QR
+    codes, and their entitlements keep resolving from the same plan row.
+    """
+    admin = current_admin()
+    plan = SubscriptionPlan.query.get_or_404(plan_id)
+    lifecycle_status = (request.form.get("lifecycle_status") or "").strip().upper()
+    if lifecycle_status not in PLAN_LIFECYCLE_STATUSES:
+        flash("Unsupported plan lifecycle status.", "error")
+        return redirect(url_for("admin_plans"))
+
+    previous = plan.lifecycle_status
+    if previous == lifecycle_status:
+        flash("Plan lifecycle status is already set to that value.", "info")
+        return redirect(url_for("admin_plans"))
+
+    plan.lifecycle_status = lifecycle_status
+    plan.plan_revision = int(plan.plan_revision or 1) + 1
+    db.session.commit()
+    log_admin_activity(
+        admin.id,
+        "plan_lifecycle_change",
+        f"Plan {plan.id} ({plan.plan_name}) lifecycle {previous} -> {lifecycle_status} "
+        f"rev={plan.plan_revision}",
+    )
+    db.session.commit()
+    flash(f"Plan lifecycle set to {lifecycle_status}.", "success")
     return redirect(url_for("admin_plans"))
 
 # --------------------------------------------------------------------------------------------
@@ -13832,6 +13887,18 @@ def _addon_catalog_form_values(form, existing=None):
         return None, "Unsupported add-on type."
     if delta <= 0:
         return None, "This add-on type needs a positive quantity for its effect field."
+
+    # An already-purchased catalog row is a commercial contract, not a draft.
+    # Refund reconciliation re-reads item.addon_type to decide how to reverse
+    # the entitlement, so repointing the type of a sold SKU would reverse the
+    # WRONG entitlement (or hit the manual-review branch) on every historical
+    # purchase. Everything else about the row stays freely editable.
+    if existing is not None and addon_type != existing.addon_type:
+        if AddonPurchase.query.filter_by(catalog_id=existing.id).first():
+            return None, (
+                "This add-on has already been purchased; its type can no longer be changed. "
+                "Deactivate it and create a new add-on instead."
+            )
 
     duplicate = AddonCatalog.query.filter(AddonCatalog.code == code)
     if existing is not None:
@@ -14307,6 +14374,59 @@ def admin_refund_detail(refund_id):
     refund = PaymentRefund.query.get_or_404(refund_id)
     return jsonify({"success": True, "refund": _payment_refund_payload(refund)})
 
+
+@app.route("/admin/api/refunds", methods=["GET"])
+@require_admin_permission("admin.payments.view")
+def admin_refund_list():
+    """Operational refund inspection.
+
+    Refund scope is unchanged (admin-only, full refunds only). The only gap
+    this closes is visibility: a refund whose provider call succeeded but whose
+    entitlement reconciliation FAILED or needs MANUAL_REVIEW was reachable only
+    if an operator already knew the refund id. Read-only, no state changes.
+    """
+    query = PaymentRefund.query
+    status = (request.args.get("status") or "").strip().upper()
+    if status:
+        if status not in REFUND_STATUSES:
+            return jsonify({"success": False, "code": "INVALID_STATUS", "error": "Unknown refund status."}), 400
+        query = query.filter(PaymentRefund.status == status)
+
+    reconciliation_status = (request.args.get("reconciliation_status") or "").strip().upper()
+    if reconciliation_status:
+        if reconciliation_status not in REFUND_RECONCILIATION_STATUSES:
+            return jsonify({
+                "success": False,
+                "code": "INVALID_RECONCILIATION_STATUS",
+                "error": "Unknown reconciliation status.",
+            }), 400
+        query = query.filter(PaymentRefund.reconciliation_status == reconciliation_status)
+
+    if request.args.get("needs_attention") in ("1", "true", "True"):
+        query = query.filter(
+            or_(
+                PaymentRefund.status == "REFUND_FAILED",
+                PaymentRefund.reconciliation_status.in_(("PENDING", "FAILED", "MANUAL_REVIEW_REQUIRED")),
+            )
+        )
+
+    user_id = request.args.get("user_id", type=int)
+    if user_id:
+        query = query.filter(PaymentRefund.user_id == user_id)
+
+    pagination = query.order_by(PaymentRefund.id.desc()).paginate(
+        page=max(request.args.get("page", 1, type=int), 1),
+        per_page=admin_page_size(),
+        error_out=False,
+    )
+    return jsonify({
+        "success": True,
+        "refunds": [_payment_refund_payload(r) for r in pagination.items],
+        "page": pagination.page,
+        "pages": pagination.pages,
+        "total": pagination.total,
+    })
+
 def _safe_display_filename(value):
     if not value:
         return "Not stored"
@@ -14538,10 +14658,29 @@ def admin_view_project(project_id):
         .all()
     )
 
+    # Coverage administration (Wave 5). Read-only inspection of the same
+    # ProjectServiceCoverage rows the resolver reads: source, window, status
+    # and who granted it, next to the resolved live/renewal state. Nothing here
+    # mutates coverage - the only admin grant path stays the POST route.
+    coverage_rows = (
+        ProjectServiceCoverage.query
+        .filter_by(project_id=project.id)
+        .order_by(ProjectServiceCoverage.coverage_start.desc(), ProjectServiceCoverage.id.desc())
+        .limit(25)
+        .all()
+    )
+    # CURRENT owner drives commercial responsibility after a Wave 4 transfer;
+    # the creator stays visible separately as history and is never overwritten.
+    creator_id = project_created_by_user_id(project)
+
     return render_template("admin/view_project.html",
                          admin=admin,
                          project=project,
                          owner=owner,
+                         coverage=project_coverage_summary(project),
+                         coverage_rows=coverage_rows,
+                         ownership=project_ownership_context(project, None),
+                         creator=User.query.get(creator_id) if creator_id else None,
                          pairs=pairs,
                          pair_count=pair_count,
                          scan_history=scan_history,
@@ -15059,27 +15198,22 @@ def admin_grant_extra_scans(user_id):
     user = User.query.get_or_404(user_id)
     
     extra_scans = request.form.get("extra_scans", type=int, default=0)
-    
-    if extra_scans <= 0:
-        flash("Please enter a positive number of scans.", "error")
-        return redirect(url_for("admin_user_scans", user_id=user_id))
 
-    # Admin grants are now auditable ledger rows, not a bare += on the
-    # materialized column. Without the ledger row the grant was erased by the
-    # next plan activation (reconciled_scan_limit rebuilds the column from
-    # plan + ledger). source_type keeps it distinguishable from purchased
-    # entitlement in the resolver, so neither can silently overwrite the other.
-    activity = log_admin_activity(
-        admin.id, "extra_scans_grant", f"Granted {extra_scans} extra scans to {user.email}"
-    )
-    _apply_entitlement_transaction(
-        user,
-        "EXTRA_SCANS",
-        extra_scans,
-        source_type=_ent.ADMIN_GRANT_SOURCE_TYPE,
-        source_id=activity.id,
-        reason=f"admin_grant_extra_scans:admin={admin.id}",
-    )
+    # Admin grants are auditable ledger rows, not a bare += on the materialized
+    # column. Without the ledger row the grant was erased by the next plan
+    # activation (reconciled_scan_limit rebuilds the column from plan + ledger).
+    # source_type keeps it distinguishable from purchased entitlement in the
+    # resolver, so neither can silently overwrite the other. A NEGATIVE amount
+    # is a governed revoke: it lowers the allowance and deletes nothing.
+    try:
+        grant_account_entitlement(
+            admin, user, "EXTRA_SCANS", extra_scans,
+            reason=(request.form.get("reason") or "").strip() or None,
+        )
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("admin_user_scans", user_id=user_id))
     if user.subscription_status == "limit_reached" and (
         user.subscribed_scan_limit in (None, 0) or user.remaining_scans > 0
     ):
@@ -15087,56 +15221,146 @@ def admin_grant_extra_scans(user_id):
     db.session.commit()
 
 
-    flash(f"Granted {extra_scans} extra scans to user.", "success")
+    verb = "Granted" if extra_scans > 0 else "Revoked"
+    flash(f"{verb} {abs(extra_scans)} extra scans for user.", "success")
     return redirect(url_for("admin_user_scans", user_id=user_id))
 
 
-def grant_account_storage(admin, user, delta_bytes, reason=None):
-    """Governed admin storage grant. Positive grants, negative revokes.
+# Reusable account-level capacity an admin may grant or revoke directly.
+# activity_type per entitlement so AdminActivity stays greppable per product.
+ADMIN_GRANTABLE_ENTITLEMENTS = {
+    "ACCOUNT_STORAGE": ("account_storage_grant", "storage bytes"),
+    "PROJECT_CAPACITY": ("project_capacity_grant", "project slots"),
+    "EXTRA_SCANS": ("extra_scans_grant", "scans"),
+}
 
-    Reuses the ledger mechanism admin scan/project grants already use, so the
-    three storage sources stay separately auditable: source_type='admin_grant'
-    here, 'addon_purchase'/'refund' for anything the customer paid for, and the
-    plan's own base_storage_bytes. Neither can overwrite the other because
+
+def grant_account_entitlement(admin, user, entitlement_type, delta, reason=None):
+    """Governed admin entitlement adjustment. Positive grants, negative revokes.
+
+    One ledger mechanism for every reusable account-level capacity, so the
+    sources stay separately auditable: source_type='admin_grant' here,
+    'addon_purchase'/'refund' for anything the customer paid for, and the plan's
+    own base allowance. None can overwrite another because
     get_effective_entitlements() sums them independently.
 
-    REVOCATION NEVER DELETES MEDIA. A negative delta only lowers the allowance;
-    if that puts the account over storage, existing content keeps working and
-    only new consumption is blocked.
+    REVOCATION IS NEVER DESTRUCTIVE. A negative delta only lowers the allowance;
+    no project, media object or QR code is touched. If the account ends up over
+    capacity, existing content keeps working and only NEW consumption is blocked.
     """
-    delta = int(delta_bytes or 0)
+    if entitlement_type not in ADMIN_GRANTABLE_ENTITLEMENTS:
+        raise ValueError("Unsupported entitlement type for an admin grant.")
+    delta = int(delta or 0)
     if delta == 0:
-        raise ValueError("Storage grant must be a non-zero number of bytes.")
+        raise ValueError("An entitlement adjustment must be a non-zero amount.")
+    activity_type, unit = ADMIN_GRANTABLE_ENTITLEMENTS[entitlement_type]
     verb = "Granted" if delta > 0 else "Revoked"
     activity = log_admin_activity(
-        admin.id, "account_storage_grant",
-        f"{verb} {abs(delta)} storage bytes for {user.email}",
+        admin.id, activity_type,
+        f"{verb} {abs(delta)} {unit} for {user.email}" + (f": {reason}" if reason else ""),
     )
     tx, _replay = _apply_entitlement_transaction(
         user,
-        "ACCOUNT_STORAGE",
+        entitlement_type,
         delta,
         source_type=_ent.ADMIN_GRANT_SOURCE_TYPE,
         source_id=activity.id,
-        reason=reason or f"admin_grant_account_storage:admin={admin.id}",
+        reason=reason or f"admin_grant_{entitlement_type.lower()}:admin={admin.id}",
     )
     return tx
 
 
-@app.route("/admin/users/<int:user_id>/grant-storage", methods=["POST"])
-@require_admin_permission("admin.users.manage")
-def admin_grant_account_storage(user_id):
+def grant_account_storage(admin, user, delta_bytes, reason=None):
+    """Kept as the storage-shaped entry point Wave 3 callers already use."""
+    return grant_account_entitlement(admin, user, "ACCOUNT_STORAGE", delta_bytes, reason)
+
+
+def _admin_entitlement_adjust_route(user_id, entitlement_type, amount_field, success_message):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
-    delta_bytes = request.form.get("storage_bytes", type=int, default=0)
+    delta = request.form.get(amount_field, type=int, default=0)
     try:
-        grant_account_storage(admin, user, delta_bytes, reason=(request.form.get("reason") or "").strip() or None)
+        grant_account_entitlement(
+            admin, user, entitlement_type, delta,
+            reason=(request.form.get("reason") or "").strip() or None,
+        )
     except ValueError as exc:
         db.session.rollback()
         flash(str(exc), "error")
         return redirect(url_for("admin_view_user", user_id=user_id))
     db.session.commit()
-    flash("Account storage entitlement updated.", "success")
+    flash(success_message, "success")
+    return redirect(url_for("admin_view_user", user_id=user_id))
+
+
+@app.route("/admin/users/<int:user_id>/grant-storage", methods=["POST"])
+@require_admin_permission("admin.users.manage")
+def admin_grant_account_storage(user_id):
+    return _admin_entitlement_adjust_route(
+        user_id, "ACCOUNT_STORAGE", "storage_bytes", "Account storage entitlement updated."
+    )
+
+
+@app.route("/admin/users/<int:user_id>/grant-project-capacity", methods=["POST"])
+@require_admin_permission("admin.users.manage")
+def admin_grant_project_capacity(user_id):
+    """Admin project-slot grant/revoke. Purchased PROJECT_CAPACITY add-ons and
+    the plan's own base limit are separate ledger/plan sources and are never
+    overwritten here; revoking only lowers the effective slot allowance and
+    deletes no project."""
+    return _admin_entitlement_adjust_route(
+        user_id, "PROJECT_CAPACITY", "project_slots", "Project capacity entitlement updated."
+    )
+
+
+@app.route("/admin/users/<int:user_id>/account-type", methods=["POST"])
+@require_admin_permission("admin.ownership.manage")
+def admin_set_account_type(user_id):
+    """Admin-only governed account-type conversion.
+
+    Wave 4 shipped can_convert_to_individual() as a validation foundation with
+    no caller; this is that caller. There is deliberately NO self-service
+    conversion route - vendor capability governs who may hold and manage other
+    people's projects, so it stays an admin decision.
+
+    NOTHING IS DESTROYED IN EITHER DIRECTION. Only User.account_type moves.
+    Projects, media, QR codes, purchases, the entitlement ledger, the storage
+    ledger, ownership history and the subscription itself are all untouched -
+    plan_family stays a separate axis from account type by design, so the
+    account's plan is not reassigned here either.
+    """
+    admin = current_admin()
+    user = User.query.get_or_404(user_id)
+    target = (request.form.get("account_type") or "").strip().upper()
+    if target not in USER_ACCOUNT_TYPES:
+        flash("Unsupported account type.", "error")
+        return redirect(url_for("admin_view_user", user_id=user_id))
+
+    previous = (user.account_type or ACCOUNT_TYPE_INDIVIDUAL).upper()
+    if previous == target:
+        flash("Account is already set to that type.", "info")
+        return redirect(url_for("admin_view_user", user_id=user_id))
+
+    if target == ACCOUNT_TYPE_INDIVIDUAL:
+        ok, blocked_reason = can_convert_to_individual(user)
+        if not ok:
+            # Relationships are never silently severed: a blocked downgrade
+            # just leaves the account a vendor until the operator resolves the
+            # managed projects, transfers or claims themselves.
+            flash(f"Cannot convert to Individual: {blocked_reason}", "error")
+            return redirect(url_for("admin_view_user", user_id=user_id))
+
+    reason = (request.form.get("reason") or "").strip()[:500] or None
+    user.account_type = target
+    db.session.commit()
+    log_admin_activity(
+        admin.id,
+        "account_type_change",
+        f"User {user.id} ({user.email}) account_type {previous} -> {target}"
+        + (f": {reason}" if reason else ""),
+    )
+    db.session.commit()
+    flash(f"Account type changed to {ACCOUNT_TYPE_LABELS.get(target, target)}.", "success")
     return redirect(url_for("admin_view_user", user_id=user_id))
 
 @app.route("/admin/scans/<int:user_id>/lock-scanner", methods=["POST"])

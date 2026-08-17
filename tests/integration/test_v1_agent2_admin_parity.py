@@ -434,23 +434,36 @@ def test_admin_plan_pages_expose_policy_contract_without_unbacked_inputs(client,
         assert "Tracked Overlay" in body
         assert "Object Tracking" not in body
         # The fields exist on SubscriptionPlan now, so the stale placeholder
-        # must be gone - but they are still read-only in this UI.
+        # must be gone.
         assert "Backend pending" not in body
 
+        # Still unbacked: there is no single field behind any of these names.
         for forbidden_input in (
-            'name="plan_family"',
             'name="base_storage"',
             'name="media_policy"',
             'name="experience_entitlements"',
-            'name="lifecycle_status"',
             'name="revision_status"',
         ):
             assert forbidden_input not in body
 
-    # The plans list renders each plan's REAL policy fields, read-only.
+    # Wave 5 gave plan_family and lifecycle_status real, validated admin forms;
+    # every input below is backed by a SubscriptionPlan column and a server-side
+    # validator, so they are no longer forbidden.
+    for path in ("/admin/plans/add", f"/admin/plans/{plan.id}/edit"):
+        form_body = client.get(path).data.decode()
+        for backed_input in (
+            'name="plan_family"',
+            'name="lifecycle_status"',
+            'name="base_storage_bytes"',
+            'name="max_image_bytes"',
+            'name="allow_tracked_overlay"',
+        ):
+            assert backed_input in form_body
+
+    # The plans list renders each plan's REAL policy fields.
     listing = client.get("/admin/plans").data.decode()
     assert "Individual" in listing
-    assert "Live (read-only here)" in listing
+    assert "Live (editable on add/edit)" in listing
     assert "ACTIVE / rev 1" in listing
     assert "Image 50 MB; video 1 GB" in listing
 

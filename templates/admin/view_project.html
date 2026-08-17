@@ -620,6 +620,10 @@
                     <div class="info-row"><span class="info-label">Owner ID</span><span class="info-value">{{ owner.id or '-' }}</span></div>
                     <div class="info-row"><span class="info-label">Owner Name</span><span class="info-value">{{ owner.name }}</span></div>
                     <div class="info-row"><span class="info-label">Owner Email</span><span class="info-value">{{ owner.email }}</span></div>
+                    <div class="info-row"><span class="info-label">Created By</span><span class="info-value">{{ creator.email if creator else 'Not recorded' }}</span></div>
+                    <div class="info-row"><span class="info-label">Managing Vendor</span><span class="info-value">{{ ownership.manager.email if ownership and ownership.manager else '-' }}</span></div>
+                    <div class="info-row"><span class="info-label">Beneficiary</span><span class="info-value">{{ ownership.beneficiary.email if ownership and ownership.beneficiary else '-' }}</span></div>
+                    <div class="info-label" style="margin-top:8px;">Owner is the CURRENT owner and carries account entitlement responsibility. Created By is permanent history.</div>
                 </div>
                 <div class="info-section">
                     <h3>Project Information</h3>
@@ -702,6 +706,41 @@
             {% endif %}
         </div>
         {% endif %}
+        <div class="card" data-testid="admin-project-coverage">
+            <h3 style="margin-bottom: 20px;">Service Coverage</h3>
+            <div class="info-grid">
+                <div class="info-section">
+                    <div class="info-row"><span class="info-label">Publicly Live</span><span class="info-value">{{ 'Yes' if coverage.is_live else 'No' }}</span></div>
+                    <div class="info-row"><span class="info-label">Reason</span><span class="info-value">{{ coverage.reason }}</span></div>
+                    <div class="info-row"><span class="info-label">Coverage Source</span><span class="info-value">{{ coverage.coverage_source or '-' }}</span></div>
+                </div>
+                <div class="info-section">
+                    <div class="info-row"><span class="info-label">Covered Until</span><span class="info-value">{{ coverage.effective_coverage_until or 'Indefinite / none' }}</span></div>
+                    <div class="info-row"><span class="info-label">Renewal Starts</span><span class="info-value">{{ coverage.renewal_starts_at or '-' }}</span></div>
+                    <div class="info-row"><span class="info-label">Renewal Eligible</span><span class="info-value">{{ 'Yes' if coverage.renewal_eligible else coverage.renewal_blocked_code or 'No' }}</span></div>
+                </div>
+            </div>
+            <table style="width:100%; margin-top:16px;">
+                <thead>
+                    <tr><th>ID</th><th>Source</th><th>Start</th><th>End</th><th>Status</th><th>Granted By</th><th>Reason</th></tr>
+                </thead>
+                <tbody>
+                    {% for row in coverage_rows %}
+                    <tr>
+                        <td>{{ row.id }}</td>
+                        <td>{{ row.source_type }}{% if row.source_reference %} ({{ row.source_reference }}){% endif %}</td>
+                        <td>{{ row.coverage_start.strftime('%d %b %Y') if row.coverage_start else '-' }}</td>
+                        <td>{{ row.coverage_end.strftime('%d %b %Y') if row.coverage_end else 'Indefinite' }}</td>
+                        <td>{{ row.status }}</td>
+                        <td>{% if row.created_by_admin %}Admin {{ row.created_by_admin.email }}{% elif row.created_by_user %}User {{ row.created_by_user.email }}{% else %}System{% endif %}</td>
+                        <td>{{ row.reason or '-' }}</td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="7">No project-specific coverage records. Coverage resolves from the owner subscription.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
 
         <div class="card">
             <h3 style="margin-bottom: 20px;">Scan Activity</h3>
