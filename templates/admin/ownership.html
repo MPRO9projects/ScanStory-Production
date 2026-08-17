@@ -68,8 +68,8 @@
           <tr>
             <td>{{ row.transfer.id }}</td>
             <td>
-              {{ row.project.name if row.project else '(deleted)' }}
-              <div class="small text-muted">project {{ row.transfer.project_id }}</div>
+              {{ row.project.name if row.project else (row.transfer.historical_project_name or '(deleted project)') }}
+              <div class="small text-muted">project {{ row.transfer.project_id or row.transfer.historical_project_id }}{% if not row.project %} &middot; deleted{% endif %}</div>
             </td>
             <td class="small">
               <div>Created by: {{ row.created_by or '&mdash;'|safe }}</div>
@@ -158,8 +158,8 @@
           <tr>
             <td>{{ row.claim.id }}</td>
             <td>
-              {{ row.project.name if row.project else '(deleted)' }}
-              <div class="small text-muted">project {{ row.claim.project_id }}</div>
+              {{ row.project.name if row.project else (row.claim.historical_project_name or '(deleted project)') }}
+              <div class="small text-muted">project {{ row.claim.project_id or row.claim.historical_project_id }}{% if not row.project %} &middot; deleted{% endif %}</div>
             </td>
             <td class="small">{{ row.claimant or '&mdash;'|safe }}</td>
             <td class="small">

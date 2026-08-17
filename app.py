@@ -4230,9 +4230,76 @@ def release_project_media_accounting(project_id, failed_paths=()):
     return sum(freed_by_user.values()), retained
 
 
+class ProjectDeletionBlocked(Exception):
+    """Hard delete refused because the project is mid-lifecycle.
+
+    `str(exc)` is deliberately a finished, safe, user/admin-facing sentence: no
+    ids of other users, no internal state names, no filesystem paths.
+    """
+
+
+def project_deletion_block_reason(project):
+    """Safe reason this project must not be hard-deleted, or None if it may be.
+
+    Active means "a human is still owed an outcome": a transfer awaiting
+    acceptance or capacity, a dispute, or an open/unreviewed claim. Destroying
+    those silently is the failure this guards (V1.1 P0-2). Historical rows
+    (COMPLETED / CANCELLED / REJECTED / EXPIRED ...) never block - they are
+    preserved by _detach_ownership_history instead.
+    """
+    if project is None or project.id is None:
+        return None
+    if ProjectOwnershipTransfer.query.filter(
+        ProjectOwnershipTransfer.project_id == project.id,
+        ProjectOwnershipTransfer.status.in_(PROJECT_ACTIVE_TRANSFER_STATUSES),
+    ).first():
+        return (
+            "This project has an ownership transfer in progress. "
+            "Complete or cancel the transfer before deleting the project."
+        )
+    if ProjectOwnershipClaim.query.filter(
+        ProjectOwnershipClaim.project_id == project.id,
+        ProjectOwnershipClaim.status.in_(PROJECT_ACTIVE_CLAIM_STATUSES),
+    ).first():
+        return (
+            "This project has an unresolved ownership claim. "
+            "Resolve the claim before deleting the project."
+        )
+    return None
+
+
+def _detach_ownership_history(project_id, project_name):
+    """Preserve ownership/claim audit rows past the project's deletion.
+
+    The live FK is cleared and the project's identity is copied into the
+    historical_* columns, so the evidence stays queryable by project id and
+    readable by a human without a projects row to join to. Bulk UPDATE rather
+    than a per-row loop: nothing here needs ORM events, and it is idempotent -
+    a re-run finds no rows still pointing at the project.
+    """
+    for model in (ProjectOwnershipTransfer, ProjectOwnershipClaim):
+        model.query.filter(model.project_id == project_id).update(
+            {
+                model.historical_project_id: project_id,
+                model.historical_project_name: (project_name or "")[:255] or None,
+                model.project_id: None,
+            },
+            synchronize_session=False,
+        )
+
+
 def _delete_project_files_and_rows(project: Project):
+    # LIFECYCLE GUARD FIRST - before any unlink, before any storage credit, so a
+    # refused delete leaves media and accounting exactly as they were. Enforced
+    # here rather than in each route because all four delete paths funnel
+    # through this helper and none of them may bypass it.
+    blocked = project_deletion_block_reason(project)
+    if blocked:
+        raise ProjectDeletionBlocked(blocked)
+
     images_dir, videos_dir, features_dir, qr_dir = project_media_dirs(project)
     project_id = project.id
+    project_name = project.name
     pairs = ProjectPair.query.filter_by(project_id=project_id).all()
 
     targets = []
@@ -4275,6 +4342,11 @@ def _delete_project_files_and_rows(project: Project):
         {UploadSession.project_id: None, UploadSession.pair_id: None},
         synchronize_session=False,
     )
+
+    # Ownership transfer/claim history is audit evidence, not project debris: it
+    # is detached and kept, never cascade-deleted (P0-2). Must run before the
+    # project row goes, while the FK is still satisfiable.
+    _detach_ownership_history(project_id, project_name)
 
     for pair in pairs:
         db.session.delete(pair)
@@ -4756,7 +4828,12 @@ def _delete_dev_test_users(confirm=False, dry_run=False):
 
     for user in users:
         for project in Project.query.filter_by(owner_user_id=user.id).all():
-            _delete_project_files_and_rows(project)
+            try:
+                _delete_project_files_and_rows(project)
+            except ProjectDeletionBlocked as exc:
+                # Dev-fixture cleanup must not force-resolve a live ownership
+                # workflow; stop and let the operator deal with it explicitly.
+                raise click.ClickException(f"Project {project.id}: {exc}") from exc
         ScanLog.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         PaymentOrder.query.filter_by(user_id=user.id).delete(synchronize_session=False)
         db.session.delete(user)
@@ -7148,13 +7225,18 @@ def user_delete_project(project_id):
         abort(404)
     
     # Decrement projects count
+    blocked = project_deletion_block_reason(project)
+    if blocked:
+        flash(blocked, "error")
+        return redirect(url_for("projects_page"))
+
     owner = User.query.get(project_current_owner_user_id(project)) if project_current_owner_user_id(project) else None
     if owner:
         owner.projects_used = max(0, (owner.projects_used or 0) - 1)
-    
+
     _delete_project_files_and_rows(project)
     db.session.commit()
-    
+
     flash("Project deleted successfully.", "success")
     return redirect(url_for("projects_page"))
 
@@ -15188,9 +15270,14 @@ def admin_delete_project(project_id):
     admin = current_admin()
     project = Project.query.get_or_404(project_id)
     
+    blocked = project_deletion_block_reason(project)
+    if blocked:
+        flash(blocked, "error")
+        return redirect(url_for("admin_view_project", project_id=project_id))
+
     # Get user before deletion for logging
     user = User.query.get(project.owner_user_id) if project.owner_user_id else None
-    
+
     # Delete project files and database records
     _delete_project_files_and_rows(project)
     
@@ -15333,8 +15420,17 @@ def _ownership_party_label(user_id):
     return user.email if user else None
 
 
+def _ownership_row_project(row):
+    """Project for an ownership/claim row, or None once it has been detached.
+
+    project_id is NULL on rows kept as history after the project was deleted
+    (P0-2); Query.get(None) warns about a fully-NULL identity, so short-circuit.
+    """
+    return Project.query.get(row.project_id) if row.project_id else None
+
+
 def _admin_transfer_row(transfer):
-    project = Project.query.get(transfer.project_id)
+    project = _ownership_row_project(transfer)
     return {
         "transfer": transfer,
         "project": project,
@@ -15350,7 +15446,7 @@ def _admin_transfer_row(transfer):
 
 
 def _admin_claim_row(claim):
-    project = Project.query.get(claim.project_id)
+    project = _ownership_row_project(claim)
     return {
         "claim": claim,
         "project": project,
@@ -16515,7 +16611,12 @@ def admin_delete_own_project(project_id):
     
     if not project or project.owner_admin_id != admin.id:
         abort(404)
-    
+
+    blocked = project_deletion_block_reason(project)
+    if blocked:
+        flash(blocked, "error")
+        return redirect(url_for("admin_projects"))
+
     _delete_project_files_and_rows(project)
     db.session.commit()
     
