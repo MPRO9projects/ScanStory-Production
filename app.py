@@ -42,6 +42,7 @@ from sqlalchemy.orm import aliased
 
 from core.config import (
     database_backend_name as _database_backend_name,
+    normalize_database_url as _normalize_database_url,
     env_flag as _env_flag,
     runtime_production_mode_flag_active as _runtime_production_mode_flag_active,
     smtp_port as _smtp_port,
@@ -144,7 +145,11 @@ def _validate_required_runtime_config():
     missing = []
     if not os.environ.get("FLASK_SECRET_KEY"):
         missing.append("FLASK_SECRET_KEY")
-    database_url = os.environ.get("DATABASE_URL")
+    # Normalized BEFORE the backend check so the check sees the same URL the
+    # engine will actually be built from, and so an explicitly requested
+    # unsupported driver (e.g. postgresql+psycopg2://) fails startup here with a
+    # named reason rather than at first connect (P0-3).
+    database_url = _normalize_database_url(os.environ.get("DATABASE_URL"))
     if not SCANSTORY_TESTING:
         if not database_url:
             missing.append("DATABASE_URL")
@@ -213,7 +218,9 @@ FLASK_DEBUG_ENABLED = False if SCANSTORY_TESTING else _env_flag("FLASK_DEBUG", d
 SESSION_COOKIE_SECURE_ENABLED = _env_flag("SESSION_COOKIE_SECURE", default=False)
 
 # ✅ ADD DATABASE CONFIGURATION HERE
-database_uri = os.environ.get("TEST_DATABASE_URL") if SCANSTORY_TESTING else os.environ.get("DATABASE_URL", "")
+database_uri = _normalize_database_url(
+    os.environ.get("TEST_DATABASE_URL") if SCANSTORY_TESTING else os.environ.get("DATABASE_URL", "")
+)
 engine_options = {}
 database_backend = _database_backend_name(database_uri) if database_uri else ""
 if database_uri and database_backend != "sqlite":
