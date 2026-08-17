@@ -9918,6 +9918,38 @@ def _safe_provider_failure_message(exc):
     return "Payment gateway refund request failed."
 
 
+def _refund_replay_response(refund):
+    """Idempotent-replay response that reflects the row's AUTHORITATIVE state.
+
+    The old version returned a flat success for any row matching the
+    idempotency key, so replaying a request whose refund had FAILED at the
+    provider answered "success" and the money never moved (V1.1 P0-1). Success
+    now means "the provider refund is not in a failed state"; a failed row
+    answers with its real state plus the recovery path.
+    """
+    payload = _payment_refund_payload(refund)
+    if refund.status == "REFUND_FAILED":
+        return {
+            "success": False,
+            "code": "REFUND_PREVIOUSLY_FAILED",
+            "error": (
+                "The refund for this payment failed at the payment gateway and was not retried. "
+                "Use refund recovery to re-drive this refund; a second refund record is never created."
+            ),
+            "refund": payload,
+            "replay": True,
+        }
+    response = {"success": True, "refund": payload, "replay": True}
+    if refund.status == "REFUNDED" and refund.reconciliation_status in ("FAILED", "PENDING"):
+        # Money HAS moved - this is genuinely a success - but the local
+        # entitlement bookkeeping did not complete, so say so instead of
+        # letting the caller read a bare success and assume it did.
+        response["code"] = "REFUND_RECONCILIATION_INCOMPLETE"
+    elif refund.status in REFUND_ACTIVE_STATUSES:
+        response["code"] = "REFUND_ALREADY_PROCESSING"
+    return response
+
+
 def _call_razorpay_full_refund(refund):
     if not razorpay_client:
         raise RuntimeError("Payment gateway not configured.")
@@ -10055,7 +10087,7 @@ def initiate_admin_refund(admin, payment_order=None, addon_purchase=None, reason
     idempotency_key = (idempotency_key or f"refund:{source_name}:{source_id}").strip()[:120]
     existing = PaymentRefund.query.filter_by(idempotency_key=idempotency_key).first()
     if existing:
-        return {"success": True, "refund": _payment_refund_payload(existing), "replay": True}
+        return _refund_replay_response(existing)
 
     eligibility = (
         refund_eligibility_for_payment_order(payment_order)
@@ -10073,7 +10105,11 @@ def initiate_admin_refund(admin, payment_order=None, addon_purchase=None, reason
         db.session.rollback()
         existing = _existing_refund_for_source(payment_order=payment_order, addon_purchase=addon_purchase)
         if existing:
-            return {"success": True, "refund": _payment_refund_payload(existing), "replay": True}
+            # A DIFFERENT idempotency key racing the same source. The source
+            # uniqueness constraint is the guarantee that one payment gets one
+            # refund record; it stays, and the caller is told the real state of
+            # the record that already exists rather than a fabricated success.
+            return _refund_replay_response(existing)
         raise
 
     log_admin_activity(
@@ -10122,6 +10158,249 @@ def initiate_admin_refund(admin, payment_order=None, addon_purchase=None, reason
     else:
         log_admin_activity(admin.id, "refund_provider_accepted", f"Refund {refund.id} accepted by provider.")
     return {"success": True, "refund": _payment_refund_payload(refund), "replay": False}
+
+
+# ---------------------------------------------------------------------
+# Refund recovery / reconciliation (V1.1 P0-1)
+# ---------------------------------------------------------------------
+# THE PROVIDER IS THE ONLY AUTHORITY ON WHETHER MONEY MOVED.
+# Every mutating outcome below is derived from a provider READ first, never
+# from a local guess, and a read that cannot be completed produces
+# "unresolved" (a human looks) instead of a second refund call. Recovery
+# always re-drives the EXISTING PaymentRefund row: no second row is created,
+# the four uniqueness constraints are untouched, entitlements are only ever
+# reversed by _apply_refund_reconciliation (which runs only after the provider
+# reports "processed"), and no code path here deletes media.
+
+# Rows whose provider outcome is not yet a confirmed success.
+REFUND_UNCONFIRMED_STATUSES = ("REFUND_REQUESTED", "REFUND_PROCESSING", "REFUND_FAILED")
+# Webhook failure code for a provider-dashboard refund we correlated to a local
+# payment but that has no local PaymentRefund record. Deliberately its own code
+# so `flask reconcile-refunds` can list it instead of it hiding in "unknown".
+OUT_OF_BAND_REFUND_FAILURE_CODE = "out_of_band_refund_no_local_record"
+
+
+def stuck_refund_query():
+    """PaymentRefund rows that are not in a finished, self-consistent state."""
+    return PaymentRefund.query.filter(
+        or_(
+            PaymentRefund.status.in_(REFUND_UNCONFIRMED_STATUSES),
+            and_(
+                PaymentRefund.status == "REFUNDED",
+                PaymentRefund.reconciliation_status != "APPLIED",
+            ),
+        )
+    ).order_by(PaymentRefund.id.asc())
+
+
+def _provider_refunds_for_payment(refund):
+    """Every provider refund recorded against this payment. Raises on API error.
+
+    A read, never a write - this is what makes it safe to call before deciding
+    whether a retry would double-refund.
+    """
+    if not razorpay_client:
+        raise RuntimeError("Payment gateway not configured.")
+    result = razorpay_client.payment.fetch_multiple_refund(refund.provider_payment_id)
+    if isinstance(result, dict):
+        items = result.get("items") or []
+    elif isinstance(result, list):
+        items = result
+    else:
+        items = []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _matching_provider_refund(refund, items):
+    """Classify the provider's view of this record: one / none / ambiguous.
+
+    "one" means exactly one provider refund is unmistakably this record (same
+    provider refund id, or the only refund on the payment for the full amount).
+    Anything else on the payment - a partial refund, two refunds, a full refund
+    for a different amount - is "ambiguous" and must never be auto-resolved.
+    """
+    if refund.provider_refund_id:
+        exact = [item for item in items if item.get("id") == refund.provider_refund_id]
+        if exact:
+            return "one", exact[0]
+    if not items:
+        return "none", None
+    expected_paise = _refund_amount_paise(refund.amount)
+    candidates = []
+    for item in items:
+        try:
+            if int(item.get("amount")) == expected_paise:
+                candidates.append(item)
+        except (TypeError, ValueError):
+            continue
+    if len(candidates) == 1 and len(items) == 1:
+        return "one", candidates[0]
+    return "ambiguous", None
+
+
+def _refund_recovery_result(refund, outcome, message, changed=False):
+    return {
+        "refund_id": refund.id,
+        "source": _refund_source_kind(refund),
+        "outcome": outcome,
+        "message": message,
+        "changed": bool(changed),
+        "status": refund.status,
+        "reconciliation_status": refund.reconciliation_status,
+    }
+
+
+# Outcomes that mean "a human still has to do something".
+REFUND_RECOVERY_UNRESOLVED_OUTCOMES = {"unresolved", "retry_failed", "manual_review"}
+
+
+def _recover_payment_refund(refund, apply_changes):
+    # 1. Finished and self-consistent. Idempotent no-op.
+    if refund.status == "REFUNDED" and refund.reconciliation_status == "APPLIED":
+        return _refund_recovery_result(
+            refund, "already_settled", "Provider refund and local reconciliation are both complete."
+        )
+
+    # 2. Manual review is a human decision. Recovery reports it and stops - it
+    #    never silently revokes a subscription or resolves the review itself.
+    if refund.reconciliation_status == "MANUAL_REVIEW_REQUIRED":
+        return _refund_recovery_result(
+            refund,
+            "manual_review",
+            "Reconciliation is parked for admin review and is not resolved automatically.",
+        )
+
+    # 3. Provider already confirmed the refund -> re-drive LOCAL reconciliation
+    #    ONLY. No provider call: the money has moved and asking for it again is
+    #    the one mistake that cannot be undone.
+    if refund.status == "REFUNDED":
+        if not apply_changes:
+            return _refund_recovery_result(
+                refund, "would_reconcile", "Local reconciliation would be retried; no provider call is made."
+            )
+        applied = _apply_refund_reconciliation(refund)
+        db.session.commit()
+        if applied:
+            outcome = "manual_review" if refund.reconciliation_status == "MANUAL_REVIEW_REQUIRED" else "reconciled"
+            return _refund_recovery_result(
+                refund, outcome, f"Local reconciliation re-driven; reconciliation status {refund.reconciliation_status}.", changed=True
+            )
+        return _refund_recovery_result(
+            refund, "unresolved", "Local reconciliation could not be completed; provider refund remains confirmed.", changed=True
+        )
+
+    # 4. Provider outcome unknown or failed -> ASK THE PROVIDER FIRST.
+    try:
+        items = _provider_refunds_for_payment(refund)
+    except Exception:
+        # Full detail to the operator log, nothing provider-shaped to the caller.
+        app.logger.exception("refund_recovery_provider_read_failed refund_id=%s", refund.id)
+        return _refund_recovery_result(
+            refund, "unresolved", "Provider refund state could not be read; the record was left unchanged for manual review."
+        )
+
+    match, item = _matching_provider_refund(refund, items)
+
+    if match == "ambiguous":
+        return _refund_recovery_result(
+            refund,
+            "unresolved",
+            "The provider reports refunds on this payment that do not unambiguously match this record; left for manual review.",
+        )
+
+    if match == "one":
+        # The provider already accepted a refund for this record. Adopt its
+        # state - never issue another one.
+        if not apply_changes:
+            return _refund_recovery_result(
+                refund,
+                "would_adopt_provider_state",
+                "The provider already holds a matching refund; its state would be adopted and no new refund issued.",
+            )
+        mark_refund_provider_result(refund, item.get("id"), item.get("status"))
+        db.session.commit()
+        return _refund_recovery_result(
+            refund,
+            "adopted_provider_state",
+            f"Adopted the provider's existing refund state; status {refund.status}, reconciliation {refund.reconciliation_status}.",
+            changed=True,
+        )
+
+    # match == "none": the provider holds NO refund for this payment.
+    if refund.status == "REFUND_PROCESSING":
+        # We recorded that the create call was accepted; the provider disagrees.
+        # Re-issuing on that contradiction is precisely how a double refund
+        # happens if the read was stale, so a human resolves it instead.
+        return _refund_recovery_result(
+            refund,
+            "unresolved",
+            "This refund is marked processing but the provider holds no matching refund; left for manual review.",
+        )
+
+    if not apply_changes:
+        return _refund_recovery_result(
+            refund,
+            "would_retry_provider",
+            "The provider holds no refund for this payment; the refund call would be re-attempted on this same record.",
+        )
+
+    # Re-attempt on the SAME row. The row is deliberately NOT pre-marked
+    # REFUND_PROCESSING: if this process dies mid-call the row stays as it was
+    # and the next recovery run re-reads the provider and either adopts the
+    # refund that landed or retries - a pre-marked row would instead be stuck in
+    # the "processing but provider has nothing" manual-review branch forever.
+    try:
+        provider_result = _call_razorpay_full_refund(refund)
+    except Exception as exc:
+        refund.status = "REFUND_FAILED"
+        refund.failed_at = get_utc_now()
+        refund.failure_code = "PROVIDER_REQUEST_FAILED"
+        refund.failure_message_safe = _safe_provider_failure_message(exc)
+        db.session.commit()
+        return _refund_recovery_result(
+            refund,
+            "retry_failed",
+            "The provider refund re-attempt failed; no entitlement was reversed.",
+            changed=True,
+        )
+    refund.processing_started_at = refund.processing_started_at or get_utc_now()
+    mark_refund_provider_result(
+        refund,
+        provider_result.get("id") if isinstance(provider_result, dict) else None,
+        provider_result.get("status") if isinstance(provider_result, dict) else None,
+    )
+    db.session.commit()
+    return _refund_recovery_result(
+        refund,
+        "retried",
+        f"Provider refund re-attempted on the existing record; status {refund.status}, reconciliation {refund.reconciliation_status}.",
+        changed=True,
+    )
+
+
+def recover_payment_refund(refund, admin=None, apply_changes=False):
+    """Re-drive one stuck PaymentRefund. Read-only unless apply_changes=True."""
+    result = _recover_payment_refund(refund, apply_changes)
+    if result["changed"] or result["outcome"] in REFUND_RECOVERY_UNRESOLVED_OUTCOMES:
+        detail = f"Refund {refund.id} recovery outcome {result['outcome']}: {result['message']}"
+        if admin is not None:
+            log_admin_activity(admin.id, "refund_recovery", detail[:500])
+        else:
+            app.logger.info(
+                "refund_recovery refund_id=%s outcome=%s changed=%s status=%s reconciliation=%s",
+                refund.id, result["outcome"], result["changed"], result["status"], result["reconciliation_status"],
+            )
+    return result
+
+
+def unlinked_out_of_band_refund_events():
+    """Provider-dashboard refunds correlated to a local payment but unrecorded."""
+    return (
+        RazorpayWebhookEvent.query
+        .filter(RazorpayWebhookEvent.failure_code == OUT_OF_BAND_REFUND_FAILURE_CODE)
+        .order_by(RazorpayWebhookEvent.id.asc())
+        .all()
+    )
 
 
 @app.route("/api/addons/catalog", methods=["GET"])
@@ -10908,6 +11187,23 @@ def _process_addon_webhook_event(event, entity, payment_id, order_id):
     return True
 
 
+def _commercial_source_for_provider_payment(payment_id):
+    """(PaymentOrder, AddonPurchase) matching a provider payment id.
+
+    Deterministic only: returns (None, None) unless exactly one local source
+    owns that payment id. Two matches means the correlation is ambiguous and a
+    human has to decide, which is strictly better than guessing on a money row.
+    """
+    key = (payment_id or "").strip()
+    if not key:
+        return None, None
+    orders = PaymentOrder.query.filter_by(razorpay_payment_id=key).all()
+    purchases = AddonPurchase.query.filter_by(razorpay_payment_id=key).all()
+    if len(orders) + len(purchases) != 1:
+        return None, None
+    return (orders[0] if orders else None), (purchases[0] if purchases else None)
+
+
 def _process_refund_webhook_event(event, refund_entity, payment_entity):
     refund_id = refund_entity.get("id") if isinstance(refund_entity, dict) else None
     payment_id = refund_entity.get("payment_id") if isinstance(refund_entity, dict) else None
@@ -10919,7 +11215,27 @@ def _process_refund_webhook_event(event, refund_entity, payment_entity):
     if not refund:
         refund = PaymentRefund.query.filter_by(provider_payment_id=payment_id, status="REFUND_PROCESSING").first()
     if not refund:
-        _finalize_webhook_event(event, "failed", failure_code="unknown_refund")
+        # OUT-OF-BAND REFUND (V1.1 P0-1 case 5). Somebody refunded from the
+        # provider dashboard, so there is no local PaymentRefund to update. We
+        # do NOT invent one: PaymentRefund.requested_by_admin_id is the record
+        # of who authorised the refund and fabricating an admin there would
+        # corrupt the audit trail, and reversing entitlements off a dashboard
+        # action is a business decision no webhook may take. What we can do
+        # deterministically is correlate the provider payment id back to the
+        # local commercial source and record that link on the event, so the
+        # refund is visible and auditable (`flask reconcile-refunds` lists it)
+        # instead of being dropped as "unknown".
+        order, purchase = _commercial_source_for_provider_payment(payment_id)
+        if order is not None or purchase is not None:
+            _finalize_webhook_event(
+                event,
+                "failed",
+                failure_code=OUT_OF_BAND_REFUND_FAILURE_CODE,
+                payment_order_id=order.id if order else None,
+                addon_purchase_id=purchase.id if purchase else None,
+            )
+        else:
+            _finalize_webhook_event(event, "failed", failure_code="unknown_refund")
         return True
     try:
         expected_paise = _refund_amount_paise(refund.amount)
@@ -11181,6 +11497,115 @@ def webhook_events_status(limit):
             f"failure_code={row.failure_code} payment_order_id={row.payment_order_id} "
             f"attempts={row.attempt_count} received_at={row.received_at}"
         )
+
+
+@app.cli.command("reconcile-refunds")
+@click.option("--apply", "apply_changes", is_flag=True, default=False, help="Re-drive recoverable refunds. Default is dry-run.")
+@click.option("--dry-run", "dry_run", is_flag=True, default=False, help="Report only (the default).")
+@click.option("--refund-id", "refund_id", type=int, default=None, help="Narrow to a single PaymentRefund id.")
+@click.option(
+    "--source", "source_kind",
+    type=click.Choice(["payment_order", "addon_purchase"]),
+    default=None,
+    help="Narrow to one commercial source kind.",
+)
+def reconcile_refunds_command(apply_changes, dry_run, refund_id, source_kind):
+    """Report and optionally recover refunds stuck mid-flight (V1.1 P0-1).
+
+    READ-ONLY BY DEFAULT. --apply re-drives each recoverable refund on its
+    EXISTING record: it never creates a second refund record, never issues a
+    second provider refund without first reading the provider's own refund list
+    for that payment, never reverses entitlements before the provider confirms,
+    and never deletes media. Anything it cannot resolve safely is reported as
+    unresolved for a human, and the command exits non-zero so a scheduled run
+    cannot look clean while money is stuck.
+    """
+    if dry_run and apply_changes:
+        raise click.UsageError("--dry-run and --apply are mutually exclusive.")
+
+    query = stuck_refund_query()
+    if refund_id is not None:
+        query = query.filter(PaymentRefund.id == refund_id)
+    if source_kind == "payment_order":
+        query = query.filter(PaymentRefund.payment_order_id.isnot(None))
+    elif source_kind == "addon_purchase":
+        query = query.filter(PaymentRefund.addon_purchase_id.isnot(None))
+    refund_ids = [row.id for row in query.all()]
+
+    if refund_id is not None and not refund_ids:
+        existing = PaymentRefund.query.get(refund_id)
+        if not existing:
+            raise click.ClickException(f"No PaymentRefund found with id={refund_id}")
+
+    click.echo("Mode: apply" if apply_changes else "Mode: dry-run")
+    click.echo(f"Refunds needing attention: {len(refund_ids)}")
+
+    buckets = {
+        "failed_provider_attempt": [],
+        "processing": [],
+        "refunded_reconciliation_failed": [],
+        "manual_review": [],
+    }
+    outcomes = {}
+    errors = []
+
+    for candidate_id in refund_ids:
+        db.session.rollback()
+        refund = PaymentRefund.query.get(candidate_id)
+        if refund is None:
+            continue
+        if refund.status == "REFUND_FAILED":
+            buckets["failed_provider_attempt"].append(refund.id)
+        elif refund.status in ("REFUND_REQUESTED", "REFUND_PROCESSING"):
+            buckets["processing"].append(refund.id)
+        elif refund.reconciliation_status == "MANUAL_REVIEW_REQUIRED":
+            buckets["manual_review"].append(refund.id)
+        else:
+            buckets["refunded_reconciliation_failed"].append(refund.id)
+
+        try:
+            result = recover_payment_refund(refund, admin=None, apply_changes=apply_changes)
+        except Exception:
+            db.session.rollback()
+            app.logger.exception("reconcile_refunds_failed refund_id=%s", candidate_id)
+            errors.append(candidate_id)
+            continue
+        outcomes.setdefault(result["outcome"], []).append(refund.id)
+        click.echo(
+            f"  refund_id={result['refund_id']} source={result['source']} "
+            f"outcome={result['outcome']} status={result['status']} "
+            f"reconciliation={result['reconciliation_status']} - {result['message']}"
+        )
+
+    for label, key in (
+        ("Failed provider attempts", "failed_provider_attempt"),
+        ("Provider outcome still open (requested/processing)", "processing"),
+        ("Refunded but local reconciliation not applied", "refunded_reconciliation_failed"),
+        ("Parked for manual review", "manual_review"),
+    ):
+        click.echo(f"{label}: {len(buckets[key])}")
+
+    recovered = sum(len(v) for k, v in outcomes.items() if k in ("reconciled", "retried", "adopted_provider_state"))
+    unresolved = sum(len(v) for k, v in outcomes.items() if k in REFUND_RECOVERY_UNRESOLVED_OUTCOMES)
+    click.echo(f"Recovered: {recovered}")
+    click.echo(f"Unresolved (human action required): {unresolved}")
+    click.echo(f"Errors: {len(errors)}")
+    for outcome, ids in sorted(outcomes.items()):
+        click.echo(f"  outcome {outcome}: {len(ids)}")
+
+    out_of_band = unlinked_out_of_band_refund_events()
+    click.echo(f"Out-of-band provider refunds with no local record: {len(out_of_band)}")
+    for event in out_of_band[:20]:
+        click.echo(
+            f"  event_id={event.id} type={event.event_type} "
+            f"payment_order_id={event.payment_order_id} addon_purchase_id={event.addon_purchase_id}"
+        )
+
+    if not apply_changes:
+        click.echo("Dry run: nothing was written. Re-run with --apply to re-drive these refunds.")
+
+    if errors or unresolved or out_of_band:
+        raise SystemExit(1)
 
 
 @app.cli.command("reconcile-order-webhooks")
@@ -14373,6 +14798,29 @@ def admin_refund_addon_purchase(purchase_id):
 def admin_refund_detail(refund_id):
     refund = PaymentRefund.query.get_or_404(refund_id)
     return jsonify({"success": True, "refund": _payment_refund_payload(refund)})
+
+
+@app.route("/admin/api/refunds/<int:refund_id>/recover", methods=["POST"])
+@require_admin_permission("admin.payments.refund")
+def admin_recover_refund(refund_id):
+    """Re-drive one stuck refund on its existing record (V1.1 P0-1).
+
+    Same permission as issuing a refund, because it can result in a provider
+    refund call. Read-only unless the caller passes apply=true. Deliberately
+    API-only for now: the operator path this wave has to ship is
+    `flask reconcile-refunds`, and no new admin UI is added here.
+    """
+    admin = current_admin()
+    refund = PaymentRefund.query.get_or_404(refund_id)
+    payload = request.get_json(silent=True) or request.form or {}
+    apply_changes = str(payload.get("apply", "")).strip().lower() in ("1", "true", "yes", "on")
+    result = recover_payment_refund(refund, admin=admin, apply_changes=apply_changes)
+    status = 409 if result["outcome"] in REFUND_RECOVERY_UNRESOLVED_OUTCOMES else 200
+    return jsonify({
+        "success": status == 200,
+        "recovery": result,
+        "refund": _payment_refund_payload(refund),
+    }), status
 
 
 @app.route("/admin/api/refunds", methods=["GET"])
