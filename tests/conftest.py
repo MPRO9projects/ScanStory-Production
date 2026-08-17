@@ -76,7 +76,16 @@ def isolated_app(tmp_path, monkeypatch):
         blocked_external_calls.append({"service": "http", "method": method, "url": url})
         raise AssertionError(f"Unmocked external HTTP call blocked: {method} {url}")
 
+    # Stashed before the stubs replace them: both real functions become
+    # unreachable once the module attribute is patched, and V1.1 P1-1/P1-2 have
+    # to test the real header handling and the real fail-open/fail-closed policy
+    # rather than the stubs.
+    app_module._real_send_email_smtp = app_module.send_email_smtp
     monkeypatch.setattr(app_module, "send_email_smtp", fake_send_email)
+    # Stashed before the stub replaces it: the real verifier is unreachable once
+    # the module attribute is patched, and V1.1 P1-2 has to test its actual
+    # fail-open/fail-closed policy rather than the stub's.
+    app_module._real_verify_recaptcha_v3 = app_module.verify_recaptcha_v3
     monkeypatch.setattr(app_module, "verify_recaptcha_v3", lambda action: (True, "OK"))
     monkeypatch.setattr(smtplib, "SMTP", blocked_smtp)
     monkeypatch.setattr(smtplib, "SMTP_SSL", blocked_smtp)

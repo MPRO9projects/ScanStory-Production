@@ -217,11 +217,17 @@ def test_ready_explicit_rq_available_reports_queue_ok(client, app_module, monkey
     monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "rq")
     monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
     monkeypatch.setattr(app_module, "redis_ready_check", lambda: True)
+    # V1.1 P1-3: rq readiness now also requires a usable worker, so the reachable
+    # -Redis case has to state that a worker is attached.
+    monkeypatch.setattr(app_module, "queue_worker_state", lambda: ("ok", 1))
 
     response = client.get("/ready")
 
     assert response.status_code == 200
-    assert response.get_json() == {"status": "ready", "checks": {"database": "ok", "queue": "ok"}}
+    assert response.get_json() == {
+        "status": "ready",
+        "checks": {"database": "ok", "queue": "ok", "workers": "ok", "usable_worker_count": 1},
+    }
 
 
 @pytest.mark.parametrize("mode", ["fake", "inline"])
