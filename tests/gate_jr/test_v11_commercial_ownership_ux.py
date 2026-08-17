@@ -85,7 +85,7 @@ def test_transfer_status_labels_cover_every_transfer_status(app_module):
     assert set(app_module.PROJECT_TRANSFER_STATUS_LABELS) == PROJECT_TRANSFER_STATUSES
     assert app_module.PROJECT_TRANSFER_STATUS_LABELS["PENDING_ACCEPTANCE"] == "Waiting for recipient"
     assert app_module.PROJECT_TRANSFER_STATUS_LABELS["PENDING_CAPACITY"] == (
-        "Recipient needs an available project slot"
+        "Recipient needs project/storage capacity"
     )
     assert app_module.PROJECT_TRANSFER_STATUS_LABELS["COMPLETED"] == "Ownership transferred"
     assert app_module.PROJECT_TRANSFER_STATUS_LABELS["CANCELLED"] == "Transfer cancelled"
@@ -146,13 +146,24 @@ def test_profile_shows_account_type_readonly_for_both_types(client, db_session, 
 
 
 def test_profile_offers_no_client_side_account_type_switch(app_module):
-    """No backend endpoint changes User.account_type, so no control may claim to."""
+    """No self-service control may mutate User.account_type. Wave 5 added a
+    governed admin-only conversion route, so that route existing is expected
+    and must not fail this test -- the safety property is that it is the
+    ONLY route touching account_type, and it lives under /admin/, never
+    reachable from the user-facing profile page."""
     html = read_template("user/profile.html")
     assert 'name="account_type"' not in html
     assert "account_type_label(user)" in html
-    # And there is genuinely no such route to wire one to.
-    rules = {str(rule) for rule in app_module.app.url_map.iter_rules()}
-    assert not [r for r in rules if "account-type" in r or "account_type" in r]
+    # The profile page never links/posts to the admin conversion route.
+    assert "account-type" not in html
+
+    rules = {
+        str(rule)
+        for rule in app_module.app.url_map.iter_rules()
+        if "account-type" in str(rule) or "account_type" in str(rule)
+    }
+    # Exactly the one governed, admin-only route -- no user-facing equivalent.
+    assert rules == {"/admin/users/<int:user_id>/account-type"}
 
 
 # ===========================================================================
@@ -269,10 +280,10 @@ def test_pending_capacity_transfer_never_hides_or_cancels_the_project(
     _transfer(app_module, db_session, project, "PENDING_CAPACITY", recipient)
 
     body = _preview(client, project)
-    assert "Recipient needs an available project slot" in body
+    assert "Recipient needs project/storage capacity" in body
     assert "PENDING_CAPACITY" not in body
-    assert "Nothing has been cancelled or moved" in body
-    assert "keeps the same" in body  # QR is not mutated
+    assert "Ownership has not changed" in body
+    assert "media and QR code remain intact" in body
 
     # The project itself is untouched: still active, still owned by the sender.
     db_session.refresh(project)
@@ -325,7 +336,7 @@ def test_project_card_badges_use_labels_not_enums(app_module, client, db_session
     _transfer(app_module, db_session, project, "PENDING_CAPACITY", recipient)
 
     body = client.get("/projects").get_data(as_text=True)
-    assert "Recipient needs an available project slot" in body
+    assert "Recipient needs project/storage capacity" in body
     assert "PENDING_CAPACITY" not in body
 
 
