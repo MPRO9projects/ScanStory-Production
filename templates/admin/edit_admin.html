@@ -255,6 +255,7 @@
                 <p class="small text-muted">Once deleted, this admin account cannot be recovered.</p>
                 <form method="POST" action="{{ url_for('admin_delete_admin', admin_id=target_admin.id) }}" 
                       onsubmit="return confirmDelete()">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" class="btn btn-danger w-100">
                         <i class="fas fa-trash-alt me-1"></i>Delete Admin Account
                     </button>

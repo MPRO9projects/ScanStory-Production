@@ -58,11 +58,20 @@ def _migration_app(tmp_path, name):
 
 
 def test_wave2_revision_is_the_single_new_head_on_top_of_wave1():
+    # WAVE2_REVISION is not the current Alembic head -- later waves (Wave 4's
+    # a9d3c7e1b502 and onward) legitimately extend the chain past it. This no
+    # longer asserts WAVE2_REVISION is the head -- only that it stays exactly
+    # once in the graph, directly on top of Wave 1, on the single linear path
+    # that leads to whatever the current head actually is.
     script = _script_directory()
     revision = script.get_revision(WAVE2_REVISION)
     assert revision.down_revision == WAVE1_HEAD
     assert len(script.get_heads()) == 1
-    assert script.get_current_head() == WAVE2_REVISION
+
+    current_head = script.get_current_head()
+    ancestry = [r.revision for r in script.iterate_revisions(current_head, "base")]
+    assert ancestry.count(WAVE2_REVISION) == 1
+    assert WAVE2_REVISION in ancestry
 
 
 def test_wave1_revisions_are_untouched_ancestors():

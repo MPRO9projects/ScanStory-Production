@@ -1132,7 +1132,13 @@ class ProjectOwnershipTransfer(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+    # NULLABLE ON PURPOSE (V1.1 P0-2). A completed/cancelled transfer is audit
+    # evidence that must outlive the project it describes, so project deletion
+    # detaches the live reference instead of cascade-deleting the row. The
+    # project stays identifiable through historical_project_id/_name below.
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
+    historical_project_id = db.Column(db.Integer, nullable=True, index=True)
+    historical_project_name = db.Column(db.String(255), nullable=True)
     initiated_by_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     from_owner_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     to_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
@@ -1167,7 +1173,10 @@ class ProjectOwnershipClaim(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+    # NULLABLE ON PURPOSE (V1.1 P0-2) - same policy as the transfer table above.
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
+    historical_project_id = db.Column(db.Integer, nullable=True, index=True)
+    historical_project_name = db.Column(db.String(255), nullable=True)
     claimant_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=False, index=True)
     current_owner_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     status = db.Column(db.String(30), nullable=False, default="OPEN", server_default="OPEN")
