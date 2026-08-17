@@ -6,60 +6,63 @@
 
 - HTTP 200 when the process is alive.
 - Liveness only.
+- Does not check database, Redis, RQ workers, SMTP, Razorpay, or storage.
 - `Cache-Control: no-store`.
+- Must not expose exception text, URLs, paths, or credentials.
 
 `GET /ready`
 
-- HTTP 200 when the database is ready, the queue is usable, and — in `rq` mode —
-  at least one live RQ worker is attached to the processing queue.
-- HTTP 503 when the database is unavailable, the queue is unavailable, or
-  `rq` mode is configured with **zero usable workers**.
+- HTTP 200 when mandatory deployment dependencies are usable.
+- HTTP 503 when any mandatory readiness component is unavailable.
 - `Cache-Control: no-store`.
-- Must not expose exception text, database URLs, paths, or credentials.
-- Response shape: `{"status": "ready"|"not_ready", "checks": {...}}`. In `rq`
-  mode `checks` carries `queue`, `workers` (`ok` / `unavailable`) and
-  `usable_worker_count` (a count only — never worker names, hostnames or job
-  payloads).
+- Must not expose exception text, database URLs, Redis URLs, worker hostnames,
+  file paths, payment keys, SMTP credentials, or stack traces.
+- Response shape: `{"status": "ready"|"not_ready", "checks": {...}}`.
 
-### Worker requirement (V1.1 P1-3)
+Readiness checks include:
 
-**Production MUST run the RQ worker process, and MUST monitor it.** A reachable
-Redis with no worker attached accepts uploads and processes none; before this
-change `/ready` reported 200 in exactly that state.
+- `database`: minimal `SELECT 1`.
+- `queue`: `ok`, `fake`, `inline`, or `unavailable` according to effective queue mode.
+- `workers`: `ok`, `unavailable`, or `not_applicable` where RQ worker awareness applies.
+- `usable_worker_count`: count only; never worker names or hostnames.
+- `configuration`: production-only safe config readiness label.
+- `payments`: production-only Razorpay API/webhook config readiness label.
+- `csp`: production-only CSP enforcement readiness label.
 
-- Start the worker alongside the web process:
-  `python -m flask --app app` is *not* enough — run `python rq_worker.py`
-  (same `REDIS_URL`, `SCANSTORY_QUEUE_MODE=rq`, `RQ_QUEUE_NAME`) as its own
-  supervised service, with automatic restart.
-- Worker liveness is derived from RQ's own heartbeat. A worker whose last
-  heartbeat is older than `RQ_WORKER_STALE_AFTER_SECONDS` (default 420s) is not
-  counted as usable.
-- `checks.workers == "not_applicable"` means a non-`rq` queue mode
-  (`fake`/`inline`). That is a supported non-production mode only; the runtime
-  config validation already refuses to boot a production-flagged deployment in
-  any mode other than `rq`.
+## Worker Requirement
+
+Production must run the RQ worker process and must monitor it. A reachable Redis
+with no worker attached accepts uploads and processes none.
+
+- Start the worker alongside the web process with `python rq_worker.py`.
+- Use the same `REDIS_URL`, `SCANSTORY_QUEUE_MODE=rq`, and `RQ_QUEUE_NAME` as the web process.
+- Worker liveness is derived from RQ heartbeat data.
+- A worker with heartbeat older than `RQ_WORKER_STALE_AFTER_SECONDS` (default
+  420s) is not counted as usable.
+- `checks.workers == "not_applicable"` means non-RQ queue mode and is supported
+  only outside production; production startup rejects non-RQ queue modes.
 
 ## Recommended Probes
 
 - External HTTPS probe for `/healthz`.
 - Internal readiness probe for `/ready`.
-- Latency threshold alert.
+- Application latency threshold alert.
 - Consecutive-failure alerting.
-- Database connectivity alert.
+- PostgreSQL connectivity alert.
+- Redis connectivity alert.
+- RQ worker-count alert.
+- Job queue growth and stuck/retrying job alert.
 - Disk/storage utilization alert.
 - Application error-rate alert.
+- SMTP failure alert.
 - Payment activation failure alert.
-- Reservation drift alert.
+- Failed payment webhook alert.
+- Refund reconciliation attention-state alert.
+- Storage reconciliation error alert.
+- Transfer expiry/reconciliation command failure alert.
 - Scanner endpoint latency alert.
 - Brute-force/login-rate alert.
-- Razorpay webhook rejection-rate alert (`missing_signature`/`invalid_signature`
-  spikes can indicate a misconfigured secret or a probing attempt).
-- Razorpay webhook `failed` processing-status alert (`unknown_order`,
-  `amount_mismatch`, `currency_mismatch`, `payment_id_conflict`).
-- **RQ worker-count alert: alert immediately when `/ready` reports
-  `checks.workers == "unavailable"` or `usable_worker_count == 0`.** This is the
-  "queue accepts jobs, nothing runs them" condition.
-- Worker process supervision alert (process exited / restart loop).
+- CSP header missing or report-only-in-production alert.
 
 ## Suggested Initial Thresholds
 
@@ -67,18 +70,23 @@ Tune with real traffic:
 
 - `/healthz`: alert after 3 consecutive failures.
 - `/ready`: alert after 2 consecutive failures.
+- `/ready` `checks.payments == "unavailable"`: alert immediately in production.
+- `/ready` `checks.csp == "unavailable"`: alert immediately in production.
+- `/ready` `checks.workers == "unavailable"` or `usable_worker_count == 0`:
+  alert immediately in production.
 - Scanner API p95 latency: warning at 1 second, critical at 3 seconds.
 - Disk usage: warning at 75%, critical at 90%.
 - Payment activation failures: alert immediately.
+- Webhook `secret_not_configured` rejection: alert immediately.
+- Webhook processing failure codes (`unknown_order`, `amount_mismatch`,
+  `currency_mismatch`, `payment_id_conflict`): alert immediately.
+- Refund reconciliation attention states: alert immediately.
 - Secret-looking log event: alert immediately.
-- Webhook `secret_not_configured` rejection: alert immediately (means
-  `RAZORPAY_WEBHOOK_SECRET` is missing in an environment expected to receive
-  webhook deliveries).
 
-## Webhook Inspection Commands (read-only)
+## Webhook Inspection Commands
 
-Use these to inspect Razorpay webhook reconciliation state without querying
-the database directly. None of the three mutate any table:
+Use these read-only commands to inspect Razorpay webhook reconciliation state
+without querying the database directly:
 
 ```powershell
 python -m flask --app app webhook-events-status --limit 50
@@ -86,24 +94,34 @@ python -m flask --app app reconcile-order-webhooks <order_id>
 python -m flask --app app webhook-replay-report
 ```
 
-- `webhook-events-status` — recent `received`/`failed` events, useful for
-  spotting a stuck or misbehaving webhook integration.
-- `reconcile-order-webhooks <order_id>` — full webhook history tied to one
-  `PaymentOrder`, useful when investigating a specific customer/order.
-- `webhook-replay-report` — aggregate count of distinct events and observed
-  replay/duplicate deliveries, useful for confirming Razorpay's retry volume
-  is within expectation.
+- `webhook-events-status`: recent `received`/`failed` events.
+- `reconcile-order-webhooks <order_id>`: webhook history tied to one `PaymentOrder`.
+- `webhook-replay-report`: aggregate replay/duplicate-delivery volume.
+
+## Scheduled Operations Signals
+
+The deployment must monitor scheduled command completion and non-zero exits for:
+
+- `reconcile-refunds`
+- `reconcile-storage --json`
+- `expire-ownership-transfers --apply`
+- `expire-stale-reservations --apply`
+- `recover-processing-jobs --apply`
+- `reconcile-capacity-reservations`
+- `cleanup-upload-sessions --apply`
 
 ## Log Hygiene
 
 Logs must not contain:
 
 - Raw passwords or credentials.
+- `FLASK_SECRET_KEY`.
 - Razorpay key secret.
-- Razorpay webhook secret (`RAZORPAY_WEBHOOK_SECRET`).
+- Razorpay webhook secret.
 - Raw payment signatures.
 - Raw `X-Razorpay-Signature` header values.
 - Raw webhook request payload/body.
+- SMTP password or provider auth failure details.
 - Auth/session cookies.
 - Private media filesystem paths.
 - Full request bodies with files.

@@ -24,6 +24,9 @@ def _import_app_with_env(monkeypatch, **overrides):
         "SCANSTORY_QUEUE_MODE": "rq",
         "REDIS_URL": "redis://127.0.0.1:6379/0",
         "SCANSTORY_SKIP_STARTUP_BOOTSTRAP": "1",
+        "RAZORPAY_KEY_ID": "rzp_test_key_id",
+        "RAZORPAY_KEY_SECRET": "rzp_test_key_secret",
+        "RAZORPAY_WEBHOOK_SECRET": "whsec_test_secret",
     }
     base.update(overrides)
     for key, value in base.items():

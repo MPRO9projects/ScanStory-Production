@@ -34,6 +34,11 @@ def _fresh_import_app(monkeypatch, tmp_path, **env):
         "MAIL_FROM",
         "SMTP_TIMEOUT_SECONDS",
         "SMTP_SECURITY",
+        "RAZORPAY_KEY_ID",
+        "RAZORPAY_KEY_SECRET",
+        "RAZORPAY_WEBHOOK_SECRET",
+        "SECURITY_CSP_ENABLED",
+        "SECURITY_CSP_ENFORCE",
     ):
         monkeypatch.delenv(key, raising=False)
     for key, value in env.items():
@@ -252,6 +257,9 @@ def test_production_secure_cookie_and_required_email_config_pass(monkeypatch, tm
         SMTP_PASS="smtp-pass",
         MAIL_FROM="no-reply@example.com",
         SMTP_TIMEOUT_SECONDS="7.5",
+        RAZORPAY_KEY_ID="rzp_test_key_id",
+        RAZORPAY_KEY_SECRET="rzp_test_key_secret",
+        RAZORPAY_WEBHOOK_SECRET="whsec_test_secret",
     )
 
     assert app_module.app.config["SESSION_COOKIE_SECURE"] is True
