@@ -492,6 +492,21 @@
             background: rgba(255,255,255,0.03);
         }
 
+        .coverage-grant-explainer {
+            margin-top: 20px;
+            padding: 14px 16px;
+            border: 1px solid rgba(0,212,255,0.28);
+            border-radius: 10px;
+            background: rgba(0,212,255,0.07);
+            color: rgba(255,255,255,0.82);
+            font-size: 13px;
+            line-height: 1.55;
+        }
+
+        .coverage-grant-explainer p {
+            margin: 8px 0 0;
+        }
+
         .coverage-grant-form {
             display: grid;
             grid-template-columns: minmax(120px, 0.5fr) minmax(220px, 1.5fr) auto;
@@ -716,7 +731,10 @@
                 <div class="info-section">
                     <h3>Claims and Coverage</h3>
                     <div class="info-row"><span class="info-label">Recent Claims</span><span class="info-value">{{ ownership.claims|length }}</span></div>
-                    <div class="info-row"><span class="info-label">Coverage State</span><span class="info-value">{% if coverage and coverage.is_suspended %}Suspended{% elif coverage and coverage.is_live %}Live{% else %}Not live{% endif %}</span></div>
+                    {# Backend-resolved state string, not a template recomputation:
+                       "suspended" and "expired" are different problems with
+                       different fixes and must never collapse into each other. #}
+                    <div class="info-row"><span class="info-label">Coverage State</span><span class="info-value" data-coverage-state="{{ coverage.coverage_state if coverage else '' }}">{{ PROJECT_COVERAGE_STATE_LABELS.get(coverage.coverage_state, coverage.coverage_state) if coverage else '-' }}</span></div>
                     <p style="color: rgba(255,255,255,0.7); margin-top: 10px;">
                         Claims do not transfer ownership by themselves. Coverage/service state is separate from ownership state.
                     </p>
@@ -755,17 +773,36 @@
             <h3 style="margin-bottom: 20px;">Service Coverage</h3>
             <div class="info-grid">
                 <div class="info-section">
+                    <div class="info-row"><span class="info-label">Coverage State</span><span class="info-value" data-coverage-state="{{ coverage.coverage_state }}">{{ PROJECT_COVERAGE_STATE_LABELS.get(coverage.coverage_state, coverage.coverage_state) }}</span></div>
                     <div class="info-row"><span class="info-label">Publicly Live</span><span class="info-value">{{ 'Yes' if coverage.is_live else 'No' }}</span></div>
                     <div class="info-row"><span class="info-label">Reason</span><span class="info-value">{{ coverage.reason }}</span></div>
-                    <div class="info-row"><span class="info-label">Coverage Source</span><span class="info-value">{{ coverage.coverage_source or '-' }}</span></div>
+                    <div class="info-row"><span class="info-label">Coverage Source</span><span class="info-value">{{ PROJECT_COVERAGE_SOURCE_LABELS.get(coverage.coverage_source, coverage.coverage_source) or '-' }}</span></div>
                 </div>
                 <div class="info-section">
-                    <div class="info-row"><span class="info-label">Covered Until</span><span class="info-value">{{ coverage.effective_coverage_until or 'Indefinite / none' }}</span></div>
+                    <div class="info-row"><span class="info-label">Covered Until</span><span class="info-value">{% if coverage.effective_coverage_until %}{{ coverage.effective_coverage_until|friendly_date }}{% elif coverage.coverage_state == 'active' %}No end date{% else %}-{% endif %}</span></div>
                     <div class="info-row"><span class="info-label">Renewal Starts</span><span class="info-value">{{ coverage.renewal_starts_at or '-' }}</span></div>
                     <div class="info-row"><span class="info-label">Renewal Eligible</span><span class="info-value">{{ 'Yes' if coverage.renewal_eligible else coverage.renewal_blocked_code or 'No' }}</span></div>
                 </div>
             </div>
             {% if admin_can('superadmin.capacity.manage') %}
+            {# COV-3. Governed grant only: the backend accepts a finite positive
+               duration in days plus a mandatory reason, and there is no revoke
+               endpoint, so no revoke control is offered here. #}
+            <div class="coverage-grant-explainer" data-testid="coverage-grant-explainer">
+                <strong>Grant ScanStory service coverage</strong>
+                <p>
+                    This grants <em>project service coverage</em> only - the window in which this one
+                    ScanStory is publicly scannable. It is separate from the account's subscription
+                    plan: it does not extend, change or create a subscription, it does not change
+                    account project slots or scan allowance, and it does not change ownership of this
+                    ScanStory or its billing history.
+                </p>
+                <p>
+                    A grant is a finite number of days starting from this project's renewal anchor,
+                    and a reason is required and recorded in the admin activity log. Coverage cannot
+                    be revoked from this screen; suspend the project instead if it must come offline.
+                </p>
+            </div>
             <form class="coverage-grant-form" id="coverageGrantForm"
                   method="POST"
                   action="{{ url_for('admin_grant_project_coverage', project_id=project.id) }}"

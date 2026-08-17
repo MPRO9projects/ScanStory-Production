@@ -91,6 +91,15 @@
         <strong>{{ (projects_by_id.get(transfer.project_id).name if projects_by_id.get(transfer.project_id) else 'ScanStory #' ~ transfer.project_id) }}</strong>
         <span class="status">{{ PROJECT_TRANSFER_STATUS_LABELS.get(transfer.status, transfer.status) }}</span>
         <div class="muted">Request #{{ transfer.id }}</div>
+        {# P1-4: expires_at is now always populated on a pending handover. Only the
+           backend decides when a handover becomes EXPIRED - this is the deadline
+           it set, formatted, and nothing more. #}
+        {% if transfer.expires_at %}
+        <div class="muted" data-transfer-deadline="{{ transfer.id }}">
+          Respond by {{ transfer.expires_at|friendly_date }}. After that this handover expires and
+          the sender has to start a new one. Ownership does not move either way.
+        </div>
+        {% endif %}
         {% set block = capacity_blocks.get(transfer.id) %}
         {% if block %}
           <div class="capacity-note">
@@ -142,6 +151,12 @@
         <strong>{{ (projects_by_id.get(transfer.project_id).name if projects_by_id.get(transfer.project_id) else 'ScanStory #' ~ transfer.project_id) }}</strong>
         <span class="status">{{ PROJECT_TRANSFER_STATUS_LABELS.get(transfer.status, transfer.status) }}</span>
         <div class="muted">Request #{{ transfer.id }} - you keep this ScanStory and its project slot until the handover finishes.</div>
+        {% if transfer.expires_at %}
+        <div class="muted" data-transfer-deadline="{{ transfer.id }}">
+          The recipient has until {{ transfer.expires_at|friendly_date }} to respond. After that this
+          request expires and you keep the ScanStory - you can send a new request then.
+        </div>
+        {% endif %}
         {% if transfer.status == 'PENDING_CAPACITY' %}
         <p class="muted">The recipient accepted, but their account still needs project and/or storage capacity. Media and QR remain intact under the current owner.</p>
         {% elif transfer.status == 'DISPUTED' %}
@@ -159,6 +174,31 @@
       </div>
     {% endfor %}
   </section>
+
+  {# EXPIRED is a terminal, historical state and is listed apart from the two
+     actionable lists on purpose: there is no accept, retry, decline or withdraw
+     control here, because the backend offers none for an expired handover. It is
+     also not the same thing as PENDING_CAPACITY (waiting on room) or DISPUTED
+     (under review) - both of those are still live and still appear above. #}
+  {% if expired_transfers %}
+  <h2>Expired handovers</h2>
+  <section data-testid="expired-transfers">
+    {% for transfer in expired_transfers %}
+      <div class="row" data-transfer-status="EXPIRED">
+        <strong>{{ (projects_by_id.get(transfer.project_id).name if projects_by_id.get(transfer.project_id) else 'ScanStory #' ~ transfer.project_id) }}</strong>
+        <span class="status">{{ PROJECT_TRANSFER_STATUS_LABELS.get(transfer.status, transfer.status) }}</span>
+        <div class="muted">Request #{{ transfer.id }}{% if transfer.expires_at %} - deadline was {{ transfer.expires_at|friendly_date }}{% endif %}</div>
+        <p class="muted">
+          This handover ran out of time and is closed. <strong>Ownership did not move</strong>: the
+          ScanStory, its media and its QR code stayed exactly where they were. Nothing can be
+          accepted or retried on this request - start a new handover if it is still wanted.
+          If an ownership review request was linked to it, that request is separate and is still
+          listed under your review requests below with its own status.
+        </p>
+      </div>
+    {% endfor %}
+  </section>
+  {% endif %}
 
   <h2>Hand a ScanStory to someone else</h2>
   <section>
@@ -200,6 +240,12 @@
         <strong>{{ (projects_by_id.get(claim.project_id).name if projects_by_id.get(claim.project_id) else 'ScanStory #' ~ claim.project_id) }}</strong>
         <span class="status">{{ PROJECT_CLAIM_STATUS_LABELS.get(claim.status, claim.status) }}</span>
         <div class="muted">Request #{{ claim.id }}{% if claim.evidence_summary %} - {{ claim.evidence_summary }}{% endif %}</div>
+        {% if claim.response_deadline_at %}
+        <div class="muted" data-claim-deadline="{{ claim.id }}">
+          Please respond by {{ claim.response_deadline_at|friendly_date }}. If no response arrives by
+          then, the ScanStory team can review the request directly. Nothing moves in the meantime.
+        </div>
+        {% endif %}
         <label class="muted" for="claimNote{{ claim.id }}">Response note (recorded)</label>
         <textarea id="claimNote{{ claim.id }}" name="note" form="claimAccept{{ claim.id }}" maxlength="500" placeholder="Optional context for this response."></textarea>
         <div class="actions">
@@ -220,6 +266,39 @@
     {% endfor %}
   </section>
 
+  {# P1-10 claimant entry point. The reference used here is the scanner link that
+     is already printed with the QR code and already served publicly, so this adds
+     no new way to find a ScanStory - it only asks the existing, authenticated,
+     rate-limited lookup endpoint whether the ScanStory you already hold a link to
+     can be claimed. Every non-eligible answer is one identical server response and
+     is rendered through one identical code path here, so this screen cannot tell
+     you whether a reference was wrong or merely not claimable. #}
+  <h2>Claim a ScanStory you scanned</h2>
+  <section data-testid="claim-lookup">
+    <p class="muted">
+      Scanned a QR code for a ScanStory that should be yours - printed for you, made by a vendor on
+      your behalf, or handed over outside the app? Paste its link here and we will check whether you
+      can file an ownership review request for it.
+    </p>
+    <form id="claimLookupForm" class="handover-form" novalidate>
+      <label class="muted full" for="claimLookupReference">ScanStory link from the QR code
+        <input type="text" id="claimLookupReference" name="reference" autocomplete="off"
+               placeholder="https://…/scanner/…" aria-describedby="claimLookupHelp">
+      </label>
+      <p class="muted full" id="claimLookupHelp">
+        Open the QR code with any phone camera and copy the link it goes to.
+      </p>
+      <button class="full" type="submit">Check this ScanStory</button>
+    </form>
+    <div id="claimLookupResult" role="status" aria-live="polite"></div>
+    <p class="muted">
+      Filing a request never transfers a ScanStory and never changes anything on its own. It goes to
+      the current owner - or to the vendor who manages the ScanStory for them - to answer first, and
+      to the ScanStory team afterwards if there is no vendor or no answer. Ownership moves only when
+      a handover is opened and the receiving account accepts it.
+    </p>
+  </section>
+
   <h2>Your ownership review requests</h2>
   <section>
     {% if not my_claims %}
@@ -228,8 +307,48 @@
     {% for claim in my_claims %}
       <div class="row">
         <strong>{{ (projects_by_id.get(claim.project_id).name if projects_by_id.get(claim.project_id) else 'ScanStory #' ~ claim.project_id) }}</strong>
-        <span class="status">{{ PROJECT_CLAIM_STATUS_LABELS.get(claim.status, claim.status) }}</span>
+        <span class="status" data-claim-status="{{ claim.status }}">{{ PROJECT_CLAIM_STATUS_LABELS.get(claim.status, claim.status) }}</span>
         <div class="muted">Request #{{ claim.id }}</div>
+        {# What "in review" actually means right now, per real backend status. The
+           governed order is: the current owner (or the vendor who manages the
+           ScanStory for them) answers first where there is one, and the ScanStory
+           team reviews afterwards or once the response deadline passes. No stage
+           before a completed handover means ownership has moved. #}
+        {% if claim.status in ['OPEN', 'VENDOR_NOTIFIED'] %}
+        <p class="muted" data-claim-explainer="awaiting_response">
+          Waiting for the current owner - or the vendor who manages this ScanStory for them - to
+          respond{% if claim.response_deadline_at %} by {{ claim.response_deadline_at|friendly_date }}{% endif %}.
+          If they do not respond, the ScanStory team reviews it after that. Ownership has not changed.
+        </p>
+        {% elif claim.status == 'APPROVED_BY_VENDOR' %}
+        <p class="muted" data-claim-explainer="approved_by_vendor">
+          The current owner agreed. A handover has been opened and you still have to accept it from
+          this page, and your account still needs room for the ScanStory and its files. Ownership has
+          not changed yet.
+        </p>
+        {% elif claim.status == 'PENDING_ADMIN_REVIEW' %}
+        <p class="muted" data-claim-explainer="pending_admin_review">
+          This request is now with the ScanStory team for review. Ownership has not changed.
+        </p>
+        {% elif claim.status == 'APPROVED_BY_ADMIN' %}
+        <p class="muted" data-claim-explainer="approved_by_admin">
+          The ScanStory team approved your request and opened a handover. Ownership moves only once
+          you accept that handover and the capacity checks pass.
+        </p>
+        {% elif claim.status == 'REJECTED' %}
+        <p class="muted" data-claim-explainer="rejected">
+          This request was reviewed and not approved. Ownership is unchanged.
+        </p>
+        {% elif claim.status == 'CANCELLED' %}
+        <p class="muted" data-claim-explainer="cancelled">
+          You withdrew this request. Ownership is unchanged.
+        </p>
+        {% elif claim.status == 'EXPIRED' %}
+        <p class="muted" data-claim-explainer="expired">
+          This request ran out of time and is closed. Ownership is unchanged - you can file a new
+          request if it still applies.
+        </p>
+        {% endif %}
         {% if claim.status in ['OPEN', 'VENDOR_NOTIFIED', 'PENDING_ADMIN_REVIEW', 'APPROVED_BY_VENDOR'] %}
         <div class="actions">
         <form method="POST" action="{{ url_for('cancel_ownership_claim_route', claim_id=claim.id) }}" onsubmit="return confirm('Withdraw this ownership review request?');">
@@ -248,5 +367,129 @@
     </p>
   </section>
 </main>
+
+<script>
+  // Claimant discovery (P1-10). This script decides NOTHING: it extracts the
+  // project reference out of the pasted scanner link, asks the backend, and prints
+  // the backend's own sentence. It branches only on `eligible` - never on
+  // reason_code - so a "does not exist" and a "not claimable" answer are literally
+  // the same code path and the same words here, exactly as the server intends.
+  (function () {
+    const form = document.getElementById('claimLookupForm');
+    if (!form) return;
+    const input = document.getElementById('claimLookupReference');
+    const result = document.getElementById('claimLookupResult');
+    const CSRF = "{{ csrf_token() }}";
+    const GENERIC =
+      'That ScanStory cannot be claimed from here. Check the link or QR code you scanned, '
+      + 'or contact ScanStory support.';
+
+    function projectReference(value) {
+      const text = (value || '').trim();
+      const fromLink = text.match(/\/scanner\/(\d+)/);
+      if (fromLink) return fromLink[1];
+      return /^\d+$/.test(text) ? text : null;
+    }
+
+    function say(message) {
+      result.textContent = '';
+      const p = document.createElement('p');
+      p.className = 'muted';
+      p.textContent = message;
+      result.appendChild(p);
+    }
+
+    function offerClaim(data) {
+      result.textContent = '';
+      const wrap = document.createElement('div');
+      wrap.className = 'row';
+      wrap.dataset.testid = 'claim-lookup-eligible';
+
+      const name = document.createElement('strong');
+      name.textContent = (data.project && data.project.name) || 'This ScanStory';
+      wrap.appendChild(name);
+
+      const reason = document.createElement('p');
+      reason.className = 'muted';
+      reason.textContent = data.reason || '';
+      wrap.appendChild(reason);
+
+      const claimForm = document.createElement('form');
+      claimForm.method = 'POST';
+      claimForm.action = data.claim_url;
+      claimForm.addEventListener('submit', function (event) {
+        if (!window.confirm(
+          'File an ownership review request for this ScanStory?\n\n'
+          + 'This does not transfer it. A person reviews every request, and ownership only '
+          + 'changes through a handover the receiving account accepts.'
+        )) { event.preventDefault(); }
+      });
+
+      const token = document.createElement('input');
+      token.type = 'hidden';
+      token.name = 'csrf_token';
+      token.value = CSRF;
+      claimForm.appendChild(token);
+
+      const label = document.createElement('label');
+      label.className = 'muted';
+      label.htmlFor = 'claimLookupEvidence';
+      label.textContent = 'Why this ScanStory is yours (recorded for review)';
+      claimForm.appendChild(label);
+
+      const evidence = document.createElement('textarea');
+      evidence.id = 'claimLookupEvidence';
+      evidence.name = 'evidence_summary';
+      evidence.maxLength = 2000;
+      evidence.rows = 3;
+      evidence.placeholder = 'Order number, who printed it, when you received it…';
+      claimForm.appendChild(evidence);
+
+      const submit = document.createElement('button');
+      submit.type = 'submit';
+      submit.textContent = 'File ownership review request';
+      claimForm.appendChild(submit);
+
+      wrap.appendChild(claimForm);
+      result.appendChild(wrap);
+      evidence.focus();
+    }
+
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      const reference = projectReference(input.value);
+      if (!reference) {
+        // Same wording as a non-eligible answer on purpose: an unusable reference
+        // must not be distinguishable from a reference that is simply not claimable.
+        say(GENERIC);
+        return;
+      }
+      say('Checking…');
+      fetch('/api/ownership/claim-lookup/' + reference, {
+        headers: { 'Accept': 'application/json' },
+        credentials: 'same-origin'
+      }).then(async function (response) {
+        if (response.status === 429) {
+          say('Too many checks in a short time. Please wait a little and try again.');
+          return;
+        }
+        const data = await response.json().catch(function () { return null; });
+        if (!response.ok || !data || !data.success) {
+          say(GENERIC);
+          return;
+        }
+        if (data.eligible && data.claim_url) {
+          offerClaim(data);
+          return;
+        }
+        // One path for every non-eligible answer, an existing open request
+        // included: the server's own sentence, never a raw reason code.
+        say(data.reason || GENERIC);
+      }).catch(function () {
+        say('That check could not be completed right now. Please try again.');
+      });
+    });
+  })();
+</script>
 </body>
 </html>

@@ -260,6 +260,23 @@
             color: rgba(255,255,255,0.3);
         }
 
+        /* Coverage warning note - text carries the meaning, colour only reinforces it */
+        .coverage-warning {
+            margin: 8px 0 0;
+            padding: 10px 12px;
+            border-radius: 10px;
+            background: rgba(250, 204, 21, 0.08);
+            border: 1px solid rgba(250, 204, 21, 0.28);
+            color: #fde68a;
+            font-size: 12px;
+            line-height: 1.5;
+        }
+        .coverage-warning-suspended {
+            background: rgba(239, 68, 68, 0.08);
+            border-color: rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+        }
+
         /* Card icon */
         .card-icon-wrap {
             width: 44px;
@@ -624,12 +641,42 @@
                     {# V1.1 - one summary badge per card, only when there is something
                        out of the ordinary to say. "You own this" on every card would be
                        noise; the detail page carries the full ownership panel. #}
-                    {% if project.is_suspended or project.active_transfer_status or project.viewer_relationship == 'manager' or project.beneficiary_user_id %}
+                    {% set coverage = project.coverage_summary %}
+                    {% if project.is_suspended or project.active_transfer_status or project.viewer_relationship == 'manager' or project.beneficiary_user_id or coverage %}
                     <div class="card-meta" style="margin-top:-4px;">
                         {% if project.is_suspended %}
                         <span class="ss-chip" data-tone="stop">
                             <i class="fas fa-ban" aria-hidden="true"></i> Suspended
                         </span>
+                        {% endif %}
+                        {# V1.1 P1-9 coverage badge. The template branches ONLY on the
+                           backend-resolved coverage_state string and formats the
+                           backend-provided date - it never compares dates itself, and
+                           "suspended" is deliberately never rendered as "expired". #}
+                        {% if coverage %}
+                        {% if coverage.coverage_state == 'active' %}
+                        <span class="ss-chip" data-tone="ok" data-coverage-state="active">
+                            <i class="fas fa-circle-check" aria-hidden="true"></i>
+                            {{ PROJECT_COVERAGE_STATE_LABELS['active'] }}
+                            {%- if coverage.effective_coverage_until %} &middot; until {{ coverage.effective_coverage_until|friendly_date }}
+                            {%- else %} &middot; no end date{% endif %}
+                        </span>
+                        {% elif coverage.coverage_state == 'expired' %}
+                        <span class="ss-chip" data-tone="stop" data-coverage-state="expired">
+                            <i class="fas fa-hourglass-end" aria-hidden="true"></i>
+                            {{ PROJECT_COVERAGE_STATE_LABELS['expired'] }}
+                        </span>
+                        {% elif coverage.coverage_state == 'none' %}
+                        <span class="ss-chip" data-tone="wait" data-coverage-state="none">
+                            <i class="fas fa-circle-exclamation" aria-hidden="true"></i>
+                            {{ PROJECT_COVERAGE_STATE_LABELS['none'] }}
+                        </span>
+                        {% elif coverage.coverage_state == 'suspended' %}
+                        <span class="ss-chip" data-tone="stop" data-coverage-state="suspended">
+                            <i class="fas fa-ban" aria-hidden="true"></i>
+                            {{ PROJECT_COVERAGE_STATE_LABELS['suspended'] }}
+                        </span>
+                        {% endif %}
                         {% endif %}
                         {% if project.active_transfer_status %}
                         <span class="ss-chip" data-tone="wait">
@@ -648,6 +695,29 @@
                         </span>
                         {% endif %}
                     </div>
+                    {% endif %}
+
+                    {# Why it matters, in words, whenever public scanning is off. Each
+                       state gets its own sentence because the fix is different for
+                       each: a suspended ScanStory is not brought back by buying
+                       coverage, and saying so would waste someone's money. #}
+                    {% if coverage and coverage.coverage_state != 'active' %}
+                    <p class="coverage-warning coverage-warning-{{ coverage.coverage_state }}" data-coverage-warning="{{ coverage.coverage_state }}">
+                        <i class="fas fa-triangle-exclamation" aria-hidden="true"></i>
+                        {% if coverage.coverage_state == 'suspended' %}
+                        This ScanStory is suspended by the ScanStory team, so scanning its QR code
+                        does not play the video. Your media and QR code are kept. Contact support -
+                        buying coverage will not lift a suspension.
+                        {% elif coverage.coverage_state == 'expired' %}
+                        Coverage for this ScanStory has run out, so scanning its QR code does not
+                        play the video right now. Your media and QR code are kept - renew coverage
+                        and the same QR code works again.
+                        {% else %}
+                        This ScanStory has no active coverage, so scanning its QR code does not play
+                        the video. Your media and QR code are kept - add coverage and the same QR
+                        code starts working.
+                        {% endif %}
+                    </p>
                     {% endif %}
 
                     <div class="card-actions">

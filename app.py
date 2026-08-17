@@ -1733,6 +1733,16 @@ PROJECT_CLAIM_STATUS_LABELS = {
     "EXPIRED": "Request expired",
     "TRANSFER_COMPLETED": "Ownership handed over",
 }
+# Display copy for project_coverage_state()'s four values. Labels only - the
+# state itself is decided by the resolver, never by a template. "Suspended" is
+# worded so it can never read as "expired": the fix for one is not the fix for
+# the other.
+PROJECT_COVERAGE_STATE_LABELS = {
+    "active": "Coverage active",
+    "expired": "Coverage expired",
+    "none": "No coverage",
+    "suspended": "Suspended by ScanStory",
+}
 PROJECT_COVERAGE_SOURCE_LABELS = {
     "OWNER_SUBSCRIPTION": "Owner's plan",
     "STANDALONE_PROJECT_RENEWAL": "ScanStory Coverage purchase",
@@ -1838,6 +1848,7 @@ app.jinja_env.globals.update(
     PROJECT_TRANSFER_STATUS_LABELS=PROJECT_TRANSFER_STATUS_LABELS,
     PROJECT_CLAIM_STATUS_LABELS=PROJECT_CLAIM_STATUS_LABELS,
     PROJECT_COVERAGE_SOURCE_LABELS=PROJECT_COVERAGE_SOURCE_LABELS,
+    PROJECT_COVERAGE_STATE_LABELS=PROJECT_COVERAGE_STATE_LABELS,
     CONTENT_REPORT_REASON_LABELS=CONTENT_REPORT_REASON_LABELS,
     CONTENT_REPORT_STATUS_LABELS=CONTENT_REPORT_STATUS_LABELS,
     CONTENT_REPORT_ACTION_LABELS=CONTENT_REPORT_ACTION_LABELS,
@@ -7310,6 +7321,19 @@ def ownership_center():
         ProjectOwnershipTransfer.status.in_(PROJECT_ACTIVE_TRANSFER_STATUSES),
     ).order_by(ProjectOwnershipTransfer.id.desc()).all()
 
+    # EXPIRED became a reachable status in P1-4, and `incoming`/`outgoing`
+    # deliberately mean "still actionable", so an expired handover had nowhere to
+    # appear at all. Listed separately (never merged into the actionable lists)
+    # so the terminal state cannot inherit an action control.
+    expired_transfers = ProjectOwnershipTransfer.query.filter(
+        ProjectOwnershipTransfer.status == "EXPIRED",
+        or_(
+            ProjectOwnershipTransfer.to_user_id == user.id,
+            ProjectOwnershipTransfer.from_owner_user_id == user.id,
+            ProjectOwnershipTransfer.initiated_by_user_id == user.id,
+        ),
+    ).order_by(ProjectOwnershipTransfer.id.desc()).limit(25).all()
+
     blocked_transfer_ids = {t.id for t in incoming if t.status == "PENDING_CAPACITY"}
     capacity_blocks = {t.id: transfer_capacity_snapshot(t) for t in incoming if t.id in blocked_transfer_ids}
 
@@ -7341,17 +7365,18 @@ def ownership_center():
         p.id: p
         for p in Project.query.filter(
             Project.id.in_(
-                {t.project_id for t in incoming + outgoing}
+                {t.project_id for t in incoming + outgoing + expired_transfers}
                 | {c.project_id for c in my_claims + incoming_claims}
             )
         ).all()
-    } if (incoming or outgoing or my_claims or incoming_claims) else {}
+    } if (incoming or outgoing or expired_transfers or my_claims or incoming_claims) else {}
 
     return render_template(
         "user/ownership.html",
         user=user,
         incoming=incoming,
         outgoing=outgoing,
+        expired_transfers=expired_transfers,
         transferable=transferable,
         my_claims=my_claims,
         incoming_claims=incoming_claims,
@@ -15875,6 +15900,11 @@ def _admin_claim_row(claim):
         "current_owner": _ownership_party_label(project_current_owner_user_id(project) if project else None),
         "manager_vendor": _ownership_party_label(project.manager_vendor_user_id if project else None),
         "audit": ownership_audit_trail(claim),
+        # The SAME gate approve/reject enforce (P1-5), resolved once for the
+        # template so the page can hide a premature adjudication control instead
+        # of offering it and flashing a PermissionError afterwards. The condition
+        # is not restated in Jinja - this is the backend's own answer.
+        "admin_block_reason": claim_admin_review_block_reason(claim),
     }
 
 
@@ -16525,6 +16555,16 @@ def admin_operations():
             purchase.id: _existing_refund_for_source(addon_purchase=purchase)
             for purchase in addon_purchases
         },
+        # The refund attention worklist (PAY-2). Deliberately the SAME predicate
+        # `flask reconcile-refunds` and /admin/api/refunds?needs_attention=1 use
+        # (stuck_refund_filter, P1-6), so the screen, the CLI and the API can
+        # never disagree about what is outstanding. A settled refund
+        # (REFUNDED + APPLIED) matches neither branch and is excluded by the
+        # predicate itself, not by the template.
+        attention_refunds=stuck_refund_query().limit(50).all(),
+        # Provider-dashboard refunds with no local PaymentRefund row by design
+        # (P1-7). Ids and the correlated local source only.
+        out_of_band_refunds=unlinked_out_of_band_refund_events(),
         entitlement_transactions=(
             EntitlementTransaction.query
             .order_by(EntitlementTransaction.created_at.desc(), EntitlementTransaction.id.desc())
