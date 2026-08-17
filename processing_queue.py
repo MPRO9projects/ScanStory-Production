@@ -300,6 +300,66 @@ def processing_job_status_payload(job):
     }
 
 
+def _worker_stale_after_seconds():
+    # A knob, not a constant: RQ's own worker TTL is configurable and a slow
+    # host legitimately heartbeats late. Default is generous - roughly RQ's
+    # 420s default worker_ttl - so a busy-but-alive worker is never called dead.
+    try:
+        return max(1, int(os.environ.get("RQ_WORKER_STALE_AFTER_SECONDS", "420")))
+    except (TypeError, ValueError):
+        return 420
+
+
+def _rq_workers_for_queue():
+    """Live RQ worker records registered against OUR queue.
+
+    Separate function so readiness can be tested without a Redis server. RQ's
+    own registry already drops a worker whose heartbeat key expired; the
+    heartbeat age check in queue_worker_state() is a second, explicit guard so a
+    registry that has not been reaped yet cannot report a dead worker as usable.
+    """
+    from redis import Redis
+    from rq import Queue, Worker
+
+    connection = Redis.from_url(os.environ["REDIS_URL"])
+    return Worker.all(queue=Queue(queue_name(), connection=connection))
+
+
+def queue_worker_state():
+    """("ok" | "unavailable" | "not_applicable", usable_worker_count).
+
+    'not_applicable' is the honest answer for queue modes that have no worker
+    process by definition (fake/inline) - it is NOT a failure, and it is exactly
+    the intentionally-supported non-rq deployment mode.
+
+    Deliberately returns a COUNT and nothing else: worker names are hostname-pid
+    strings and current jobs carry payloads, neither of which belongs in a
+    public readiness response.
+    """
+    try:
+        mode = queue_mode()
+    except QueueUnavailable:
+        return "unavailable", 0
+    if mode != "rq":
+        return "not_applicable", 0
+    if not os.environ.get("REDIS_URL"):
+        return "unavailable", 0
+    try:
+        workers = _rq_workers_for_queue()
+    except Exception:
+        return "unavailable", 0
+    cutoff = get_utc_now() - timedelta(seconds=_worker_stale_after_seconds())
+    usable = 0
+    for worker in workers:
+        if getattr(worker, "death_date", None):
+            continue
+        heartbeat = getattr(worker, "last_heartbeat", None)
+        if heartbeat is not None and heartbeat < cutoff:
+            continue
+        usable += 1
+    return ("ok" if usable else "unavailable"), usable
+
+
 def redis_ready_check():
     if queue_required() and not os.environ.get("REDIS_URL"):
         return False

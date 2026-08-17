@@ -14,6 +14,7 @@ from flask import (
     Flask, request, redirect, url_for, session, make_response,
     jsonify, flash, send_from_directory, render_template, abort, has_request_context
 )
+from markupsafe import escape
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.datastructures import FileStorage
@@ -85,6 +86,7 @@ from processing_queue import (
     queue_config_summary,
     queue_mode,
     queue_required,
+    queue_worker_state,
     processing_job_status_payload,
     redis_ready_check,
     retry_failed_job,
@@ -347,6 +349,10 @@ RATE_LIMITS = {
     # project, so it is the one ownership mutation worth a bucket; the rest are
     # already scoped to a row the caller is a party to.
     "ownership_claim": (10, 3600),
+    # V1.1 P1-10. The claim-preflight lookup answers "can I file a claim for the
+    # project on this QR?" and therefore has to be cheap enough for a normal
+    # claimant and too slow to sweep a range of ids with.
+    "ownership_claim_lookup": (30, 3600),
 }
 
 
@@ -488,8 +494,30 @@ def inject_recaptcha_key():
 
 
 def verify_recaptcha_v3(expected_action):
-    # Bypass when keys not configured (local dev or unconfigured deployment)
+    # MISSING CONFIG IS A DEPLOYMENT FAULT, NOT A PASS (V1.1 P1-2).
+    #
+    # Unconfigured keys used to return True unconditionally, so a production
+    # deployment that forgot RECAPTCHA_SECRET_KEY ran every protected form with
+    # no verification at all and nothing said so. A production-flagged runtime
+    # now fails CLOSED here; local dev and the test suite (which have no real
+    # keys, by design) keep the documented bypass.
+    #
+    # A provider/network failure already fails closed in the except branch
+    # below - that behaviour is deliberate and unchanged.
     if not RECAPTCHA_SITE_KEY or not RECAPTCHA_SECRET_KEY:
+        if _runtime_production_mode_flag_active():
+            # Names the missing setting, never a key value.
+            app.logger.error(
+                "recaptcha_not_configured_in_production action=%s missing=%s",
+                expected_action,
+                ",".join(
+                    name for name, value in (
+                        ("RECAPTCHA_SITE_KEY", RECAPTCHA_SITE_KEY),
+                        ("RECAPTCHA_SECRET_KEY", RECAPTCHA_SECRET_KEY),
+                    ) if not value
+                ),
+            )
+            return False, "Security verification is unavailable. Please try again later."
         app.logger.warning(f"reCAPTCHA keys not configured — bypassing verification for action={expected_action}")
         return True, "OK"
 
@@ -668,6 +696,13 @@ def _readiness_checks():
         if not redis_ready_check():
             return {"database": "ok", "queue": "unavailable"}
         checks["queue"] = "ok"
+        # P1-3: a reachable Redis with no worker attached is a queue that
+        # accepts jobs and runs none - indistinguishable from health before this
+        # check existed. /healthz deliberately does NOT do this (it stays a
+        # process-liveness probe); worker awareness belongs on /ready only.
+        worker_state, usable_workers = queue_worker_state()
+        checks["workers"] = worker_state
+        checks["usable_worker_count"] = usable_workers
     elif queue_required():
         # P0-6: fake/inline skip the Redis probe entirely, so readiness used to
         # report 200 precisely when no upload would ever be processed. In a
@@ -683,7 +718,10 @@ def _readiness_checks():
 def ready():
     try:
         checks = _readiness_checks()
-        if checks.get("queue") == "unavailable":
+        # Any component reporting "unavailable" is not-ready. Scanning the values
+        # rather than naming one key means a component added later cannot be
+        # silently ignored the way the worker check would have been.
+        if "unavailable" in checks.values():
             response = jsonify({"status": "not_ready", "checks": checks})
             response.headers["Cache-Control"] = "no-store"
             return response, 503
@@ -1929,7 +1967,11 @@ def initiate_project_ownership_transfer(project, initiated_by_user, recipient_us
         retain_vendor_management=bool(retain_vendor_management),
         status="PENDING_ACCEPTANCE",
         reason=reason,
-        expires_at=expires_at,
+        # P1-4: every pending transfer now carries a deadline. The column and the
+        # expiry check in accept_project_ownership_transfer() already existed;
+        # nothing ever populated this, so EXPIRED was unreachable in production.
+        # An explicit expires_at from a caller still wins.
+        expires_at=expires_at or (get_utc_now() + timedelta(days=ownership_transfer_expiry_days())),
     )
     db.session.add(transfer)
     db.session.flush()
@@ -1962,6 +2004,29 @@ def initiate_project_ownership_transfer(project, initiated_by_user, recipient_us
 # never filesystem paths.
 # ---------------------------------------------------------------------------
 _TRANSFER_RESUMABLE_STATUSES = ("PENDING_ACCEPTANCE", "PENDING_CAPACITY")
+
+# V1.1 P1-4 / P1-5: the two ownership deadlines, in one place.
+#
+# EXPIRED and the vendor-response escalation both already existed in the
+# vocabulary (PROJECT_TRANSFER_STATUSES / ProjectOwnershipClaim
+# .response_deadline_at) but neither column was ever populated, so EXPIRED was
+# unreachable and "the vendor never answered" had no deterministic resolution.
+# These are the durations, named and env-overridable, not magic numbers inline.
+def _ownership_deadline_days(name, default_days):
+    try:
+        return max(1, int(os.environ.get(name, str(default_days))))
+    except (TypeError, ValueError):
+        return default_days
+
+
+def ownership_transfer_expiry_days():
+    """How long a pending transfer stays acceptable."""
+    return _ownership_deadline_days("OWNERSHIP_TRANSFER_EXPIRY_DAYS", 14)
+
+
+def ownership_claim_response_days():
+    """How long a managing vendor has to answer a claim before admin may act."""
+    return _ownership_deadline_days("OWNERSHIP_CLAIM_RESPONSE_DAYS", 7)
 
 
 def _ownership_metadata(record):
@@ -2090,6 +2155,43 @@ def _mark_claims_transfer_completed(transfer):
             _record_ownership_event(claim, "claim_transfer_completed", transfer_id=transfer.id)
 
 
+def expire_transfer_if_due(transfer, actor_user=None, admin=None, now=None):
+    """True when this transfer is past its deadline (and now recorded EXPIRED).
+
+    Called before any mutating action on a transfer, and by the
+    `expire-ownership-transfers` CLI. Idempotent by construction: the conditional
+    UPDATE only matches a still-pending row, so a second run neither
+    re-transitions nor errors, and an already-EXPIRED transfer still answers
+    True. Ownership is NEVER touched here - expiry closes the handover offer and
+    nothing else. A linked claim is deliberately left alone: an expired transfer
+    and an open claim are separate lifecycles, and cancelling someone's claim as
+    a side effect of a missed deadline is not a decision this function may take.
+    """
+    if not transfer or not transfer.expires_at:
+        return False
+    if (now or get_utc_now()) <= transfer.expires_at:
+        return False
+    if transfer.status == "EXPIRED":
+        return True
+    if transfer.status not in _TRANSFER_RESUMABLE_STATUSES:
+        # Already COMPLETED/CANCELLED/DISPUTED - a deadline cannot reopen or
+        # override a state a human or a completed handover already reached.
+        return False
+    if _transition_transfer(transfer, _TRANSFER_RESUMABLE_STATUSES, "EXPIRED"):
+        _record_ownership_event(transfer, "transfer_expired", actor_user=actor_user, admin=admin)
+        db.session.flush()
+    return True
+
+
+def expired_pending_transfer_query(now=None):
+    """Pending transfers whose deadline has passed."""
+    return ProjectOwnershipTransfer.query.filter(
+        ProjectOwnershipTransfer.status.in_(_TRANSFER_RESUMABLE_STATUSES),
+        ProjectOwnershipTransfer.expires_at.isnot(None),
+        ProjectOwnershipTransfer.expires_at < (now or get_utc_now()),
+    ).order_by(ProjectOwnershipTransfer.id.asc())
+
+
 def accept_project_ownership_transfer(transfer, acting_user=None, completed_by_admin=None):
     """Complete a transfer if - and only if - BOTH capacity dimensions allow it.
 
@@ -2105,10 +2207,7 @@ def accept_project_ownership_transfer(transfer, acting_user=None, completed_by_a
     if acting_user is not None and acting_user.id != transfer.to_user_id:
         raise PermissionError("Only the intended recipient can accept this transfer.")
 
-    if transfer.expires_at and get_utc_now() > transfer.expires_at:
-        if _transition_transfer(transfer, _TRANSFER_RESUMABLE_STATUSES, "EXPIRED"):
-            _record_ownership_event(transfer, "transfer_expired", actor_user=acting_user, admin=completed_by_admin)
-            db.session.flush()
+    if expire_transfer_if_due(transfer, actor_user=acting_user, admin=completed_by_admin):
         raise ValueError("This transfer has expired.")
 
     project = Project.query.get(transfer.project_id)
@@ -2245,6 +2344,11 @@ def create_project_ownership_claim(project, claimant_user, evidence_summary=None
         claimant_user_id=claimant_user.id,
         current_owner_user_id=project_current_owner_user_id(project),
         status="OPEN",
+        # P1-5: the deterministic escalation instant. Until it passes, a claim on
+        # a VENDOR-MANAGED project belongs to the vendor to answer; after it,
+        # admin review is unblocked so a silent vendor cannot park a claim
+        # forever. Populated here because nothing ever populated it before.
+        response_deadline_at=get_utc_now() + timedelta(days=ownership_claim_response_days()),
         evidence_summary=evidence_summary,
         evidence_json=json.dumps(evidence_json) if isinstance(evidence_json, (dict, list)) else evidence_json,
     )
@@ -2323,6 +2427,39 @@ def cancel_project_ownership_claim(claim, acting_user, reason=None):
     return claim
 
 
+_CLAIM_ADMIN_REVIEWABLE_STATUSES = ("PENDING_ADMIN_REVIEW", "APPROVED_BY_VENDOR")
+
+
+def claim_admin_review_block_reason(claim, now=None):
+    """Why admin adjudication is premature for this claim, or None if it is not.
+
+    THE GOVERNED ORDER (P1-5). Where a project has an explicit managing vendor,
+    that vendor answers first: admin is the escalation, not the first responder,
+    so an OPEN/VENDOR_NOTIFIED claim is not admin-reviewable until either the
+    vendor has responded (which lands the claim in PENDING_ADMIN_REVIEW or
+    APPROVED_BY_VENDOR) or the response deadline has passed.
+
+    Where there is NO managing vendor, direct admin review of an OPEN claim is
+    the correct governed path, not a bug - there is no vendor step that could
+    ever be satisfied, and the current owner can still respond at any time.
+    Nothing here transfers ownership either way.
+    """
+    if not claim:
+        return None
+    if claim.status in _CLAIM_ADMIN_REVIEWABLE_STATUSES:
+        return None
+    project = Project.query.get(claim.project_id)
+    if not project or not project.manager_vendor_user_id:
+        return None
+    deadline = claim.response_deadline_at
+    if deadline and (now or get_utc_now()) > deadline:
+        return None
+    return (
+        "This project has a managing vendor, who has not responded yet. "
+        "Admin review opens once the vendor responds or the vendor response deadline passes."
+    )
+
+
 def approve_project_ownership_claim_by_admin(claim, admin, decision_reason=None):
     """Approval alone NEVER moves ownership: it opens a governed transfer that
     still has to pass both capacity checks, so an approved claim against a full
@@ -2331,6 +2468,9 @@ def approve_project_ownership_claim_by_admin(claim, admin, decision_reason=None)
         raise ValueError("Claim and admin are required.")
     if claim.status not in PROJECT_ACTIVE_CLAIM_STATUSES:
         raise ValueError("Claim is not active.")
+    premature = claim_admin_review_block_reason(claim)
+    if premature:
+        raise PermissionError(premature)
     project = Project.query.get(claim.project_id)
     claimant = User.query.get(claim.claimant_user_id)
     if not project or not claimant:
@@ -2369,6 +2509,9 @@ def approve_project_ownership_claim_by_admin(claim, admin, decision_reason=None)
 def reject_project_ownership_claim_by_admin(claim, admin, decision_reason=None):
     if not claim or not admin:
         raise ValueError("Claim and admin are required.")
+    premature = claim_admin_review_block_reason(claim)
+    if premature:
+        raise PermissionError(premature)
     if not _transition_claim(
         claim,
         PROJECT_ACTIVE_CLAIM_STATUSES,
@@ -2577,6 +2720,41 @@ def admin_grant_project_service_coverage(project, admin, days, reason, now=None)
     return coverage
 
 
+def _project_coverage_ended_in_past(project, now):
+    """True when this project HAS been covered and that coverage has run out.
+
+    The one fact needed to tell "expired" apart from "never covered" - which the
+    is_live/reason pair cannot express, because both collapse to
+    'no_valid_coverage'.
+    """
+    owner_id = project_current_owner_user_id(project)
+    owner = User.query.get(owner_id) if owner_id else None
+    if owner and owner.subscription_expires_at and owner.subscription_expires_at <= now:
+        return True
+    return db.session.query(ProjectServiceCoverage.id).filter(
+        ProjectServiceCoverage.project_id == project.id,
+        ProjectServiceCoverage.coverage_end.isnot(None),
+        ProjectServiceCoverage.coverage_end <= now,
+    ).first() is not None
+
+
+def project_coverage_state(project, access_state, now):
+    """'suspended' | 'active' | 'expired' | 'none' - the badge-level state.
+
+    SUSPENDED IS DELIBERATELY NOT 'expired'. An admin-suspended project and a
+    project whose coverage lapsed are different problems with different fixes,
+    and collapsing them is how a UI ends up telling someone to buy coverage that
+    would not bring their project back.
+    """
+    if not project:
+        return "none"
+    if not project.is_active:
+        return "suspended"
+    if access_state["is_live"]:
+        return "active"
+    return "expired" if _project_coverage_ended_in_past(project, now) else "none"
+
+
 def project_coverage_summary(project, now=None):
     now = now or get_utc_now()
     state = project_public_access_state(project, now)
@@ -2584,6 +2762,7 @@ def project_coverage_summary(project, now=None):
     eligible, code, _message = project_renewal_eligibility(project, now)
     return {
         "project_id": project.id if project else None,
+        "coverage_state": project_coverage_state(project, state, now),
         "is_live": state["is_live"],
         "reason": state["reason"],
         "coverage_source": state["coverage_source"],
@@ -2873,8 +3052,31 @@ def friendly_date_filter(value):
 # --------------------------------------------------------------------------------------------
 import smtplib
 import ssl
+from email.header import Header
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+
+# CR, LF and NUL are the only characters that can end a header line early and
+# therefore forge Bcc/Cc/Reply-To/any custom header. Everything else - including
+# every non-ASCII name - is legitimate header content.
+_HEADER_BREAK_CHARS = ("\r", "\n", "\x00")
+
+
+def safe_email_header(value, field="header"):
+    """Return `value` only if it cannot break out of a single header line.
+
+    REJECTS rather than strips: a contact-form name containing a newline is an
+    injection attempt, not a typo, and silently mangling it hides the attempt
+    from the operator. Unicode is preserved untouched - non-ASCII is RFC 2047
+    encoded at the point of use (see send_email_smtp below), never stripped.
+    This is the ONE enforcement point every mail path routes through, so no
+    caller has to remember to sanitize.
+    """
+    text = str(value or "")
+    if any(char in text for char in _HEADER_BREAK_CHARS):
+        raise ValueError(f"Line breaks are not allowed in the email {field}.")
+    return text
+
 
 def send_email_smtp(to_email: str, subject: str, html_body: str):
     host = os.environ.get("SMTP_HOST")
@@ -2884,14 +3086,23 @@ def send_email_smtp(to_email: str, subject: str, html_body: str):
     mail_from = os.environ.get("MAIL_FROM", username)
     timeout = _smtp_timeout_seconds()
     security = _smtp_security_mode()
-    
+
     if not all([host, port, username, password, mail_from]):
         raise RuntimeError("SMTP env vars missing.")
-    
+
+    # Header-derived values are validated BEFORE the message is built, so an
+    # injected header never reaches the wire and no partial send happens.
+    # html_body is deliberately NOT checked: newlines in a body are ordinary.
+    to_email = safe_email_header(to_email, "recipient address")
+    mail_from = safe_email_header(mail_from, "sender address")
+    subject = safe_email_header(subject, "subject")
+
     msg = MIMEMultipart("alternative")
     msg["From"] = mail_from
     msg["To"] = to_email
-    msg["Subject"] = subject
+    # A non-ASCII subject must be RFC 2047 encoded or msg.as_string() produces a
+    # string smtplib cannot encode; ASCII subjects stay human-readable as before.
+    msg["Subject"] = subject if subject.isascii() else Header(subject, "utf-8")
     msg.attach(MIMEText(html_body, "html"))
     
     context = ssl.create_default_context()
@@ -4494,7 +4705,8 @@ def reconcile_storage_ledger(apply_changes=False):
 @app.cli.command("reconcile-storage")
 @click.option("--apply", "apply_changes", is_flag=True, default=False, help="Write ledger rows and counters.")
 @click.option("--dry-run", "dry_run", is_flag=True, default=False, help="Report only (the default).")
-def reconcile_storage_command(apply_changes, dry_run):
+@click.option("--json", "json_output", is_flag=True, default=False, help="Emit the full report as JSON.")
+def reconcile_storage_command(apply_changes, dry_run, json_output):
     """Reconcile the media storage ledger against the filesystem.
 
     Read-only by default. Deliberately NOT part of any Alembic migration:
@@ -4506,27 +4718,93 @@ def reconcile_storage_command(apply_changes, dry_run):
         raise click.UsageError("--dry-run and --apply are mutually exclusive.")
     report = reconcile_storage_ledger(apply_changes=apply_changes)
 
+    # Categories, in one place, so the human-readable and --json outputs cannot
+    # describe different findings. "needs_human" marks the categories a
+    # scheduled run must NOT be able to exit 0 on (P1-8): a hard error, or
+    # ownership that could not be resolved and therefore was left alone.
+    # ORPHAN FILES ARE NOT ONE OF THEM: an orphan file is reported, never
+    # deleted, and never blocks a run.
+    categories = (
+        ("missing_files", "Missing files (ledger row exists, file absent on disk)", False),
+        ("orphan_files", "Orphan files (file on disk, no ledger row - reported only, never deleted)", False),
+        ("ambiguous_ownership", "Ambiguous ownership (left unassigned for a human)", True),
+        ("size_mismatches", "Ledger/disk size mismatches", False),
+        ("counter_drift", "Account counter drift", False),
+        ("errors", "Hard reconciliation errors", True),
+    )
+    blocking = sum(len(report[key]) for key, _label, needs_human in categories if needs_human)
+
+    if json_output:
+        # Machine-readable, and carries only what the text output carries: counts,
+        # totals and the report's own entry strings. No credentials, no
+        # environment, no absolute media paths beyond what reconcile_storage_ledger
+        # already puts in an entry.
+        click.echo(json.dumps({
+            "mode": "apply" if apply_changes else "dry-run",
+            "discovered": report["discovered"],
+            "created": report["created"],
+            "already_reconciled": report["already_reconciled"],
+            "total_bytes_accounted": report["total_bytes_accounted"],
+            "counts": {key: len(report[key]) for key, _label, _needs_human in categories},
+            "needs_human_total": blocking,
+            "findings": {key: [str(entry) for entry in report[key]] for key, _label, _needs_human in categories},
+        }, indent=2, default=str))
+    else:
+        click.echo("Mode: apply" if apply_changes else "Mode: dry-run")
+        click.echo(f"Media discovered on disk: {report['discovered']}")
+        click.echo(f"Ledger rows created: {report['created']}")
+        click.echo(f"Already reconciled: {report['already_reconciled']}")
+        click.echo(f"Total bytes accounted: {report['total_bytes_accounted']}")
+        for key, label, _needs_human in categories:
+            entries = report[key]
+            click.echo(f"{label}: {len(entries)}")
+            for entry in entries[:20]:
+                click.echo(f"  - {entry}")
+            if len(entries) > 20:
+                click.echo(f"  ... and {len(entries) - 20} more (total {len(entries)}; use --json for all)")
+        if not apply_changes:
+            click.echo("Dry run: nothing was written. Re-run with --apply to persist.")
+
+    # One audit line per run, in the existing app log - not a new
+    # reconciliation-history subsystem.
+    app.logger.info(
+        "reconcile_storage_run mode=%s discovered=%s created=%s ambiguous=%s errors=%s",
+        "apply" if apply_changes else "dry-run",
+        report["discovered"], report["created"],
+        len(report["ambiguous_ownership"]), len(report["errors"]),
+    )
+    if blocking:
+        # Non-zero so a cron/CI run cannot look clean while storage accounting is
+        # unresolved. Nothing was deleted either way.
+        raise SystemExit(1)
+
+
+@app.cli.command("expire-ownership-transfers")
+@click.option("--apply", "apply_changes", is_flag=True, default=False, help="Persist EXPIRED transitions. Default is dry-run.")
+def expire_ownership_transfers_command(apply_changes):
+    """Close pending ownership transfers whose deadline has passed (V1.1 P1-4).
+
+    Read-only by default. Ownership is never changed here and no linked claim is
+    cancelled - an expired handover offer and an open claim are separate
+    lifecycles. Safe to re-run: an already-EXPIRED transfer is skipped, so a
+    second pass neither double-transitions nor errors.
+    """
+    rows = expired_pending_transfer_query().all()
     click.echo("Mode: apply" if apply_changes else "Mode: dry-run")
-    click.echo(f"Media discovered on disk: {report['discovered']}")
-    click.echo(f"Ledger rows created: {report['created']}")
-    click.echo(f"Already reconciled: {report['already_reconciled']}")
-    click.echo(f"Total bytes accounted: {report['total_bytes_accounted']}")
-    for label, key in (
-        ("Missing files (DB row, no file)", "missing_files"),
-        ("Orphan files (file, no DB row)", "orphan_files"),
-        ("Ambiguous ownership", "ambiguous_ownership"),
-        ("Ledger/disk size mismatches", "size_mismatches"),
-        ("Account counter drift", "counter_drift"),
-        ("Errors", "errors"),
-    ):
-        entries = report[key]
-        click.echo(f"{label}: {len(entries)}")
-        for entry in entries[:20]:
-            click.echo(f"  - {entry}")
-        if len(entries) > 20:
-            click.echo(f"  ... and {len(entries) - 20} more")
-    if not apply_changes:
-        click.echo("Dry run: nothing was written. Re-run with --apply to persist.")
+    click.echo(f"Pending transfers past their deadline: {len(rows)}")
+    expired = 0
+    for transfer in rows:
+        click.echo(
+            f"  transfer_id={transfer.id} project_id={transfer.project_id} "
+            f"status={transfer.status} expires_at={transfer.expires_at}"
+        )
+        if apply_changes and expire_transfer_if_due(transfer):
+            expired += 1
+    if apply_changes:
+        db.session.commit()
+        click.echo(f"Transferred to EXPIRED: {expired}")
+    else:
+        click.echo("Dry run: nothing was written. Re-run with --apply to expire these transfers.")
 
 
 def _quota_counter_rows():
@@ -6756,8 +7034,25 @@ def send_contact_email():
                 "error": recaptcha_msg
             }), 403    
 
-        # Email content
+        # Email content. Both interpolated pieces are user-controlled
+        # (enquiry_label falls back to the raw enquiry_type), so a CRLF here is
+        # exactly the header-injection case. send_email_smtp() is the
+        # enforcement point; this only turns its refusal into a 400 for the
+        # submitter instead of a 500.
         subject = f"[{enquiry_label}] Contact Form — {name}"
+        try:
+            safe_email_header(subject, "subject")
+        except ValueError:
+            return jsonify({
+                'success': False,
+                'error': 'Please remove line breaks from the name and enquiry type fields.',
+            }), 400
+
+        # Escaped: this HTML goes to a staff inbox, and an f-string with raw
+        # form input is how a submitter gets to author markup inside it.
+        name, phone, email, project, message, enquiry_label = (
+            escape(value) for value in (name, phone, email, project, message, enquiry_label)
+        )
 
         html_body = f"""
         <html>
@@ -6795,10 +7090,15 @@ def send_contact_email():
         # ✅ Return JSON success response
         return jsonify({'success': True, 'message': 'Email sent successfully'})
         
-    except Exception as e:
-        print(f"Contact form error: {e}")
-        # ✅ Return JSON error response
-        return jsonify({'success': False, 'error': str(e)}), 500
+    except Exception:
+        # Full detail to the operator log only. The raw exception text can carry
+        # the SMTP host and gateway response and went straight to an
+        # unauthenticated caller before (P1-1).
+        app.logger.exception("contact_form_send_failed")
+        return jsonify({
+            'success': False,
+            'error': 'We could not send your message right now. Please try again shortly.',
+        }), 500
 
 @app.route("/profile")
 @login_required
@@ -6892,6 +7192,15 @@ def projects_page():
         )
         project.is_suspended = not project.is_active
         project.active_transfer_status = active_transfers.get(project.id)
+        # P1-9: the per-card coverage summary the list template could not
+        # truthfully render before, from the SAME authoritative resolver the
+        # project detail page and /api use. The coverage rules are deliberately
+        # not re-derived here or in the template.
+        # ponytail: one resolver call per card (a few indexed reads each) rather
+        # than a hand-rolled bulk query that would duplicate those rules. If a
+        # user ever has hundreds of projects on one page, batch it inside
+        # project_public_access_state, not here.
+        project.coverage_summary = project_coverage_summary(project)
         projects.append(project)
 
     has_any_projects = db.session.query(Project.id).filter(project_user_access_filter(user.id)).first() is not None
@@ -7180,6 +7489,83 @@ def submit_project_ownership_claim(project_id):
     return _ownership_flash_redirect(
         ok_message=f"Request #{claim.id} submitted. A person reviews every request - nothing moves on its own."
     )
+
+
+@app.route("/api/ownership/claim-lookup/<int:project_id>", methods=["GET"])
+@login_required
+def ownership_claim_lookup(project_id):
+    """Claim-submission discovery for a project the caller holds a reference to.
+
+    THE REFERENCE. project_id is the identifier already printed into every QR
+    code and served by the PUBLIC /scanner/<project_id> page, which anyone -
+    logged in or not - can already use to learn that a project exists and to read
+    its name and creator display name. This endpoint therefore adds NO new
+    disclosure: it answers "eligible / not eligible" and echoes back only the
+    fields that public page already shows, and only while that public page would
+    itself serve them. Nothing owner-identifying, nothing private, no media, no
+    counts.
+
+    Everything the caller is not entitled to - a project that does not exist, an
+    admin-owned platform project, a project that is not publicly available, or
+    one the caller already owns/manages - returns ONE identical shape with
+    eligible=false and no project block, so a near miss and a total miss are
+    indistinguishable.
+
+    Read-only. Ownership cannot change here, and filing the claim still goes
+    through the existing POST route with its own rate limit and its own
+    active-claim dedupe.
+    """
+    user = current_user()
+    ok, retry_after = _check_rate_limit(
+        "ownership_claim_lookup", _rate_limit_key("ownership_claim_lookup", user.id)
+    )
+    if not ok:
+        response = jsonify({
+            "success": False,
+            "code": "RATE_LIMITED",
+            "error": "Too many lookups. Please wait before trying again.",
+        })
+        response.status_code = 429
+        response.headers["Retry-After"] = str(retry_after)
+        return response
+
+    not_eligible = {
+        "success": True,
+        "eligible": False,
+        "reason_code": "NOT_CLAIMABLE",
+        "reason": (
+            "This ScanStory cannot be claimed from here. Check the link or QR code you scanned, "
+            "or contact ScanStory support."
+        ),
+        "project": None,
+        "claim_url": None,
+    }
+
+    project = Project.query.get(project_id)
+    if not project or project.owner_admin_id or not _project_is_available(project):
+        return jsonify(not_eligible)
+    if user_can_manage_project(user, project) or project_current_owner_user_id(project) == user.id:
+        return jsonify(not_eligible)
+
+    existing = ProjectOwnershipClaim.query.filter(
+        ProjectOwnershipClaim.project_id == project.id,
+        ProjectOwnershipClaim.claimant_user_id == user.id,
+        ProjectOwnershipClaim.status.in_(PROJECT_ACTIVE_CLAIM_STATUSES),
+    ).first()
+    return jsonify({
+        "success": True,
+        "eligible": existing is None,
+        "reason_code": "ALREADY_OPEN" if existing else "CLAIMABLE",
+        "reason": (
+            "You already have an open ownership review request for this ScanStory."
+            if existing else
+            "You can file an ownership review request. Nothing changes until it is reviewed."
+        ),
+        # Exactly the two fields /scanner/<project_id> already renders publicly.
+        "project": {"id": project.id, "name": project.name},
+        "existing_claim_id": existing.id if existing else None,
+        "claim_url": url_for("submit_project_ownership_claim", project_id=project.id),
+    })
 
 
 @app.route("/ownership/claims/<int:claim_id>/respond", methods=["POST"])
@@ -10269,17 +10655,26 @@ REFUND_UNCONFIRMED_STATUSES = ("REFUND_REQUESTED", "REFUND_PROCESSING", "REFUND_
 OUT_OF_BAND_REFUND_FAILURE_CODE = "out_of_band_refund_no_local_record"
 
 
+def stuck_refund_filter():
+    """The ONE definition of "this refund needs attention".
+
+    Shared by `flask reconcile-refunds` and the admin read API (P1-6) so the
+    operator queue and the recovery command can never disagree about which
+    refunds are outstanding. A settled refund (REFUNDED + APPLIED) matches
+    neither branch and is therefore excluded.
+    """
+    return or_(
+        PaymentRefund.status.in_(REFUND_UNCONFIRMED_STATUSES),
+        and_(
+            PaymentRefund.status == "REFUNDED",
+            PaymentRefund.reconciliation_status != "APPLIED",
+        ),
+    )
+
+
 def stuck_refund_query():
     """PaymentRefund rows that are not in a finished, self-consistent state."""
-    return PaymentRefund.query.filter(
-        or_(
-            PaymentRefund.status.in_(REFUND_UNCONFIRMED_STATUSES),
-            and_(
-                PaymentRefund.status == "REFUNDED",
-                PaymentRefund.reconciliation_status != "APPLIED",
-            ),
-        )
-    ).order_by(PaymentRefund.id.asc())
+    return PaymentRefund.query.filter(stuck_refund_filter()).order_by(PaymentRefund.id.asc())
 
 
 def _provider_refunds_for_payment(refund):
@@ -14939,13 +15334,12 @@ def admin_refund_list():
             }), 400
         query = query.filter(PaymentRefund.reconciliation_status == reconciliation_status)
 
-    if request.args.get("needs_attention") in ("1", "true", "True"):
-        query = query.filter(
-            or_(
-                PaymentRefund.status == "REFUND_FAILED",
-                PaymentRefund.reconciliation_status.in_(("PENDING", "FAILED", "MANUAL_REVIEW_REQUIRED")),
-            )
-        )
+    # P1-6: the attention queue is now literally the same predicate
+    # `flask reconcile-refunds` works from (stuck_refund_filter), instead of a
+    # second hand-written status list that could drift from it.
+    needs_attention = request.args.get("needs_attention") in ("1", "true", "True")
+    if needs_attention:
+        query = query.filter(stuck_refund_filter())
 
     user_id = request.args.get("user_id", type=int)
     if user_id:
@@ -14956,13 +15350,33 @@ def admin_refund_list():
         per_page=admin_page_size(),
         error_out=False,
     )
-    return jsonify({
+    payload = {
         "success": True,
         "refunds": [_payment_refund_payload(r) for r in pagination.items],
         "page": pagination.page,
         "pages": pagination.pages,
         "total": pagination.total,
-    })
+    }
+    if needs_attention:
+        # Out-of-band (provider-dashboard) refunds have NO PaymentRefund row by
+        # design - P0 correlates them onto the webhook event instead of inventing
+        # one. They were visible only in `flask reconcile-refunds` output, so an
+        # operator working from the API could not see them at all. Ids and the
+        # correlated local source only: never the provider payload.
+        out_of_band = unlinked_out_of_band_refund_events()
+        payload["out_of_band_refunds"] = [
+            {
+                "webhook_event_id": event.id,
+                "event_type": event.event_type,
+                "payment_order_id": event.payment_order_id,
+                "addon_purchase_id": event.addon_purchase_id,
+                "state": "MANUAL_REVIEW_REQUIRED",
+                "reason": "Provider-side refund correlated to a local purchase with no local refund record.",
+            }
+            for event in out_of_band
+        ]
+        payload["out_of_band_total"] = len(out_of_band)
+    return jsonify(payload)
 
 def _safe_display_filename(value):
     if not value:
