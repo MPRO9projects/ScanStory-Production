@@ -138,11 +138,66 @@ def _runtime_environment_declared():
     return False
 
 
+def _required_razorpay_config_missing():
+    """Names of Razorpay settings required for production payment paths.
+
+    Values are deliberately never returned or logged here. The API key pair is
+    required for browser-created orders/refunds; the webhook secret is required
+    for provider-to-server reconciliation.
+    """
+    return [
+        key for key in (
+            "RAZORPAY_KEY_ID",
+            "RAZORPAY_KEY_SECRET",
+            "RAZORPAY_WEBHOOK_SECRET",
+        )
+        if not (os.environ.get(key) or "").strip()
+    ]
+
+
+def _production_security_config_missing():
+    """Production-only security/deployment config gaps, by variable name only."""
+    if not _runtime_production_mode_flag_active():
+        return []
+    missing = _required_razorpay_config_missing()
+    if not _env_flag("SECURITY_CSP_ENABLED", default=True):
+        missing.append("SECURITY_CSP_ENABLED=1")
+    if not _env_flag("SECURITY_CSP_ENFORCE", default=True):
+        missing.append("SECURITY_CSP_ENFORCE=1")
+    return missing
+
+
+def _production_security_readiness_checks():
+    """Safe /ready labels for production-only config gates.
+
+    Startup validation normally prevents these from being bad in production;
+    readiness still reports them generically for reloads/tests where the env can
+    change after import.
+    """
+    if not _runtime_production_mode_flag_active():
+        return {}
+    missing = _production_security_config_missing()
+    payment_missing = _required_razorpay_config_missing()
+    return {
+        "configuration": "unavailable" if missing else "ok",
+        "payments": "unavailable" if payment_missing else "ok",
+        "csp": "unavailable" if (
+            not _env_flag("SECURITY_CSP_ENABLED", default=True)
+            or not _env_flag("SECURITY_CSP_ENFORCE", default=True)
+        ) else "ok",
+    }
+
+
+def _with_production_security_readiness(checks):
+    checks.update(_production_security_readiness_checks())
+    return checks
+
+
 def _validate_required_runtime_config():
     """Fail fast on missing required runtime-security configuration.
 
-    Centralized so future required settings can be added here. Does not
-    validate payment credentials or other unrelated production settings.
+    Centralized so future required settings can be added here. Error text names
+    missing variables only; it never includes secret values.
     """
     missing = []
     if not os.environ.get("FLASK_SECRET_KEY"):
@@ -179,6 +234,7 @@ def _validate_required_runtime_config():
         # SCANSTORY_DEV_TESTING and was simply missing (P0-6 / ANM-52).
         if SCANSTORY_TESTING:
             missing.append("SCANSTORY_TESTING=0")
+        missing.extend(_production_security_config_missing())
     elif not SCANSTORY_TESTING and not _runtime_environment_declared():
         # P0-6: production was detected only by an opt-IN flag, so a deploy that
         # set none of SCANSTORY_PRODUCTION / APP_ENV / ENV / FLASK_ENV booted
@@ -603,17 +659,15 @@ def log_outgoing_response(response):
 # ProxyFix middleware above) - never sent over ordinary local HTTP.
 HSTS_ENABLED = _env_flag("SECURITY_HSTS_ENABLED", default=False)
 
-# CSP staged rollout: the policy below has NOT been manually verified in a
-# real browser against the scanner/OpenCV-WASM/Razorpay/reCAPTCHA/Bootstrap
-# /Chart.js/fonts/inline-script surface, so it defaults to report-only
-# (observe violations, block nothing) rather than enforcing mode.
+# CSP rollout: non-production can still run report-only for browser debugging,
+# but a production-flagged runtime must enforce the policy. The validator above
+# rejects production attempts to disable CSP or force report-only mode.
 #   SECURITY_CSP_ENABLED=0        -> send neither CSP header at all
-#   SECURITY_CSP_ENABLED=1, ENFORCE=0 (default) -> Content-Security-Policy-Report-Only
-#   SECURITY_CSP_ENABLED=1, ENFORCE=1           -> Content-Security-Policy (enforcing)
-# Only flip SECURITY_CSP_ENFORCE=1 after browser + real-device QA confirms
-# the policy below doesn't block anything real.
+#   SECURITY_CSP_ENABLED=1, ENFORCE=0 -> Content-Security-Policy-Report-Only
+#   SECURITY_CSP_ENABLED=1, ENFORCE=1 -> Content-Security-Policy
+# Defaults: development/test report-only, production enforcing.
 CSP_ENABLED = _env_flag("SECURITY_CSP_ENABLED", default=True)
-CSP_ENFORCE = _env_flag("SECURITY_CSP_ENFORCE", default=False)
+CSP_ENFORCE = _env_flag("SECURITY_CSP_ENFORCE", default=_runtime_production_mode_flag_active())
 
 # Every external origin actually referenced by templates/static assets
 # (Tailwind CDN, AOS, Font Awesome, Bootstrap/Chart.js CDN, Razorpay
@@ -691,10 +745,10 @@ def _readiness_checks():
     try:
         mode = queue_mode()
     except QueueUnavailable:
-        return {"database": "ok", "queue": "unavailable"}
+        return _with_production_security_readiness({"database": "ok", "queue": "unavailable"})
     if mode == "rq":
         if not redis_ready_check():
-            return {"database": "ok", "queue": "unavailable"}
+            return _with_production_security_readiness({"database": "ok", "queue": "unavailable"})
         checks["queue"] = "ok"
         # P1-3: a reachable Redis with no worker attached is a queue that
         # accepts jobs and runs none - indistinguishable from health before this
@@ -708,10 +762,10 @@ def _readiness_checks():
         # report 200 precisely when no upload would ever be processed. In a
         # production runtime any non-rq mode is a not-ready condition, never a
         # reason to skip the check.
-        return {"database": "ok", "queue": "unavailable"}
+        return _with_production_security_readiness({"database": "ok", "queue": "unavailable"})
     else:
         checks["queue"] = mode
-    return checks
+    return _with_production_security_readiness(checks)
 
 
 @app.route("/ready", methods=["GET"])
