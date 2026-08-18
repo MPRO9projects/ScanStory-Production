@@ -16456,6 +16456,12 @@ def _content_report_payload(report):
         # Additive: the moderation queue needs something readable to show
         # next to the project link instead of a bare numeric id.
         "project_name": report.project.name if report.project else None,
+        # A hard-deleted project detaches its reports (project_id -> NULL) instead
+        # of destroying them, so the moderation record outlives the content. The
+        # queue has to be able to say "project no longer available" rather than
+        # link to /admin/projects/None, so the state is explicit in the payload
+        # instead of inferred from a missing field.
+        "project_deleted": report.project is None,
         # INVESTIGATION CONTEXT. A moderator was deciding without two facts the
         # decision depends on: WHO owns the reported content, and whether it is
         # already suspended (so "suspend project" was being offered against
@@ -16537,6 +16543,20 @@ def admin_review_content_report(report_id):
         return jsonify({"success": False, "code": "INVALID_ACTION", "error": "Invalid moderation action."}), 400
     resolution_reason = (payload.get("resolution_reason") or "").strip() or None
 
+    # A report whose project was hard-deleted survives as detached moderation
+    # history, so it can still be dismissed, resolved or annotated - but
+    # "suspend the project" has nothing left to act on. Rejected as a business
+    # error rather than allowed to record a suspension that never happened:
+    # silently succeeding would write PROJECT_SUSPENDED into the audit trail for
+    # a project that no longer exists.
+    if status == "ACTION_TAKEN" and action == "PROJECT_SUSPENDED" and report.project is None:
+        return jsonify({
+            "success": False,
+            "code": "PROJECT_UNAVAILABLE",
+            "error": "The reported ScanStory no longer exists, so it cannot be suspended. "
+                     "Record this decision as dismissed or as another action.",
+        }), 409
+
     report.status = status
     report.resolution_action = action
     report.resolution_reason = resolution_reason
@@ -16554,7 +16574,7 @@ def admin_review_content_report(report_id):
     log_admin_activity(
         admin.id,
         "content_report_review",
-        f"Report {report.id} (project {report.project_id}) -> {status}"
+        f"Report {report.id} (project {report.project_id if report.project_id else 'deleted'}) -> {status}"
         + (f" action={action}" if action else "")
         + (f": {resolution_reason[:150]}" if resolution_reason else ""),
     )
