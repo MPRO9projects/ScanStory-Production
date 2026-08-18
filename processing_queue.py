@@ -62,6 +62,35 @@ def queue_name():
     return (os.environ.get("RQ_QUEUE_NAME") or "scanstory-processing").strip() or "scanstory-processing"
 
 
+def redis_socket_timeout_seconds():
+    try:
+        return max(1, int(os.environ.get("REDIS_SOCKET_TIMEOUT_SECONDS", "5")))
+    except (TypeError, ValueError):
+        return 5
+
+
+def redis_connection(url=None):
+    """The ONLY place a Redis client is built for queue/readiness work.
+
+    Every socket operation is bounded. redis-py's default socket_timeout is
+    None, and an unreachable Redis does not always refuse a connection - a
+    firewall that DROPs, a dead host holding an ARP entry, or a hung server all
+    accept-then-never-answer. With no timeout, `Redis.ping()` blocks forever,
+    which meant /ready, queue_worker_state() and every enqueue could hang a
+    worker thread indefinitely on exactly the outage a readiness probe exists
+    to report. A bounded socket turns that hang into the "unavailable" answer
+    the callers below already handle.
+    """
+    from redis import Redis
+
+    timeout = redis_socket_timeout_seconds()
+    return Redis.from_url(
+        url or os.environ["REDIS_URL"],
+        socket_timeout=timeout,
+        socket_connect_timeout=timeout,
+    )
+
+
 def queue_config_summary():
     mode = queue_mode()
     redis_configured = bool(os.environ.get("REDIS_URL"))
@@ -170,12 +199,11 @@ def _enqueue_transport(job):
     if not redis_url:
         raise QueueUnavailable("REDIS_URL is required when SCANSTORY_QUEUE_MODE=rq")
     try:
-        from redis import Redis
         from rq import Queue, Retry
     except Exception as exc:
         raise QueueUnavailable("queue dependency unavailable") from exc
     try:
-        conn = Redis.from_url(redis_url)
+        conn = redis_connection(redis_url)
         conn.ping()
         queue = Queue(queue_name(), connection=conn)
         timeout = rq_timeout_seconds()
@@ -348,10 +376,9 @@ def _rq_workers_for_queue():
     heartbeat age check in queue_worker_state() is a second, explicit guard so a
     registry that has not been reaped yet cannot report a dead worker as usable.
     """
-    from redis import Redis
     from rq import Queue, Worker
 
-    connection = Redis.from_url(os.environ["REDIS_URL"])
+    connection = redis_connection()
     return Worker.all(queue=Queue(queue_name(), connection=connection))
 
 
@@ -402,8 +429,7 @@ def redis_ready_check():
     if not os.environ.get("REDIS_URL"):
         return False
     try:
-        from redis import Redis
-        Redis.from_url(os.environ["REDIS_URL"]).ping()
+        redis_connection().ping()
         return True
     except Exception:
         return False

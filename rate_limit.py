@@ -37,6 +37,16 @@ logger = logging.getLogger(__name__)
 # Short Retry-After used when the shared backend is unreachable (fail closed).
 FAIL_CLOSED_RETRY_AFTER = 5
 
+# Every limiter call sits in front of a user-visible request (login, OTP mail,
+# report submission), so its Redis socket MUST be bounded. redis-py defaults
+# socket_timeout to None, and an unreachable-but-not-refusing Redis (firewall
+# DROP, hung server) then blocks the request thread forever - a fail-closed
+# policy that never returns is not fail-closed, it is a hang. With the bound,
+# the outage lands in check()'s except branch and answers 429 immediately.
+# Deliberately duplicated rather than imported from processing_queue: this
+# module is dependency-free by design and is imported before the queue layer.
+REDIS_SOCKET_TIMEOUT_DEFAULT = 5
+
 
 def identity_digest(value):
     """Stable short digest for an identifier used inside a rate-limit key.
@@ -168,7 +178,14 @@ def build_limiter(redis_url=None, client=None, fail_closed=True):
     try:
         import redis as redis_module
 
-        return RedisRateLimiter(redis_module.Redis.from_url(url), fail_closed=fail_closed)
+        try:
+            timeout = max(1, int(os.environ.get("REDIS_SOCKET_TIMEOUT_SECONDS", REDIS_SOCKET_TIMEOUT_DEFAULT)))
+        except (TypeError, ValueError):
+            timeout = REDIS_SOCKET_TIMEOUT_DEFAULT
+        return RedisRateLimiter(
+            redis_module.Redis.from_url(url, socket_timeout=timeout, socket_connect_timeout=timeout),
+            fail_closed=fail_closed,
+        )
     except Exception as exc:
         # Misconfiguration must be loud, not a silent downgrade to a limiter
         # that is ineffective in the multi-worker deployment it was set for.
