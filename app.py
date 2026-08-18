@@ -7205,10 +7205,18 @@ def projects_page():
         .subquery()
     )
 
+    # Presentation passthrough only: the readiness columns below are ALREADY
+    # computed by the pair_counts subquery above (they drive the status filter).
+    # Selecting them costs no extra query and adds no rule - it just lets the
+    # card render the state the filter can already select on, instead of the
+    # list showing a "Processing" filter with no per-card processing state.
     query = (
         db.session.query(
             Project,
             pair_counts.c.pair_count,
+            pair_counts.c.ready_pair_count,
+            pair_counts.c.failed_pair_count,
+            pair_counts.c.processing_pair_count,
         )
         .filter(project_user_access_filter(user.id))
         .outerjoin(pair_counts, Project.id == pair_counts.c.project_id)
@@ -7241,14 +7249,20 @@ def projects_page():
     active_transfers = {}
     if rows:
         for transfer in ProjectOwnershipTransfer.query.filter(
-            ProjectOwnershipTransfer.project_id.in_([p.id for p, _ in rows]),
+            ProjectOwnershipTransfer.project_id.in_([row[0].id for row in rows]),
             ProjectOwnershipTransfer.status.in_(PROJECT_ACTIVE_TRANSFER_STATUSES),
         ).all():
             active_transfers[transfer.project_id] = transfer.status
 
     projects = []
-    for project, pair_count in rows:
+    for project, pair_count, ready_pair_count, failed_pair_count, processing_pair_count in rows:
         project.pairs_count = int(pair_count or 0)
+        # Same rollup the status filter above already applies, handed to the
+        # template so a card can say which state it is in. No new rule: these
+        # are the identical aggregates, just no longer discarded.
+        project.ready_pairs_count = int(ready_pair_count or 0)
+        project.failed_pairs_count = int(failed_pair_count or 0)
+        project.processing_pairs_count = int(processing_pair_count or 0)
         # Card-level ownership summary only (one badge). The full ownership /
         # coverage detail lives on the project detail page so a list of 40
         # cards doesn't turn into 40 stacked panels.

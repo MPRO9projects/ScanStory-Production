@@ -22,11 +22,22 @@
             --bg-dark: #050505;
         }
 
+        /* `overflow-x: hidden` on <body> alone does NOT contain the decorative
+           blobs: they are position:fixed, so their containing block is the
+           viewport and no ancestor's overflow clips them - which is why the
+           page could still be dragged sideways on narrow screens. Clipping at
+           the root element is what actually bounds them. `clip` rather than
+           `hidden` so the sticky topbar keeps working (overflow:hidden on the
+           root turns it into a scroll container and kills position:sticky). */
+        html {
+            overflow-x: clip;
+        }
+
         body {
             font-family: 'Plus Jakarta Sans', sans-serif;
             background: var(--bg-dark);
             color: #ffffff;
-            overflow-x: hidden;
+            overflow-x: clip;
             scroll-behavior: smooth;
             min-height: 100vh;
         }
@@ -322,9 +333,10 @@
 </head>
 
 <body class="ss-user-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     <!-- Blobs -->
-    <div id="blob1" class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]"></div>
-    <div id="blob2" class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]"></div>
+    <div id="blob1" class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]" aria-hidden="true"></div>
+    <div id="blob2" class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]" aria-hidden="true"></div>
 
     <!-- Topbar -->
     <header class="topbar glass">
@@ -455,7 +467,7 @@
     </div>
     {% endif %}
 
-    <main class="max-w-7xl mx-auto px-6 md:px-10 py-10 md:py-14">
+    <main class="max-w-7xl mx-auto px-6 md:px-10 py-10 md:py-14" id="main-content" tabindex="-1">
         <!-- Welcome Header -->
         <div class="mb-10" data-aos="fade-up">
             <h1 class="text-4xl md:text-6xl font-black uppercase leading-[0.9]">
@@ -484,17 +496,23 @@
         <div class="glass create-project-cta rounded-2xl p-8 mb-10" data-aos="fade-up" data-aos-delay="100">
             <div class="flex flex-col md:flex-row items-center justify-between">
                 <div class="mb-6 md:mb-0 md:mr-8">
-                    <h2 class="text-2xl font-bold text-white mb-3">Create Your First STORY</h2>
+                    <h2 class="text-2xl font-bold text-white mb-3">
+                        {% if projects %}Create another ScanStory{% else %}Create your first ScanStory{% endif %}
+                    </h2>
                     <p class="text-white/70 mb-4">
-                        Upload image and video pairs to create interactive memories that come alive when scanned
+                        Add an image + video set and we turn it into a QR code that plays your video when it is scanned.
                     </p>
 
                     {% if user.can_create_project or dev_test_entitled %}
                     <div class="flex items-center text-green-400">
-                        <i class="fas fa-check-circle mr-2"></i>
-                        <span class="font-bold">You’re ready to create. You can still bring {{ user.remaining_projects
-                            }} memories to life.
-                            remaining.</span>
+                        <i class="fas fa-check-circle mr-2" aria-hidden="true"></i>
+                        <span class="font-bold">
+                            {% if user.subscribed_project_limit in [None, 0, 999999] %}
+                            You're ready to create.
+                            {% else %}
+                            You're ready to create &mdash; {{ user.remaining_projects }} story{{ '' if user.remaining_projects == 1 else 'ies' }} left on your plan.
+                            {% endif %}
+                        </span>
                     </div>
                     {% else %}
                     <div class="flex items-center text-yellow-400">
@@ -517,14 +535,14 @@
                     <a href="{{ url_for('user_create_project_page') }}"
                         class="ss-btn ss-btn-primary" style="min-height:56px;padding:0 2rem;font-size:1rem;text-transform:none;letter-spacing:normal;">
                         <i class="fas fa-plus-circle" aria-hidden="true"></i>
-                        <span>Create Memory</span>
+                        <span>Create ScanStory</span>
                     </a>
 
                     {% else %}
                     <a href="{{ url_for('subscribe_page') }}"
                         class="ss-btn ss-btn-primary" style="min-height:56px;padding:0 2rem;font-size:1rem;text-transform:none;letter-spacing:normal;">
                         <i class="fas fa-crown" aria-hidden="true"></i>
-                        <span>Unlock More Stories</span>
+                        <span>Upgrade to create more</span>
                     </a>
                     {% endif %}
                 </div>
@@ -617,7 +635,7 @@
                     {% if user.can_create_project or dev_test_entitled %}
                     <a href="{{ url_for('user_create_project_page') }}"
                         class="btn-neo btn-highlight-primary w-full text-center justify-center mt-4">
-                        <i class="fas fa-plus mr-2"></i> Create Memory
+                        <i class="fas fa-plus mr-2" aria-hidden="true"></i> Create ScanStory
                     </a>
                     {% else %}
                     <button class="btn-neo w-full text-center justify-center mt-4 cursor-not-allowed opacity-50"
@@ -686,7 +704,7 @@
             <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-5">
                 <div>
                     <h2 class="text-xl font-black uppercase tracking-widest text-[12px] text-white/70">Effective Entitlement</h2>
-                    <p class="text-white/60 text-sm mt-2">Backend-sourced account limits and V1.1 experience availability.</p>
+                    <p class="text-white/60 text-sm mt-2">What your account can do right now, including anything you have bought on top of your plan.</p>
                 </div>
                 <span class="badge">
                     <i class="fa-solid fa-id-card" aria-hidden="true"></i>
@@ -715,8 +733,9 @@
                     <div class="text-white/50 text-xs mt-1">Plan {{ entitlement_summary.base_scan_limit if not entitlement_summary.scan_unlimited else "Unlimited" }} + purchased {{ entitlement_summary.purchased_scan_capacity }}</div>
                 </div>
                 <div class="glass rounded-2xl p-4">
-                    <div class="text-white/50 text-xs uppercase font-black tracking-widest">Pairs / Project</div>
+                    <div class="text-white/50 text-xs uppercase font-black tracking-widest">Content Sets Per Story</div>
                     <div class="text-white font-black mt-1">{{ entitlement_summary.max_pairs_per_project }}</div>
+                    <div class="text-white/50 text-xs mt-1">Image + video sets you can add to one story</div>
                 </div>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4" data-testid="storage-entitlement-summary">
@@ -750,6 +769,7 @@
             {% endif %}
             {% if entitlement_summary.over_storage %}
             <div class="mt-5 p-4 rounded-2xl border border-yellow-400/30 bg-yellow-400/10 text-yellow-100 text-sm" data-testid="storage-overage-copy">
+                <strong>Your current storage use is above your plan allowance. Existing content is safe, but new uploads are paused.</strong>
                 Existing projects, media and QR codes remain available. New uploads that consume more storage are blocked until you delete or reduce media, buy storage if available, or upgrade. Smaller replacements may be allowed when they reduce stored bytes.
             </div>
             {% endif %}
@@ -787,7 +807,7 @@
                     <div class="project-stats">
                         <div class="stat-item">
                             <i class="fas fa-images stat-icon"></i>
-                            <span>{{ pairs_count }} memories</span>
+                            <span>{{ pairs_count }} content set{{ '' if pairs_count == 1 else 's' }}</span>
                         </div>
                         <div class="stat-item">
                             <i class="fas fa-eye stat-icon"></i>
@@ -842,21 +862,20 @@
                 <div class="text-white/20 mb-6">
                     <i class="fas fa-folder-open text-6xl"></i>
                 </div>
-                <h3 class="text-xl font-bold mb-3">No Story Yet</h3>
+                <h3 class="text-xl font-bold mb-3">No stories yet</h3>
                 <p class="text-white/50 mb-8 max-w-md mx-auto">
-                    You haven't created any story yet. Create your first living memory by uploading image and video
-                    pairs.
+                    You have not created a ScanStory yet. Add an image + video set and we turn it into a scannable QR code.
                 </p>
 
                 {% if user.can_create_project or dev_test_entitled %}
                 <a href="{{ url_for('user_create_project_page') }}"
                     class="ss-btn ss-btn-primary" style="min-height:56px;padding:0 2rem;font-size:1rem;text-transform:none;letter-spacing:normal;">
                     <i class="fa-solid fa-plus" aria-hidden="true"></i>
-                    <span>Create your first story</span>
+                    <span>Create ScanStory</span>
                 </a>
                 {% else %}
                 <div class="ss-card" style="max-width:32rem;margin:0 auto;text-align:left;">
-                    <h3 class="text-lg font-bold mb-3">Cannot create a memory yet</h3>
+                    <h3 class="text-lg font-bold mb-3">You cannot create a ScanStory yet</h3>
                     <p class="text-white/70 mb-4">
                         {% if user.remaining_projects == 0 %}
                         You've reached your project limit ({{ user.subscribed_project_limit }}).
@@ -877,31 +896,10 @@
             {% endif %}
         </section>
 
-        <!-- Quick Stats -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-10" data-aos="fade-up">
-            <div class="glass rounded-2xl p-6 text-center">
-                <div class="text-2xl font-bold text-cyan-400">{{ user.projects_used }}</div>
-                <div class="text-white/70 text-xs uppercase tracking-widest">Stories Created</div>
-            </div>
-            <div class="glass rounded-2xl p-6 text-center">
-                <div class="text-2xl font-bold text-purple-400">{{ user.scans_used }}</div>
-                <div class="text-white/70 text-xs uppercase tracking-widest">Stories Viewed</div>
-            </div>
-            <div class="glass rounded-2xl p-6 text-center">
-                <div class="text-2xl font-bold text-green-400">{{ user.Total_Visits or 0 }}</div>
-                <div class="text-white/70 text-xs uppercase tracking-widest">Visits</div>
-            </div>
-            <div class="glass rounded-2xl p-6 text-center">
-                <div class="text-2xl font-bold">
-                    {% if user.subscription_status == 'active' %}
-                    <span class="text-yellow-400">PAID</span>
-                    {% else %}
-                    <span class="text-pink-400">TRIAL</span>
-                    {% endif %}
-                </div>
-                <div class="text-white/70 text-xs uppercase tracking-widest">Your Plan</div>
-            </div>
-        </div>
+        {# The "Quick Stats" strip that used to sit here restated numbers the
+           Plan / Stories / Scans cards above already show (and a raw visit
+           counter with no defined meaning). Removed rather than restyled:
+           repeating a number does not make it clearer. #}
     </main>
 
     <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
