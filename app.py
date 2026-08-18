@@ -88,6 +88,7 @@ from processing_queue import (
     queue_required,
     queue_worker_state,
     processing_job_status_payload,
+    redis_connection,
     redis_ready_check,
     retry_failed_job,
     safe_error_summary,
@@ -457,6 +458,18 @@ def _apply_short_private_cache(response):
     return response
 
 
+def _apply_no_store_cache(response):
+    """For media served only because an admin is investigating it.
+
+    A suspended or uncovered project's bytes must not survive anywhere once the
+    investigation request is over - not in a shared proxy (which `public` would
+    have permitted) and not in the admin's own disk cache either, since the
+    project is deliberately not publicly live.
+    """
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
+
+
 def _log_scanner_latency(event, start_time, stage_timings=None, **fields):
     """stage_timings (Wave 7): optional dict of per-substage seconds (e.g. "read", "prep",
     "detect", "quick_score", "match", "homography"), the same breakdown this file has always
@@ -774,8 +787,31 @@ def healthz():
     return response, 200
 
 
-def _readiness_checks():
+READINESS_DB_TIMEOUT_MS = 3000
+
+
+def _readiness_probe_database():
+    """Bounded liveness query for /ready.
+
+    `connect_timeout` already bounds *reaching* PostgreSQL, but nothing bounded
+    the statement itself: a connection that is established and then stops
+    answering (failing-over primary, saturated server) left this SELECT - and
+    therefore the whole readiness probe - waiting indefinitely, which is the
+    outage the probe exists to report rather than join. SET LOCAL scopes the
+    timeout to this transaction only, so no ordinary application query changes
+    behaviour.
+
+    ponytail: pool_pre_ping's own SELECT 1 is still unbounded; bound it globally
+    with connect_args options='-c statement_timeout=...' if that ever bites,
+    accepting the blast radius across every query.
+    """
+    if db.engine.dialect.name == "postgresql":
+        db.session.execute(text(f"SET LOCAL statement_timeout = {READINESS_DB_TIMEOUT_MS}"))
     db.session.execute(text("SELECT 1"))
+
+
+def _readiness_checks():
+    _readiness_probe_database()
     checks = {"database": "ok"}
     try:
         mode = queue_mode()
@@ -2929,6 +2965,29 @@ def _project_is_available(project):
     return bool(project_public_access_state(project)["is_live"])
 
 
+def _admin_media_investigation_allowed():
+    """May the caller read project media that is NOT publicly live?
+
+    The four media routes' only gate was `_project_is_available()` - a PUBLIC
+    availability predicate, never an authorization one. That made moderation
+    self-defeating: suspending a reported project (admin_review_content_report
+    and admin_suspend_project both set `is_active=False`) instantly 404'd that
+    project's own marker image and video for the ADMIN too, so the only way to
+    look at the evidence behind a report was to re-publish the reported content
+    first. A project whose owner's subscription merely lapsed was equally
+    invisible.
+
+    This grants no new admin capability: it is read-only and gated on the same
+    `admin.projects.view` permission that already guards the project detail page
+    the evidence is rendered on. It only stops the public availability gate from
+    doubling as a staff blindfold. Called lazily - ONLY once a project has
+    already been judged not-publicly-live - so the ordinary public scanner path
+    pays no extra query for it.
+    """
+    admin = current_admin()
+    return bool(admin and admin_has_permission(admin, "admin.projects.view"))
+
+
 # ---------------------------------------------------------------------
 # Scanner fallback video resolution (V1 Wave 6)
 # ---------------------------------------------------------------------
@@ -5053,8 +5112,16 @@ def reconcile_capacity_reservations(apply_changes):
 @click.option("--job-id", type=int, default=None)
 @click.option("--project-id", type=int, default=None)
 @click.option("--apply", "apply_changes", is_flag=True, help="Persist stale-job recovery decisions. Default is dry-run.")
-def recover_processing_jobs(older_than_minutes, job_id, project_id, apply_changes):
-    """Inspect or recover stale durable processing jobs. CLI-only."""
+@click.option("--limit", default=200, show_default=True, type=int, help="Max jobs processed per invocation (bounded batch).")
+def recover_processing_jobs(older_than_minutes, job_id, project_id, apply_changes, limit):
+    """Inspect or recover stale durable processing jobs. CLI-only.
+
+    Diagnosis is the default (dry-run); --apply is the only thing that mutates.
+    Staleness is judged on last_heartbeat_at, which mark_job_processing() and
+    every mark_job_* transition refresh, so a legitimately long-running job that
+    is still beating is never in the candidate set - only jobs whose worker
+    stopped reporting (crash, Redis restart, lost enqueue response) are.
+    --limit bounds the batch; it was previously an unbounded .all()."""
     cutoff = dt.utcnow() - timedelta(minutes=max(1, older_than_minutes))
     query = ProcessingJob.query.filter(
         ProcessingJob.job_type == "process_project_pairs",
@@ -5069,10 +5136,10 @@ def recover_processing_jobs(older_than_minutes, job_id, project_id, apply_change
             ProcessingJob.last_heartbeat_at.is_(None),
             ProcessingJob.last_heartbeat_at < cutoff,
         )
-    ).order_by(ProcessingJob.created_at.asc()).all()
+    ).order_by(ProcessingJob.created_at.asc()).limit(max(1, limit)).all()
 
     click.echo("Mode: apply" if apply_changes else "Mode: dry-run")
-    click.echo(f"Stale jobs found: {len(stale_jobs)}")
+    click.echo(f"Stale jobs found (bounded to limit={limit}): {len(stale_jobs)}")
     for job in stale_jobs:
         retryable = int(job.attempt_count or 0) < int(job.max_attempts or 1)
         action = "retrying" if retryable else "failed"
@@ -8369,7 +8436,12 @@ def forgot_password():
                 session["pending_reset_challenge_id"] = otp_rec.challenge_id
             flash("If the email exists, an OTP has been sent.", "success")
         except Exception as e:
-            print(f"❌ Forgot password email error: {e}")
+            # Type only, never str(e): this block wraps _create_otp() and the
+            # OTP mail send, so the exception text can carry the OTP code, the
+            # recipient address or SMTP server dialogue. The identifying detail
+            # an operator needs is already the correlating log line, not the
+            # payload.
+            app.logger.warning("forgot_password_otp_dispatch_failed error=%s", type(e).__name__)
             otp_rec = _latest_otp(email, "reset_password")
             if otp_rec:
                 otp_rec.invalidated_at = dt.utcnow()
@@ -9009,6 +9081,24 @@ UPLOAD_SESSION_ABANDONED_STALE_MINUTES = int(
     os.environ.get("SCANSTORY_UPLOAD_SESSION_ABANDONED_STALE_MINUTES", str(UPLOAD_SESSION_TTL_MINUTES))
 )
 UPLOAD_SESSION_CLEANUP_BATCH_LIMIT = int(os.environ.get("SCANSTORY_UPLOAD_CLEANUP_BATCH_LIMIT", "200"))
+# STUCK-FINALIZE RECOVERY. models.py documents 'finalizing' as a state that "is
+# never a resting state a client should see" - true for every handled failure,
+# because _finalize_assemble_and_validate's fail()/fail_group() always move the
+# row on. An UNHANDLED death mid-finalize (deploy restart, OOM kill, proxy
+# timeout severing the request) breaks that promise: the row stays 'finalizing'
+# forever, the cleanup sweep only ever queried status='active' so nothing
+# reaped it, and the finalize gate only claims 'active'/'assembled' rows - so
+# the creator's project was permanently wedged behind FINALIZE_IN_PROGRESS 409s
+# with no client, admin or CLI path out.
+#
+# The threshold is deliberately far beyond any live finalize. Finalize runs
+# synchronously inside one HTTP request, so a gunicorn worker timeout or the
+# reverse proxy kills a real one in seconds to minutes, never two hours. Every
+# recovery below is additionally guarded by a conditional UPDATE on
+# status='finalizing', so a finalize that did somehow survive still wins.
+UPLOAD_SESSION_FINALIZING_STALE_MINUTES = int(
+    os.environ.get("SCANSTORY_UPLOAD_FINALIZING_STALE_MINUTES", "120")
+)
 RESUMABLE_UPLOAD_CHUNK_MAX_BYTES = int(os.environ.get("SCANSTORY_RESUMABLE_CHUNK_MAX_BYTES", str(1024 * 1024)))
 if RESUMABLE_UPLOAD_CHUNK_MAX_BYTES <= 0:
     raise RuntimeError("SCANSTORY_RESUMABLE_CHUNK_MAX_BYTES must be a positive integer.")
@@ -10441,13 +10531,26 @@ def cancel_upload_session(session_id):
     "--limit", default=UPLOAD_SESSION_CLEANUP_BATCH_LIMIT, show_default=True, type=int,
     help="Max sessions processed per invocation (bounded batch).",
 )
-def cleanup_upload_sessions(apply_changes, limit):
-    """Expire stale resumable UploadSession rows (TTL passed, or 'active'
-    but no chunk activity beyond the abandoned-staleness window) and clean
-    up their temp files. Only ever queries status='active' rows - NEVER
-    touches 'completed' sessions, blind or otherwise (see models.py's
-    UploadSession lifecycle docstring). Dry-run by default; --apply
-    persists. Bounded via --limit so this never runs an unbounded query."""
+@click.option(
+    "--finalizing-stale-minutes", default=UPLOAD_SESSION_FINALIZING_STALE_MINUTES,
+    show_default=True, type=int,
+    help="Age after which a session parked in 'finalizing' is treated as a crashed finalize.",
+)
+def cleanup_upload_sessions(apply_changes, limit, finalizing_stale_minutes):
+    """Expire stale resumable UploadSession rows and recover crashed finalizes.
+
+    Two bounded sweeps, both dry-run by default:
+
+    1. EXPIRE - status='active' rows whose TTL passed, or with no chunk
+       activity beyond the abandoned-staleness window. Temp files removed.
+    2. RECOVER - status='finalizing' rows older than
+       --finalizing-stale-minutes, i.e. a finalize that died mid-flight. See
+       UPLOAD_SESSION_FINALIZING_STALE_MINUTES for why this is safe and for
+       the per-outcome reasoning.
+
+    NEVER touches 'completed' sessions, blind or otherwise (see models.py's
+    UploadSession lifecycle docstring). --apply persists; --limit bounds each
+    sweep so this never runs an unbounded query."""
     now = get_utc_now()
     abandoned_cutoff = now - timedelta(minutes=UPLOAD_SESSION_ABANDONED_STALE_MINUTES)
     candidates = UploadSession.query.filter(
@@ -10472,9 +10575,62 @@ def cleanup_upload_sessions(apply_changes, limit):
             if updated == 1:
                 _safe_delete_upload_temp(_upload_session_temp_path(sess.storage_token))
                 processed += 1
+
+    finalizing_cutoff = now - timedelta(minutes=max(1, finalizing_stale_minutes))
+    stuck = UploadSession.query.filter(
+        UploadSession.status == "finalizing",
+        UploadSession.updated_at < finalizing_cutoff,
+    ).order_by(UploadSession.id.asc()).limit(limit).all()
+    click.echo(f"Stuck finalizing sessions found (bounded to limit={limit}): {len(stuck)}")
+    recovered = 0
+    for sess in stuck:
+        temp_path = _upload_session_temp_path(sess.storage_token)
+        if sess.project_id:
+            # Step 3 of finalize already committed: Project, ProjectPair, the
+            # project-quota unit and the media ledger rows all exist, and this
+            # row already carries project_id/pair_id. Only QR + enqueue +
+            # settle remained - which is precisely what 'assembled' means, and
+            # the finalize route already recovers an 'assembled' session by
+            # retrying ONLY the enqueue step. No re-validation, no second quota
+            # unit, no duplicate project.
+            outcome, next_status, failure_code = "recover_to_assembled", "assembled", None
+        elif os.path.exists(temp_path) and os.path.getsize(temp_path) == sess.expected_total_size:
+            # No project_id, so nothing durable was created and no quota was
+            # consumed - and the assembled bytes are still present at exactly
+            # the declared length, so a retried finalize will genuinely work.
+            # Hand the transfer back rather than bill the creator for a crash.
+            outcome, next_status, failure_code = "recover_to_active", "active", None
+        else:
+            # No project AND no intact assembled file: validation had already
+            # consumed the temp file before the crash, so the bytes are gone
+            # and any retried finalize could only fail STORAGE_INCONSISTENT.
+            # Terminal and honest beats advertising a resumable session that
+            # has nothing left to resume.
+            outcome, next_status, failure_code = "fail_no_recoverable_bytes", "failed", "FINALIZE_INTERRUPTED"
+        click.echo(
+            f"session_id={sess.id} project_id={sess.project_id} "
+            f"owner_user_id={sess.owner_user_id} owner_admin_id={sess.owner_admin_id} "
+            f"stuck_since={sess.updated_at} outcome={outcome}"
+        )
+        if not apply_changes:
+            continue
+        # Conditional on status='finalizing': a finalize that somehow outlived
+        # the threshold and settled the row itself wins, and this no-ops.
+        updated = UploadSession.query.filter(
+            UploadSession.id == sess.id, UploadSession.status == "finalizing"
+        ).update(
+            {UploadSession.status: next_status, UploadSession.failure_code: failure_code},
+            synchronize_session=False,
+        )
+        if updated == 1:
+            if next_status == "failed":
+                _safe_delete_upload_temp(temp_path)
+            recovered += 1
+
     if apply_changes:
         db.session.commit()
         click.echo(f"Expired: {processed}")
+        click.echo(f"Finalizing recovered: {recovered}")
 
 
 @app.route("/project/<int:project_id>", methods=["GET"])
@@ -12818,33 +12974,39 @@ def serve_video(project_id, image_id):
     project = Project.query.get(project_id)
     if not project:
         return "Project not found"
+    investigating = False
     if not _project_is_available(project):
-        return _project_unavailable_response()
-    
+        if not _admin_media_investigation_allowed():
+            return _project_unavailable_response()
+        investigating = True
+
     pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
     if not pair:
         return "Pair not found"
-    
+
     response = send_from_directory(VIDEOS_DIR, pair.video_filename)
     response.headers["Content-Disposition"] = "inline"
-    return _apply_short_public_cache(response)
+    return _apply_no_store_cache(response) if investigating else _apply_short_public_cache(response)
 
 @app.route("/image/<int:project_id>/<int:image_id>")
 def serve_image(project_id, image_id):
     project = Project.query.get(project_id)
     if not project:
         return "Project not found"
+    investigating = False
     if not _project_is_available(project):
-        return _project_unavailable_response()
-    
+        if not _admin_media_investigation_allowed():
+            return _project_unavailable_response()
+        investigating = True
+
     pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
     if not pair:
         return "Pair not found"
     if not pair.image_filename:
         abort(404)
-    
+
     response = send_from_directory(IMAGES_DIR, pair.image_filename)
-    return _apply_short_public_cache(response)
+    return _apply_no_store_cache(response) if investigating else _apply_short_public_cache(response)
 
 @app.route("/qr/<filename>")
 def serve_qr(filename):
@@ -16294,6 +16456,25 @@ def _content_report_payload(report):
         # Additive: the moderation queue needs something readable to show
         # next to the project link instead of a bare numeric id.
         "project_name": report.project.name if report.project else None,
+        # INVESTIGATION CONTEXT. A moderator was deciding without two facts the
+        # decision depends on: WHO owns the reported content, and whether it is
+        # already suspended (so "suspend project" was being offered against
+        # projects already down, with no way to tell). Both are derived from the
+        # reported project itself, so they add no new stored data.
+        #
+        # Owner is identified by type + id only - deliberately not the owner's
+        # email or name. Moderation needs to know which account to hold
+        # responsible and be able to open it; it does not need the account
+        # holder's contact details rendered into a queue view. The owner link
+        # goes to admin_view_user, which is permission-gated in its own right.
+        "project_owner_type": (
+            "user" if (report.project and project_current_owner_user_id(report.project))
+            else "admin" if (report.project and report.project.owner_admin_id)
+            else None
+        ),
+        "project_owner_user_id": project_current_owner_user_id(report.project) if report.project else None,
+        "project_is_active": bool(report.project.is_active) if report.project else None,
+        "project_is_publicly_live": _project_is_available(report.project) if report.project else None,
     }
 
 
@@ -17035,11 +17216,13 @@ def _rq_diagnostics_payload():
         payload.update(summary)
         payload["available"] = redis_ready_check()
         if summary["mode"] == "rq" and os.environ.get("REDIS_URL"):
-            from redis import Redis
             from rq import Queue
             from rq.registry import FailedJobRegistry, StartedJobRegistry
 
-            conn = Redis.from_url(os.environ["REDIS_URL"])
+            # Bounded socket (see redis_connection): the admin operations page
+            # must degrade to payload["error"] on an unreachable Redis, never
+            # hang the admin's request thread waiting on it.
+            conn = redis_connection()
             queue = Queue(summary["queue_name"], connection=conn)
             payload["pending_count"] = queue.count
             payload["running_count"] = StartedJobRegistry(summary["queue_name"], connection=conn).count
@@ -17493,13 +17676,16 @@ def serve_admin_image(project_id, image_id):
     project = Project.query.get(project_id)
     if not project or not project.owner_admin_id:
         abort(404)
+    investigating = False
     if not _project_is_available(project):
-        return _project_unavailable_response()
-    
+        if not _admin_media_investigation_allowed():
+            return _project_unavailable_response()
+        investigating = True
+
     pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
     if not pair:
         abort(404)
-    
+
     # ✅ ADD THIS CHECK
     if not pair.image_filename:
         abort(404)
@@ -17507,25 +17693,28 @@ def serve_admin_image(project_id, image_id):
     if not os.path.exists(file_path):
         print(f"❌ Admin image not found: {file_path}")
         abort(404)
-    
+
     response = send_from_directory(ADMIN_IMAGES_DIR, pair.image_filename)
-    return _apply_short_private_cache(response)
+    return _apply_no_store_cache(response) if investigating else _apply_short_private_cache(response)
 @app.route("/admin/video/<int:project_id>/<int:image_id>")
 def serve_admin_video(project_id, image_id):
     """Serve videos for ADMIN projects only"""
     project = Project.query.get(project_id)
     if not project or not project.owner_admin_id:
         abort(404)
+    investigating = False
     if not _project_is_available(project):
-        return _project_unavailable_response()
-    
+        if not _admin_media_investigation_allowed():
+            return _project_unavailable_response()
+        investigating = True
+
     pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
     if not pair:
         abort(404)
-    
+
     response = send_from_directory(ADMIN_VIDEOS_DIR, pair.video_filename)
     response.headers["Content-Disposition"] = "inline"
-    return _apply_short_private_cache(response)
+    return _apply_no_store_cache(response) if investigating else _apply_short_private_cache(response)
 
 @app.route("/admin/qr/<filename>")
 def serve_admin_qr(filename):
