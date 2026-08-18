@@ -105,13 +105,30 @@ Success: `201`
 }
 ```
 
-`expires_at` is `created_at + 1440 minutes` (24h) by default
+`expires_at` starts at `created_at + 1440 minutes` (24h) by default
 (`SCANSTORY_UPLOAD_SESSION_TTL_MINUTES`) - generous on purpose: large video
 files over slow/mobile networks may legitimately take a long time to fully
 upload in chunks. Compare the payment-reservation TTL (30 min) which gates a
 much shorter checkout flow; a resumable upload's TTL is deliberately a
 different order of magnitude for a different reason (slow transfer, not
 checkout abandonment).
+
+**`expires_at` is an inactivity deadline, not a wall clock.** Every accepted
+chunk slides it forward by the full TTL (V1.1 extreme-low-bandwidth
+hardening). A creator who pauses an upload overnight on a bad mobile link
+must still be able to resume the bytes the server has already confirmed, and
+a wall clock measured from session creation would take those bytes away for
+no protocol reason. Genuinely abandoned sessions are still reaped by
+`cleanup-upload-sessions`, which keys off the much shorter `updated_at`
+staleness window (`SCANSTORY_UPLOAD_SESSION_ABANDONED_STALE_MINUTES`,
+default 120) - that window, not the TTL, is what bounds how long a paused
+upload survives, so set it to the pause window you actually want to support.
+
+`max_chunk_bytes` in the session payload publishes the server's configured
+chunk ceiling (`SCANSTORY_RESUMABLE_CHUNK_MAX_BYTES`). A client that sizes
+chunks adaptively must read it from here rather than hardcoding a copy of
+the default, which would silently start returning `413` the day the config
+is lowered.
 
 ### 2. Upload next sequential chunk
 
@@ -133,10 +150,27 @@ Offset rules (sequential-only, V1):
   unchanged `current_offset`. This is the retry-safety guarantee: resending
   the same already-accepted chunk is always safe.
 - Any other offset (a gap, or an overlap that isn't a clean retry of already-
-  accepted bytes): `409 OFFSET_MISMATCH`.
+  accepted bytes): `409 OFFSET_MISMATCH`. A **partial** overlap is
+  deliberately rejected rather than spliced: accepting one would mean
+  trusting that the overlapping prefix is byte-identical to what is already
+  on disk, which nothing in this protocol proves.
 - Empty body: `400 EMPTY_CHUNK`.
 - Body larger than `SCANSTORY_RESUMABLE_CHUNK_MAX_BYTES` (default 1 MiB):
   `413 CHUNK_TOO_LARGE`.
+
+**Recoverable rejections carry their own recovery data** (V1.1
+extreme-low-bandwidth hardening), so a client on a weak uplink does not
+spend a second round-trip asking what it could have been told the first
+time:
+
+| Response | Extra fields |
+|---|---|
+| `409 OFFSET_MISMATCH` | `current_offset`, `expected_total_size` |
+| `400 CHUNK_EXCEEDS_EXPECTED_SIZE` | `current_offset`, `expected_total_size` |
+| `413 CHUNK_TOO_LARGE` | `max_chunk_bytes` |
+| `409 INCOMPLETE_UPLOAD` (finalize) | `current_offset`, `expected_total_size` |
+
+These are additive; every existing field and status code is unchanged.
 
 Session-state rejections (all `409` except `SESSION_EXPIRED`, which can also
 be produced lazily the moment TTL passes even before the cleanup CLI runs):
@@ -273,8 +307,10 @@ trace, or secret.
 
 | Situation | Client should |
 |---|---|
-| Chunk request timed out / connection dropped | Re-send the same chunk at the same offset it tried before, or `GET` status first to confirm `current_offset`, then resume from there. |
-| Got `OFFSET_MISMATCH` | `GET` status, resume from the returned `current_offset`. |
+| Chunk request timed out / connection dropped | Prefer re-sending the same chunk at the same offset: that is idempotent by contract, so one request answers both "did you get it?" and "here it is again". A `GET` status first also works but costs a round-trip the weak link cannot spare. |
+| Got `OFFSET_MISMATCH` | Resume from the `current_offset` in the rejection body. No status read needed. |
+| Got `CHUNK_TOO_LARGE` | Re-slice to at most the `max_chunk_bytes` in the rejection body and send again from the same offset. |
+| Repeated transport failures | Back off with bounds and jitter, then **pause** - do not cancel the session. Every confirmed byte stays confirmed and a later resume continues from `current_offset`. |
 | Got `SESSION_EXPIRED`/`SESSION_CANCELLED`/`SESSION_FAILED` | Start a new session; the old one cannot be revived. |
 | Finalize returned `502 QUEUE_ENQUEUE_FAILED` | Call finalize again on the same session id later. |
 | Finalize returned `409 INCOMPLETE_UPLOAD` | Resume chunk upload from `current_offset`, then finalize again. |

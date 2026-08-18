@@ -389,10 +389,16 @@ def test_creator_upload_paths_send_experience_and_playback_contract():
 def test_resumable_recovery_matches_experience_and_playback_contract():
     html = creator_html()
     matcher = html[html.index("function storedSessionMatchesFiles("):html.index("function sequentialUploadSlice(")]
-    assert "stored.experience_type === experiencePayload.experience_type" in matcher
-    assert "stored.playback_mode === experiencePayload.playback_mode" in matcher
-    assert "stored.imageName === (markerFile?.name || null)" in matcher
-    assert "stored.imageSize === (markerFile?.size || 0)" in matcher
+    # Early returns rather than one && chain since the V1.1 low-bandwidth
+    # pass added the file fingerprint, but the same four facts must still be
+    # compared before a stored session is ever resumed.
+    assert "stored.experience_type !== experiencePayload.experience_type" in matcher
+    assert "stored.playback_mode !== experiencePayload.playback_mode" in matcher
+    assert "stored.imageName !== (markerFile?.name || null)" in matcher
+    assert "stored.imageSize !== (markerFile?.size || 0)" in matcher
+    # And the fingerprint is what actually proves file identity: metadata
+    # alone cannot tell two exports of the same clip apart.
+    assert "fingerprintsMatch(stored.videoFingerprint, fingerprints?.video)" in matcher
     saved_start = html.index("activeResumableUpload = {", html.index("const session = sessionPayload.session;"))
     saved_state = html[saved_start:html.index("saveResumableUploadState(activeResumableUpload);", saved_start)]
     assert "experience_type: experiencePayload.experience_type" in saved_state

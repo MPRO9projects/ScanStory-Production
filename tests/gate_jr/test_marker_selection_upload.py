@@ -339,7 +339,13 @@ def test_resumable_upload_streams_marker_then_video_sequentially():
     assert "videoFile.slice(offset - markerEnd, end - markerEnd)" in block
     assert "markerFile.slice(offset, markerEnd)" in block
     assert "videoFile.slice(0, end - markerEnd)" in block
-    assert "RESUMABLE_UPLOAD_CHUNK_SIZE = 1024 * 1024" in html
+    # Chunk size is measured, not fixed (V1.1 extreme-low-bandwidth
+    # hardening), so what matters here is that the slice length comes from
+    # the adaptive size and stays inside the floor/ceiling the sizer honours.
+    assert "sequentialUploadSlice(markerFile, videoFile, offset, chunkBytes)" in html
+    assert "RESUMABLE_CHUNK_MIN_BYTES = 128 * 1024" in html
+    assert "RESUMABLE_CHUNK_MAX_BYTES = 5 * 1024 * 1024" in html
+    assert "initialChunkBytes(serverMaxBytes)" in html
 
 
 def test_resumable_upload_progress_bytes_percent_speed_eta_are_visible():
@@ -348,7 +354,9 @@ def test_resumable_upload_progress_bytes_percent_speed_eta_are_visible():
     block = html[start:html.index("async function finalizeResumableWithBoundedRetry", start)]
     assert "`Uploading video — ${Math.round(percent)}%`" in block
     assert "`${formatBytes(offset)} of ${formatBytes(expectedTotal)}`" in block
-    assert "`${formatRate(avgBytesPerSecond)} · ${etaText}`" in block
+    # The rate quoted to the creator is the SMOOTHED one: a link that just
+    # recovered must stop quoting the stall it recovered from.
+    assert "`${formatRate(smoothed)} · ${etaText}`" in block
     assert "setUploadProgress('Finalizing upload'" in html
     assert "setUploadProgress('Processing queued'" in html
     assert "setUploadProgress('Project ready'" in html
@@ -358,12 +366,21 @@ def test_resumable_upload_resume_and_offset_mismatch_sync_to_server_offset():
     html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
     start = html.index("async function uploadResumableStream")
     block = html[start:html.index("async function finalizeResumableWithBoundedRetry", start)]
-    assert "err.code === 'OFFSET_MISMATCH'" in block
-    assert "err.status === 0" in block
+    # Failures are now CLASSIFIED rather than pattern-matched inline; the
+    # classifier itself is exercised for real in
+    # tests/integration/test_extreme_low_bandwidth_upload.py. What this
+    # guards is that the stream loop still routes a mismatch back to the
+    # server's authoritative offset and never to a local counter.
+    assert "uploadRetryDecision(err, attempt)" in block
+    assert "decision.action === 'resync'" in block
+    assert "err.payload?.current_offset" in block
     assert "getUploadSessionStatus(sessionId" in block
-    assert "offset = statusPayload.session.current_offset" in block
+    assert ".session.current_offset" in block
     assert "RESUMABLE CLIENT RESUME" in block
     assert "response.note === 'duplicate_chunk_ignored'" in block
+    # A spent retry budget must pause, never destroy the session.
+    assert "decision.action === 'pause'" in block
+    assert "UPLOAD_PAUSED_NETWORK" in block
 
 
 def test_resumable_upload_cancellation_aborts_and_calls_cancel_route():
