@@ -2079,6 +2079,8 @@
             <div class="upload-progress-bar" aria-hidden="true"><span id="uploadProgressFill"></span></div>
           </div>
 
+          <div class="upload-set-progress" id="uploadSetProgress" aria-live="polite" hidden></div>
+
           <div class="upload-state-note" id="uploadStateNote" aria-live="polite"></div>
 
           <div class="action-buttons">
@@ -4020,8 +4022,8 @@
     // third attempt either.
     const RESUMABLE_SHRINK_AFTER_ATTEMPTS = 2;
     const RESUMABLE_FINGERPRINT_BLOCK_BYTES = 64 * 1024;
-    const RESUMABLE_UPLOAD_STORAGE_KEY = 'scanstory.resumableUpload.v2';
-    const RESUMABLE_UPLOAD_STORAGE_VERSION = 2;
+    const RESUMABLE_UPLOAD_STORAGE_KEY = 'scanstory.resumableUpload.v3';
+    const RESUMABLE_UPLOAD_STORAGE_VERSION = 3;
     const RESUMABLE_POLL_MAX_ATTEMPTS = 8;
     const UPLOAD_AUTO_RESUME_LIMIT = 3;
     // Terminality is read from the session payload's `is_terminal` (see
@@ -4233,6 +4235,12 @@
        and 404s a session that is not yours. */
     function saveResumableUploadState(state) {
       try {
+        // Keep the active set's record in step with the flat cursor the chunk
+        // loop advances, so one write persists both views of the same fact.
+        if (Array.isArray(state.sets) && Number.isInteger(state.setIndex) && state.sets[state.setIndex]) {
+          state.sets[state.setIndex].currentOffset = state.currentOffset || 0;
+          if (state.expectedTotalSize) state.sets[state.setIndex].expectedTotalSize = state.expectedTotalSize;
+        }
         localStorage.setItem(RESUMABLE_UPLOAD_STORAGE_KEY, JSON.stringify({
           version: RESUMABLE_UPLOAD_STORAGE_VERSION,
           sessionId: state.sessionId,
@@ -4250,6 +4258,12 @@
           // Local bookkeeping only. On resume the SERVER's current_offset
           // always wins — see resumeOffsetFromServer().
           currentOffset: state.currentOffset || 0,
+          // MULTI-CONTENT-SET RECORD. One entry per content set, in upload
+          // order, extending this same record rather than opening a second
+          // storage key with its own schema to keep in step. A single-pair
+          // upload leaves it null and behaves exactly as it did before.
+          sets: Array.isArray(state.sets) ? state.sets : null,
+          setIndex: Number.isInteger(state.setIndex) ? state.setIndex : null,
           chunkBytes: state.chunkBytes || 0,
           smoothedBytesPerSecond: state.smoothedBytesPerSecond || 0,
           networkQuality: state.networkQuality || 'unknown',
@@ -4337,12 +4351,18 @@
       return payload || {};
     }
 
-    async function createResumableSession(markerFile, videoFile, projectName, experiencePayload, signal) {
+    async function createResumableSession(markerFile, videoFile, projectName, experiencePayload, signal, purpose) {
       return fetchUploadJson('/api/uploads/sessions', {
         method: 'POST',
         signal,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          // 'project_content_set' tells the server this session may only be
+          // finalized together with its siblings, so a stray single-session
+          // finalize cannot turn content set 2 of 3 into its own one-pair
+          // project. Omitted (undefined) for a single-pair upload, which keeps
+          // the server default 'project_pair'.
+          purpose: purpose || undefined,
           image_size: markerFile?.size || 0,
           video_size: videoFile.size,
           project_name: projectName,
@@ -4838,12 +4858,422 @@
       }
     }
 
+    /* ============ Multi-content-set resumable upload ============
+       One upload session per content set; all of them finished by a single
+       atomic project finalize. Nothing about the reliability model is
+       re-implemented here: the chunk loop, adaptive sizing, bounded
+       retry/backoff, pause semantics, fingerprints, server-authoritative
+       offsets and the localStorage record are all the ones the single-pair
+       path above already uses. What this adds is ordering, per-set
+       bookkeeping, and the group finalize.
+
+       Why one session PER SET rather than one giant stream: a set that got
+       across must never be re-sent because a later one failed, and the
+       existing session model is already exactly one-image-plus-one-video
+       wide. Widening it into an N-set stream would have thrown away that
+       independence for nothing. */
+
+    function resumableUploadSupported() {
+      // The resumable path needs fetch, Blob.slice and AbortController. Every
+      // browser this product supports has all three; the check exists so one
+      // that does not still gets a working (if all-or-nothing) upload rather
+      // than a dead Create button.
+      return typeof fetch === 'function'
+        && typeof AbortController === 'function'
+        && typeof Blob !== 'undefined'
+        && typeof Blob.prototype.slice === 'function';
+    }
+
+    async function finalizeResumableProject(sessionIds, signal) {
+      return fetchUploadJson('/api/uploads/projects/finalize', {
+        method: 'POST',
+        signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_ids: sessionIds })
+      });
+    }
+
+    /* Group finalize with the same bounded-retry discipline the single-pair
+       finalize has, and the same rule underneath it: a lost RESPONSE is not a
+       lost finalize, so ask the server what actually happened before deciding
+       anything. Duplicate group finalizes are safe by contract - the server's
+       all-N-or-none conditional UPDATE is what makes them safe, not this. */
+    async function finalizeResumableProjectWithBoundedRetry(sessionIds, signal, uploadState) {
+      let delay = 1200;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          return await finalizeResumableProject(sessionIds, signal);
+        } catch (err) {
+          const transportLost = err.status === 0 || err.name === 'TypeError';
+          if (transportLost || err.code === 'ALREADY_FINALIZED' || err.code === 'FINALIZE_IN_PROGRESS') {
+            const recovered = await reconcileUploadSessionFromServer(sessionIds[0], signal);
+            const completed = normalizedCompletedUploadPayload(recovered);
+            if (completed) return completed;
+            if (transportLost && recovered.session?.status === 'assembled') {
+              await new Promise(resolve => setTimeout(resolve, delay));
+              delay *= 2;
+              continue;
+            }
+            throw err;
+          }
+          // INCOMPLETE_UPLOAD and a per-set validation failure both carry the
+          // per-set state the caller needs to act on; retrying blindly here
+          // would just re-ask the same question.
+          if (err.code !== 'QUEUE_ENQUEUE_FAILED' || attempt === 2) throw err;
+          setUploadState('retrying');
+          uploadClientLog('UPLOAD CLIENT FINALIZE RETRY', uploadState, { http_status: err.status, current_phase: 'Finalizing' });
+          await new Promise(resolve => setTimeout(resolve, delay));
+          delay *= 2;
+        }
+      }
+      throw new UploadApiError('QUEUE_ENQUEUE_FAILED', 'Queue unavailable', 502);
+    }
+
+    /* Per-content-set progress, the one thing a multi-set creator cannot read
+       off a single bar. Deliberately no offsets and no chunk sizes: those are
+       protocol details, and a creator asked to reason about them has been
+       handed our problem. */
+    function renderContentSetProgress(records, activeIndex) {
+      const host = document.getElementById('uploadSetProgress');
+      if (!host) return;
+      if (!Array.isArray(records) || records.length < 2) {
+        host.innerHTML = '';
+        host.hidden = true;
+        return;
+      }
+      host.hidden = false;
+      host.innerHTML = records.map((record, index) => {
+        const total = record.expectedTotalSize || 0;
+        const done = Math.min(record.currentOffset || 0, total);
+        let label;
+        if (record.complete || (total && done >= total)) label = 'complete';
+        else if (index === activeIndex) label = total ? `${Math.round((done / total) * 100)}% uploaded` : 'starting';
+        else if (done > 0) label = `paused at ${Math.round((done / total) * 100)}%`;
+        else label = 'waiting';
+        return `<div class="upload-set-row">Content set ${index + 1} of ${records.length} — ${label}</div>`;
+      }).join('');
+    }
+
+    /* Refresh recovery, honestly. A reload cannot restore File handles, so the
+       creator has to re-add their files; what we owe them is a clear statement
+       that the bytes already across are not lost and that re-selecting the
+       SAME file continues rather than restarts. */
+    function announceRecoverableResumableUpload() {
+      const stored = loadResumableUploadState();
+      if (!stored || stored.version !== RESUMABLE_UPLOAD_STORAGE_VERSION) return;
+      const records = Array.isArray(stored.sets) ? stored.sets : [{
+        currentOffset: stored.currentOffset || 0,
+        expectedTotalSize: stored.expectedTotalSize || 0
+      }];
+      const incomplete = records.filter(r => !r.expectedTotalSize || (r.currentOffset || 0) < r.expectedTotalSize);
+      if (!incomplete.length) return;
+      const note = document.getElementById('uploadStateNote');
+      if (note) {
+        note.textContent = 'Re-select the same video to continue your upload. Your uploaded progress is safe.';
+      }
+      renderContentSetProgress(Array.isArray(stored.sets) ? stored.sets : null, -1);
+    }
+
+    /* Resolve ONE content set against the server. The server's answer wins in
+       every branch; a local "100%" that the server does not confirm is treated
+       as a local belief and nothing more. */
+    async function resolveContentSetSession(context) {
+      const { stored, record, markerFile, videoFile, projectName, experiencePayload, fingerprints, signal, uploadId, setIndex } = context;
+      const identityMatches = record && storedSessionMatchesFiles(
+        { ...stored, ...record }, markerFile, videoFile, projectName, experiencePayload, fingerprints
+      );
+      if (record && !identityMatches) {
+        // A DIFFERENT file for this set. Appending these bytes to that set's
+        // half-finished stream would corrupt it, so this ONE set restarts and
+        // its stale session is released - the sets that still match are
+        // untouched.
+        logClientStage('RESUMABLE CLIENT RESUME REJECTED', {
+          upload_id: uploadId, session_id: record.sessionId || null, set_index: setIndex, reason: 'file_identity_mismatch'
+        });
+        if (record.sessionId) { try { await cancelResumableSession(record.sessionId); } catch (_err) {} }
+      }
+      if (identityMatches && record.sessionId) {
+        try {
+          const payload = await getUploadSessionStatus(record.sessionId, signal);
+          const session = payload.session;
+          if (session?.status === 'completed' && session.project_id) return { session, alreadyProjectId: session.project_id };
+          if (session?.status === 'assembled') return { session, assembled: true };
+          if (session?.status === 'active') return { session };
+          // Terminal: expired, cancelled or failed. This set starts clean; the
+          // others keep theirs.
+        } catch (_err) {}
+      }
+      const created = await createResumableSession(
+        markerFile, videoFile, projectName, experiencePayload, signal, 'project_content_set'
+      );
+      return { session: created.session, fresh: true };
+    }
+
+    async function submitResumableMultiPair(context) {
+      const { projectName, readyPairs, uploadId, submitBtn, uploadState, experiencePayload } = context;
+      const controller = new AbortController();
+      const setCount = readyPairs.length;
+      activeResumableUpload = { controller, cancelled: false, sessionId: null, projectName };
+      uploadPausedForNetwork = false;
+      setCancelUploadVisible(true);
+      enableUploadNavigationWarning();
+
+      const goToProject = (projectId, totalBytes) => {
+        clearResumableUploadState();
+        uploadClientLog('UPLOAD CLIENT COMPLETE', uploadState, { current_phase: 'Project ready' });
+        setUploadProgress('Project ready', 100, 'Opening your project page.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'ready');
+        window.setTimeout(() => {
+          markResumableUploadCompleteForRedirect();
+          window.location.href = projectId ? `/success/${projectId}` : '/dashboard';
+        }, 250);
+      };
+
+      try {
+        // 1. Prepare every set's marker and fingerprints up front, in wizard
+        //    order. That order IS the content-set order and becomes
+        //    pair_index 0..N-1, so it must be fixed before anything uploads
+        //    and must not change across a resume.
+        uploadState.phase = 'Preparing markers';
+        const prepared = [];
+        for (let index = 0; index < setCount; index++) {
+          const pair = readyPairs[index].pair;
+          let markerFile = null;
+          if (experiencePayload.experience_type === 'image_video') {
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing markers...';
+            setUploadProgress(`Preparing marker ${index + 1} of ${setCount}`, 4, 'Creating the scannable marker image.', '', 'preparing');
+            if (pair.markerMode === 'full_image') pair.crop = { x: 0, y: 0, width: 1, height: 1 };
+            const blob = await renderMarkerBlob(readyPairs[index].id, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
+            markerFile = new File([blob], blob.name || `marker-${index}.jpg`, { type: blob.type || 'image/jpeg' });
+          }
+          prepared.push({
+            markerFile,
+            videoFile: pair.video,
+            fingerprints: { image: await fileFingerprint(markerFile), video: await fileFingerprint(pair.video) }
+          });
+        }
+        const totalBytes = prepared.reduce((sum, item) => sum + (item.markerFile?.size || 0) + item.videoFile.size, 0);
+        uploadState.totalBytes = totalBytes;
+        uploadClientLog('UPLOAD CLIENT VALIDATION DONE', uploadState, { current_phase: 'Preparing markers' });
+
+        // 2. Reconcile every set against the server before sending a byte.
+        //    A saved record is only usable if this is the same project with the
+        //    same number of sets; per-SET identity is then checked per set, so
+        //    one replaced file costs one set and not the project.
+        const stored = loadResumableUploadState();
+        const storedSets = (
+          stored
+          && stored.version === RESUMABLE_UPLOAD_STORAGE_VERSION
+          && stored.projectName === projectName
+          && stored.experience_type === experiencePayload.experience_type
+          && stored.playback_mode === experiencePayload.playback_mode
+          && Array.isArray(stored.sets)
+          && stored.sets.length === setCount
+        ) ? stored.sets : null;
+
+        setUploadProgress('Checking upload progress', 6, 'Asking the server what it already has.', '', 'preparing');
+        const resolved = [];
+        for (let index = 0; index < setCount; index++) {
+          const outcome = await resolveContentSetSession({
+            stored, record: storedSets ? storedSets[index] : null,
+            markerFile: prepared[index].markerFile, videoFile: prepared[index].videoFile,
+            projectName, experiencePayload, fingerprints: prepared[index].fingerprints,
+            signal: controller.signal, uploadId, setIndex: index
+          });
+          if (outcome.alreadyProjectId) {
+            // Every set of a finalized project settles to 'completed'
+            // together, so one completed set means the project exists. Nothing
+            // to re-upload and nothing to re-finalize.
+            uploadClientLog('UPLOAD CLIENT RECOVERED COMPLETED SESSION', uploadState, {
+              session_id: outcome.session.id, current_phase: 'Project ready'
+            });
+            goToProject(outcome.alreadyProjectId, totalBytes);
+            return;
+          }
+          resolved.push(outcome);
+        }
+
+        const sessionIds = resolved.map(item => item.session.id);
+        const records = resolved.map((item, index) => ({
+          sessionId: item.session.id,
+          imageName: prepared[index].markerFile?.name || null,
+          imageSize: prepared[index].markerFile?.size || 0,
+          videoName: prepared[index].videoFile.name,
+          videoSize: prepared[index].videoFile.size,
+          videoLastModified: prepared[index].videoFile.lastModified || 0,
+          imageFingerprint: prepared[index].fingerprints.image,
+          videoFingerprint: prepared[index].fingerprints.video,
+          expectedTotalSize: item.session.expected_total_size,
+          // The SERVER's offset, always - a stored local counter is a UI hint
+          // at most, for every set, not just the one being sent.
+          currentOffset: item.session.current_offset || 0,
+          complete: (item.session.current_offset || 0) >= (item.session.expected_total_size || 0)
+        }));
+        activeResumableUpload = {
+          ...activeResumableUpload,
+          projectName,
+          experience_type: experiencePayload.experience_type,
+          playback_mode: experiencePayload.playback_mode,
+          sets: records,
+          setIndex: 0,
+          chunkBytes: stored?.chunkBytes || 0,
+          smoothedBytesPerSecond: stored?.smoothedBytesPerSecond || 0,
+          retryCount: stored?.retryCount || 0,
+          resumeCount: stored?.resumeCount || 0,
+          pauseCount: stored?.pauseCount || 0
+        };
+        saveResumableUploadState(activeResumableUpload);
+        uploadClientLog('UPLOAD CLIENT SESSION CREATED', uploadState, { current_phase: 'Preparing', total_bytes: totalBytes });
+
+        // 3. Upload the sets in order. An already-complete set is SKIPPED, not
+        //    re-sent - that is the whole point of the pass.
+        uploadState.phase = 'Uploading video';
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+        for (let index = 0; index < setCount; index++) {
+          const record = records[index];
+          activeResumableUpload.setIndex = index;
+          activeResumableUpload.sessionId = record.sessionId;
+          activeResumableUpload.imageName = record.imageName;
+          activeResumableUpload.imageSize = record.imageSize;
+          activeResumableUpload.videoName = record.videoName;
+          activeResumableUpload.videoSize = record.videoSize;
+          activeResumableUpload.videoLastModified = record.videoLastModified;
+          activeResumableUpload.imageFingerprint = record.imageFingerprint;
+          activeResumableUpload.videoFingerprint = record.videoFingerprint;
+          activeResumableUpload.expectedTotalSize = record.expectedTotalSize;
+          activeResumableUpload.currentOffset = record.currentOffset;
+          renderContentSetProgress(records, index);
+          if (record.complete) {
+            logClientStage('RESUMABLE CLIENT SET SKIPPED', {
+              upload_id: uploadId, session_id: record.sessionId, set_index: index, set_count: setCount, reason: 'already_uploaded'
+            });
+            continue;
+          }
+          logClientStage('RESUMABLE CLIENT SET START', {
+            upload_id: uploadId, session_id: record.sessionId, set_index: index, set_count: setCount,
+            file_size: record.expectedTotalSize, resume_from: record.currentOffset
+          });
+          // A set the server has already assembled needs no bytes, only the
+          // group finalize below.
+          if (resolved[index].session.status === 'active') {
+            await uploadResumableStream(
+              resolved[index].session, prepared[index].markerFile, prepared[index].videoFile, uploadState
+            );
+          }
+          record.currentOffset = record.expectedTotalSize;
+          record.complete = true;
+          saveResumableUploadState(activeResumableUpload);
+          renderContentSetProgress(records, index);
+          logClientStage('RESUMABLE CLIENT SET COMPLETE', { upload_id: uploadId, session_id: record.sessionId, set_index: index, set_count: setCount });
+        }
+
+        // 4. One atomic project finalize for the whole group.
+        uploadState.phase = 'Finalizing';
+        submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finalizing...';
+        setUploadProgress('Finalizing upload', 94, 'Saving and validating your project.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'uploaded');
+        let finalized;
+        try {
+          finalized = await finalizeResumableProjectWithBoundedRetry(sessionIds, controller.signal, uploadState);
+        } catch (err) {
+          if (err.code === 'INCOMPLETE_UPLOAD' && Array.isArray(err.payload?.sessions)) {
+            // The server disagrees with us about at least one set. Its answer
+            // wins: re-send only the sets it says are short, then finalize
+            // once more.
+            for (const state of err.payload.sessions) {
+              const index = state.set_index;
+              if (state.status !== 'active' || state.current_offset >= state.expected_total_size) continue;
+              activeResumableUpload.setIndex = index;
+              activeResumableUpload.sessionId = state.id;
+              activeResumableUpload.expectedTotalSize = state.expected_total_size;
+              activeResumableUpload.currentOffset = state.current_offset;
+              records[index].currentOffset = state.current_offset;
+              records[index].complete = false;
+              saveResumableUploadState(activeResumableUpload);
+              renderContentSetProgress(records, index);
+              await uploadResumableStream(
+                { id: state.id, expected_total_size: state.expected_total_size, current_offset: state.current_offset,
+                  max_chunk_bytes: resolved[index].session.max_chunk_bytes },
+                prepared[index].markerFile, prepared[index].videoFile, uploadState
+              );
+              records[index].currentOffset = state.expected_total_size;
+              records[index].complete = true;
+              saveResumableUploadState(activeResumableUpload);
+            }
+            finalized = await finalizeResumableProjectWithBoundedRetry(sessionIds, controller.signal, uploadState);
+          } else {
+            throw err;
+          }
+        }
+
+        const finalSession = finalized.session;
+        if (!finalSession || finalSession.status !== 'completed') {
+          throw new UploadApiError(finalSession?.failure_code || 'PROJECT_CREATION_FAILED', safeUploadErrorMessage(finalSession?.failure_code), 409, finalized);
+        }
+        uploadState.phase = 'Processing queued';
+        setUploadProgress('Processing queued', 98, 'Your markers are queued for processing.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'processing');
+        await pollProcessingJobIfAvailable(finalized.session?.processing_job?.id || null, controller.signal);
+        goToProject(finalSession.project_id, totalBytes);
+      } catch (err) {
+        if (err.code === 'SESSION_CANCELLED') {
+          setUploadProgress('Upload cancelled', 0, 'The upload was cancelled safely.', '', '');
+        } else if (err.code === 'UPLOAD_PAUSED_NETWORK') {
+          // A resting state, not a failure. Every confirmed byte of every set
+          // stays on the server and the saved record stays in place, so
+          // pressing Resume continues from where each set actually is.
+          const uploaded = activeResumableUpload?.currentOffset || 0;
+          const total = activeResumableUpload?.expectedTotalSize || 0;
+          uploadClientLog('UPLOAD CLIENT PAUSED', uploadState, { bytes_uploaded: uploaded, total_bytes: total, current_phase: 'Paused' });
+          setUploadProgress(
+            'Upload paused',
+            total ? Math.min(90, 10 + (uploaded / total) * 80) : 0,
+            'Your connection dropped. Your uploaded progress is safe.',
+            `${formatBytes(uploaded)} of ${formatBytes(total)}`,
+            'paused'
+          );
+          renderContentSetProgress(activeResumableUpload?.sets || null, activeResumableUpload?.setIndex ?? -1);
+          pauseUploadForNetwork(submitBtn);
+          return;
+        } else if (err.code === 'IMAGE_VALIDATION_FAILED' || err.code === 'VIDEO_VALIDATION_FAILED') {
+          // FAILURE ISOLATION, surfaced. One set's file was rejected; the
+          // server kept every other set's bytes, so the creator replaces one
+          // file rather than the whole project.
+          const failedIndex = Number.isInteger(err.payload?.failed_set_index) ? err.payload.failed_set_index : null;
+          const which = failedIndex === null ? 'One content set' : `Content set ${failedIndex + 1}`;
+          uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { http_status: err.status, current_phase: uploadState.phase });
+          setUploadProgress(
+            'Upload needs your attention', 0,
+            `${which} could not be used: ${safeUploadErrorMessage(err.code)} Replace just that file — every other content set you already uploaded is safe.`,
+            '', 'failed'
+          );
+          if (failedIndex !== null && activeResumableUpload?.sets?.[failedIndex]) {
+            activeResumableUpload.sets[failedIndex].complete = false;
+            activeResumableUpload.sets[failedIndex].currentOffset = 0;
+            activeResumableUpload.sets[failedIndex].sessionId = null;
+            saveResumableUploadState(activeResumableUpload);
+          }
+          resetUploadSubmit(submitBtn);
+          return;
+        } else {
+          const message = safeUploadErrorMessage(err.code);
+          uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { http_status: err.status, current_phase: uploadState.phase });
+          setUploadProgress('Upload failed', 0, message, '', 'failed');
+          if (['SESSION_EXPIRED', 'SESSION_FAILED', 'STORAGE_INCONSISTENT', 'CHECKSUM_MISMATCH', 'PROJECT_CREATION_FAILED', 'CONTENT_SET_MISMATCH'].includes(err.code)) {
+            clearResumableUploadState();
+          }
+        }
+        resetUploadSubmit(submitBtn);
+      }
+    }
+
     let uploadActive = false;
     let activeUploadXhr = null;
     let activeUploadId = null;
     let uploadBeforeUnloadActive = false;
     let uploadRedirected = false;
     let uploadElapsedStartedAt = null;
+
+    // A reload cannot restore File handles, so say so plainly instead of
+    // letting the creator guess whether their bytes survived.
+    announceRecoverableResumableUpload();
 
     document.getElementById('projectForm').addEventListener('submit', async function (e) {
       e.preventDefault();
@@ -4921,8 +5351,27 @@
         user_agent: navigator.userAgent
       });
 
-      if (readyPairs.length === 1) {
-        await submitResumableSinglePair({
+      // EVERY JS-driven creation goes through the resumable path now - one
+      // content set or twenty. The single-pair function is kept as its own
+      // entry point because a one-set project needs no group finalize and no
+      // per-set bookkeeping; both share the chunk loop, the retry policy and
+      // the saved record underneath.
+      if (resumableUploadSupported()) {
+        if (readyPairs.length === 1) {
+          await submitResumableSinglePair({
+            projectName,
+            readyPairs,
+            uploadId,
+            submitBtn,
+            totalStart,
+            videoBytes,
+            originalBytes,
+            uploadState,
+            experiencePayload
+          });
+          return;
+        }
+        await submitResumableMultiPair({
           projectName,
           readyPairs,
           uploadId,
@@ -4936,7 +5385,9 @@
         return;
       }
 
-      setUploadProgress('Preparing upload', 5, 'Using the legacy uploader for multi-pair projects.', '', 'preparing');
+      // Last resort only: a browser without fetch/AbortController/Blob.slice.
+      // All-or-nothing, and honest about it.
+      setUploadProgress('Preparing upload', 5, 'Using the direct uploader for this browser.', '', 'preparing');
 
       try {
         for (let index = 0; index < readyPairs.length; index++) {
