@@ -6,7 +6,7 @@
 <div class="d-flex justify-content-between align-items-start flex-wrap gap-3 mb-4">
     <div>
         <h1 class="h3 mb-1">Operations Diagnostics</h1>
-        <p class="text-muted mb-0">Safe runtime visibility for uploads, processing, SMTP, and entitlements.</p>
+        <p class="text-muted mb-0">Runtime visibility for uploads, background processing, email delivery and account allowances.</p>
     </div>
     <a href="{{ url_for('admin_activity_logs') }}" class="btn btn-outline-light">
         <i class="fas fa-clipboard-list me-2" aria-hidden="true"></i>Activity Logs
@@ -16,49 +16,61 @@
 <div class="row g-3 mb-4">
     <div class="col-lg-6">
         <div class="card h-100">
-            <div class="card-header">RQ / Worker Configuration</div>
+            <div class="card-header">Background processing</div>
             <div class="card-body">
+                {# Same facts, operational vocabulary. The internal queue backend
+                   name, its storage URL and the queue's implementation name are
+                   never rendered - only what an operator has to act on. #}
                 <dl class="row mb-0">
-                    <dt class="col-sm-5">Queue availability check</dt>
+                    <dt class="col-sm-5">Processing service</dt>
                     <dd class="col-sm-7">
                         {% if rq_diagnostics.mode == 'rq' and rq_diagnostics.available %}
-                        Reachable
+                        <span class="badge bg-success">Online</span>
                         {% elif rq_diagnostics.mode == 'rq' %}
-                        Unavailable
+                        <span class="badge bg-danger">Unreachable</span>
                         {% else %}
-                        Unknown / not verified
+                        <span class="badge bg-secondary">Not verified</span>
                         {% endif %}
                     </dd>
-                    <dt class="col-sm-5">Mode</dt><dd class="col-sm-7">{{ rq_diagnostics.mode or "-" }}</dd>
-                    <dt class="col-sm-5">Redis configuration</dt><dd class="col-sm-7">{{ "Configured" if rq_diagnostics.redis_configured else "Not configured" }}</dd>
-                    <dt class="col-sm-5">Queue</dt><dd class="col-sm-7">{{ rq_diagnostics.queue_name or "-" }}</dd>
-                    <dt class="col-sm-5">Pending</dt><dd class="col-sm-7">{{ rq_diagnostics.pending_count if rq_diagnostics.pending_count is not none else "-" }}</dd>
-                    <dt class="col-sm-5">Running</dt><dd class="col-sm-7">{{ rq_diagnostics.running_count if rq_diagnostics.running_count is not none else "-" }}</dd>
-                    <dt class="col-sm-5">Failed</dt><dd class="col-sm-7">{{ rq_diagnostics.failed_count if rq_diagnostics.failed_count is not none else "-" }}</dd>
+                    <dt class="col-sm-5">Processing runs</dt>
+                    <dd class="col-sm-7">
+                        {% if rq_diagnostics.mode == 'rq' %}In the background{% else %}Immediately, in the web request{% endif %}
+                    </dd>
+                    <dt class="col-sm-5">Background storage</dt><dd class="col-sm-7">{{ "Configured" if rq_diagnostics.redis_configured else "Not configured" }}</dd>
+                    <dt class="col-sm-5">Waiting</dt><dd class="col-sm-7">{{ rq_diagnostics.pending_count if rq_diagnostics.pending_count is not none else "-" }}</dd>
+                    <dt class="col-sm-5">Processing</dt><dd class="col-sm-7">{{ rq_diagnostics.running_count if rq_diagnostics.running_count is not none else "-" }}</dd>
+                    <dt class="col-sm-5">Needs attention</dt><dd class="col-sm-7">{{ rq_diagnostics.failed_count if rq_diagnostics.failed_count is not none else "-" }}</dd>
                     {% if rq_diagnostics.error %}
-                    <dt class="col-sm-5">Safe error</dt><dd class="col-sm-7 text-warning">{{ rq_diagnostics.error }}</dd>
+                    <dt class="col-sm-5">Reported problem</dt><dd class="col-sm-7 text-warning">{{ rq_diagnostics.error }}</dd>
                     {% endif %}
                 </dl>
-                <p class="text-muted small mt-3 mb-0">Configured Redis/RQ does not prove a worker is online. The live worker count is reported by the <code>/ready</code> probe (<code>checks.workers</code> / <code>usable_worker_count</code>), not by this page.</p>
+                <p class="text-muted small mt-3 mb-0">A configured processing service is not proof that a worker is actually running. The live worker count comes from the readiness probe, not from this page.</p>
             </div>
         </div>
     </div>
     <div class="col-lg-6">
         <div class="card h-100">
-            <div class="card-header">SMTP</div>
+            <div class="card-header">Email delivery</div>
             <div class="card-body">
                 <dl class="row mb-0">
-                    <dt class="col-sm-5">Configuration</dt><dd class="col-sm-7">{{ "Configured" if smtp_diagnostics.configured else "Not configured" }}</dd>
-                    <dt class="col-sm-5">Host configuration</dt><dd class="col-sm-7">{{ "Configured" if smtp_diagnostics.host_configured else "Not configured" }}</dd>
+                    <dt class="col-sm-5">Email delivery</dt>
+                    <dd class="col-sm-7">
+                        {% if smtp_diagnostics.configured %}
+                        <span class="badge bg-success">Configured</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Not configured</span>
+                        {% endif %}
+                    </dd>
+                    <dt class="col-sm-5">Mail server</dt><dd class="col-sm-7">{{ "Configured" if smtp_diagnostics.host_configured else "Not configured" }}</dd>
                     <dt class="col-sm-5">Port</dt><dd class="col-sm-7">{{ smtp_diagnostics.port or "-" }}</dd>
-                    <dt class="col-sm-5">Security</dt><dd class="col-sm-7">{{ smtp_diagnostics.security or "-" }}</dd>
+                    <dt class="col-sm-5">Connection security</dt><dd class="col-sm-7">{{ smtp_diagnostics.security or "-" }}</dd>
                     <dt class="col-sm-5">Timeout</dt><dd class="col-sm-7">{{ smtp_diagnostics.timeout_seconds or "-" }}s</dd>
-                    <dt class="col-sm-5">From configured</dt><dd class="col-sm-7">{{ "Yes" if smtp_diagnostics.mail_from_configured else "No" }}</dd>
+                    <dt class="col-sm-5">Sender address set</dt><dd class="col-sm-7">{{ "Yes" if smtp_diagnostics.mail_from_configured else "No" }}</dd>
                     {% for error in smtp_diagnostics.errors %}
-                    <dt class="col-sm-5">Config warning</dt><dd class="col-sm-7 text-warning">{{ error }}</dd>
+                    <dt class="col-sm-5">Configuration warning</dt><dd class="col-sm-7 text-warning">{{ error }}</dd>
                     {% endfor %}
                 </dl>
-                <p class="text-muted small mt-3 mb-0">Configured SMTP does not prove email delivery; last-send success is not reported by this backend yet.</p>
+                <p class="text-muted small mt-3 mb-0">Configured email delivery is not proof that mail is arriving; last-send success is not reported yet.</p>
             </div>
         </div>
     </div>
@@ -213,16 +225,17 @@
     <div class="card-body p-0">
         <div class="table-responsive">
             <table class="table table-dark table-hover mb-0">
+                <caption class="visually-hidden">Recent upload sessions</caption>
                 <thead>
                     <tr>
-                        <th>ID</th>
-                        <th>Owner</th>
-                        <th>Project</th>
-                        <th>Status</th>
-                        <th>Bytes</th>
-                        <th>Media</th>
-                        <th>Failure</th>
-                        <th>Updated</th>
+                        <th scope="col">ID</th>
+                        <th scope="col">Owner</th>
+                        <th scope="col">ScanStory</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Uploaded</th>
+                        <th scope="col">Media</th>
+                        <th scope="col">Problem</th>
+                        <th scope="col">Last activity</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -239,8 +252,14 @@
                             {% endif %}
                         </td>
                         <td>{{ session.project_id or "-" }}</td>
-                        <td>{{ session.status }}</td>
-                        <td>{{ session.current_offset }} / {{ session.expected_total_size }}</td>
+                        <td>
+                            {# Status text always carries the meaning; the badge tone
+                               only reinforces it. #}
+                            <span class="badge {% if session.status in ('completed', 'finalized') %}bg-success{% elif session.status in ('failed', 'cancelled', 'expired') %}bg-danger{% elif session.status == 'uploading' %}bg-info text-dark{% else %}bg-secondary{% endif %}">
+                                {{ session.status|replace('_', ' ')|title }}
+                            </span>
+                        </td>
+                        <td>{{ session.current_offset }} / {{ session.expected_total_size }} bytes</td>
                         <td>
                             Image: {{ safe_basename(session.original_image_name) }}<br>
                             Video: {{ safe_basename(session.original_video_name) }}
@@ -262,26 +281,33 @@
     <div class="card-body p-0">
         <div class="table-responsive">
             <table class="table table-dark table-hover mb-0">
+                <caption class="visually-hidden">Recent background processing runs</caption>
                 <thead>
                     <tr>
-                        <th>ID</th>
-                        <th>Queue ID</th>
-                        <th>Project</th>
-                        <th>Status</th>
-                        <th>Attempts</th>
-                        <th>Queued</th>
-                        <th>Started</th>
-                        <th>Finished</th>
-                        <th>Safe failure</th>
+                        <th scope="col">ID</th>
+                        <th scope="col">ScanStory</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Attempts</th>
+                        <th scope="col">Accepted</th>
+                        <th scope="col">Started</th>
+                        <th scope="col">Last attempt</th>
+                        <th scope="col">Problem summary</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for job in processing_jobs %}
                     <tr>
                         <td>{{ job.id }}</td>
-                        <td>{{ job.queue_job_id or "-" }}</td>
                         <td>{{ job.project_id or "-" }}</td>
-                        <td>{{ job.status }}</td>
+                        <td>
+                            <span class="badge {% if job.status == 'completed' %}bg-success{% elif job.status == 'failed' %}bg-danger{% elif job.status == 'processing' %}bg-info text-dark{% else %}bg-secondary{% endif %}">
+                                {% if job.status == 'queued' %}Waiting
+                                {% elif job.status == 'processing' %}Processing
+                                {% elif job.status == 'completed' %}Done
+                                {% elif job.status == 'failed' %}Needs attention
+                                {% else %}{{ job.status|replace('_', ' ')|title }}{% endif %}
+                            </span>
+                        </td>
                         <td>{{ job.attempt_count }} / {{ job.max_attempts }}</td>
                         <td>{{ job.queued_at.strftime('%d %b %Y %H:%M') if job.queued_at else "-" }}</td>
                         <td>{{ job.started_at.strftime('%d %b %Y %H:%M') if job.started_at else "-" }}</td>
@@ -289,7 +315,7 @@
                         <td>{{ job.safe_error_code or "-" }}{% if job.safe_error_summary %}<br><small>{{ job.safe_error_summary }}</small>{% endif %}</td>
                     </tr>
                     {% else %}
-                    <tr><td colspan="9" class="text-center text-muted py-4">No processing jobs found.</td></tr>
+                    <tr><td colspan="8" class="text-center text-muted py-4">No processing jobs found.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -302,14 +328,15 @@
     <div class="card-body p-0">
         <div class="table-responsive">
             <table class="table table-dark table-hover mb-0">
+                <caption class="visually-hidden">Current account allowances</caption>
                 <thead>
                     <tr>
-                        <th>User</th>
-                        <th>Plan</th>
-                        <th>Status</th>
-                        <th>Projects</th>
-                        <th>Scans</th>
-                        <th>Valid until</th>
+                        <th scope="col">User</th>
+                        <th scope="col">Plan</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Stories</th>
+                        <th scope="col">Scans</th>
+                        <th scope="col">Valid until</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -347,13 +374,13 @@
                     <table class="table table-dark table-hover mb-0 align-middle">
                         <thead>
                             <tr>
-                                <th>ID</th>
-                                <th>User</th>
-                                <th>Catalog</th>
-                                <th>Status</th>
-                                <th>Total</th>
-                                <th>Fulfilled</th>
-                                <th>Refund</th>
+                                <th scope="col">ID</th>
+                                <th scope="col">User</th>
+                                <th scope="col">Catalog</th>
+                                <th scope="col">Status</th>
+                                <th scope="col">Total</th>
+                                <th scope="col">Fulfilled</th>
+                                <th scope="col">Refund</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -439,12 +466,12 @@
                     <table class="table table-dark table-hover mb-0">
                         <thead>
                             <tr>
-                                <th>ID</th>
-                                <th>User</th>
-                                <th>Type</th>
-                                <th>Delta</th>
-                                <th>Source</th>
-                                <th>Created</th>
+                                <th scope="col">ID</th>
+                                <th scope="col">User</th>
+                                <th scope="col">Type</th>
+                                <th scope="col">Delta</th>
+                                <th scope="col">Source</th>
+                                <th scope="col">Created</th>
                             </tr>
                         </thead>
                         <tbody>

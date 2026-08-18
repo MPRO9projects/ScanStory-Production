@@ -687,8 +687,11 @@ def test_moderation_permission_codes_are_the_real_ones(app_module):
     for role in ("admin", "superadmin"):
         assert "admin.reports.view" in app_module.ADMIN_ROLE_PERMISSIONS[role]
         assert "admin.reports.manage" in app_module.ADMIN_ROLE_PERMISSIONS[role]
-    html = read_template("admin/base.html")
+    # Both admin shells render the one shared sidebar partial, so the gate on
+    # the Content Reports entry lives there rather than inline in base.html.
+    html = read_template("admin/_sidebar_links.html")
     assert "admin_can('admin.reports.view')" in html
+    assert '{% include "admin/_sidebar_links.html" %}' in read_template("admin/base.html")
 
 
 # ===========================================================================

@@ -358,6 +358,7 @@
 </head>
 
 <body class="ss-user-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     <div class="blob blob-1"></div>
     <div class="blob blob-2"></div>
     <div id="toastContainer"></div>
@@ -372,7 +373,7 @@
         </div>
     </nav>
 
-    <main class="pt-28 pb-16 px-4 md:px-6 max-w-7xl mx-auto">
+    <main class="pt-28 pb-16 px-4 md:px-6 max-w-7xl mx-auto" id="main-content" tabindex="-1">
 
         <!-- Hero Header -->
         <div class="text-center mb-10 md:mb-14" data-aos="fade-up">
@@ -505,7 +506,7 @@
 
                         <!-- Enquiry type select (visible) -->
                         <div class="form-group">
-                            <label class="form-label"><i class="fas fa-tag"></i> Enquiry Type</label>
+                            <label class="form-label" for="enquirySelect"><i class="fas fa-tag" aria-hidden="true"></i> Enquiry Type</label>
                             <select id="enquirySelect" name="enquiry_type_display" class="form-input" onchange="syncEnquiryType(this.value)">
                                 <option value="support"> Technical Support</option>
                                 <option value="demo">Request a Demo</option>
@@ -519,11 +520,11 @@
                         <!-- Name + Phone row -->
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                             <div class="form-group mb-0">
-                                <label class="form-label"><i class="fas fa-user"></i> Your Name</label>
+                                <label class="form-label" for="name"><i class="fas fa-user" aria-hidden="true"></i> Your Name</label>
                                 <input type="text" id="name" name="name" class="form-input" placeholder="Full Name" required>
                             </div>
                             <div class="form-group mb-0">
-                                <label class="form-label"><i class="fas fa-phone"></i> Phone Number</label>
+                                <label class="form-label" for="phone"><i class="fas fa-phone" aria-hidden="true"></i> Phone Number</label>
                                 <input type="tel" id="phone" name="phone" class="form-input" placeholder="10 digit mobile number" pattern="[0-9]{10}" maxlength="10" required>
                             </div>
                         </div>
@@ -531,19 +532,19 @@
 
                         <!-- Email -->
                         <div class="form-group">
-                            <label class="form-label"><i class="fas fa-envelope"></i> Email Address</label>
+                            <label class="form-label" for="email"><i class="fas fa-envelope" aria-hidden="true"></i> Email Address</label>
                             <input type="email" id="email" name="email" class="form-input" placeholder="name@example.com" required>
                         </div>
 
                         <!-- Project / Company -->
                         <div class="form-group">
-                            <label class="form-label"><i class="fas fa-building"></i> Company / Project Name</label>
+                            <label class="form-label" for="project"><i class="fas fa-building" aria-hidden="true"></i> Company / Project Name</label>
                             <input type="text" id="project" name="project" class="form-input" placeholder="Your company or project name (optional)">
                         </div>
 
                         <!-- Message -->
                         <div class="form-group">
-                            <label class="form-label"><i class="fas fa-comment-dots"></i> Your Message</label>
+                            <label class="form-label" for="message"><i class="fas fa-comment-dots" aria-hidden="true"></i> Your Message</label>
                             <textarea id="message" name="message" rows="5" class="form-input"
                                 placeholder="Describe your requirement, issue, or question in detail..." required></textarea>
                         </div>

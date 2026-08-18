@@ -1274,6 +1274,53 @@
       text-align: center;
     }
 
+    /* Content requirements, stated before the file pickers. */
+    .ss-content-reqs {
+      list-style: none;
+      display: grid;
+      gap: 9px;
+      margin: 0 0 20px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.025);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .ss-content-reqs li {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      gap: 10px;
+      align-items: start;
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.68);
+    }
+
+    .ss-content-reqs i {
+      color: var(--accent);
+      font-size: 13px;
+      margin-top: 2px;
+      text-align: center;
+    }
+
+    .ss-content-reqs strong { color: rgba(255, 255, 255, 0.92); }
+
+    /* Story Name is the one field every creator must fill, so it reads as the
+       headline of the Details step rather than one input among several. */
+    .project-name-group .input-label {
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+      color: #fff;
+    }
+
+    .project-name-group .input-field {
+      font-size: 17px;
+      font-weight: 600;
+      padding-top: 15px;
+      padding-bottom: 15px;
+    }
+
     /* Transparent on desktop so the .panel elements stay direct children of the grid and
        the two-column layout is byte-for-byte what it was. */
     .wizard-pane-wrap {
@@ -1773,8 +1820,9 @@
 </head>
 
 <body class="ss-user-scope">
-  <div class="blob blob-1"></div>
-  <div class="blob blob-2"></div>
+  <a class="ss-skip-link" href="#main-content">Skip to main content</a>
+  <div class="blob blob-1" aria-hidden="true"></div>
+  <div class="blob blob-2" aria-hidden="true"></div>
 
   <!-- Flash Messages Container -->
   <div class="flash-messages">
@@ -1789,7 +1837,7 @@
     {% endwith %}
   </div>
 
-  <div class="main-container">
+  <main class="main-container" id="main-content" tabindex="-1">
 
     <!-- Top bar: fixes merged "Back to Dashboard" -->
     <div class="topbar">
@@ -1838,7 +1886,7 @@
         <div class="wizard-pane-wrap" data-wizard-pane="1 2">
         <div class="panel">
           <div data-wizard-pane="1">
-            <div class="panel-title"><span class="step-chip">1</span> Create ScanStory</div>
+            <div class="panel-title"><span class="step-chip">1</span> Story details</div>
 
             <!-- First-run explainer. <details> is used on purpose: it opens by default for
                  a first-time creator, collapses with no JavaScript, and stays keyboard and
@@ -1945,22 +1993,30 @@
           <div data-wizard-pane="2">
             <div class="panel-title" id="contentStepTitle"><span class="step-chip">2</span> Add your photo &amp; video</div>
             <p class="help-text" id="contentStepHelp" style="margin-top:-8px;margin-bottom:16px;">
-              For each pair: pick the photo people will scan, the video that plays when they scan it, and (optionally) adjust the exact area that triggers it.
+              For each content set: pick the photo people will scan, the video that plays when they scan it, and (optionally) adjust the exact area that triggers it.
             </p>
+
+            <!-- What "good content" means, stated BEFORE the file pickers rather than
+                 discovered through a rejected upload. -->
+            <ul class="ss-content-reqs">
+              <li><i class="fas fa-image" aria-hidden="true"></i><span><strong>Photo:</strong> JPG or PNG. Detailed and high-contrast works best &mdash; a poster, label, artwork or printed card. Avoid blank, blurry or heavily reflective surfaces.</span></li>
+              <li><i class="fas fa-video" aria-hidden="true"></i><span><strong>Video:</strong> MP4 or MOV. Keep it short and in the same shape as your photo so it sits neatly on top.</span></li>
+              <li><i class="fas fa-clock" aria-hidden="true"></i><span><strong>After you create:</strong> background processing prepares your photo for recognition. Your QR code is ready immediately and never changes.</span></li>
+            </ul>
 
           <div id="pairsContainer"></div>
           <div class="help-text" id="pairLimitMessage" style="margin-bottom:16px; color:#d1d5db; font-size:0.95rem;">
             {% if is_admin %}
-            Admin mode: unlimited pairs allowed per ScanStory.
+            Admin mode: unlimited content sets allowed per ScanStory.
             {% elif dev_test_entitled %}
-            Development test account: unlimited pairs allowed locally.
+            Development test account: unlimited content sets allowed locally.
             {% else %}
-            Your current plan allows up to {{ max_pairs_per_project }} pair(s) per ScanStory.
+            Your current plan allows up to {{ max_pairs_per_project }} image + video set{{ '' if max_pairs_per_project == 1 else 's' }} per ScanStory.
             {% endif %}
           </div>
 
           <button type="button" class="add-pair-btn" onclick="addPair()" id="addPairBtn">
-            <i class="fas fa-plus"></i>&nbsp; Add another pair
+            <i class="fas fa-plus" aria-hidden="true"></i>&nbsp; Add another content set
           </button>
           </div>
         </div>
@@ -2052,7 +2108,7 @@
         <p class="wizard-create-hint" id="wizardCreateHint" role="status" aria-live="polite" hidden></p>
       </div>
     </form>
-  </div>
+  </main>
 
   <div class="crop-modal" id="cropModal" aria-hidden="true">
     <div class="crop-shell">
@@ -2378,7 +2434,7 @@
       if (contentHelp) {
         contentHelp.textContent = value === 'direct_qr'
           ? 'Add the video that plays as soon as someone scans your QR code.'
-          : 'For each pair: pick the photo people will scan, the video that plays when they scan it, and (optionally) adjust the exact area that triggers it.';
+          : 'For each content set: pick the photo people will scan, the video that plays when they scan it, and (optionally) adjust the exact area that triggers it.';
       }
 
       updateFormFields();
@@ -2419,7 +2475,7 @@
             <i class="fa-solid fa-pen"></i>
           </button>
           ${pairId > 1 ? `
-            <button type="button" class="icon-btn danger" onclick="removePair(${pairId})" title="Remove pair" aria-label="Remove pair">
+            <button type="button" class="icon-btn danger" onclick="removePair(${pairId})" title="Remove this content set" aria-label="Remove this content set">
               <i class="fa-solid fa-trash"></i>
             </button>
           ` : ''}
@@ -2495,7 +2551,7 @@
             </div>
 
             ${pairId > 1 ? `
-              <button type="button" class="icon-btn danger" onclick="removePair(${pairId})" title="Remove pair" aria-label="Remove pair">
+              <button type="button" class="icon-btn danger" onclick="removePair(${pairId})" title="Remove this content set" aria-label="Remove this content set">
                 <i class="fa-solid fa-trash"></i>
               </button>
             ` : ``}
@@ -2511,6 +2567,7 @@
                      name="images"
                      accept="image/*"
                      class="file-input"
+                     aria-label="Photo to scan for content set ${pairId}"
                      onchange="handleFileSelect(this, ${pairId}, 'image')"
                      required />
               <div class="ua-inner">
@@ -2539,6 +2596,7 @@
                      name="videos"
                      accept="video/*"
                      class="file-input"
+                     aria-label="Video to play for content set ${pairId}"
                      onchange="handleFileSelect(this, ${pairId}, 'video')"
                      required />
               <div class="ua-inner">
@@ -2593,6 +2651,13 @@
     function removePair(pairId) {
       const pairElement = document.getElementById(`pair-${pairId}`);
       if (!pairElement) return;
+
+      // Confirm only when there is actually work to lose. Confirming an empty
+      // content set would train people to click through the dialog.
+      const held = currentFiles[pairId];
+      if (held && (held.image || held.video)) {
+        if (!window.confirm('Remove this content set? The photo and video you picked for it will be cleared.')) return;
+      }
 
       // Revoke object URLs
       if (currentFiles[pairId]) {
@@ -3472,7 +3537,7 @@
       if (IS_ADMIN || IS_DEV_TEST) {
         if (addPairBtn) {
           addPairBtn.disabled = false;
-          addPairBtn.innerHTML = '<i class="fas fa-plus"></i>&nbsp; Add another pair';
+          addPairBtn.innerHTML = '<i class="fas fa-plus" aria-hidden="true"></i>&nbsp; Add another content set';
           addPairBtn.style.cursor = 'pointer';
         }
 
@@ -3490,7 +3555,7 @@
           addPairBtn.style.cursor = 'not-allowed';
         } else {
           addPairBtn.disabled = false;
-          addPairBtn.innerHTML = '<i class="fas fa-plus"></i>&nbsp; Add another pair';
+          addPairBtn.innerHTML = '<i class="fas fa-plus" aria-hidden="true"></i>&nbsp; Add another content set';
           addPairBtn.style.cursor = 'pointer';
         }
       }

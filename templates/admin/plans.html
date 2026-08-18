@@ -458,10 +458,31 @@
         
         .plan-actions {
             display: flex;
+            flex-wrap: wrap;
+            align-items: center;
             gap: 10px;
             margin-top: 20px;
         }
+
+        .plan-actions > form {
+            display: inline-flex;
+            gap: 6px;
+            margin: 0;
+            min-width: 0;
+        }
+
+        .plan-actions select[name="lifecycle_status"] {
+            min-width: 0;
+            max-width: 100%;
+        }
         
+        .visually-hidden {
+            position: absolute !important;
+            width: 1px; height: 1px;
+            margin: -1px; padding: 0; border: 0;
+            overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap;
+        }
+
         .alert {
             padding: 15px;
             border-radius: 8px;
@@ -525,6 +546,7 @@
     </style>
 </head>
 <body class="ss-admin-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     <!-- Navbar -->
     <nav class="navbar">
         <a href="/admin/dashboard" class="navbar-brand">
@@ -557,7 +579,7 @@
     </div>
 
     <!-- Main Content -->
-    <div class="main-content">
+    <div class="main-content" id="main-content" role="main" tabindex="-1">
         <div class="page-header">
             <h1 class="page-title">Subscription Plans</h1>
             <div>
@@ -576,10 +598,10 @@
         {% endwith %}
 
         <div class="card" data-testid="v11-plan-policy-contract">
-            <h3 style="margin-bottom: 10px;">V1.1 Commercial Policy Contract</h3>
+            <h3 style="margin-bottom: 10px;">Commercial Policy Contract</h3>
             <p class="policy-note">
                 This admin view governs the whole commercial plan definition: price, validity, project capacity, scan
-                allowance, pairs per project, plan family, storage and per-file media policy, per-experience
+                allowance, content sets per story, plan family, storage and per-file media policy, per-experience
                 entitlements and lifecycle status. Every value is validated server-side. Editing commercial policy
                 bumps the plan revision; historical payment snapshots are never rewritten.
             </p>
@@ -719,7 +741,8 @@
                     </form>
                     <form action="/admin/plans/{{ plan.id }}/lifecycle" method="POST" style="display:inline-flex; gap:6px; margin:0;">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <select name="lifecycle_status" class="btn btn-secondary btn-sm" style="padding:4px 8px;">
+                        <label class="visually-hidden" for="lifecycle-{{ plan.id }}">Lifecycle status for {{ plan.plan_name }}</label>
+                        <select name="lifecycle_status" id="lifecycle-{{ plan.id }}" class="btn btn-secondary btn-sm" style="padding:4px 8px;">
                             {% for status in ['DRAFT', 'ACTIVE', 'CLOSED_FOR_NEW_PURCHASE', 'ARCHIVED'] %}
                             <option value="{{ status }}" {% if plan.lifecycle_status==status %}selected{% endif %}>{{ status }}</option>
                             {% endfor %}

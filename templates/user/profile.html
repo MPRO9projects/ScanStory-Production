@@ -34,10 +34,13 @@
             overflow-x: hidden;
         }
 
-        /* Enable scrolling */
+        /* Enable scrolling. overflow-x is clipped at the ROOT because the
+           decorative blobs are position:fixed - a body/wrapper overflow rule
+           cannot contain them (their containing block is the viewport). */
         html, body {
             height: auto;
             overflow-y: auto;
+            overflow-x: clip;
             -webkit-overflow-scrolling: touch;
         }
 
@@ -382,9 +385,10 @@
 </head>
 
 <body class="ss-user-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     <div class="page-wrapper">
-        <div class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]"></div>
-        <div class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]"></div>
+        <div class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]" aria-hidden="true"></div>
+        <div class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]" aria-hidden="true"></div>
 
         <!-- Flash Messages -->
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -432,7 +436,7 @@
             </div>
         </header>
 
-        <div class="content-wrapper">
+        <main class="content-wrapper" id="main-content" tabindex="-1">
             <div class="main-container">
                 <div class="mb-6 md:mb-10 px-3 md:px-0" data-aos="fade-up">
                     <h1 class="text-3xl md:text-4xl lg:text-6xl font-black uppercase leading-[0.9]">
@@ -565,7 +569,7 @@
                         </li>
                         <li>
                             <span class="ss-slots-value">{{ entitlement_summary.max_pairs_per_project }}</span>
-                            <span class="ss-slots-label">Pairs / project</span>
+                            <span class="ss-slots-label">Content sets per story</span>
                         </li>
                     </ul>
                     <div class="flex flex-wrap gap-2 mt-4" aria-label="Experience modes on your plan">
@@ -607,6 +611,7 @@
                     </ul>
                     {% if entitlement_summary.over_storage %}
                     <p class="ss-domain-note" style="margin-top:1rem;" data-testid="storage-overage-copy">
+                        <strong>Your current storage use is above your plan allowance. Existing content is safe, but new uploads are paused.</strong>
                         Your account is over storage by <strong data-storage="storage_overage_display">{{ entitlement_summary.storage_overage_display }}</strong>.
                         Existing projects, media and QR codes remain available. New uploads that consume more storage are blocked until you delete or reduce media, buy storage if available, or upgrade.
                         Smaller replacements may be allowed when they reduce the total stored bytes.
@@ -877,7 +882,7 @@
                 </div>
                 {% endif %}
             </div>
-        </div>
+        </main>
 
         <!-- Bottom spacer for scrolling -->
         <div class="h-8 md:h-12"></div>

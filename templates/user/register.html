@@ -1090,6 +1090,7 @@
 </head>
 
 <body class="ss-user-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% set latest_category, latest_message = messages[-1] %}
@@ -1107,7 +1108,7 @@
     <div class="blob blob-1"></div>
     <div class="blob blob-2"></div>
 
-    <div class="container-fluid">
+    <div class="container-fluid" id="main-content" role="main" tabindex="-1">
         <!-- LEFT PANEL - Registration Form -->
         <div class="left-panel">
             <!-- Updated Back Button with Accent Color -->

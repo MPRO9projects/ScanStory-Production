@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Story | ScanStory</title>
+    <title>My Stories | ScanStory</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
@@ -419,6 +419,87 @@
             transform: translateY(-2px);
         }
 
+        .btn-retry {
+            background: rgba(255,60,60,0.12);
+            border-color: rgba(255,60,60,0.35);
+            color: #ffb4b4;
+        }
+
+        .btn-retry:hover {
+            background: rgba(255,60,60,0.2);
+            border-color: rgba(255,60,60,0.5);
+            transform: translateY(-2px);
+        }
+
+        .action-btn[disabled],
+        .action-btn[aria-disabled="true"] {
+            opacity: 0.55;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        /* A busy or in-progress control gets its own row: its label is longer
+           than the idle one, and .action-btn is nowrap inside a 4-up flex row,
+           so it would otherwise be clipped - hiding the exact state this
+           feature exists to communicate. */
+        .card-actions > .action-btn[aria-disabled="true"],
+        .card-actions > form.is-busy {
+            flex: 1 0 100%;
+        }
+
+        /* Processing / readiness state. Text always carries the meaning; the
+           colour and the dot only reinforce it (never colour-only status). */
+        .card-state {
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 5px 13px;
+            border-radius: 50px;
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+            border: 1px solid transparent;
+            margin-bottom: 12px;
+        }
+
+        .card-state i { font-size: 10px; }
+        .card-state[data-state="ready"]       { background: rgba(0,255,170,0.08);  border-color: rgba(0,255,170,0.28);  color: #34d399; }
+        .card-state[data-state="processing"]  { background: rgba(0,212,255,0.08);   border-color: rgba(0,212,255,0.28);  color: #67e8f9; }
+        .card-state[data-state="queued"]      { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.14); color: rgba(255,255,255,0.65); }
+        .card-state[data-state="failed"]      { background: rgba(255,60,60,0.09);   border-color: rgba(255,60,60,0.3);   color: #ff8b8b; }
+        .card-state[data-state="attention"]   { background: rgba(255,190,0,0.09);   border-color: rgba(255,190,0,0.3);   color: #fbbf24; }
+        .card-state[data-state="suspended"]   { background: rgba(255,60,60,0.09);   border-color: rgba(255,60,60,0.3);   color: #ff8b8b; }
+
+        .card-state[data-state="processing"] .live-dot { background: #00d4ff; }
+
+        .card-progress-note {
+            display: block;
+            font-size: 11.5px;
+            color: rgba(255,255,255,0.45);
+            margin: -6px 0 14px;
+            line-height: 1.5;
+        }
+
+        /* Auto-refresh notice - the persistent, non-toast reflection of the
+           fact that a repair/processing run is being watched. */
+        .refresh-note {
+            display: none;
+            align-items: center;
+            gap: 10px;
+            padding: 12px 18px;
+            border-radius: 14px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            font-weight: 600;
+            background: rgba(0,212,255,0.07);
+            border: 1px solid rgba(0,212,255,0.22);
+            color: #a5eefd;
+        }
+        .refresh-note[data-visible="true"] { display: flex; }
+
+        @keyframes ss-spin { to { transform: rotate(360deg); } }
+        .ss-spin { animation: ss-spin 0.9s linear infinite; display: inline-block; }
+
         /* Empty state */
         .empty-state {
             grid-column: 1 / -1;
@@ -506,6 +587,7 @@
 </head>
 
 <body class="ss-user-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     <!-- Ambient Blobs -->
     <div class="blob w-96 h-96 bg-purple-600" style="width:380px;height:380px;background:#7000ff;top:-8%;left:-5%;"></div>
     <div class="blob" style="width:420px;height:420px;background:#ff007a;bottom:-10%;right:-5%;"></div>
@@ -544,7 +626,7 @@
     </nav>
 
     <!-- Main Content -->
-    <main class="page">
+    <main class="page" id="main-content" tabindex="-1">
 
         <!-- Flash messages -->
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -575,11 +657,24 @@
                 {% if projects %}
                 <span class="project-count-badge">
                     <span class="live-dot"></span>
-                    {{ projects|length }} story{{ 's' if projects|length != 1 else '' }}
+                    {{ projects|length }} {{ 'stories' if projects|length != 1 else 'story' }}
                 </span>
                 {% endif %}
             </div>
             <p class="page-subtitle">Each story is a live AR experience tied to a unique QR code.</p>
+        </div>
+
+        {# Persistent (non-toast) reflection of an in-flight processing run.
+           The flash message that starts a repair is transient; this is not. #}
+        <div class="refresh-note" id="processingWatch" role="status">
+            <i class="fas fa-rotate ss-spin" aria-hidden="true"></i>
+            <span>
+                Background processing is running on <span data-processing-count>0</span> of your stories.
+                This page refreshes itself until it finishes.
+            </span>
+            <button type="button" class="ss-btn ss-btn-secondary ss-btn-sm" id="stopWatch" style="margin-left:auto;">
+                Stop auto-refresh
+            </button>
         </div>
 
         <!-- Search & filter -->
@@ -612,14 +707,57 @@
         <div class="projects-grid">
             {% if projects %}
                 {% for project in projects %}
-                <div class="project-card" data-aos="fade-up" data-aos-delay="{{ loop.index0 * 60 }}">
+                {# Readiness state, derived only from the backend-provided pair
+                   rollup (the SAME aggregate the route's status filter uses).
+                   Nothing here re-derives a business rule; it names the state
+                   the list could already be filtered by but never showed.
+                   Suspension is deliberately its own state and never collapses
+                   into a processing or coverage state. #}
+                {% set _ready = project.ready_pairs_count | default(0) %}
+                {% set _failed = project.failed_pairs_count | default(0) %}
+                {% set _busy = project.processing_pairs_count | default(0) %}
+                {% set _total = project.pairs_count | default(0) %}
+                {% if project.is_suspended %}{% set story_state = 'suspended' %}
+                {% elif _total == 0 %}{% set story_state = 'attention' %}
+                {% elif _failed > 0 %}{% set story_state = 'failed' %}
+                {% elif _busy > 0 %}{% set story_state = 'processing' %}
+                {% elif _ready >= _total %}{% set story_state = 'ready' %}
+                {% else %}{% set story_state = 'queued' %}{% endif %}
+                <div class="project-card" data-aos="fade-up" data-aos-delay="{{ loop.index0 * 60 }}"
+                     data-story-state="{{ story_state }}" data-project-id="{{ project.id }}">
                     <span class="card-number">{{ project|project_display_number }}</span>
 
                     <div class="card-icon-wrap">
-                        <i class="fas fa-cube"></i>
+                        <i class="fas fa-cube" aria-hidden="true"></i>
                     </div>
 
                     <div class="card-title">{{ project.name }}</div>
+
+                    <span class="card-state" data-state="{{ story_state }}">
+                        {% if story_state == 'ready' %}
+                        <i class="fas fa-circle-check" aria-hidden="true"></i> Ready
+                        {% elif story_state == 'processing' %}
+                        <span class="live-dot" aria-hidden="true"></span> Processing
+                        {% elif story_state == 'queued' %}
+                        <i class="fas fa-hourglass-half" aria-hidden="true"></i> Waiting to process
+                        {% elif story_state == 'failed' %}
+                        <i class="fas fa-circle-exclamation" aria-hidden="true"></i> Processing failed
+                        {% elif story_state == 'suspended' %}
+                        <i class="fas fa-ban" aria-hidden="true"></i> Suspended
+                        {% else %}
+                        <i class="fas fa-triangle-exclamation" aria-hidden="true"></i> Needs attention
+                        {% endif %}
+                    </span>
+
+                    {% if story_state == 'processing' %}
+                    <span class="card-progress-note">{{ _ready }} of {{ _total }} content sets ready. This usually takes a minute.</span>
+                    {% elif story_state == 'failed' %}
+                    <span class="card-progress-note">Some content sets could not be prepared. Use Try again below - your QR code will not change.</span>
+                    {% elif story_state == 'queued' %}
+                    <span class="card-progress-note">Waiting for background processing to pick this up.</span>
+                    {% elif story_state == 'attention' %}
+                    <span class="card-progress-note">This story has no image + video sets yet. Add content to make it scannable.</span>
+                    {% endif %}
 
                     <div class="card-meta">
                         <span class="meta-pill">
@@ -627,8 +765,8 @@
                             {{ project.created_at.strftime('%d %b %Y') }}
                         </span>
                         <span class="meta-pill">
-                            <i class="fas fa-layer-group"></i>
-                            {{ project.pairs_count }} pair{{ 's' if project.pairs_count != 1 else '' }}
+                            <i class="fas fa-layer-group" aria-hidden="true"></i>
+                            {{ project.pairs_count }} content set{{ 's' if project.pairs_count != 1 else '' }}
                         </span>
                         {% if project.scan_count is defined %}
                         <span class="meta-pill">
@@ -720,30 +858,56 @@
                     </p>
                     {% endif %}
 
+                    {# Actions are contextual: a card never offers a control that
+                       cannot do anything useful in its current state. Testing a
+                       story that is still processing, or "fixing" a suspension
+                       (which reprocessing cannot lift), are both dead ends. #}
                     <div class="card-actions">
                         <a href="{{ url_for('project_view', project_id=project.id) }}" class="action-btn btn-view">
-                            <i class="fas fa-eye"></i> View
+                            <i class="fas fa-eye" aria-hidden="true"></i> View
                         </a>
+                        {% if story_state == 'ready' %}
+                        <a href="{{ url_for('scanner_test_entry', project_id=project.id) }}" target="_blank" rel="noopener"
+                           class="action-btn btn-view">
+                            <i class="fas fa-vial" aria-hidden="true"></i> Test
+                        </a>
+                        {% endif %}
                         <a href="{{ url_for('download_project_qr', project_id=project.id) }}" class="action-btn btn-qr">
-                            <i class="fas fa-qrcode"></i> QR
+                            <i class="fas fa-qrcode" aria-hidden="true"></i> QR
                         </a>
                         <a href="{{ url_for('user_edit_project_page', project_id=project.id) }}" class="action-btn btn-edit">
-                            <i class="fas fa-pen"></i> Edit
+                            <i class="fas fa-pen" aria-hidden="true"></i> Edit
                         </a>
+
+                        {# Repair. While a run is already in flight the control is
+                           replaced by a plain-language, non-clickable statement
+                           rather than a button that would queue a second attempt.
+                           Suspended stories never offer it - reprocessing does not
+                           lift a suspension and offering it would waste time. #}
+                        {% if story_state == 'processing' %}
+                        <span class="action-btn btn-reprocess" aria-disabled="true" style="flex:1; min-width:60px;">
+                            <i class="fas fa-rotate ss-spin" aria-hidden="true"></i> Repair in progress
+                        </span>
+                        {% elif story_state != 'suspended' %}
                         <form method="POST" action="{{ url_for('user_reprocess_project', project_id=project.id) }}"
-                            onsubmit="return confirm('Fix this ScanStory? Your QR code will not change.');"
+                            data-repair-form
                             style="flex:1; min-width:60px;">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="submit" class="action-btn btn-reprocess" style="width:100%;">
-                                <i class="fas fa-rotate"></i> Fix
+                            <button type="submit" class="action-btn {{ 'btn-retry' if story_state == 'failed' else 'btn-reprocess' }}" style="width:100%;"
+                                data-busy-label="Repairing&hellip;">
+                                <i class="fas fa-rotate" aria-hidden="true"></i>
+                                {{ 'Try again' if story_state == 'failed' else 'Fix' }}
                             </button>
                         </form>
+                        {% endif %}
+
                         <form method="POST" action="{{ url_for('user_delete_project', project_id=project.id) }}"
-                            onsubmit="return confirm('Delete \'{{ project.name }}\'? This cannot be undone.');"
+                            data-confirm="Delete &quot;{{ project.name }}&quot;? This cannot be undone."
                             style="flex:1; min-width:60px;">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                            <button type="submit" class="action-btn btn-delete" style="width:100%;">
-                                <i class="fas fa-trash"></i> Delete
+                            <button type="submit" class="action-btn btn-delete" style="width:100%;"
+                                data-busy-label="Deleting&hellip;">
+                                <i class="fas fa-trash" aria-hidden="true"></i> Delete
                             </button>
                         </form>
                     </div>
@@ -767,10 +931,10 @@
                         <i class="fas fa-cube"></i>
                     </div>
                     <h3>No Stories yet</h3>
-                    <p>Create your first AR Story and start turning print into interactive experiences.</p>
-                    <a href="{{ url_for('dashboard') }}" class="empty-cta">
-                        <i class="fas fa-plus"></i>
-                        Create First Story
+                    <p>Create your first ScanStory and start turning print into interactive experiences.</p>
+                    <a href="{{ url_for('user_create_project_page') }}" class="empty-cta">
+                        <i class="fas fa-plus" aria-hidden="true"></i>
+                        Create ScanStory
                     </a>
                 </div>
             {% endif %}
@@ -781,6 +945,100 @@
     <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
     <script>
         AOS.init({ duration: 600, easing: 'ease-out-cubic', once: true });
+
+        /* ------------------------------------------------------------------
+         * Action feedback + processing watch.
+         *
+         * Repair (Fix / Try again) is a normal POST -> redirect form: the only
+         * contract that exists today. There is no per-project JSON status
+         * endpoint to poll (/api/processing/jobs/<id> exists but the repair
+         * route does not hand back a job id), so "polling" here is a bounded
+         * page refresh driven by the state the server already renders. When a
+         * status endpoint exists, swap ONLY the refresh() call below.
+         * ------------------------------------------------------------------ */
+        (function () {
+            var BUSY = 'aria-busy';
+
+            function markBusy(form) {
+                var button = form.querySelector('button[type="submit"]');
+                if (!button) return;
+                var label = button.getAttribute('data-busy-label') || 'Working&hellip;';
+                button.disabled = true;
+                button.setAttribute(BUSY, 'true');
+                button.innerHTML = '<i class="fas fa-rotate ss-spin" aria-hidden="true"></i> ' + label;
+                // Nothing else on this card should be clickable mid-mutation.
+                form.classList.add('is-busy');
+                form.style.flex = '1 0 100%';
+                var card = form.closest('.project-card');
+                if (card) {
+                    card.querySelectorAll('button[type="submit"]').forEach(function (other) {
+                        if (other !== button) other.disabled = true;
+                    });
+                }
+            }
+
+            document.querySelectorAll('form[data-repair-form]').forEach(function (form) {
+                form.addEventListener('submit', function (event) {
+                    if (form.dataset.submitted === '1') { event.preventDefault(); return; }
+                    if (!window.confirm('Repair this ScanStory? Your QR code will not change.')) {
+                        event.preventDefault();
+                        return;
+                    }
+                    form.dataset.submitted = '1';
+                    markBusy(form);
+                });
+            });
+
+            document.querySelectorAll('form[data-confirm]').forEach(function (form) {
+                form.addEventListener('submit', function (event) {
+                    if (form.dataset.submitted === '1') { event.preventDefault(); return; }
+                    if (!window.confirm(form.getAttribute('data-confirm'))) {
+                        event.preventDefault();
+                        return;
+                    }
+                    form.dataset.submitted = '1';
+                    markBusy(form);
+                });
+            });
+
+            // Watch in-flight processing. Bounded so a stuck job can never turn
+            // the page into an endless reload loop.
+            var busyCards = document.querySelectorAll('.project-card[data-story-state="processing"]');
+            var watch = document.getElementById('processingWatch');
+            if (!busyCards.length || !watch) return;
+
+            watch.setAttribute('data-visible', 'true');
+            var counter = watch.querySelector('[data-processing-count]');
+            if (counter) counter.textContent = String(busyCards.length);
+
+            var MAX_REFRESHES = 20;
+            var key = 'ss-projects-watch';
+            var seen = Number(sessionStorage.getItem(key) || 0);
+            var stopped = false;
+
+            document.getElementById('stopWatch').addEventListener('click', function () {
+                stopped = true;
+                sessionStorage.removeItem(key);
+                watch.removeAttribute('data-visible');
+            });
+
+            if (seen >= MAX_REFRESHES) {
+                sessionStorage.removeItem(key);
+                return;
+            }
+
+            setTimeout(function () {
+                if (stopped || document.hidden) return;
+                sessionStorage.setItem(key, String(seen + 1));
+                window.location.reload();
+            }, 12000);
+
+            window.addEventListener('pagehide', function () {
+                if (!document.querySelector('.project-card[data-story-state="processing"]')) {
+                    sessionStorage.removeItem(key);
+                }
+            });
+        })();
     </script>
 </body>
 </html>

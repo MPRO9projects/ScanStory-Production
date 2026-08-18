@@ -560,6 +560,7 @@
     </style>
 </head>
 <body class="ss-admin-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     <!-- Navbar -->
     <nav class="navbar">
         <a href="/admin/dashboard" class="navbar-brand">
@@ -593,7 +594,7 @@
 
     
     <!-- Main Content -->
-    <div class="main-content">
+    <div class="main-content" id="main-content" role="main" tabindex="-1">
         <div class="page-header">
             <h1 class="page-title">User Details</h1>
             <div>
@@ -838,8 +839,8 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="info-label">Admin storage grant or revocation (bytes)</div>
                 <div class="d-flex gap-2 flex-wrap">
-                    <input class="form-control" type="number" name="storage_bytes" placeholder="1073741824 or -1073741824" required>
-                    <input class="form-control" type="text" name="reason" placeholder="Reason">
+                    <input class="form-control" type="number" name="storage_bytes" id="storageGrantBytes" aria-label="Storage grant or revocation in bytes" placeholder="1073741824 or -1073741824" required>
+                    <input class="form-control" type="text" name="reason" id="storageGrantReason" aria-label="Reason for the storage change" placeholder="Reason">
                     <button class="btn btn-warning" type="submit" onclick="return confirm('Update this user storage entitlement? Existing media and QR codes are not deleted.');">Update storage</button>
                 </div>
                 <div class="info-label">Revocation never deletes media or QR codes; it can put the account over storage and block new storage-consuming uploads.</div>
@@ -848,8 +849,8 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="info-label">Admin project-slot grant or revocation</div>
                 <div class="d-flex gap-2 flex-wrap">
-                    <input class="form-control" type="number" name="project_slots" placeholder="5 or -5" required>
-                    <input class="form-control" type="text" name="reason" placeholder="Reason">
+                    <input class="form-control" type="number" name="project_slots" id="projectSlotsDelta" aria-label="Story-slot grant or revocation" placeholder="5 or -5" required>
+                    <input class="form-control" type="text" name="reason" id="projectSlotsReason" aria-label="Reason for the story-slot change" placeholder="Reason">
                     <button class="btn btn-warning" type="submit" onclick="return confirm('Update this user project capacity? No project is deleted by a revocation.');">Update project slots</button>
                 </div>
                 <div class="info-label">Purchased capacity and the plan allowance are separate sources and are never overwritten. Revocation deletes no project.</div>
@@ -858,12 +859,12 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="info-label">Account type (currently {{ entitlement_summary.account_type_label }})</div>
                 <div class="d-flex gap-2 flex-wrap">
-                    <select class="form-control" name="account_type">
+                    <select class="form-control" name="account_type" id="accountTypeSelect" aria-label="Account type">
                         {% for value, label in ACCOUNT_TYPE_LABELS.items() %}
                         <option value="{{ value }}" {% if (user.account_type or 'INDIVIDUAL')|upper==value %}selected{% endif %}>{{ label }}</option>
                         {% endfor %}
                     </select>
-                    <input class="form-control" type="text" name="reason" placeholder="Reason">
+                    <input class="form-control" type="text" name="reason" id="accountTypeReason" aria-label="Reason for the account type change" placeholder="Reason">
                     <button class="btn btn-warning" type="submit" onclick="return confirm('Change this account type? Projects, media, QR codes, purchases and history are all preserved.');">Set account type</button>
                 </div>
                 <div class="info-label">Converting to Individual is refused while the account still manages vendor projects, has transfers in progress or has open ownership reviews.</div>

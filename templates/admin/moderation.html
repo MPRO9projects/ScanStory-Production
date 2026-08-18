@@ -35,6 +35,12 @@
 </div>
 {% endif %}
 
+{# Report summary. Counted from the same rows the table renders - no second
+   query, no second source of truth. #}
+<div class="d-flex flex-wrap gap-2 mb-3" id="reportSummary" role="status" aria-live="polite">
+  <span class="badge bg-secondary">Loading summary&hellip;</span>
+</div>
+
 <div class="card">
   <div class="card-body p-0">
     <div class="table-responsive">
@@ -73,10 +79,26 @@
       </div>
       <div class="modal-body">
         <dl class="row mb-3 small">
-          <dt class="col-4">ScanStory</dt><dd class="col-8" id="reviewProject">-</dd>
+          <dt class="col-4">ScanStory</dt>
+          <dd class="col-8">
+            <span id="reviewProject">-</span>
+            <a class="d-inline-block ms-2" id="reviewProjectLink" href="#" target="_blank" rel="noopener">
+              Open ScanStory<span class="visually-hidden"> in a new tab</span>
+            </a>
+          </dd>
+          <dt class="col-4">Reported</dt><dd class="col-8" id="reviewReported">-</dd>
+          <dt class="col-4">Reporter</dt><dd class="col-8" id="reviewReporter">-</dd>
           <dt class="col-4">Reason</dt><dd class="col-8" id="reviewReason">-</dd>
           <dt class="col-4">Details</dt><dd class="col-8" id="reviewDetails">-</dd>
+          <dt class="col-4">Current status</dt><dd class="col-8" id="reviewCurrentStatus">-</dd>
         </dl>
+
+        {# Prior decision, when there is one. Without it a reviewer cannot see
+           whether they are revisiting a decision or making the first one. #}
+        <div class="alert alert-secondary py-2 px-3 small d-none" id="reviewHistory">
+          <strong>Previous decision</strong>
+          <div id="reviewHistoryBody"></div>
+        </div>
 
         <div class="mb-3">
           <label class="form-label" for="reviewStatus">New status</label>
@@ -185,7 +207,22 @@
         });
     }
 
+    function renderSummary(reports) {
+      const summary = document.getElementById('reportSummary');
+      if (!reports.length) {
+        summary.innerHTML = '<span class="badge bg-secondary">No reports in this view</span>';
+        return;
+      }
+      const counts = {};
+      reports.forEach(function (report) { counts[report.status] = (counts[report.status] || 0) + 1; });
+      summary.innerHTML = '<span class="badge bg-light text-dark">' + reports.length + ' shown</span>'
+        + Object.keys(counts).map(function (status) {
+          return ' ' + statusBadge(status).replace('">', '">' + counts[status] + ' &middot; ');
+        }).join('');
+    }
+
     function render(reports) {
+      renderSummary(reports);
       if (!reports.length) {
         rows.innerHTML = emptyRow('No reports match this filter.');
         return;
@@ -226,8 +263,29 @@
       if (!report) return;
       activeReportId = report.id;
       document.getElementById('reviewProject').textContent = report.project_name || ('Project ' + report.project_id);
+      document.getElementById('reviewProjectLink').href = '/admin/projects/' + report.project_id;
+      document.getElementById('reviewReported').textContent = (report.created_at || '').slice(0, 10) || '-';
+      document.getElementById('reviewReporter').textContent = report.reporter_user_id
+        ? ('User ' + report.reporter_user_id)
+        : (report.has_reporter_contact ? 'Contact provided' : 'Anonymous');
       document.getElementById('reviewReason').textContent = REASON_LABELS[report.reason] || report.reason;
       document.getElementById('reviewDetails').textContent = report.details || '-';
+      document.getElementById('reviewCurrentStatus').textContent = STATUS_LABELS[report.status] || report.status;
+
+      const history = document.getElementById('reviewHistory');
+      const historyBody = document.getElementById('reviewHistoryBody');
+      if (report.reviewed_at || report.resolution_action || report.resolution_reason) {
+        const parts = [];
+        if (report.reviewed_at) parts.push('Reviewed ' + esc(report.reviewed_at.slice(0, 10)));
+        if (report.reviewed_by_admin_id) parts.push('by admin #' + esc(report.reviewed_by_admin_id));
+        if (report.resolution_action) parts.push('Resolution: ' + esc(ACTION_LABELS[report.resolution_action] || report.resolution_action));
+        if (report.resolution_reason) parts.push('Note: ' + esc(report.resolution_reason));
+        historyBody.innerHTML = parts.join('<br>');
+        history.classList.remove('d-none');
+      } else {
+        historyBody.textContent = '';
+        history.classList.add('d-none');
+      }
       statusSelect.value = 'UNDER_REVIEW';
       actionSelect.value = 'NONE';
       reasonText.value = '';
@@ -257,7 +315,10 @@
         return;
       }
 
+      // A disabled button with unchanged text reads as a dead click.
+      const idleLabel = submitBtn.textContent;
       submitBtn.disabled = true;
+      submitBtn.textContent = 'Saving\u2026';
       errorBox.classList.add('d-none');
       fetch('/admin/reports/' + activeReportId + '/review', {
         method: 'POST',
@@ -270,6 +331,7 @@
       })
         .then(async function (response) {
           submitBtn.disabled = false;
+          submitBtn.textContent = idleLabel;
           const result = await window.parseAdminJsonResponse(response);
           const payload = result.payload;
           if (!result.ok || !payload || !payload.success) {
@@ -282,6 +344,7 @@
         })
         .catch(function () {
           submitBtn.disabled = false;
+          submitBtn.textContent = idleLabel;
           errorBox.textContent = 'Network error. The decision was not saved.';
           errorBox.classList.remove('d-none');
         });

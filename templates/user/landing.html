@@ -235,11 +235,19 @@
             box-sizing: border-box;
         }
 
+        /* The decorative blobs are position:fixed, so their containing block is
+           the viewport and no ancestor's overflow-x can clip them - clipping
+           has to happen at the root element. `clip` not `hidden`, so sticky
+           positioning inside the page keeps working. */
+        html {
+            overflow-x: clip;
+        }
+
         body {
             font-family: 'Plus Jakarta Sans', sans-serif;
             background: var(--bg-dark);
             color: #ffffff;
-            overflow-x: hidden;
+            overflow-x: clip;
             scroll-behavior: smooth;
         }
 
@@ -1496,6 +1504,7 @@
 </head>
 
 <body class="ss-user-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     <!-- Blobs -->
     <div id="blob1" class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]"></div>
     <div id="blob2" class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]"></div>
@@ -1576,7 +1585,8 @@
     </div>
 
     <!-- Hero Section -->
-    <section id="hero-section" class="px-6 text-center">
+    <main id="main-content" tabindex="-1">
+<section id="hero-section" class="px-6 text-center">
         <div class="max-w-6xl mx-auto">
             <h1 class="text-[clamp(2.8rem,10vw,7rem)] font-black leading-[0.9] uppercase mb-4" data-aos="zoom-in-up">
                 Create AR Experiences <br> <span class="animated-gradient-text italic">Instantly</span>
@@ -2095,7 +2105,7 @@
                     <div class="space-y-3">
                         <div class="flex items-center justify-center lg:justify-start gap-3">
                             <i class="fas fa-layer-group text-pink-500 text-sm w-5"></i>
-                            <span class="text-slate-300 text-sm font-semibold">Unlimited Pairs/Project</span>
+                            <span class="text-slate-300 text-sm font-semibold">Unlimited content sets</span>
                         </div>
                         <div class="flex items-center justify-center lg:justify-start gap-3">
                             <i class="fas fa-headset text-pink-500 text-sm w-5"></i>
@@ -2295,6 +2305,8 @@
     </section>
 
     <!-- Footer -->
+    </main>
+
     <footer class="pt-12 pb-8 px-6 lg:px-20 relative overflow-hidden border-t border-white/5 glass">
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 md:gap-12 mb-12">
             <div class="space-y-4">
@@ -2689,6 +2701,7 @@
             setCurrency(localStorage.getItem("scanstorySelectedCurrency") || "inr");
         });
 </script>
+
 </body>
 
 </html>

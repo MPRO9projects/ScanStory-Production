@@ -43,9 +43,22 @@
   a claim first and admin review is the escalation - approve and reject stay unavailable until the
   vendor responds or the response deadline passes. Where a project has <em>no</em> managing vendor,
   direct admin review is the correct path and is available immediately. A transfer that reaches its
-  deadline becomes <code>EXPIRED</code>: that closes the handover without moving ownership, and it
+  deadline is closed as <strong>Expired</strong>: that ends the handover without moving ownership, and it
   does not cancel a linked claim.
 </p>
+
+{# Worklist summary. Counted from the same rows the tables render below - the
+   point of this page is "what needs a decision", so that has to be visible
+   before scrolling two tables. #}
+{% set actionable_transfers = transfer_rows | selectattr('transfer.status', 'in', ['PENDING_ACCEPTANCE', 'PENDING_CAPACITY', 'DISPUTED']) | list %}
+{% set blocked_claims = claim_rows | selectattr('admin_block_reason') | list %}
+{% set open_claims = claim_rows | selectattr('claim.status', 'in', ['OPEN', 'VENDOR_NOTIFIED', 'APPROVED_BY_VENDOR', 'PENDING_ADMIN_REVIEW']) | list %}
+<div class="d-flex flex-wrap gap-2 mb-4" data-testid="ownership-worklist-summary">
+  <span class="badge bg-primary">{{ actionable_transfers|length }} transfer{{ '' if actionable_transfers|length == 1 else 's' }} awaiting a decision</span>
+  <span class="badge bg-warning text-dark">{{ open_claims|length }} review request{{ '' if open_claims|length == 1 else 's' }} open</span>
+  <span class="badge bg-secondary">{{ blocked_claims|length }} waiting on a managing vendor</span>
+  <span class="badge bg-secondary">{{ transfer_rows|length }} transfer{{ '' if transfer_rows|length == 1 else 's' }} &middot; {{ claim_rows|length }} review request{{ '' if claim_rows|length == 1 else 's' }} in total</span>
+</div>
 
 {% if not admin_can('admin.ownership.manage') %}
 <div class="alert alert-info">
@@ -95,8 +108,7 @@
                 {%- elif row.transfer.status == 'DISPUTED' %}bg-danger
                 {%- elif row.transfer.status == 'PENDING_CAPACITY' %}bg-warning text-dark
                 {%- elif row.transfer.status == 'COMPLETED' %}bg-success
-                {%- else %}bg-secondary{% endif %}">{{ row.transfer.status }}</span>
-              <div class="small text-muted">{{ PROJECT_TRANSFER_STATUS_LABELS.get(row.transfer.status, '') }}</div>
+                {%- else %}bg-secondary{% endif %}">{{ PROJECT_TRANSFER_STATUS_LABELS.get(row.transfer.status, row.transfer.status|replace('_', ' ')|title) }}</span>
               {% if row.transfer.status == 'EXPIRED' %}
               <div class="small text-muted mt-1" data-testid="transfer-expired-note">
                 Closed on its deadline{% if row.transfer.expires_at %} ({{ row.transfer.expires_at|friendly_date }}){% endif %}.
@@ -111,10 +123,13 @@
             </td>
             <td class="small">
               {% if row.capacity_block %}
-                <div><strong>Storage</strong>: {{ 'available' if row.capacity_block.storage_ok else 'blocked' }}</div>
-                <div><strong>Project slot</strong>: {{ 'available' if row.capacity_block.project_slot_ok else 'blocked' }}</div>
-                <div><strong>Project bytes</strong>: {{ row.capacity_block.project_bytes }}</div>
+                <div><strong>Recipient storage</strong>: {{ 'Enough room' if row.capacity_block.storage_ok else 'Not enough room' }}</div>
+                <div><strong>Recipient story slot</strong>: {{ 'Available' if row.capacity_block.project_slot_ok else 'None free' }}</div>
+                <div><strong>This ScanStory needs</strong>: {{ row.capacity_block.project_bytes }} bytes</div>
                 <div class="text-muted">Checked {{ row.capacity_block.checked_at }}</div>
+                {% if not (row.capacity_block.storage_ok and row.capacity_block.project_slot_ok) %}
+                <div class="text-warning mt-1">Completing this handover will not succeed until the recipient has room.</div>
+                {% endif %}
               {% else %}
                 <span class="text-muted">&mdash;</span>
               {% endif %}
@@ -132,7 +147,7 @@
                         action="{{ url_for('admin_resolve_ownership_transfer', transfer_id=row.transfer.id, action=action) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="text" name="reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Reason for {{ label|lower }}">
-                    <button type="submit" class="btn btn-sm {{ style }} mb-1">{{ label }}</button>
+                    <button type="submit" class="btn btn-sm {{ style }} mb-1" data-busy-label="Working&hellip;">{{ label }}</button>
                   </form>
                   {% endfor %}
                 {% elif row.transfer.status == 'DISPUTED' %}
@@ -144,7 +159,7 @@
                         action="{{ url_for('admin_resolve_ownership_transfer', transfer_id=row.transfer.id, action=action) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="text" name="reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Reason for {{ label|lower }}">
-                    <button type="submit" class="btn btn-sm {{ style }} mb-1">{{ label }}</button>
+                    <button type="submit" class="btn btn-sm {{ style }} mb-1" data-busy-label="Working&hellip;">{{ label }}</button>
                   </form>
                   {% endfor %}
                 {% else %}
@@ -199,8 +214,7 @@
               <span class="badge {% if row.claim.status in ['APPROVED_BY_ADMIN', 'TRANSFER_COMPLETED'] %}bg-success
                 {%- elif row.claim.status == 'REJECTED' %}bg-danger
                 {%- elif row.claim.status in ['OPEN', 'VENDOR_NOTIFIED', 'PENDING_ADMIN_REVIEW', 'APPROVED_BY_VENDOR'] %}bg-warning text-dark
-                {%- else %}bg-secondary{% endif %}">{{ row.claim.status }}</span>
-              <div class="small text-muted">{{ PROJECT_CLAIM_STATUS_LABELS.get(row.claim.status, '') }}</div>
+                {%- else %}bg-secondary{% endif %}">{{ PROJECT_CLAIM_STATUS_LABELS.get(row.claim.status, row.claim.status|replace('_', ' ')|title) }}</span>
               {% if row.claim.response_deadline_at and row.claim.status in ['OPEN', 'VENDOR_NOTIFIED'] %}
               <div class="small text-muted mt-1" data-testid="claim-response-deadline">
                 Response deadline {{ row.claim.response_deadline_at|friendly_date }}
@@ -228,13 +242,13 @@
                     onsubmit="return confirm('Approve claim #{{ row.claim.id }}? Approval opens a governed handover; ownership still changes only after acceptance and capacity checks.');">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="text" name="decision_reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Approval reason">
-                <button type="submit" class="btn btn-sm btn-outline-primary">Approve</button>
+                <button type="submit" class="btn btn-sm btn-outline-primary" data-busy-label="Approving&hellip;">Approve</button>
               </form>
               <form method="POST" action="{{ url_for('admin_reject_ownership_claim', claim_id=row.claim.id) }}"
                     onsubmit="return confirm('Reject claim #{{ row.claim.id }}? The current owner remains unchanged and the decision is recorded.');">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="text" name="decision_reason" class="form-control form-control-sm mb-1" placeholder="Reason (recorded)" aria-label="Rejection reason">
-                <button type="submit" class="btn btn-sm btn-outline-danger">Reject</button>
+                <button type="submit" class="btn btn-sm btn-outline-danger" data-busy-label="Rejecting&hellip;">Reject</button>
               </form>
               {% endif %}
               {% else %}
@@ -250,4 +264,22 @@
     </div>
   </div>
 </div>
+
+<script>
+  // Every mutation here is a full POST + redirect. Without this the button
+  // looks inert for the whole round trip and invites a second click on an
+  // ownership-affecting action.
+  document.querySelectorAll('button[data-busy-label]').forEach(function (button) {
+    var form = button.closest('form');
+    if (!form) return;
+    form.addEventListener('submit', function (event) {
+      if (form.dataset.submitted === '1') { event.preventDefault(); return; }
+      // The confirm() in onsubmit runs first; if it cancelled, we never get here.
+      form.dataset.submitted = '1';
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      button.innerHTML = button.getAttribute('data-busy-label');
+    });
+  });
+</script>
 {% endblock %}

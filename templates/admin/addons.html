@@ -44,12 +44,13 @@
     </style>
 </head>
 <body class="ss-admin-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     <nav class="navbar">
         <a href="/admin/dashboard"><strong>ScanStory Admin</strong></a>
         <span>Welcome, {{ admin.name }}</span>
     </nav>
 
-    <div class="wrap">
+    <div class="wrap" id="main-content" role="main" tabindex="-1">
         <h1>Add-on Catalogue</h1>
         <p class="lede">
             Items listed here are what <code>/api/addons/catalog</code> offers to customers.
@@ -110,22 +111,22 @@
                                 <form method="POST" action="{{ url_for('admin_edit_addon', catalog_id=item.id) }}" style="margin-top:12px;">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <div class="grid">
-                                        <div><label>Code</label><input type="text" name="code" value="{{ item.code }}" required></div>
-                                        <div><label>Name</label><input type="text" name="name" value="{{ item.name }}" required></div>
+                                        <div><label>Code</label><input type="text" name="code" aria-label="Add-on code" value="{{ item.code }}" required></div>
+                                        <div><label>Name</label><input type="text" name="name" aria-label="Add-on name" value="{{ item.name }}" required></div>
                                         <div>
                                             <label>Type</label>
-                                            <select name="addon_type">
+                                            <select name="addon_type" aria-label="Add-on type">
                                                 {% for t in addon_types %}
                                                 <option value="{{ t }}" {% if t == item.addon_type %}selected{% endif %}>{{ t }}</option>
                                                 {% endfor %}
                                             </select>
                                         </div>
-                                        <div><label>Unit amount</label><input type="number" step="0.01" min="0" name="unit_amount" value="{{ item.unit_amount }}" required></div>
-                                        <div><label>Currency</label><input type="text" name="currency" value="{{ item.currency }}" maxlength="3"></div>
-                                        <div><label>Scan delta</label><input type="number" name="scan_delta" value="{{ item.scan_delta if item.scan_delta is not none else '' }}"></div>
-                                        <div><label>Project delta</label><input type="number" name="project_delta" value="{{ item.project_delta if item.project_delta is not none else '' }}"></div>
-                                        <div><label>Validity days delta</label><input type="number" name="validity_days_delta" value="{{ item.validity_days_delta if item.validity_days_delta is not none else '' }}"></div>
-                                        <div><label>Storage bytes delta</label><input type="number" name="storage_bytes_delta" value="{{ item.storage_bytes_delta if item.storage_bytes_delta is not none else '' }}"></div>
+                                        <div><label>Unit amount</label><input type="number" step="0.01" min="0" name="unit_amount" aria-label="Unit amount" value="{{ item.unit_amount }}" required></div>
+                                        <div><label>Currency</label><input type="text" name="currency" aria-label="Currency" value="{{ item.currency }}" maxlength="3"></div>
+                                        <div><label>Scan delta</label><input type="number" name="scan_delta" aria-label="Scan delta" value="{{ item.scan_delta if item.scan_delta is not none else '' }}"></div>
+                                        <div><label>Project delta</label><input type="number" name="project_delta" aria-label="Story-slot delta" value="{{ item.project_delta if item.project_delta is not none else '' }}"></div>
+                                        <div><label>Validity days delta</label><input type="number" name="validity_days_delta" aria-label="Validity days delta" value="{{ item.validity_days_delta if item.validity_days_delta is not none else '' }}"></div>
+                                        <div><label>Storage bytes delta</label><input type="number" name="storage_bytes_delta" aria-label="Storage bytes delta" value="{{ item.storage_bytes_delta if item.storage_bytes_delta is not none else '' }}"></div>
                                     </div>
                                     <div class="checks">
                                         <label><input type="checkbox" name="is_active" {% if item.is_active %}checked{% endif %}> Active</label>
@@ -153,22 +154,22 @@
             <form method="POST" action="{{ url_for('admin_create_addon') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="grid">
-                    <div><label>Code</label><input type="text" name="code" required placeholder="extra-scans-500"></div>
-                    <div><label>Name</label><input type="text" name="name" required placeholder="500 extra scans"></div>
+                    <div><label>Code</label><input type="text" name="code" aria-label="Add-on code" required placeholder="extra-scans-500"></div>
+                    <div><label>Name</label><input type="text" name="name" aria-label="Add-on name" required placeholder="500 extra scans"></div>
                     <div>
                         <label>Type</label>
-                        <select name="addon_type">
+                        <select name="addon_type" aria-label="Add-on type">
                             {% for t in addon_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
                         </select>
                     </div>
-                    <div><label>Unit amount</label><input type="number" step="0.01" min="0" name="unit_amount" required></div>
-                    <div><label>Currency</label><input type="text" name="currency" value="INR" maxlength="3"></div>
-                    <div><label>Scan delta <span class="muted">(EXTRA_SCANS)</span></label><input type="number" name="scan_delta"></div>
-                    <div><label>Project delta <span class="muted">(PROJECT_CAPACITY)</span></label><input type="number" name="project_delta"></div>
-                    <div><label>Validity days delta <span class="muted">(VALIDITY_EXTENSION / PROJECT_SERVICE_COVERAGE)</span></label><input type="number" name="validity_days_delta"></div>
-                    <div><label>Storage bytes delta <span class="muted">(ACCOUNT_STORAGE - in bytes)</span></label><input type="number" name="storage_bytes_delta"></div>
+                    <div><label>Unit amount</label><input type="number" step="0.01" min="0" name="unit_amount" aria-label="Unit amount" required></div>
+                    <div><label>Currency</label><input type="text" name="currency" aria-label="Currency" value="INR" maxlength="3"></div>
+                    <div><label>Scan delta <span class="muted">(EXTRA_SCANS)</span></label><input type="number" name="scan_delta" aria-label="Scan delta"></div>
+                    <div><label>Project delta <span class="muted">(PROJECT_CAPACITY)</span></label><input type="number" name="project_delta" aria-label="Story-slot delta"></div>
+                    <div><label>Validity days delta <span class="muted">(VALIDITY_EXTENSION / PROJECT_SERVICE_COVERAGE)</span></label><input type="number" name="validity_days_delta" aria-label="Validity days delta"></div>
+                    <div><label>Storage bytes delta <span class="muted">(ACCOUNT_STORAGE - in bytes)</span></label><input type="number" name="storage_bytes_delta" aria-label="Storage bytes delta"></div>
                 </div>
-                <div><label style="margin-top:14px;">Description</label><textarea name="description" rows="2"></textarea></div>
+                <div><label style="margin-top:14px;">Description</label><textarea name="description" aria-label="Description" rows="2"></textarea></div>
                 <div class="checks">
                     <label><input type="checkbox" name="is_active" checked> Active</label>
                     <label><input type="checkbox" name="is_commercially_available" checked> Commercially available</label>
