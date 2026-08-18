@@ -69,6 +69,7 @@
     </style>
 </head>
 <body class="min-h-screen p-4 md:p-6 ss-user-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     
     <!-- Simple Header -->
     <div class="flex items-center justify-between mb-6">
@@ -77,10 +78,12 @@
             <span class="text-xs font-bold uppercase tracking-wider">Dashboard</span>
         </a>
         <div class="text-right">
-            <div class="text-xs text-white/50">Viewing Project</div>
-            <div class="font-bold">Project {{ project.display_number }}: {{ project.name }}</div>
+            <div class="text-xs text-white/50">Viewing ScanStory {{ project.display_number }}</div>
+            <h1 class="font-bold text-lg md:text-2xl leading-tight">{{ project.name }}</h1>
         </div>
     </div>
+
+    <main id="main-content" tabindex="-1">
     
     <!-- Project Info Bar -->
     <div class="glass p-4 mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -91,7 +94,7 @@
             </div>
             <div class="w-px h-8 bg-white/10"></div>
             <div>
-                <span class="text-xs text-white/50">Pairs</span>
+                <span class="text-xs text-white/50">Content sets</span>
                 <div class="font-bold">{{ pairs|length }}</div>
             </div>
             <div class="w-px h-8 bg-white/10 hidden md:block"></div>
@@ -564,5 +567,6 @@
             });
         })();
     </script>
+    </main>
 </body>
 </html>

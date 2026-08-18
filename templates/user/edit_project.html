@@ -365,6 +365,7 @@
 </head>
 
 <body class="ss-user-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
   <div class="blob" style="width:500px;height:500px;background:#7000ff;top:-10%;left:-8%;"></div>
   <div class="blob" style="width:460px;height:460px;background:#ff007a;bottom:-10%;right:-8%;"></div>
 
@@ -378,7 +379,7 @@
     {% endwith %}
   </div>
 
-  <div class="page">
+  <div class="page" id="main-content" role="main" tabindex="-1">
     <div class="topbar">
       <a href="{{ url_for('projects_page') }}" class="nav-back">
         <i class="fas fa-chevron-left"></i> Back to My Stories

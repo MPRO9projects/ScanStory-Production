@@ -652,6 +652,7 @@
 </head>
 
 <body class="ss-user-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% set latest_category, latest_message = messages[-1] %}
@@ -664,7 +665,7 @@
     {% endif %}
     {% endwith %}
 
-    <div class="container-fluid">
+    <div class="container-fluid" id="main-content" role="main" tabindex="-1">
         <div class="left-panel">
             <div class="typing-container" data-aos="fade-down" data-aos-duration="1000">
                 <div class="typing-text">
