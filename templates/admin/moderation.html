@@ -86,6 +86,19 @@
               Open ScanStory<span class="visually-hidden"> in a new tab</span>
             </a>
           </dd>
+          {# Owner and current project state. A report is not proof of
+             anything, so the decision needs both: which account is being held
+             responsible, and whether the project is already suspended (the
+             "Suspend project" action was previously offered with no way to see
+             that it had already been applied). #}
+          <dt class="col-4">Owner</dt>
+          <dd class="col-8">
+            <span id="reviewOwner">-</span>
+            <a class="d-inline-block ms-2 d-none" id="reviewOwnerLink" href="#" target="_blank" rel="noopener">
+              Open account<span class="visually-hidden"> in a new tab</span>
+            </a>
+          </dd>
+          <dt class="col-4">Project state</dt><dd class="col-8" id="reviewProjectState">-</dd>
           <dt class="col-4">Reported</dt><dd class="col-8" id="reviewReported">-</dd>
           <dt class="col-4">Reporter</dt><dd class="col-8" id="reviewReporter">-</dd>
           <dt class="col-4">Reason</dt><dd class="col-8" id="reviewReason">-</dd>
@@ -264,7 +277,25 @@
       activeReportId = report.id;
       document.getElementById('reviewProject').textContent = report.project_name || ('Project ' + report.project_id);
       document.getElementById('reviewProjectLink').href = '/admin/projects/' + report.project_id;
-      document.getElementById('reviewReported').textContent = (report.created_at || '').slice(0, 10) || '-';
+      const ownerLabel = document.getElementById('reviewOwner');
+      const ownerLink = document.getElementById('reviewOwnerLink');
+      if (report.project_owner_type === 'user' && report.project_owner_user_id) {
+        ownerLabel.textContent = 'User ' + report.project_owner_user_id;
+        ownerLink.href = '/admin/users/' + report.project_owner_user_id;
+        ownerLink.classList.remove('d-none');
+      } else {
+        ownerLabel.textContent = report.project_owner_type === 'admin' ? 'Admin-owned project' : 'Owner not recorded';
+        ownerLink.classList.add('d-none');
+      }
+      // Suspended-but-still-live is impossible; live-but-not-suspended is not
+      // (coverage can lapse independently), so both facts are shown.
+      const stateParts = [report.project_is_active === false ? 'Suspended' : 'Active'];
+      if (report.project_is_publicly_live === false) stateParts.push('not publicly live');
+      document.getElementById('reviewProjectState').textContent = stateParts.join(' - ');
+
+      // Full timestamp, not a date slice: report ordering within a day is part
+      // of an investigation.
+      document.getElementById('reviewReported').textContent = (report.created_at || '').replace('T', ' ').slice(0, 19) || '-';
       document.getElementById('reviewReporter').textContent = report.reporter_user_id
         ? ('User ' + report.reporter_user_id)
         : (report.has_reporter_contact ? 'Contact provided' : 'Anonymous');
