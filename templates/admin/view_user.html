@@ -872,8 +872,13 @@
         </div>
         {% endif %}
         
-        <!-- Projects Section - UPDATED with Display Numbers -->
-        <!-- <div class="card">
+        <!-- Projects Section. admin_view_user() has always queried and passed
+             `projects` (project_user_access_filter), but this whole card was
+             HTML-commented out, so the investigation chain Admin > Users > View
+             User > their projects had no link at all and the query's result was
+             discarded. Restored - the View button targets admin_view_project,
+             which is already permission-gated on admin.projects.view. -->
+        <div class="card">
             <div class="card-header">
                 <h3 class="card-title">Projects ({{ projects|length }})</h3>
             </div>
@@ -887,6 +892,7 @@
                             <th>Status</th>
                             <th>Pairs</th>
                             <th>Actions</th>
+                        </tr>
                         </thead>
                     <tbody>
                         {% for project in projects %}
@@ -894,7 +900,7 @@
                             <td>
                                 <strong>{{ project.name }}</strong>
                             </td>
-                            <td>{{ project.created_at.strftime('%d %b %Y') }}</td>
+                            <td>{{ project.created_at.strftime('%d %b %Y') if project.created_at else '-' }}</td>
                             <td>
                                 {% if project.is_active %}
                                 <span class="badge badge-success">Active</span>
@@ -915,8 +921,8 @@
                     </tbody>
                 </table>
             </div>
-        </div> -->
-        
+        </div>
+
         <!-- Payment History -->
         <div class="card">
             <div class="card-header">

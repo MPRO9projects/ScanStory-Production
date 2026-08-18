@@ -77,8 +77,6 @@ def test_suspended_project_blocks_and_restore_reenables_scanner_and_media(client
     assert app_module.Project.query.get(project.id).is_active is False
 
     scanner = client.get(f"/scanner/{project.id}")
-    video = client.get(f"/video/{project.id}/{pair.pair_index}")
-    image = client.get(f"/image/{project.id}/{pair.pair_index}")
     detect = client.post(
         "/detect_init",
         data={"project_id": str(project.id), "test_image": (io.BytesIO(b"not-image"), "frame.jpg")},
@@ -87,10 +85,26 @@ def test_suspended_project_blocks_and_restore_reenables_scanner_and_media(client
 
     assert scanner.status_code == 404
     assert b"suspended or unavailable" in scanner.data
-    assert video.status_code == 404
-    assert image.status_code == 404
     assert detect.status_code == 404
     assert detect.get_json()["reason"] == "Project is suspended or unavailable"
+
+    # The suspension's job is to block the PUBLIC, which it still does.
+    with client.session_transaction() as sess:
+        sess.pop("admin_id", None)
+    assert client.get(f"/video/{project.id}/{pair.pair_index}").status_code == 404
+    assert client.get(f"/image/{project.id}/{pair.pair_index}").status_code == 404
+
+    # ...but it must NOT blind the admin who ordered it. This assertion used to
+    # read 404 for an admin session too, which encoded a real moderation defect:
+    # the only way to review the evidence behind a report was to re-publish the
+    # reported content first. See _admin_media_investigation_allowed.
+    _login_admin(client, admin)
+    admin_video = client.get(f"/video/{project.id}/{pair.pair_index}")
+    admin_image = client.get(f"/image/{project.id}/{pair.pair_index}")
+    assert admin_video.status_code == 200
+    assert admin_image.status_code == 200
+    assert admin_video.headers["Cache-Control"] == "private, no-store"
+    assert admin_image.headers["Cache-Control"] == "private, no-store"
 
     restore = client.post(f"/admin/projects/{project.id}/restore", follow_redirects=True)
     assert restore.status_code == 200

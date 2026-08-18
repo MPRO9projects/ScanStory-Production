@@ -2245,7 +2245,12 @@ class UploadSession(db.Model):
     (failed) | active -> cancelled | active -> expired. `finalizing` is only
     ever observed mid-request (the atomic conditional UPDATE gate against
     double finalization - see app.py finalize route); it is never a resting
-    state a client should see.
+    state a client should see. A process death mid-finalize is the one thing
+    that can break that, so `cleanup-upload-sessions` sweeps rows left in
+    'finalizing' past SCANSTORY_UPLOAD_FINALIZING_STALE_MINUTES back to
+    'assembled' (project already created - retry the enqueue), 'active' (no
+    project, assembled bytes intact - retry the finalize) or 'failed' with
+    failure_code FINALIZE_INTERRUPTED (no project and no recoverable bytes).
 
     client_checksum_sha256 is an OPTIONAL client-declared sha256 of the full
     assembled byte stream (image+video concatenated). If provided at session

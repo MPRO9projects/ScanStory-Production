@@ -632,7 +632,16 @@
     <div class="main-content">
         <div class="page-header">
             <h1 class="page-title">Project Details</h1>
-            <div><a href="/admin/projects" class="btn btn-secondary">&larr; Back to Projects</a></div>
+            <div>
+                <a href="/admin/projects" class="btn btn-secondary">&larr; Back to Projects</a>
+                <!-- Route back into user context. The investigation chain was
+                     one-way: nothing here linked to the owning account, so an
+                     admin who arrived from a report or a user's project list
+                     had no way back to that user. -->
+                {% if owner.type == 'User' and owner.id %}
+                <a href="{{ url_for('admin_view_user', user_id=owner.id) }}" class="btn btn-secondary">&larr; Back to Owner</a>
+                {% endif %}
+            </div>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -664,7 +673,14 @@
                     <button type="submit" class="btn btn-success">Restore Project</button>
                 </form>
                 {% endif %}
+                {# admin_scanner_test_entry aborts 404 unless the project is
+                   owned by THIS admin, so on a creator's project this button
+                   was rendered unconditionally and always dead. Gate it on the
+                   same condition the route enforces rather than offering a
+                   control that cannot work. #}
+                {% if project.owner_admin_id and project.owner_admin_id == admin.id %}
                 <a href="{{ url_for('admin_scanner_test_entry', project_id=project.id) }}" class="btn btn-primary">Open Scanner Test</a>
+                {% endif %}
                 {% if admin_can('superadmin.repair.execute') %}
                 <form method="POST" action="{{ url_for('admin_delete_project', project_id=project.id) }}" style="display:inline;" onsubmit="return confirm('Permanently delete this project and its project data/files? This is not a suspension and cannot be undone.');">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -853,16 +869,41 @@
 
         <div class="card">
             <h3 style="margin-bottom: 20px;">Pairs</h3>
+            <!-- INVESTIGATION EVIDENCE. This page previously showed media
+                 filenames as text only, so an admin opening a reported project
+                 could not answer "what image did this creator use and what
+                 video is connected to it" without going outside the product.
+                 The media routes are the existing serve_image/serve_video (and
+                 the admin-owned equivalents) - no new endpoint - and they now
+                 authorize a permission-holding admin even when the project is
+                 not publicly live, which is exactly the suspended-project case
+                 moderation creates. See _admin_media_investigation_allowed. -->
+            {% set evidence_image_route = 'serve_admin_image' if project.owner_admin_id else 'serve_image' %}
+            {% set evidence_video_route = 'serve_admin_video' if project.owner_admin_id else 'serve_video' %}
             {% if pair_count > pairs|length %}<p style="color: rgba(255,255,255,0.6); margin-bottom: 15px;">Showing first {{ pairs|length }} pairs of {{ pair_count }} total.</p>{% endif %}
             <div class="table-container">
                 <table class="table">
-                    <thead><tr><th>Pair ID</th><th>Image</th><th>Video</th><th>Sizes</th><th>Processing</th><th>Created</th><th>Recognition</th></tr></thead>
+                    <thead><tr><th>Pair ID</th><th>Marker image</th><th>Video</th><th>Sizes</th><th>Processing</th><th>Created</th><th>Recognition</th></tr></thead>
                     <tbody>
                         {% for pair in pairs %}
                         <tr>
                             <td>{{ pair.id }}<br><small style="color: rgba(255,255,255,0.6);">Index {{ pair.pair_index }}</small></td>
-                            <td>{{ pair.safe_image_filename }}</td>
-                            <td>{{ pair.safe_video_filename }}</td>
+                            <td>
+                                {{ pair.safe_image_filename }}
+                                {% if pair.image_filename %}
+                                <br><img src="{{ url_for(evidence_image_route, project_id=project.id, image_id=pair.pair_index) }}"
+                                         alt="Marker image for pair index {{ pair.pair_index }}"
+                                         style="margin-top:8px;max-width:160px;max-height:120px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);">
+                                {% endif %}
+                            </td>
+                            <td>
+                                {{ pair.safe_video_filename }}
+                                {% if pair.video_filename %}
+                                <br><video src="{{ url_for(evidence_video_route, project_id=project.id, image_id=pair.pair_index) }}"
+                                           controls preload="metadata"
+                                           style="margin-top:8px;max-width:200px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);"></video>
+                                {% endif %}
+                            </td>
                             <td>Image: {{ pair.image_size if pair.image_size is not none else '-' }} bytes<br><small style="color: rgba(255,255,255,0.6);">Video: {{ pair.video_size if pair.video_size is not none else '-' }} bytes</small></td>
                             <td>{{ pair.processing_status or '-' }}<br><small style="color: rgba(255,255,255,0.6);">Video: {{ pair.video_processing_status or '-' }} &bull; Features: {{ pair.feature_extraction_status or '-' }}</small></td>
                             <td>{{ pair.created_at.strftime('%d %b %Y, %I:%M %p') if pair.created_at else '-' }}</td>
