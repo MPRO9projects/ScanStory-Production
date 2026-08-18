@@ -9036,10 +9036,19 @@ def _upload_session_owned(session_row, user, admin):
     return False
 
 
-def _upload_api_error(code, message, http_status):
+def _upload_api_error(code, message, http_status, **extra):
     """Every resumable-upload error response: a safe generic message plus a
-    machine-readable code, never a raw path/stack trace/secret."""
-    response = jsonify({"success": False, "code": code, "error": message})
+    machine-readable code, never a raw path/stack trace/secret.
+
+    `**extra` carries only already-safe scalars the client legitimately
+    needs to recover without a second round-trip (the authoritative
+    current_offset on an offset mismatch, the server chunk ceiling on an
+    oversized chunk). On a 0.3 Mbps link an extra GET per recoverable
+    rejection is real dead time, which is why these are inlined here
+    rather than left to a follow-up status read."""
+    payload = {"success": False, "code": code, "error": message}
+    payload.update(extra)
+    response = jsonify(payload)
     response.status_code = http_status
     return response
 
@@ -9118,6 +9127,12 @@ def _upload_session_payload(session_row):
         "purpose": session_row.purpose,
         "current_offset": session_row.current_offset,
         "expected_total_size": session_row.expected_total_size,
+        # The server chunk ceiling, so the client's adaptive chunk sizer can
+        # grow toward the real limit instead of hardcoding a copy of the
+        # default that silently 413s the day the config changes.
+        "max_chunk_bytes": int(
+            app.config.get("RESUMABLE_UPLOAD_CHUNK_MAX_BYTES", RESUMABLE_UPLOAD_CHUNK_MAX_BYTES)
+        ),
         "uploaded_bytes": uploaded_bytes,
         "remaining_bytes": remaining_bytes,
         "progress_percent": progress_percent,
@@ -9163,6 +9178,8 @@ def _finalize_conflict_response(session_row):
             "INCOMPLETE_UPLOAD",
             f"Upload is incomplete ({session_row.current_offset}/{session_row.expected_total_size} bytes).",
             409,
+            current_offset=session_row.current_offset,
+            expected_total_size=session_row.expected_total_size,
         )
     code = _UPLOAD_SESSION_CONFLICT_CODES.get(session_row.status, "SESSION_NOT_ACTIVE")
     return _upload_api_error(code, f"Upload session is not finalizable (status={session_row.status}).", 409)
@@ -9391,11 +9408,15 @@ def upload_session_chunk(session_id):
 
     max_chunk_bytes = app.config.get("RESUMABLE_UPLOAD_CHUNK_MAX_BYTES", RESUMABLE_UPLOAD_CHUNK_MAX_BYTES)
     if request.content_length is not None and request.content_length > max_chunk_bytes:
-        return _upload_api_error("CHUNK_TOO_LARGE", "Chunk body exceeds the allowed size.", 413)
+        return _upload_api_error(
+            "CHUNK_TOO_LARGE", "Chunk body exceeds the allowed size.", 413, max_chunk_bytes=max_chunk_bytes
+        )
 
     body = request.get_data(cache=False)
     if len(body) > max_chunk_bytes:
-        return _upload_api_error("CHUNK_TOO_LARGE", "Chunk body exceeds the allowed size.", 413)
+        return _upload_api_error(
+            "CHUNK_TOO_LARGE", "Chunk body exceeds the allowed size.", 413, max_chunk_bytes=max_chunk_bytes
+        )
     if not body:
         return _upload_api_error("EMPTY_CHUNK", "Chunk body must not be empty.", 400)
 
@@ -9435,15 +9456,26 @@ def upload_session_chunk(session_id):
     if claimed_offset == session_row.current_offset:
         new_offset = session_row.current_offset + len(body)
         if new_offset > session_row.expected_total_size:
+            resulting_offset = session_row.current_offset
+            expected_total_size = session_row.expected_total_size
             db.session.rollback()
             return _upload_api_error(
-                "CHUNK_EXCEEDS_EXPECTED_SIZE", "This chunk would exceed the declared upload size.", 400
+                "CHUNK_EXCEEDS_EXPECTED_SIZE", "This chunk would exceed the declared upload size.", 400,
+                current_offset=resulting_offset, expected_total_size=expected_total_size,
             )
         write_start = time.perf_counter()
         with open(temp_path, "ab") as fh:
             fh.write(body)
         write_duration_ms = _elapsed_ms(write_start)
         session_row.current_offset = os.path.getsize(temp_path)
+        # Sliding expiry: expires_at is an INACTIVITY deadline, not a
+        # wall-clock one measured from session creation. A creator who
+        # pauses an upload overnight (weak mobile link, tab left open)
+        # must still be able to resume the same session's confirmed bytes
+        # rather than being told to start from zero. Genuinely abandoned
+        # sessions are still reaped by cleanup-upload-sessions, which
+        # keys off the (much shorter) updated_at staleness window.
+        session_row.expires_at = now + timedelta(minutes=UPLOAD_SESSION_TTL_MINUTES)
         db.session.commit()
         _log_upload_timing(
             "upload_session_chunk",
@@ -9486,7 +9518,16 @@ def upload_session_chunk(session_id):
             "note": "duplicate_chunk_ignored",
         })
 
+    # Everything else - a gap/future offset, or a PARTIALLY overlapping
+    # replay whose tail would extend past current_offset - is rejected
+    # rather than spliced. Accepting a partial overlap would mean trusting
+    # that the overlapping prefix is byte-identical to what is already on
+    # disk, which nothing in this protocol proves. Rejecting keeps the
+    # "every accepted byte stays accepted" invariant, and the authoritative
+    # offset travels back in the SAME response so the client re-slices in
+    # one round-trip instead of two.
     resulting_offset = session_row.current_offset
+    expected_total_size = session_row.expected_total_size
     db.session.rollback()
     _log_upload_timing(
         "upload_session_chunk",
@@ -9503,8 +9544,10 @@ def upload_session_chunk(session_id):
     )
     return _upload_api_error(
         "OFFSET_MISMATCH",
-        f"Chunk offset does not match the session's current offset ({session_row.current_offset}).",
+        f"Chunk offset does not match the session's current offset ({resulting_offset}).",
         409,
+        current_offset=resulting_offset,
+        expected_total_size=expected_total_size,
     )
 
 
