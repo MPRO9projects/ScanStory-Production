@@ -1404,6 +1404,14 @@
 
                         // Open Razorpay checkout
                         const rzp = new Razorpay(options);
+                        // payment.failed is an INSTANCE event. There is no static
+                        // Razorpay.on(), so registering it here is what actually
+                        // surfaces a failed payment instead of leaving the modal
+                        // stuck on the "Processing payment..." spinner.
+                        rzp.on('payment.failed', function (response) {
+                            const err = (response && response.error) || {};
+                            showPaymentError(err.description || 'Payment failed. Please try again.');
+                        });
                         rzp.open();
                     } else {
                         showPaymentError(data.error || 'Failed to create payment order');
@@ -1490,13 +1498,11 @@
             window.location.href = `/payment-success?order_id=${orderId}`;
         }
 
-        // Handle Razorpay payment failure
         document.addEventListener('DOMContentLoaded', function () {
-            if (typeof Razorpay !== 'undefined') {
-                Razorpay.on('payment.failed', function (response) {
-                    showPaymentError(response.error.description || 'Payment failed. Please try again.');
-                });
-            }
+            // payment.failed is registered on the checkout instance in
+            // subscribeToPlan(). It was previously called here as a static
+            // Razorpay.on(), which does not exist and threw a TypeError on every
+            // page load - aborting the rest of this handler.
 
             // Prevent body scroll when modal is open
             const observer = new MutationObserver(function (mutations) {
