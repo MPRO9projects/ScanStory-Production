@@ -1,18 +1,43 @@
-# Resumable Upload API Contract (V1 Wave 5)
+# Resumable Upload API Contract (V1 Wave 5, extended V1.1 Phase 2)
 
-Backend-only contract. There is no frontend implementation yet - this document
-is written so a future frontend implementer can build against it without
-reading `app.py`.
+Wire contract for the resumable upload API, written so an implementer can build
+against it without reading `app.py`. The shipped frontend
+(`templates/user/user_create_project.html`) is a consumer of this contract, not
+its definition - V1.1 Phase 1 built the single-set client, Phase 2 the
+multi-content-set one.
 
 ## Scope
 
-One `UploadSession` = one new **single-pair** Project: exactly one image and
-one video, uploaded as a single sequential byte stream. The client sends the
-image's bytes first (`image_size` bytes), then immediately the video's bytes
-(`video_size` bytes) - back to back, no separator. `expected_total_size =
-image_size + video_size`. There is no support in this wave for multi-pair
-resumable projects or attaching a resumable pair to an existing project - a
-brand-new project is always created on successful finalize.
+One `UploadSession` = one **content set**: exactly one image and one video,
+uploaded as a single sequential byte stream. The client sends the image's bytes
+first (`image_size` bytes), then immediately the video's bytes (`video_size`
+bytes) - back to back, no separator. `expected_total_size = image_size +
+video_size`.
+
+**V1.1 Phase 2 - multi-content-set projects.** A project may now be built from
+N content sets, each its own independently resumable session:
+
+- Each set is created with `"purpose": "project_content_set"` and uploaded
+  through the same chunk route as any other session.
+- The whole project is created by ONE call to
+  `POST /api/uploads/projects/finalize` with the ordered `session_ids`. That
+  request's order becomes `pair_index` 0..N-1.
+- The "group" is defined by the finalize request, not by a parent row and not
+  by a new column: there is no draft-project table and no migration. All the
+  atomicity comes from one conditional UPDATE that must claim exactly N rows.
+- A session created with the default `"purpose": "project_pair"` still
+  finalizes on its own through route 4 and still produces a single-pair
+  project. A `project_content_set` session is REFUSED by route 4
+  (`409 GROUP_FINALIZE_REQUIRED`) so a client bug cannot turn content set 2 of
+  3 into a stray one-pair project with its own quota unit.
+- Attaching a resumable content set to an ALREADY EXISTING project is still out
+  of scope. A finalize always creates a brand-new project.
+
+**Project atomicity.** No Project row exists until every set in the group is
+byte-complete AND every set validates. That is the same all-or-nothing
+guarantee the non-resumable multipart `/upload` route has always had; partial
+progress lives entirely in `UploadSession` rows, where it is explicit and
+recoverable rather than a half-built project.
 
 Authentication: every route requires either a logged-in user session or a
 logged-in Admin session (whichever the existing app already uses -
@@ -37,6 +62,25 @@ app's global CSRF protection. Send the CSRF token via the `X-CSRFToken` or
 | `cancelled`  | Client cancelled before completion. |
 | `expired`    | TTL passed, or found stale by the cleanup CLI, before completion. |
 | `failed`     | Validation, quota, or project-creation failure. See `failure_code`. |
+
+### Derived per-content-set state (`set_state`)
+
+Every session payload also carries `set_state`, computed from `status`,
+`current_offset` and `expected_total_size` - **no stored column, no
+migration**:
+
+| `set_state` | Means |
+|---|---|
+| `pending` | `active`, nothing uploaded yet. |
+| `uploading` | `active`, partially uploaded. |
+| `uploaded` | `active`, byte-complete, waiting for its siblings / for finalize. |
+| `finalizing` | `finalizing` or `assembled`. |
+| `complete` | `completed`. |
+| `failed_requires_action` | `failed`, `expired` or `cancelled`. |
+
+There is deliberately no `paused`. A paused upload and a very slow one are the
+same row server-side; pausing is a client fact and stays one. What the server
+owns is the offset, and it reports that.
 
 ## Routes
 
@@ -269,6 +313,41 @@ On the winning transition, in order:
      documented operator/client recovery path for this failure mode - there
      is no separate CLI for it.
 
+### 4b. Finalize a multi-content-set project
+
+`POST /api/uploads/projects/finalize`
+
+Request: `{"session_ids": [12, 13, 14]}` - ordered, no duplicates, at most 100
+entries. Every id must exist and be owned by the caller (otherwise `404
+NOT_FOUND`, never a 403, exactly as elsewhere). Every set must agree on
+`project_name`, `experience_type`, `playback_mode` and `purpose`
+(`409 CONTENT_SET_MISMATCH` otherwise).
+
+Success `200`: `{"success": true, "session": {...first set...}, "sessions":
+[per-set summaries]}`. One Project, N ProjectPairs at `pair_index` 0..N-1 in
+request order, one project-quota unit, N pair slots, the summed storage bytes
+reserved once, 2N `MediaObject` ledger rows, one QR image, one processing job.
+
+| Response | Meaning | Client should |
+|---|---|---|
+| `200` + `recovered_existing_completion: true` | This exact group already produced a project. | Treat as success. Never retry. |
+| `409 INCOMPLETE_UPLOAD` | At least one set is short. `sessions[]` carries every set's authoritative `current_offset` and `set_state`. | Resume ONLY the short sets, then finalize again. |
+| `409 FINALIZE_IN_PROGRESS` | Another request holds the group, or a previous attempt settled part of it. | Re-read state; do not start over. |
+| `409 SESSION_EXPIRED` | A set passed its inactivity deadline. | Create a fresh session for that set only. |
+| `409 CONTENT_SET_MISMATCH` | The sets do not describe one project. | Client bug - clear local state. |
+| `403 PAIR_LIMIT_REACHED` | More sets than the plan allows. Refused BEFORE the claim, so every set stays `active` with its bytes. | Reduce sets or upgrade, then finalize again. |
+| `422 IMAGE_VALIDATION_FAILED` / `VIDEO_VALIDATION_FAILED` | ONE set's content was rejected. Body carries `failed_session_id` and `failed_set_index`. | Replace that one file, create one new session, finalize the new group. |
+| `502 QUEUE_ENQUEUE_FAILED` | Project exists, queue handoff failed; every set parked `assembled`. | Call this route again with the same ids - retries ONLY the enqueue. |
+
+**Failure isolation.** On a per-set validation failure only the offender is
+marked `failed` and only the offender's assembled temp file is deleted. Every
+sibling is handed back its `active` state with its confirmed bytes untouched, so
+a creator whose third video is rejected replaces one file rather than
+re-uploading the first two. Failures that happen after the assembled temp files
+have been consumed by validation (quota, storage allowance, project creation)
+are terminal for the whole group - at that point there are no confirmed bytes
+left to preserve for anyone, and saying otherwise would be a lie.
+
 ### 5. Cancel
 
 `POST /api/uploads/sessions/<id>/cancel`
@@ -303,6 +382,10 @@ trace, or secret.
 `SESSION_ASSEMBLED_RETRY`, `CHECKSUM_MISMATCH`, `IMAGE_VALIDATION_FAILED`,
 `VIDEO_VALIDATION_FAILED`, `PROJECT_CREATION_FAILED`, `QUEUE_ENQUEUE_FAILED`.
 
+V1.1 Phase 2 additions: `INVALID_PURPOSE`, `INVALID_SESSION_IDS`,
+`DUPLICATE_SESSION_IDS`, `TOO_MANY_CONTENT_SETS`, `CONTENT_SET_MISMATCH`,
+`GROUP_FINALIZE_REQUIRED`, `PAIR_LIMIT_REACHED`, `STORAGE_LIMIT_REACHED`.
+
 ## Retry behavior summary
 
 | Situation | Client should |
@@ -313,14 +396,54 @@ trace, or secret.
 | Repeated transport failures | Back off with bounds and jitter, then **pause** - do not cancel the session. Every confirmed byte stays confirmed and a later resume continues from `current_offset`. |
 | Got `SESSION_EXPIRED`/`SESSION_CANCELLED`/`SESSION_FAILED` | Start a new session; the old one cannot be revived. |
 | Finalize returned `502 QUEUE_ENQUEUE_FAILED` | Call finalize again on the same session id later. |
-| Finalize returned `409 INCOMPLETE_UPLOAD` | Resume chunk upload from `current_offset`, then finalize again. |
+| Finalize returned `409 INCOMPLETE_UPLOAD` | Resume chunk upload from `current_offset`, then finalize again. For a group, `sessions[]` says which sets are short - resume only those. |
+| Group finalize rejected ONE set's content (`422` with `failed_set_index`) | Replace that one file, create one new session for it, finalize the group again with the new id. Never re-upload the sets that passed. |
+| A set finished long before its siblings | `GET` its status occasionally. That read slides its inactivity deadline, which is what keeps an early-finishing set alive through a multi-hour group upload. |
 
-## Known V1 limitations (see also the final delivery report)
+## Pause lifetime and cleanup (V1.1 Phase 2)
+
+Two knobs, and it matters which one binds. **Both are inactivity-based, so the
+SHORTER of the two is what actually bounds how long a paused upload survives.**
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `SCANSTORY_UPLOAD_SESSION_TTL_MINUTES` | `1440` (24 h) | The inactivity deadline (`expires_at`). Slid forward by every accepted chunk AND by every owner status read. |
+| `SCANSTORY_UPLOAD_SESSION_ABANDONED_STALE_MINUTES` | `1440` (24 h) | The `cleanup-upload-sessions` staleness window, keyed off `updated_at`. Only ever touches `status='active'` rows, bounded by `--limit`. |
+
+Phase 1 shipped the stale window at `120`, which silently undercut the
+advertised 24-hour TTL by a factor of twelve: a creator told "resume when you
+are ready" lost their bytes after two hours. The default now matches the TTL, so
+the advertised window is the real one. An operator under temp-storage pressure
+can still set it lower deliberately.
+
+**A status `GET` is a liveness touch.** An owner reading their own `active`
+session slides its deadline. This is what keeps a content set that finished its
+bytes early alive while its siblings are still crawling: in a three-set upload
+on a very weak link, set 1 goes quiet for hours through no fault of its own, and
+reaping it while the group is actively progressing would destroy bytes the
+creator already paid for in time. An already-expired session is never
+resurrected by a read.
+
+**Quota and storage during a pause.** A paused, non-finalized session holds
+bytes only in `TMP_UPLOADS_DIR`. It consumes **no** project quota, **no**
+account storage allowance, and has **no** `MediaObject` ledger row - all three
+are taken at finalize, atomically, for the whole project. That is what makes a
+longer recoverable-pause window safe to offer. The operational cost is real
+though: a 24-hour window means up to a day of unaccounted temp bytes per
+abandoned upload, so `cleanup-upload-sessions --apply` must actually be
+scheduled. It is dry-run by default and does nothing if nobody runs it.
+
+## Known limitations (see also the delivery reports)
 
 - No marker-crop metadata support (the non-resumable path's `marker_*`
   fields on `ProjectPair`) - a resumable-created pair always uses
-  `marker_mode="full_image"` (the model default).
-- No multi-pair resumable projects; no "attach to an existing project" mode.
+  `marker_mode="full_image"` (the model default). Now that every JS-driven
+  creation is resumable, this affects multi-set projects too. The fields are
+  diagnostic/provenance only (see `rebuild_pair_features(...,
+  apply_legacy_roi=True)`); the uploaded pixels are always the authoritative
+  marker. Closing it means either a migration adding `marker_*` to
+  `upload_sessions`, or accepting the metadata in the group-finalize body.
+- No "attach a resumable content set to an existing project" mode.
 - A crash while a session is stuck in `finalizing` is not swept by the
   cleanup CLI (which only ever touches `active` rows) - this is a known,
   documented gap for a future wave, not a silent one.
