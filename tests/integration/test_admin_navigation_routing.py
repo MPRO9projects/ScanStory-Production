@@ -345,6 +345,12 @@ def test_admin_nav_shows_capacity_link_with_active_state_for_superadmin(client, 
     assert 'aria-current="page"' in body
 
 
+def test_admin_base_does_not_load_unused_chart_library_globally():
+    base = open("templates/admin/base.html", encoding="utf-8").read()
+    assert "cdn.jsdelivr.net/npm/chart.js" not in base
+    assert "Chart.js" not in base
+
+
 def test_admin_nav_hides_capacity_link_for_admin_without_permission(client, secondary_admin):
     with client.session_transaction() as sess:
         sess["admin_id"] = secondary_admin.id
