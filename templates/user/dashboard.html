@@ -632,16 +632,19 @@
                         </span>
                     </div>
 
+                    {# The primary Create call-to-action is the hero panel above.
+                       Repeating it here as a second loud button gave the page two
+                       competing primaries; this card links to the list instead. #}
                     {% if user.can_create_project or dev_test_entitled %}
-                    <a href="{{ url_for('user_create_project_page') }}"
-                        class="btn-neo btn-highlight-primary w-full text-center justify-center mt-4">
-                        <i class="fas fa-plus mr-2" aria-hidden="true"></i> Create ScanStory
+                    <a href="{{ url_for('projects_page') }}"
+                        class="btn-neo w-full text-center justify-center mt-4">
+                        <i class="fas fa-folder-open mr-2" aria-hidden="true"></i> View my stories
                     </a>
                     {% else %}
-                    <button class="btn-neo w-full text-center justify-center mt-4 cursor-not-allowed opacity-50"
-                        disabled>
-                        <i class="fas fa-ban mr-2"></i> Limit Reached
-                    </button>
+                    <div class="flex items-center justify-center mt-4 p-3 bg-yellow-500/10 border border-yellow-500/20 rounded-xl">
+                        <i class="fas fa-circle-exclamation text-yellow-400 mr-2" aria-hidden="true"></i>
+                        <span class="text-yellow-300 font-bold">Story limit reached</span>
+                    </div>
                     {% endif %}
                 </div>
             </div>

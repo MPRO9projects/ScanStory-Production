@@ -132,11 +132,65 @@
             flex: none;
         }
 
-        /* Mobile: the sidebar column is hidden below md, so the same nav is
-           rendered inside the collapsible header instead. Without this the
-           admin console had NO navigation at all on a phone. */
-        .mobile-nav .sidebar-link { margin-left: 0; margin-right: 0; }
-        .mobile-nav .sidebar-title { padding-left: 0; }
+                /* Below md the SAME sidebar element becomes an off-canvas drawer.
+           Duplicating the nav into the header would put every admin href in the
+           document twice and give the two copies room to drift apart; moving
+           the one element keeps a single source of truth. */
+        /* Drawer trigger: only below md, where the sidebar is off-canvas. */
+        .sidebar-toggle {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            width: 44px;
+            height: 44px;
+            margin-right: 0.5rem;
+            border: 1px solid var(--ss-border-strong, rgba(255,255,255,0.16));
+            border-radius: 0.5rem;
+            background: transparent;
+            color: var(--ss-text, #e6e6e9);
+            font-size: 1.05rem;
+        }
+
+        .sidebar-toggle:focus-visible {
+            outline: none;
+            border-color: var(--info-color);
+            box-shadow: 0 0 0 3px var(--admin-nav-focus-ring);
+        }
+
+        @media (max-width: 767.98px) {
+            .sidebar-toggle { display: inline-flex; }
+        }
+
+        .sidebar-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 1029;
+        }
+
+        @media (max-width: 767.98px) {
+            .sidebar {
+                position: fixed;
+                top: 56px;
+                bottom: 0;
+                left: 0;
+                width: 82%;
+                max-width: 320px;
+                min-height: 0;
+                padding: 0;
+                z-index: 1030;
+                transform: translateX(-100%);
+                transition: transform 200ms ease;
+            }
+
+            .sidebar.is-open { transform: translateX(0); }
+
+            .sidebar-scroll { max-height: none; height: 100%; }
+        }
+
+        @media (min-width: 768px) {
+            .sidebar-backdrop { display: none; }
+        }
 
         .navbar {
             background-color: var(--ss-surface-1, #0b0b0f) !important;
@@ -303,23 +357,20 @@
     {% endwith %}
     
     <!-- Navigation -->
-    <nav class="navbar navbar-expand-md" aria-label="Admin account and menu">
+    <nav class="navbar navbar-expand" aria-label="Admin account and menu">
         <div class="container-fluid">
             <a class="navbar-brand fw-bold text-primary" href="{{ url_for('admin_dashboard') }}">
                 <i class="fas fa-cube me-2"></i>ScanStory Admin
             </a>
             
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#adminNavbar"
-                    aria-controls="adminNavbar" aria-expanded="false" aria-label="Toggle admin menu">
-                <span class="navbar-toggler-icon" aria-hidden="true"></span>
+                        {% if admin %}
+            <button class="sidebar-toggle" type="button" id="sidebarToggle"
+                    aria-controls="adminSidebar" aria-expanded="false" aria-label="Open admin sections">
+                <i class="fas fa-bars" aria-hidden="true"></i>
             </button>
-            
-            <div class="collapse navbar-collapse" id="adminNavbar">
-                {% if admin %}
-                <nav class="mobile-nav d-md-none w-100 py-2" aria-label="Admin sections">
-                    {% include "admin/_sidebar_links.html" %}
-                </nav>
-                {% endif %}
+            {% endif %}
+
+            <div class="navbar-collapse d-flex" id="adminNavbar">
                 <ul class="navbar-nav ms-auto">
                     {% if admin %}
                         <li class="nav-item dropdown">
@@ -345,11 +396,12 @@
         <div class="row">
             <!-- Sidebar -->
             {% if admin %}
-                <div class="col-lg-2 col-md-3 d-none d-md-block sidebar">
+                                <div class="col-lg-2 col-md-3 sidebar" id="adminSidebar">
                     <nav class="sidebar-scroll" aria-label="Admin sections">
                         {% include "admin/_sidebar_links.html" %}
                     </nav>
                 </div>
+                <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
             {% endif %}
             
             <!-- Main Content -->
@@ -378,6 +430,37 @@
             });
         }, 6000);
         
+                // Off-canvas admin nav below md. Esc closes it, focus moves into it on
+        // open and back to the trigger on close, and the backdrop is inert when
+        // the drawer is shut.
+        (function () {
+            var toggle = document.getElementById('sidebarToggle');
+            var sidebar = document.getElementById('adminSidebar');
+            var backdrop = document.getElementById('sidebarBackdrop');
+            if (!toggle || !sidebar || !backdrop) return;
+
+            function setOpen(open) {
+                sidebar.classList.toggle('is-open', open);
+                backdrop.hidden = !open;
+                toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+                toggle.setAttribute('aria-label', open ? 'Close admin sections' : 'Open admin sections');
+                if (open) {
+                    var first = sidebar.querySelector('.sidebar-link');
+                    if (first) first.focus();
+                } else {
+                    toggle.focus();
+                }
+            }
+
+            toggle.addEventListener('click', function () {
+                setOpen(!sidebar.classList.contains('is-open'));
+            });
+            backdrop.addEventListener('click', function () { setOpen(false); });
+            document.addEventListener('keydown', function (event) {
+                if (event.key === 'Escape' && sidebar.classList.contains('is-open')) setOpen(false);
+            });
+        })();
+
         // Confirm delete actions
         document.addEventListener('DOMContentLoaded', function() {
             var deleteButtons = document.querySelectorAll('.btn-delete');

@@ -264,7 +264,9 @@ def test_admin_settings_dead_fields_are_disabled(client, login_admin):
     assert '<input type="text" id="site_name" class="form-control"' in body
     site_name_tag = body.split('id="site_name"', 1)[1].split(">", 1)[0]
     assert "disabled" in site_name_tag
-    assert "Not active in V1" in body
+    assert "Read-only" in body
+    assert "managed by server" in body
+    assert "Not active in V1" not in body
     assert 'id="generalForm"' not in body
     assert 'id="paymentForm"' not in body
     assert 'id="securityForm"' not in body
@@ -341,10 +343,13 @@ def test_operations_page_distinguishes_configured_from_healthy(client, login_adm
     response = client.get("/admin/operations")
     assert response.status_code == 200
     body = response.data.decode()
-    assert "Queue availability check" in body
-    assert "Unknown / not verified" in body or "Reachable" in body or "Unavailable" in body
-    assert "does not prove a worker is online" in body
-    assert "does not prove email delivery" in body
+    assert "Processing service" in body
+    assert "Not verified" in body or "Online" in body or "Unreachable" in body
+    assert "not proof that a worker is actually running" in body
+    assert "not proof that mail is arriving" in body
+    # Infrastructure vocabulary must not leak back into the operator UI.
+    for leaked in ("Redis", "RQ /", "SMTP", "Queue ID", "usable_worker_count"):
+        assert leaked not in body
 
 
 def test_destructive_admin_copy_distinguishes_suspend_delete_deactivate(client, login_admin, secondary_admin, project_with_pair):
@@ -428,7 +433,8 @@ def test_admin_plan_pages_expose_policy_contract_without_unbacked_inputs(client,
         response = client.get(path)
         assert response.status_code == 200
         body = response.data.decode()
-        assert "V1.1" in body
+        assert "policy" in body.lower()
+        assert "V1.1" not in body
         assert "Direct QR" in body
         assert "Detect Once" in body
         assert "Tracked Overlay" in body

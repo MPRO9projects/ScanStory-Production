@@ -57,7 +57,7 @@
   <span class="badge bg-primary">{{ actionable_transfers|length }} transfer{{ '' if actionable_transfers|length == 1 else 's' }} awaiting a decision</span>
   <span class="badge bg-warning text-dark">{{ open_claims|length }} review request{{ '' if open_claims|length == 1 else 's' }} open</span>
   <span class="badge bg-secondary">{{ blocked_claims|length }} waiting on a managing vendor</span>
-  <span class="badge bg-light text-dark">{{ transfer_rows|length }} transfer{{ '' if transfer_rows|length == 1 else 's' }} &middot; {{ claim_rows|length }} review request{{ '' if claim_rows|length == 1 else 's' }} in total</span>
+  <span class="badge bg-secondary">{{ transfer_rows|length }} transfer{{ '' if transfer_rows|length == 1 else 's' }} &middot; {{ claim_rows|length }} review request{{ '' if claim_rows|length == 1 else 's' }} in total</span>
 </div>
 
 {% if not admin_can('admin.ownership.manage') %}

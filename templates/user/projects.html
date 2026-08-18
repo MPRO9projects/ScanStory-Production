@@ -438,6 +438,15 @@
             transform: none !important;
         }
 
+        /* A busy or in-progress control gets its own row: its label is longer
+           than the idle one, and .action-btn is nowrap inside a 4-up flex row,
+           so it would otherwise be clipped - hiding the exact state this
+           feature exists to communicate. */
+        .card-actions > .action-btn[aria-disabled="true"],
+        .card-actions > form.is-busy {
+            flex: 1 0 100%;
+        }
+
         /* Processing / readiness state. Text always carries the meaning; the
            colour and the dot only reinforce it (never colour-only status). */
         .card-state {
@@ -958,6 +967,8 @@
                 button.setAttribute(BUSY, 'true');
                 button.innerHTML = '<i class="fas fa-rotate ss-spin" aria-hidden="true"></i> ' + label;
                 // Nothing else on this card should be clickable mid-mutation.
+                form.classList.add('is-busy');
+                form.style.flex = '1 0 100%';
                 var card = form.closest('.project-card');
                 if (card) {
                     card.querySelectorAll('button[type="submit"]').forEach(function (other) {

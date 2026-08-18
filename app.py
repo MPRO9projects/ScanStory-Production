@@ -15845,6 +15845,7 @@ def admin_moderation_page():
     """
     return render_template(
         "admin/moderation.html",
+        admin=current_admin(),
         report_statuses=["OPEN", "UNDER_REVIEW", "ACTION_TAKEN", "DISMISSED"],
         report_actions=["NONE", "PROJECT_SUSPENDED", "CREATOR_CONTACT_REQUIRED", "LEGAL_REVIEW_REQUIRED", "OTHER"],
         status_filter=(request.args.get("status") or "").strip().upper(),
@@ -15989,6 +15990,7 @@ def admin_ownership_page():
     )
     return render_template(
         "admin/ownership.html",
+        admin=current_admin(),
         transfer_rows=[_admin_transfer_row(t) for t in transfers],
         claim_rows=[_admin_claim_row(c) for c in claims],
     )

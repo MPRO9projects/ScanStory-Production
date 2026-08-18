@@ -135,7 +135,7 @@ def test_admin_nav_exposes_users_scans_subscriptions_and_activity_logs_once(clie
     # entry (the dashboard's separate "Recent Users -> View All" shortcut
     # also links to /admin/users, so this checks the sidebar item specifically
     # rather than every href on the page).
-    assert data.count(b'<i class="fas fa-users"></i> Users') == 1
+    assert data.count(b'<span>Users</span>') == 1
     assert b"User Profiles" not in data
     assert b'href="/admin/user-profiles"' not in data
 
@@ -341,7 +341,8 @@ def test_admin_nav_shows_capacity_link_with_active_state_for_superadmin(client, 
     assert response.status_code == 200
     body = response.data.decode()
     assert 'href="/admin/capacity"' in body
-    assert '<a class="nav-link active" aria-current="page" href="/admin/capacity">' in body
+    assert 'href="/admin/capacity" class="sidebar-link active"' in body
+    assert 'aria-current="page"' in body
 
 
 def test_admin_nav_hides_capacity_link_for_admin_without_permission(client, secondary_admin):
