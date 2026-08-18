@@ -309,24 +309,65 @@ def test_upload_client_diagnostics_use_safe_metrics_only():
 
 def test_resumable_upload_frontend_uses_documented_routes_and_csrf():
     html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
-    assert "createResumableSession(markerFile, videoFile, projectName, experiencePayload, signal)" in html
+    # Phase 2 added a trailing `purpose` argument so a multi-content-set
+    # session can be marked as one at creation; the four facts this ever cared
+    # about are the files, the project name and the experience payload.
+    assert "createResumableSession(markerFile, videoFile, projectName, experiencePayload, signal" in html
     assert "fetchUploadJson('/api/uploads/sessions'" in html
     assert "...experiencePayload" in html
     assert "`/api/uploads/sessions/${sessionId}/chunk`" in html
     assert "`/api/uploads/sessions/${sessionId}`" in html
     assert "`/api/uploads/sessions/${sessionId}/finalize`" in html
     assert "`/api/uploads/sessions/${sessionId}/cancel`" in html
+    # The multi-content-set project finalize is the one new documented route.
+    assert "fetchUploadJson('/api/uploads/projects/finalize'" in html
     assert "'X-CSRFToken': csrfHeader()" in html
     assert "'X-Chunk-Offset': String(offset)" in html
 
 
-def test_resumable_upload_is_single_pair_and_legacy_multipart_is_explicit_fallback():
+def test_every_pair_count_uploads_resumably_and_legacy_multipart_is_browser_fallback_only():
+    """V1.1 Phase 2 re-point. This used to assert the opposite - that a
+    multi-pair project deliberately fell back to the monolithic multipart
+    uploader. That was the largest remaining low-bandwidth gap (a two-set
+    project on a weak link was all-or-nothing), and Phase 2 closed it, so the
+    guard now pins the architecture that replaced it: one content set or many,
+    the resumable path handles it, and the multipart XHR survives ONLY for a
+    browser that cannot run the resumable path at all.
+    """
     html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
-    branch_start = html.index("if (readyPairs.length === 1)")
-    branch = html[branch_start:html.index("try {", branch_start)]
-    assert "await submitResumableSinglePair" in branch
-    assert "Using the legacy uploader for multi-pair projects." in html
+    dispatch_start = html.index("if (resumableUploadSupported())")
+    dispatch = html[dispatch_start:html.index("// Last resort only", dispatch_start)]
+    assert "if (readyPairs.length === 1)" in dispatch
+    assert "await submitResumableSinglePair" in dispatch
+    assert "await submitResumableMultiPair" in dispatch
+    # The fallback is reachable, gated on capability rather than pair count,
+    # and no longer describes itself as the multi-pair uploader.
+    assert "Using the legacy uploader for multi-pair projects." not in html
+    assert "Using the direct uploader for this browser." in html
     assert "xhr.open('POST', this.action, true)" in html
+    support = html[html.index("function resumableUploadSupported()"):html.index("async function finalizeResumableProject(")]
+    for capability in ("fetch", "AbortController", "Blob.prototype.slice"):
+        assert capability in support
+
+
+def test_multi_content_set_upload_is_one_session_per_set_and_one_atomic_finalize():
+    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
+    start = html.index("async function submitResumableMultiPair")
+    block = html[start:html.index("    let uploadActive = false;", start)]
+    # One session per content set, created/recovered before any byte is sent.
+    assert "resolveContentSetSession(" in block
+    # A set the server already has is SKIPPED, never re-sent.
+    assert "if (record.complete)" in block
+    assert "RESUMABLE CLIENT SET SKIPPED" in block
+    # The chunk loop is the single-pair one, reused rather than reimplemented.
+    assert "await uploadResumableStream(" in block
+    # Exactly one project finalize for the whole group.
+    assert "finalizeResumableProjectWithBoundedRetry(sessionIds" in block
+    assert "session_ids: sessionIds" in html
+    # Server state wins for every set, not just the active one.
+    assert "err.code === 'INCOMPLETE_UPLOAD'" in block
+    # Per-set failure names the set and preserves the others.
+    assert "failed_set_index" in block
 
 
 def test_resumable_upload_streams_marker_then_video_sequentially():
