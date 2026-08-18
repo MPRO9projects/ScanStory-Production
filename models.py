@@ -1656,7 +1656,14 @@ class ContentReport(db.Model):
     )
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=False, index=True)
+    # nullable + ondelete="SET NULL": a ContentReport is moderation/audit history.
+    # It records WHY content was reported and what an admin decided, so it has to
+    # outlive the project it describes - the same retention decision as
+    # UploadSession.project_id (P0-5). A hard-deleted project leaves the report
+    # detached (project_id IS NULL), never deleted.
+    project_id = db.Column(
+        db.Integer, db.ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     reporter_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     reporter_email = db.Column(db.String(255), nullable=True)
     reporter_session_hash = db.Column(db.String(64), nullable=True, index=True)
@@ -1671,7 +1678,12 @@ class ContentReport(db.Model):
     resolution_reason = db.Column(db.Text, nullable=True)
     metadata_json = db.Column(db.Text, nullable=True)
 
-    project = db.relationship("Project", backref=db.backref("content_reports", lazy=True, cascade="all, delete-orphan"))
+    # NO delete/delete-orphan cascade: that is exactly what used to destroy the
+    # moderation record along with the reported project. With the default cascade
+    # SQLAlchemy de-associates instead (sets project_id to NULL), which matches the
+    # database's ON DELETE SET NULL, so the report survives on every path -
+    # including a raw DELETE that never goes through the ORM.
+    project = db.relationship("Project", backref=db.backref("content_reports", lazy=True))
     reporter_user = db.relationship("User", foreign_keys=[reporter_user_id], lazy=True)
     reviewed_by_admin = db.relationship("Admin", foreign_keys=[reviewed_by_admin_id], lazy=True)
 

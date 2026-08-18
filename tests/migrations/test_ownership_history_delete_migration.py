@@ -52,10 +52,20 @@ def _columns(table):
     return {c["name"]: c for c in inspect(shared_db.engine).get_columns(table)}
 
 
-def test_revision_is_the_single_linear_head_on_top_of_wave4():
+def test_revision_sits_linearly_on_top_of_wave4():
+    """Still one head, and this revision is still on the single path to it.
+
+    Originally asserted that this revision WAS the head. Later revisions stack on
+    top of it (e9b4d7a2c815 first), so the assertion now pins what it actually
+    meant: the history stays linear - exactly one head, no branch - and this
+    revision remains an ancestor of it on top of PRIOR_REVISION.
+    """
     script = _script_directory()
     assert script.get_revision(HISTORY_REVISION).down_revision == PRIOR_REVISION
-    assert [rev.revision for rev in script.get_revisions("heads")] == [HISTORY_REVISION]
+    heads = [rev.revision for rev in script.get_revisions("heads")]
+    assert len(heads) == 1, f"migration history branched: {heads}"
+    ancestry = {rev.revision for rev in script.iterate_revisions(heads[0], "base")}
+    assert HISTORY_REVISION in ancestry
 
 
 def test_upgrade_relaxes_project_id_adds_history_columns_and_keeps_rows(tmp_path):

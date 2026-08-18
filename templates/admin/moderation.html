@@ -128,7 +128,7 @@
           <label class="form-label" for="reviewAction">Resolution</label>
           <select class="form-select" id="reviewAction">
             {% for code in report_actions %}
-            <option value="{{ code }}">{{ CONTENT_REPORT_ACTION_LABELS.get(code, code) }}</option>
+            <option value="{{ code }}" data-label="{{ CONTENT_REPORT_ACTION_LABELS.get(code, code) }}">{{ CONTENT_REPORT_ACTION_LABELS.get(code, code) }}</option>
             {% endfor %}
           </select>
         </div>
@@ -241,9 +241,13 @@
         return;
       }
       rows.innerHTML = reports.map(function (report) {
-        const projectCell = report.project_name
-          ? '<a href="/admin/projects/' + report.project_id + '">' + esc(report.project_name) + '</a>'
-          : '<a href="/admin/projects/' + report.project_id + '">Project ' + report.project_id + '</a>';
+        // A detached report (project hard-deleted) has no project to link to, so
+        // no project URL is built from the missing id - it says so instead.
+        const projectCell = report.project_deleted
+          ? '<span class="text-muted">ScanStory deleted</span>'
+          : report.project_name
+            ? '<a href="/admin/projects/' + report.project_id + '">' + esc(report.project_name) + '</a>'
+            : '<a href="/admin/projects/' + report.project_id + '">Project ' + report.project_id + '</a>';
         const reporter = report.reporter_user_id
           ? 'User ' + report.reporter_user_id
           : (report.has_reporter_contact ? 'Contact provided' : 'Anonymous');
@@ -275,11 +279,23 @@
     function openReview(report) {
       if (!report) return;
       activeReportId = report.id;
-      document.getElementById('reviewProject').textContent = report.project_name || ('Project ' + report.project_id);
-      document.getElementById('reviewProjectLink').href = '/admin/projects/' + report.project_id;
+      // The report outlives the project it was filed against. When the project is
+      // gone the evidence link is removed rather than pointed at a dead id, and
+      // every other fact on the report (reporter, reason, status, decision) is
+      // still shown - the moderation history is the whole reason the row survives.
+      const projectGone = !!report.project_deleted;
+      const projectLink = document.getElementById('reviewProjectLink');
+      document.getElementById('reviewProject').textContent = projectGone
+        ? 'Deleted - no longer available'
+        : (report.project_name || ('Project ' + report.project_id));
+      projectLink.classList.toggle('d-none', projectGone);
+      projectLink.href = projectGone ? '#' : '/admin/projects/' + report.project_id;
       const ownerLabel = document.getElementById('reviewOwner');
       const ownerLink = document.getElementById('reviewOwnerLink');
-      if (report.project_owner_type === 'user' && report.project_owner_user_id) {
+      if (projectGone) {
+        ownerLabel.textContent = 'Unavailable - ScanStory deleted';
+        ownerLink.classList.add('d-none');
+      } else if (report.project_owner_type === 'user' && report.project_owner_user_id) {
         ownerLabel.textContent = 'User ' + report.project_owner_user_id;
         ownerLink.href = '/admin/users/' + report.project_owner_user_id;
         ownerLink.classList.remove('d-none');
@@ -289,8 +305,10 @@
       }
       // Suspended-but-still-live is impossible; live-but-not-suspended is not
       // (coverage can lapse independently), so both facts are shown.
-      const stateParts = [report.project_is_active === false ? 'Suspended' : 'Active'];
-      if (report.project_is_publicly_live === false) stateParts.push('not publicly live');
+      const stateParts = projectGone
+        ? ['Deleted']
+        : [report.project_is_active === false ? 'Suspended' : 'Active'];
+      if (!projectGone && report.project_is_publicly_live === false) stateParts.push('not publicly live');
       document.getElementById('reviewProjectState').textContent = stateParts.join(' - ');
 
       // Full timestamp, not a date slice: report ordering within a day is part
@@ -319,6 +337,16 @@
       }
       statusSelect.value = 'UNDER_REVIEW';
       actionSelect.value = 'NONE';
+      // Never offer a working "suspend project" against a project that is gone.
+      // The backend rejects it with PROJECT_UNAVAILABLE either way; this stops the
+      // reviewer picking a decision that cannot be carried out.
+      const suspendOption = actionSelect.querySelector('option[value="PROJECT_SUSPENDED"]');
+      if (suspendOption) {
+        suspendOption.disabled = projectGone;
+        suspendOption.textContent = projectGone
+          ? 'Suspend ScanStory (unavailable - deleted)'
+          : suspendOption.dataset.label || suspendOption.textContent;
+      }
       reasonText.value = '';
       errorBox.classList.add('d-none');
       syncActionVisibility();
