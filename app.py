@@ -56,7 +56,7 @@ from models import (
     db, User, Admin, SubscriptionPlan, TrialDetails, OTPCode,
     Project, ProjectPair, PaymentOrder, ScanLog, SystemConfig,
     UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation,
-    RazorpayWebhookEvent, ProcessingJob, UploadSession, get_utc_now,
+    RazorpayWebhookEvent, ProcessingJob, UploadSession, UPLOAD_SESSION_PURPOSES, get_utc_now,
     ScanEvent, SCAN_EVENT_TYPES, UserConsentEvidence, AddonCatalog,
     AddonPurchase, EntitlementTransaction, PROJECT_EXPERIENCE_TYPES,
     PROJECT_PLAYBACK_MODES, ACCOUNT_TYPE_BUSINESS_VENDOR,
@@ -506,6 +506,9 @@ def _log_upload_timing(event, **fields):
         "server_write_duration_ms", "duplicate_chunk", "offset_mismatch", "checksum_duration_ms",
         "validation_duration_ms", "project_create_duration_ms", "qr_duration_ms", "enqueue_duration_ms",
         "finalize_duration_ms", "recovered_existing_completion", "project_id", "status", "safe_error_code",
+        # Multi-content-set telemetry (Phase 2). Which set of how many, never
+        # file contents, auth headers, tokens or connection strings.
+        "set_index", "set_count",
     }
     safe = {"event": event}
     for key, value in fields.items():
@@ -514,7 +517,8 @@ def _log_upload_timing(event, **fields):
         if key.endswith("_ms"):
             safe[key] = _safe_timing_value(value)
         elif key in {"upload_session_id", "pair_count", "total_bytes", "image_bytes", "video_bytes",
-                     "chunk_size", "claimed_offset", "resulting_offset", "project_id"}:
+                     "chunk_size", "claimed_offset", "resulting_offset", "project_id",
+                     "set_index", "set_count"}:
             safe[key] = int(value) if value is not None else None
         elif key in {"duplicate_chunk", "offset_mismatch", "recovered_existing_completion"}:
             safe[key] = bool(value)
@@ -9096,6 +9100,53 @@ def _lock_upload_session(session_id):
     return query.first()
 
 
+def _upload_session_set_state(session_row):
+    """Per-content-set state, DERIVED from columns that already exist.
+
+    No new column and no migration: `status`, `current_offset` and
+    `expected_total_size` already carry everything the brief's state list
+    needs. 'paused' is deliberately NOT in this vocabulary - a paused upload
+    and a very slow one are the same row server-side (status='active', a
+    partial offset), so a server-reported 'paused' would be a guess the
+    client would then have to keep in step with. Pausing is a client fact and
+    stays a client fact; what the server owns is the offset, and it reports
+    that.
+    """
+    status = session_row.status
+    if status != "active":
+        return {
+            "finalizing": "finalizing",
+            "assembled": "finalizing",
+            "completed": "complete",
+        }.get(status, "failed_requires_action")
+    total = int(session_row.expected_total_size or 0)
+    offset = int(session_row.current_offset or 0)
+    if total and offset >= total:
+        return "uploaded"
+    return "uploading" if offset > 0 else "pending"
+
+
+def _upload_session_group_payload(session_rows):
+    """Compact per-content-set view of a multi-content-set project, so a
+    client can reconcile every set from ONE response instead of N status GETs
+    on a link that can least afford them. Ordered exactly as the caller
+    listed the sets, which is the order they become pair_index 0..N-1."""
+    return [
+        {
+            "id": row.id,
+            "set_index": index,
+            "status": row.status,
+            "set_state": _upload_session_set_state(row),
+            "current_offset": int(row.current_offset or 0),
+            "expected_total_size": int(row.expected_total_size or 0),
+            "project_id": row.project_id,
+            "pair_id": row.pair_id,
+            "failure_code": row.failure_code,
+        }
+        for index, row in enumerate(session_rows)
+    ]
+
+
 def _upload_session_payload(session_row):
     uploaded_bytes = int(session_row.current_offset or 0)
     total_bytes = int(session_row.expected_total_size or 0)
@@ -9145,6 +9196,8 @@ def _upload_session_payload(session_row):
         "pair": pair_payload,
         "processing_job": processing_job_status_payload(latest_job) if latest_job else None,
         "failure_code": session_row.failure_code,
+        # Derived, not stored - see _upload_session_set_state().
+        "set_state": _upload_session_set_state(session_row),
         "can_upload_chunks": session_row.status == "active" and uploaded_bytes < total_bytes,
         "can_finalize": (
             session_row.status == "assembled"
@@ -9231,11 +9284,18 @@ class _BoundedFileView:
         self._fh.close()
 
 
-def _finalize_enqueue_and_complete(session_row):
+def _finalize_enqueue_and_complete(session_rows):
     """Attempt the existing RQ enqueue EXACTLY ONCE for an
-    already-assembled/validated session's project, via the very same
+    already-assembled/validated project, via the very same
     _schedule_project_pair_processing() the non-resumable /upload route
     calls - never a second/parallel enqueue mechanism.
+
+    `session_rows` is the ordered content-set list that produced the project:
+    one row for a single-pair project, N rows for a multi-content-set one.
+    The enqueue is per PROJECT, not per content set, exactly as
+    handle_upload() does it for an N-pair multipart POST - so N content sets
+    produce ONE job, and every row settles to the same terminal state
+    together.
 
     Recovery semantics (documented, see Phase 3 finalize spec): if the
     enqueue call itself fails/throws, this endpoint must NOT report a
@@ -9243,30 +9303,34 @@ def _finalize_enqueue_and_complete(session_row):
     is already consumed at this point (matching the non-resumable path's
     own behavior when ITS enqueue attempt fails - it also keeps the
     already-created Project/Pair rows and just marks pairs failed rather
-    than un-creating the project). The session is left in status
-    'assembled' rather than 'completed'; calling finalize again on this
-    same session id retries ONLY this enqueue step (see the 'assembled'
-    branch in finalize_upload_session) - that is the operator/client
-    recovery path, not a separate CLI.
+    than un-creating the project). The sessions are left in status
+    'assembled' rather than 'completed'; calling finalize again on the same
+    session id(s) retries ONLY this enqueue step (see the 'assembled'
+    branch in finalize_upload_session / finalize_upload_project) - that is
+    the operator/client recovery path, not a separate CLI.
     """
-    project = Project.query.get(session_row.project_id)
-    if project and project.experience_type == "direct_qr":
-        session_row.status = "completed"
-        session_row.completed_at = get_utc_now()
-        session_row.failure_code = None
+    session_rows = list(session_rows)
+    primary = session_rows[0]
+
+    def settle(status, failure_code):
+        completed_at = get_utc_now() if status == "completed" else None
+        for row in session_rows:
+            row.status = status
+            row.failure_code = failure_code
+            if completed_at:
+                row.completed_at = completed_at
         db.session.commit()
+
+    project = Project.query.get(primary.project_id)
+    if project and project.experience_type == "direct_qr":
+        settle("completed", None)
         return True
 
-    job = _schedule_project_pair_processing(session_row.project_id)
+    job = _schedule_project_pair_processing(primary.project_id)
     if job:
-        session_row.status = "completed"
-        session_row.completed_at = get_utc_now()
-        session_row.failure_code = None
-        db.session.commit()
+        settle("completed", None)
         return True
-    session_row.status = "assembled"
-    session_row.failure_code = "QUEUE_ENQUEUE_FAILED"
-    db.session.commit()
+    settle("assembled", "QUEUE_ENQUEUE_FAILED")
     return False
 
 
@@ -9341,12 +9405,19 @@ def create_upload_session():
         if not ok:
             return _upload_api_error("SUBSCRIPTION_LIMIT", message or "Subscription limit reached.", 403)
 
+    # A content set of a multi-set project is marked as such at creation, so
+    # the single-session finalize route can refuse it and it can only ever be
+    # finalized together with its siblings.
+    purpose = _sanitize_display_text(payload.get("purpose"), max_len=30) or "project_pair"
+    if purpose not in UPLOAD_SESSION_PURPOSES:
+        return _upload_api_error("INVALID_PURPOSE", "Unsupported upload session purpose.", 400)
+
     storage_token = str(uuid.uuid4())
     now = get_utc_now()
     session_row = UploadSession(
         owner_user_id=user.id if user else None,
         owner_admin_id=admin.id if admin else None,
-        purpose="project_pair",
+        purpose=purpose,
         project_name=_sanitize_display_text(payload.get("project_name")) or "Untitled Project",
         original_image_name=_sanitize_display_text(payload.get("original_image_name")),
         original_video_name=_sanitize_display_text(payload.get("original_video_name")),
@@ -9565,7 +9636,7 @@ def upload_session_status(session_id):
     return response
 
 
-def _finalize_assemble_and_validate(session_row, user, admin):
+def _finalize_assemble_and_validate(session_rows, user, admin):
     """The validate -> quota -> Project/ProjectPair -> QR -> enqueue
     sequence, run exactly once per winning atomic 'active'->'finalizing'
     transition. Mirrors handle_upload()/admin_handle_upload() step for
@@ -9573,60 +9644,117 @@ def _finalize_assemble_and_validate(session_row, user, admin):
     _reserve_project_quota_atomic() authoritative point (skipped entirely
     for admin owners, exactly like admin_handle_upload), same
     os.replace() atomic-move convention, same QR helpers, same
-    _schedule_project_pair_processing() enqueue call."""
+    _schedule_project_pair_processing() enqueue call.
+
+    `session_rows` is the ORDERED content-set list: one row for a
+    single-pair project, N rows for a multi-content-set one. The length
+    changes none of the invariants - one Project, one project-quota unit,
+    N ProjectPairs at pair_index 0..N-1 in exactly this order, one QR
+    image, one processing job. That is precisely what handle_upload()
+    already does for an N-pair multipart POST, which is why multi-pair was
+    converged onto this one function instead of growing a parallel
+    multi-pair finalizer that would have to be kept in step with it.
+    """
     finalize_start = time.perf_counter()
+    session_rows = list(session_rows)
+    primary = session_rows[0]
+    multi = len(session_rows) > 1
     checksum_duration_ms = 0
     validation_duration_ms = 0
     project_create_duration_ms = 0
     qr_duration_ms = 0
     enqueue_duration_ms = 0
-    combined_path = _upload_session_temp_path(session_row.storage_token)
+    combined_paths = {row.id: _upload_session_temp_path(row.storage_token) for row in session_rows}
+    declared_total_bytes = sum(int(row.expected_total_size or 0) for row in session_rows)
 
-    def fail(code, message, http_status=422):
-        _safe_delete_upload_temp(combined_path)
-        session_row.status = "failed"
-        session_row.failure_code = code
+    def _timing(**extra):
+        fields = {
+            "upload_session_id": primary.id,
+            "project_id": primary.project_id,
+            "pair_count": len(session_rows),
+            "set_count": len(session_rows),
+            "total_bytes": declared_total_bytes,
+            "checksum_duration_ms": checksum_duration_ms,
+            "validation_duration_ms": validation_duration_ms,
+            "project_create_duration_ms": project_create_duration_ms,
+            "qr_duration_ms": qr_duration_ms,
+            "enqueue_duration_ms": enqueue_duration_ms,
+            "finalize_duration_ms": _elapsed_ms(finalize_start),
+            "recovered_existing_completion": False,
+            "status": primary.status,
+        }
+        fields.update(extra)
+        _log_upload_timing("upload_session_finalize", **fields)
+
+    def fail(code, message, http_status=422, offender=None):
+        """Park the offending content set - and, when it has siblings, hand
+        every sibling back its 'active' state with its confirmed bytes
+        untouched.
+
+        FAILURE ISOLATION. A later content set failing validation must never
+        cost a creator the bytes an earlier one already got across, so only
+        the offender's own assembled temp file is discarded and only the
+        offender becomes 'failed'. The creator re-selects one file, not
+        three. Single-set behaviour is byte-for-byte what it was: there is
+        no sibling to preserve, so the session is simply marked failed.
+        """
+        offender = offender or primary
+        offender_index = next(i for i, row in enumerate(session_rows) if row.id == offender.id)
+        _safe_delete_upload_temp(combined_paths[offender.id])
+        for row in session_rows:
+            if row.id == offender.id:
+                row.status = "failed"
+                row.failure_code = code
+            elif row.status == "finalizing":
+                row.status = "active"
         db.session.commit()
-        _log_upload_timing(
-            "upload_session_finalize",
-            upload_session_id=session_row.id,
-            project_id=session_row.project_id,
-            pair_count=1,
-            total_bytes=session_row.expected_total_size,
-            checksum_duration_ms=checksum_duration_ms,
-            validation_duration_ms=validation_duration_ms,
-            project_create_duration_ms=project_create_duration_ms,
-            qr_duration_ms=qr_duration_ms,
-            enqueue_duration_ms=enqueue_duration_ms,
-            finalize_duration_ms=_elapsed_ms(finalize_start),
-            recovered_existing_completion=False,
-            status=session_row.status,
-            safe_error_code=code,
-        )
+        _timing(status=offender.status, safe_error_code=code, set_index=offender_index)
+        extra = {"failed_session_id": offender.id, "failed_set_index": offender_index} if multi else {}
+        return _upload_api_error(code, message, http_status, **extra)
+
+    def fail_group(code, message, http_status):
+        """Terminal for every content set. Used only for failures that
+        happen AFTER the assembled temp files have been consumed by
+        validation (quota, storage allowance, project creation) - at that
+        point there are no confirmed bytes left to preserve for anyone, so
+        pretending a set is still resumable would be a lie. Same behaviour
+        the single-pair path has always had, now applied uniformly.
+        """
+        for row in session_rows:
+            row.status = "failed"
+            row.failure_code = code
+        db.session.commit()
+        _timing(status="failed", safe_error_code=code)
         return _upload_api_error(code, message, http_status)
 
-    if not os.path.exists(combined_path) or os.path.getsize(combined_path) != session_row.expected_total_size:
-        return fail("STORAGE_INCONSISTENT", "Uploaded data is inconsistent with the declared size.", 500)
+    # ---- 1. Every set's assembled bytes must be present and the declared length.
+    for row in session_rows:
+        path = combined_paths[row.id]
+        if not os.path.exists(path) or os.path.getsize(path) != row.expected_total_size:
+            return fail("STORAGE_INCONSISTENT", "Uploaded data is inconsistent with the declared size.", 500, offender=row)
+        if row.client_checksum_sha256:
+            checksum_start = time.perf_counter()
+            digest = hashlib.sha256()
+            with open(path, "rb") as fh:
+                for block in iter(lambda: fh.read(1024 * 1024), b""):
+                    digest.update(block)
+            computed = digest.hexdigest()
+            row.computed_checksum_sha256 = computed
+            checksum_duration_ms += _elapsed_ms(checksum_start)
+            if computed != row.client_checksum_sha256:
+                return fail("CHECKSUM_MISMATCH", "Uploaded data failed checksum verification.", offender=row)
 
-    if session_row.client_checksum_sha256:
-        checksum_start = time.perf_counter()
-        digest = hashlib.sha256()
-        with open(combined_path, "rb") as fh:
-            for block in iter(lambda: fh.read(1024 * 1024), b""):
-                digest.update(block)
-        computed = digest.hexdigest()
-        session_row.computed_checksum_sha256 = computed
-        checksum_duration_ms = _elapsed_ms(checksum_start)
-        if computed != session_row.client_checksum_sha256:
-            return fail("CHECKSUM_MISMATCH", "Uploaded data failed checksum verification.")
-
-    experience_type = session_row.experience_type or "image_video"
-    playback_mode = session_row.playback_mode or _default_playback_mode_for_experience(experience_type)
+    # Experience/playback is a PROJECT fact, so it is read from the first set
+    # only; the route that got here already refused a group whose sets
+    # disagreed about it.
+    experience_type = primary.experience_type or "image_video"
+    playback_mode = primary.playback_mode or _default_playback_mode_for_experience(experience_type)
     try:
         _validate_project_experience_playback(experience_type, playback_mode)
     except ValueError as exc:
         return fail("INVALID_EXPERIENCE_PLAYBACK", str(exc), 400)
 
+    # ---- 2. Validate every set's image/video slice from its own assembled file.
     validation_start = time.perf_counter()
     # Same plan-effective policy as the direct upload path; admin-owned
     # sessions have no plan and fall back to the server ceiling.
@@ -9635,71 +9763,99 @@ def _finalize_assemble_and_validate(session_row, user, admin):
         image_limits(_fin_ents) if _fin_ents else (_ent.MAX_IMAGE_SIZE, _ent.MAX_IMAGE_DIMENSION_PX, _ent.MAX_IMAGE_PIXELS)
     )
     _vid_max, _vid_dur = video_limits(_fin_ents) if _fin_ents else (_ent.MAX_VIDEO_SIZE, _ent.MAX_VIDEO_DURATION_SECONDS)
-    image_view = _BoundedFileView(combined_path, 0, session_row.image_size) if experience_type == "image_video" else None
-    video_view = _BoundedFileView(combined_path, session_row.image_size, session_row.video_size)
-    img_temp = vid_temp = img_ext = vid_ext = None
-    image_error = video_error = None
-    try:
-        if experience_type == "image_video":
-            image_storage = FileStorage(
-                stream=image_view,
-                filename=session_row.original_image_name or "upload.jpg",
-                content_type=session_row.image_content_type or "application/octet-stream",
-            )
-            try:
-                img_temp, img_ext = validate_image(
-                    image_storage, TMP_UPLOADS_DIR, _img_max, _img_dim, _img_px
+    validated = []
+    failed_row = failed_code = failed_message = None
+    for row in session_rows:
+        path = combined_paths[row.id]
+        image_view = _BoundedFileView(path, 0, row.image_size) if experience_type == "image_video" else None
+        video_view = _BoundedFileView(path, row.image_size, row.video_size)
+        img_temp = vid_temp = img_ext = vid_ext = None
+        image_error = video_error = None
+        try:
+            if image_view is not None:
+                image_storage = FileStorage(
+                    stream=image_view,
+                    filename=row.original_image_name or "upload.jpg",
+                    content_type=row.image_content_type or "application/octet-stream",
                 )
-            except UploadValidationError as exc:
-                image_error = exc
+                try:
+                    img_temp, img_ext = validate_image(
+                        image_storage, TMP_UPLOADS_DIR, _img_max, _img_dim, _img_px
+                    )
+                except UploadValidationError as exc:
+                    image_error = exc
 
-        if image_error is None:
-            video_storage = FileStorage(
-                stream=video_view,
-                filename=session_row.original_video_name or "upload.mp4",
-                content_type=session_row.video_content_type or "application/octet-stream",
-            )
-            try:
-                vid_temp, vid_ext = validate_video(
-                    video_storage, TMP_UPLOADS_DIR, _vid_max, _vid_dur
+            if image_error is None:
+                video_storage = FileStorage(
+                    stream=video_view,
+                    filename=row.original_video_name or "upload.mp4",
+                    content_type=row.video_content_type or "application/octet-stream",
                 )
-            except UploadValidationError as exc:
-                video_error = exc
-    finally:
-        # Close both view handles BEFORE any attempt to delete combined_path
-        # below (via `fail()` or the success path) - on Windows, a file
-        # with an open handle cannot be deleted, so doing this any later
-        # would silently no-op the cleanup on failure.
-        if image_view:
-            image_view.close()
-        video_view.close()
-        validation_duration_ms = _elapsed_ms(validation_start)
+                try:
+                    vid_temp, vid_ext = validate_video(
+                        video_storage, TMP_UPLOADS_DIR, _vid_max, _vid_dur
+                    )
+                except UploadValidationError as exc:
+                    video_error = exc
+        finally:
+            # Close both view handles BEFORE any attempt to delete this set's
+            # assembled file below (via `fail()`) - on Windows, a file with an
+            # open handle cannot be deleted, so doing this any later would
+            # silently no-op the cleanup on failure.
+            if image_view:
+                image_view.close()
+            video_view.close()
 
-    if image_error is not None:
-        app.logger.warning(f"resumable_upload_rejected image session_id={session_row.id}: {image_error.detail}")
-        return fail("IMAGE_VALIDATION_FAILED", image_error.safe_message)
-    if video_error is not None:
-        _safe_remove(img_temp)
-        app.logger.warning(f"resumable_upload_rejected video session_id={session_row.id}: {video_error.detail}")
-        return fail("VIDEO_VALIDATION_FAILED", video_error.safe_message)
+        if image_error is not None:
+            app.logger.warning(f"resumable_upload_rejected image session_id={row.id}: {image_error.detail}")
+            failed_row, failed_code, failed_message = row, "IMAGE_VALIDATION_FAILED", image_error.safe_message
+            break
+        if video_error is not None:
+            _safe_remove(img_temp)
+            app.logger.warning(f"resumable_upload_rejected video session_id={row.id}: {video_error.detail}")
+            failed_row, failed_code, failed_message = row, "VIDEO_VALIDATION_FAILED", video_error.safe_message
+            break
+        validated.append({
+            "session": row, "image_temp": img_temp, "image_ext": img_ext,
+            "video_temp": vid_temp, "video_ext": vid_ext,
+        })
+    validation_duration_ms = _elapsed_ms(validation_start)
 
-    # Both files validated and copied out by validate_image/validate_video's
-    # own save_to_temp - the combined temp file is no longer needed.
-    _safe_delete_upload_temp(combined_path)
+    if failed_row is not None:
+        # The copies made for the sets that DID validate are throwaway; their
+        # authoritative bytes are still in their own assembled temp files,
+        # which fail() deliberately leaves alone.
+        for item in validated:
+            _safe_remove(item["image_temp"])
+            _safe_remove(item["video_temp"])
+        return fail(failed_code, failed_message, offender=failed_row)
 
+    # Every set validated and was copied out by validate_image/validate_video's
+    # own save_to_temp - the assembled temp files are no longer needed.
+    for row in session_rows:
+        _safe_delete_upload_temp(combined_paths[row.id])
+
+    # ---- 3. One project, N pairs, one quota unit, in one transaction.
     is_admin_owner = admin is not None
     saved_paths = []
     project_create_start = time.perf_counter()
-    retained_image_bytes = os.path.getsize(img_temp) if img_temp else None
-    retained_video_bytes = os.path.getsize(vid_temp)
-    total_new_storage_bytes = (retained_image_bytes or 0) + retained_video_bytes
+    retained = [
+        (
+            os.path.getsize(item["image_temp"]) if item["image_temp"] else None,
+            os.path.getsize(item["video_temp"]),
+        )
+        for item in validated
+    ]
+    total_new_storage_bytes = sum((image_bytes or 0) + video_bytes for image_bytes, video_bytes in retained)
     _storage_used, storage_allowance = account_storage_state(user) if user else (0, None)
 
     try:
         if not is_admin_owner:
             # Same authoritative atomic reservation as handle_upload(); a
             # rollback in either except block below releases it. Admin-owned
-            # sessions bill no account and are recorded uncounted.
+            # sessions bill no account and are recorded uncounted. The ENTIRE
+            # retained set is weighed at once, exactly like the multipart
+            # path - never set 1 persisted and set 2 rejected.
             if not _storage.reserve_account_storage(user.id, total_new_storage_bytes, storage_allowance):
                 raise _ResumableQuotaLimitReached("STORAGE_LIMIT_REACHED", STORAGE_LIMIT_MESSAGE)
             if not _reserve_project_quota_atomic(user):
@@ -9714,7 +9870,7 @@ def _finalize_assemble_and_validate(session_row, user, admin):
             ).scalar()
             project_index = (int(max_index) if max_index and int(max_index) > 0 else 0) + 1
             project = Project(
-                name=session_row.project_name or "Untitled Project",
+                name=primary.project_name or "Untitled Project",
                 owner_admin_id=admin.id,
                 owner_user_id=None,
                 user_project_index=project_index,
@@ -9727,7 +9883,7 @@ def _finalize_assemble_and_validate(session_row, user, admin):
             ).scalar()
             project_index = (int(max_index) if max_index and int(max_index) > 0 else 0) + 1
             project = Project(
-                name=session_row.project_name or "Untitled Project",
+                name=primary.project_name or "Untitled Project",
                 owner_user_id=user.id,
                 owner_admin_id=None,
                 created_by_user_id=user.id,
@@ -9748,76 +9904,66 @@ def _finalize_assemble_and_validate(session_row, user, admin):
 
         if not is_admin_owner:
             max_pairs = get_plan_pairs_limit(user)
-            pair_slots_ok, pair_slots_error = _reserve_pair_slots_for_project(project.id, 1, max_pairs)
+            pair_slots_ok, pair_slots_error = _reserve_pair_slots_for_project(project.id, len(validated), max_pairs)
             if not pair_slots_ok:
                 raise ValueError(pair_slots_error)
 
-        img_filename = f"{project.id}_0.jpg" if experience_type == "image_video" else None
-        vid_filename = f"{project.id}_0{vid_ext}"
-        img_path = None
-        if img_filename:
-            img_path = os.path.join(images_dir, img_filename)
-            os.replace(img_temp, img_path)  # atomic move: already-validated content only
-            saved_paths.append(img_path)
-        vid_path = os.path.join(videos_dir, vid_filename)
-        os.replace(vid_temp, vid_path)  # atomic move: already-validated content only
-        saved_paths.append(vid_path)
+        created_pairs = []
+        for index, item in enumerate(validated):
+            img_filename = f"{project.id}_{index}.jpg" if experience_type == "image_video" else None
+            vid_filename = f"{project.id}_{index}{item['video_ext']}"
+            img_path = None
+            if img_filename:
+                img_path = os.path.join(images_dir, img_filename)
+                os.replace(item["image_temp"], img_path)  # atomic move: already-validated content only
+                saved_paths.append(img_path)
+            vid_path = os.path.join(videos_dir, vid_filename)
+            os.replace(item["video_temp"], vid_path)  # atomic move: already-validated content only
+            saved_paths.append(vid_path)
 
-        image_path_url = None
-        if img_filename:
-            image_path_url = f"/admin/image/{project.id}/0" if is_admin_owner else f"/image/{project.id}/0"
-        pair = ProjectPair(
-            project_id=project.id,
-            pair_index=0,
-            image_filename=img_filename,
-            video_filename=vid_filename,
-            image_path=image_path_url,
-            original_image_name=session_row.original_image_name,
-            original_video_name=session_row.original_video_name,
-            image_size=os.path.getsize(img_path) if img_path else None,
-            video_size=os.path.getsize(vid_path),
-            is_processed=experience_type == "direct_qr",
-            processing_status="completed" if experience_type == "direct_qr" else "uploaded",
-            feature_extraction_status="not_required" if experience_type == "direct_qr" else "pending",
-            processing_error=None,
-        )
-        db.session.add(pair)
+            image_path_url = None
+            if img_filename:
+                image_path_url = f"/admin/image/{project.id}/{index}" if is_admin_owner else f"/image/{project.id}/{index}"
+            pair = ProjectPair(
+                project_id=project.id,
+                pair_index=index,
+                image_filename=img_filename,
+                video_filename=vid_filename,
+                image_path=image_path_url,
+                original_image_name=item["session"].original_image_name,
+                original_video_name=item["session"].original_video_name,
+                image_size=os.path.getsize(img_path) if img_path else None,
+                video_size=os.path.getsize(vid_path),
+                is_processed=experience_type == "direct_qr",
+                processing_status="completed" if experience_type == "direct_qr" else "uploaded",
+                feature_extraction_status="not_required" if experience_type == "direct_qr" else "pending",
+                processing_error=None,
+            )
+            db.session.add(pair)
+            created_pairs.append((item["session"], pair, img_path, vid_path))
+
+        # Ledger rows for the retained media, in the SAME transaction as the
+        # reservation and the pair rows, so accounting can never be
+        # half-applied across content sets.
         db.session.flush()
-        record_pair_media_objects(
-            project, pair,
-            image_bytes=os.path.getsize(img_path) if img_path else None,
-            video_bytes=os.path.getsize(vid_path),
-        )
+        for row, pair, img_path, vid_path in created_pairs:
+            record_pair_media_objects(
+                project, pair,
+                image_bytes=os.path.getsize(img_path) if img_path else None,
+                video_bytes=os.path.getsize(vid_path),
+            )
+            row.project_id = project.id
+            row.pair_id = pair.id
 
-        session_row.project_id = project.id
-        session_row.pair_id = pair.id
         db.session.commit()
         project_create_duration_ms = _elapsed_ms(project_create_start)
     except _ResumableQuotaLimitReached as limit_exc:
         db.session.rollback()
-        _safe_remove(img_temp)
-        _safe_remove(vid_temp)
-        session_row.status = "failed"
-        session_row.failure_code = limit_exc.code
-        db.session.commit()
+        for item in validated:
+            _safe_remove(item["image_temp"])
+            _safe_remove(item["video_temp"])
         project_create_duration_ms = _elapsed_ms(project_create_start)
-        _log_upload_timing(
-            "upload_session_finalize",
-            upload_session_id=session_row.id,
-            project_id=session_row.project_id,
-            pair_count=1,
-            total_bytes=session_row.expected_total_size,
-            checksum_duration_ms=checksum_duration_ms,
-            validation_duration_ms=validation_duration_ms,
-            project_create_duration_ms=project_create_duration_ms,
-            qr_duration_ms=qr_duration_ms,
-            enqueue_duration_ms=enqueue_duration_ms,
-            finalize_duration_ms=_elapsed_ms(finalize_start),
-            recovered_existing_completion=False,
-            status=session_row.status,
-            safe_error_code=limit_exc.code,
-        )
-        return _upload_api_error(limit_exc.code, limit_exc.message, 403)
+        return fail_group(limit_exc.code, limit_exc.message, 403)
     except Exception as exc:
         db.session.rollback()
         for saved_path in saved_paths:
@@ -9826,33 +9972,15 @@ def _finalize_assemble_and_validate(session_row, user, admin):
                     os.remove(saved_path)
             except Exception:
                 pass
-        _safe_remove(img_temp)
-        _safe_remove(vid_temp)
-        session_row.status = "failed"
-        session_row.failure_code = "PROJECT_CREATION_FAILED"
-        db.session.commit()
+        for item in validated:
+            _safe_remove(item["image_temp"])
+            _safe_remove(item["video_temp"])
         project_create_duration_ms = _elapsed_ms(project_create_start)
-        _log_upload_timing(
-            "upload_session_finalize",
-            upload_session_id=session_row.id,
-            project_id=session_row.project_id,
-            pair_count=1,
-            total_bytes=session_row.expected_total_size,
-            checksum_duration_ms=checksum_duration_ms,
-            validation_duration_ms=validation_duration_ms,
-            project_create_duration_ms=project_create_duration_ms,
-            qr_duration_ms=qr_duration_ms,
-            enqueue_duration_ms=enqueue_duration_ms,
-            finalize_duration_ms=_elapsed_ms(finalize_start),
-            recovered_existing_completion=False,
-            status=session_row.status,
-            safe_error_code="PROJECT_CREATION_FAILED",
-        )
-        app.logger.error(f"resumable_upload_project_creation_failed session_id={session_row.id}: {exc}")
-        return _upload_api_error("PROJECT_CREATION_FAILED", "Project creation failed. Please try again.", 500)
+        app.logger.error(f"resumable_upload_project_creation_failed session_id={primary.id}: {exc}")
+        return fail_group("PROJECT_CREATION_FAILED", "Project creation failed. Please try again.", 500)
 
     # QR code generation - same helpers/convention the non-resumable path
-    # uses, unmodified.
+    # uses, unmodified. One QR per project, never one per content set.
     qr_start = time.perf_counter()
     if is_admin_owner:
         admin_name = admin.name or admin.email.split("@")[0]
@@ -9889,41 +10017,12 @@ def _finalize_assemble_and_validate(session_row, user, admin):
     qr_duration_ms = _elapsed_ms(qr_start)
 
     enqueue_start = time.perf_counter()
-    if _finalize_enqueue_and_complete(session_row):
+    if _finalize_enqueue_and_complete(session_rows):
         enqueue_duration_ms = _elapsed_ms(enqueue_start)
-        _log_upload_timing(
-            "upload_session_finalize",
-            upload_session_id=session_row.id,
-            project_id=session_row.project_id,
-            pair_count=1,
-            total_bytes=session_row.expected_total_size,
-            checksum_duration_ms=checksum_duration_ms,
-            validation_duration_ms=validation_duration_ms,
-            project_create_duration_ms=project_create_duration_ms,
-            qr_duration_ms=qr_duration_ms,
-            enqueue_duration_ms=enqueue_duration_ms,
-            finalize_duration_ms=_elapsed_ms(finalize_start),
-            recovered_existing_completion=False,
-            status=session_row.status,
-        )
-        return jsonify({"success": True, "session": _upload_session_payload(session_row)})
+        _timing(status=primary.status)
+        return jsonify({"success": True, "session": _upload_session_payload(primary), "sessions": _upload_session_group_payload(session_rows)})
     enqueue_duration_ms = _elapsed_ms(enqueue_start)
-    _log_upload_timing(
-        "upload_session_finalize",
-        upload_session_id=session_row.id,
-        project_id=session_row.project_id,
-        pair_count=1,
-        total_bytes=session_row.expected_total_size,
-        checksum_duration_ms=checksum_duration_ms,
-        validation_duration_ms=validation_duration_ms,
-        project_create_duration_ms=project_create_duration_ms,
-        qr_duration_ms=qr_duration_ms,
-        enqueue_duration_ms=enqueue_duration_ms,
-        finalize_duration_ms=_elapsed_ms(finalize_start),
-        recovered_existing_completion=False,
-        status=session_row.status,
-        safe_error_code="QUEUE_ENQUEUE_FAILED",
-    )
+    _timing(status=primary.status, safe_error_code="QUEUE_ENQUEUE_FAILED")
     return _upload_api_error(
         "QUEUE_ENQUEUE_FAILED",
         "Upload was assembled and validated but could not be queued for processing. Retry finalize to try again.",
@@ -9946,6 +10045,17 @@ def finalize_upload_session(session_id):
     if not session_row or not _upload_session_owned(session_row, user, admin):
         return _upload_api_error("NOT_FOUND", "Upload session not found.", 404)
 
+    if session_row.purpose == "project_content_set":
+        # Finalizing one content set of a multi-set project on its own would
+        # produce a stray single-pair project, consume a project-quota unit for
+        # it, and leave the siblings orphaned. The group route is the only way
+        # in for these, and it is atomic across all of them.
+        return _upload_api_error(
+            "GROUP_FINALIZE_REQUIRED",
+            "This content set belongs to a multi-content-set project and must be finalized with it.",
+            409,
+        )
+
     if session_row.status == "assembled":
         enqueue_start = time.perf_counter()
         updated = UploadSession.query.filter(
@@ -9956,7 +10066,7 @@ def finalize_upload_session(session_id):
             return _finalize_conflict_response(UploadSession.query.get(session_row.id))
         db.session.commit()
         session_row = UploadSession.query.get(session_row.id)
-        if _finalize_enqueue_and_complete(session_row):
+        if _finalize_enqueue_and_complete([session_row]):
             _log_upload_timing(
                 "upload_session_finalize",
                 upload_session_id=session_row.id,
@@ -10018,7 +10128,257 @@ def finalize_upload_session(session_id):
     db.session.commit()
     session_row = UploadSession.query.get(session_row.id)
 
-    return _finalize_assemble_and_validate(session_row, user, admin)
+    return _finalize_assemble_and_validate([session_row], user, admin)
+
+
+# Widest a single project-finalize request may declare. This is a
+# REQUEST-SHAPE guard at the trust boundary, not a product limit - the real
+# per-project ceiling is the plan's own get_plan_pairs_limit(), enforced
+# below and again inside _reserve_pair_slots_for_project().
+_UPLOAD_PROJECT_MAX_CONTENT_SETS = 100
+
+
+def _parse_content_set_ids(payload):
+    """(ids, error_response). Order is meaningful - it becomes pair_index
+    0..N-1 - so it is preserved exactly as sent, and duplicates are rejected
+    rather than silently collapsed: a repeated id would otherwise ask for the
+    same bytes to become two pairs."""
+    raw = payload.get("session_ids")
+    if not isinstance(raw, list) or not raw:
+        return None, _upload_api_error("INVALID_SESSION_IDS", "session_ids must be a non-empty list of upload session ids.", 400)
+    if len(raw) > _UPLOAD_PROJECT_MAX_CONTENT_SETS:
+        return None, _upload_api_error("TOO_MANY_CONTENT_SETS", "Too many content sets in one project.", 400)
+    ids = []
+    for value in raw:
+        if isinstance(value, bool):
+            return None, _upload_api_error("INVALID_SESSION_IDS", "session_ids must be a non-empty list of upload session ids.", 400)
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            return None, _upload_api_error("INVALID_SESSION_IDS", "session_ids must be a non-empty list of upload session ids.", 400)
+    if len(set(ids)) != len(ids):
+        return None, _upload_api_error("DUPLICATE_SESSION_IDS", "A content set may only appear once in a project.", 400)
+    return ids, None
+
+
+@app.route("/api/uploads/projects/finalize", methods=["POST"])
+def finalize_upload_project():
+    """4b. Finalize a MULTI-CONTENT-SET project: N upload sessions in, one
+    Project out.
+
+    The "group" is defined by THIS REQUEST, not by a new parent row and not by
+    a new column - which is why this whole feature needed no migration. Every
+    guarantee comes from the same atomic conditional UPDATE the single-pair
+    route already uses, widened to N rows: the claim
+    `WHERE id IN (...) AND status='active' AND current_offset=expected_total_size`
+    must move EXACTLY N rows or nobody finalizes and nothing is created. That
+    one statement is what makes a double-clicked Create, a request retried
+    after a lost response, and two racing tabs all resolve to a single
+    project.
+
+    A single-set project may use this route too; it just delegates to the
+    same _finalize_assemble_and_validate() the /sessions/<id>/finalize route
+    does, with a one-element list.
+    """
+    finalize_start = time.perf_counter()
+    user, admin = _upload_identity()
+    if not user and not admin:
+        return _upload_api_error("UNAUTHENTICATED", "Login required.", 401)
+
+    payload = request.get_json(silent=True) or {}
+    ids, error = _parse_content_set_ids(payload)
+    if error is not None:
+        return error
+
+    rows_by_id = {
+        row.id: row
+        for row in UploadSession.query.filter(UploadSession.id.in_(ids)).all()
+        if _upload_session_owned(row, user, admin)
+    }
+    if len(rows_by_id) != len(ids):
+        # Same answer as a single unknown/foreign session: a 404 that tells a
+        # caller nothing about whether the id exists on another account.
+        return _upload_api_error("NOT_FOUND", "Upload session not found.", 404)
+    session_rows = [rows_by_id[i] for i in ids]
+    primary = session_rows[0]
+
+    # Every set must belong to the same project intent. Disagreement here means
+    # two different creation flows got mixed up client-side, and guessing which
+    # one the creator meant is not something a server may do.
+    for row in session_rows[1:]:
+        if (
+            (row.project_name or "") != (primary.project_name or "")
+            or row.experience_type != primary.experience_type
+            or row.playback_mode != primary.playback_mode
+            or row.purpose != primary.purpose
+        ):
+            return _upload_api_error(
+                "CONTENT_SET_MISMATCH",
+                "These content sets do not belong to the same project.",
+                409,
+                sessions=_upload_session_group_payload(session_rows),
+            )
+
+    statuses = {row.status for row in session_rows}
+    project_ids = {row.project_id for row in session_rows}
+
+    # REPLAY: this exact group already produced a project. Report that project
+    # instead of creating a second one. This is the browser-resent-after-a-lost-
+    # response case and the double-clicked-Create case, and it must be a
+    # success, not an error, or the client will think it has to retry.
+    if statuses == {"completed"} and len(project_ids) == 1 and primary.project_id:
+        _log_upload_timing(
+            "upload_project_finalize",
+            upload_session_id=primary.id,
+            project_id=primary.project_id,
+            pair_count=len(session_rows),
+            set_count=len(session_rows),
+            finalize_duration_ms=_elapsed_ms(finalize_start),
+            recovered_existing_completion=True,
+            status="completed",
+            safe_error_code="ALREADY_FINALIZED",
+        )
+        return jsonify({
+            "success": True,
+            "session": _upload_session_payload(primary),
+            "sessions": _upload_session_group_payload(session_rows),
+            "recovered_existing_completion": True,
+        })
+
+    # RETRY-ENQUEUE-ONLY: the project, its pairs, its media rows and its quota
+    # all already exist; only the queue handoff failed. Re-running validation
+    # or quota here would duplicate both.
+    if statuses == {"assembled"} and len(project_ids) == 1 and primary.project_id:
+        enqueue_start = time.perf_counter()
+        claimed = UploadSession.query.filter(
+            UploadSession.id.in_(ids), UploadSession.status == "assembled"
+        ).update({UploadSession.status: "finalizing"}, synchronize_session=False)
+        if claimed != len(ids):
+            db.session.rollback()
+            fresh = [UploadSession.query.get(i) for i in ids]
+            return _upload_api_error(
+                "FINALIZE_IN_PROGRESS", "This project is already being finalized.", 409,
+                sessions=_upload_session_group_payload([row for row in fresh if row]),
+            )
+        db.session.commit()
+        session_rows = [UploadSession.query.get(i) for i in ids]
+        ok = _finalize_enqueue_and_complete(session_rows)
+        _log_upload_timing(
+            "upload_project_finalize",
+            upload_session_id=session_rows[0].id,
+            project_id=session_rows[0].project_id,
+            pair_count=len(session_rows),
+            set_count=len(session_rows),
+            enqueue_duration_ms=_elapsed_ms(enqueue_start),
+            finalize_duration_ms=_elapsed_ms(finalize_start),
+            recovered_existing_completion=True,
+            status=session_rows[0].status,
+            safe_error_code=None if ok else "QUEUE_ENQUEUE_FAILED",
+        )
+        if ok:
+            return jsonify({
+                "success": True,
+                "session": _upload_session_payload(session_rows[0]),
+                "sessions": _upload_session_group_payload(session_rows),
+            })
+        return _upload_api_error(
+            "QUEUE_ENQUEUE_FAILED",
+            "Upload was assembled and validated but could not be queued for processing. Retry finalize to try again.",
+            502,
+        )
+
+    # Expire anything genuinely past its inactivity deadline before judging the
+    # group, so the client is told SESSION_EXPIRED for that set rather than an
+    # opaque "incomplete".
+    now = get_utc_now()
+    expired_any = False
+    for row in session_rows:
+        if row.status == "active" and row.expires_at < now:
+            row.status = "expired"
+            row.failure_code = "SESSION_TTL_EXPIRED"
+            expired_any = True
+    if expired_any:
+        db.session.commit()
+        return _upload_api_error(
+            "SESSION_EXPIRED", "One or more content sets in this project expired.", 409,
+            sessions=_upload_session_group_payload(session_rows),
+        )
+
+    # Some sets are already past the claim gate. Either another request is
+    # finalizing this group right now, or a previous attempt settled part of it.
+    # Either way the answer is "re-read the state", never "start again" - and
+    # the per-set payload is what lets the client see which sets are already
+    # done instead of guessing.
+    settled = [row for row in session_rows if row.status in {"finalizing", "assembled", "completed"}]
+    if settled:
+        return _upload_api_error(
+            "FINALIZE_IN_PROGRESS", "This project is already being finalized.", 409,
+            sessions=_upload_session_group_payload(session_rows),
+        )
+
+    # Some sets are already past the claim gate. Either another request is
+    # finalizing this group right now, or a previous attempt settled part of it.
+    # Either way the answer is "re-read the state", never "start again" - and
+    # the per-set payload is what lets the client see which sets are already
+    # done instead of guessing.
+    settled = [row for row in session_rows if row.status in {"finalizing", "assembled", "completed"}]
+    if settled:
+        return _upload_api_error(
+            "FINALIZE_IN_PROGRESS", "This project is already being finalized.", 409,
+            sessions=_upload_session_group_payload(session_rows),
+        )
+
+    # Not every set is byte-complete yet. The response carries every set's
+    # authoritative offset so the client resumes exactly the sets that need it
+    # and re-sends nothing for the ones that are already done.
+    incomplete = [
+        row for row in session_rows
+        if row.status != "active" or int(row.current_offset or 0) != int(row.expected_total_size or 0)
+    ]
+    if incomplete:
+        return _upload_api_error(
+            "INCOMPLETE_UPLOAD",
+            f"{len(incomplete)} of {len(session_rows)} content sets are not fully uploaded yet.",
+            409,
+            sessions=_upload_session_group_payload(session_rows),
+        )
+
+    if user:
+        max_pairs = get_plan_pairs_limit(user)
+        if max_pairs is not None and len(session_rows) > int(max_pairs):
+            # Refused BEFORE the claim, so a plan-limited request leaves every
+            # set 'active' and every uploaded byte exactly where it was.
+            return _upload_api_error(
+                "PAIR_LIMIT_REACHED",
+                f"Your current plan allows maximum {max_pairs} pairs per project.",
+                403,
+                sessions=_upload_session_group_payload(session_rows),
+            )
+
+    # THE atomic gate. All N or none.
+    claimed = UploadSession.query.filter(
+        UploadSession.id.in_(ids),
+        UploadSession.status == "active",
+        UploadSession.current_offset == UploadSession.expected_total_size,
+    ).update({UploadSession.status: "finalizing"}, synchronize_session=False)
+    if claimed != len(ids):
+        db.session.rollback()
+        fresh = [row for row in (UploadSession.query.get(i) for i in ids) if row]
+        if fresh and all(row.status == "completed" for row in fresh) and fresh[0].project_id:
+            return jsonify({
+                "success": True,
+                "session": _upload_session_payload(fresh[0]),
+                "sessions": _upload_session_group_payload(fresh),
+                "recovered_existing_completion": True,
+            })
+        return _upload_api_error(
+            "FINALIZE_IN_PROGRESS", "This project is already being finalized.", 409,
+            sessions=_upload_session_group_payload(fresh),
+        )
+    db.session.commit()
+    session_rows = [UploadSession.query.get(i) for i in ids]
+
+    return _finalize_assemble_and_validate(session_rows, user, admin)
 
 
 @app.route("/api/uploads/sessions/<int:session_id>/cancel", methods=["POST"])
