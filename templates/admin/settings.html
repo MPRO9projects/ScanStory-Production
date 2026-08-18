@@ -489,6 +489,7 @@
     </style>
 </head>
 <body class="ss-admin-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     <!-- Navbar -->
     <nav class="navbar">
         <a href="/admin/dashboard" class="navbar-brand">
@@ -521,9 +522,14 @@
     </div>
 
     <!-- Main Content -->
-    <div class="main-content">
+    <div class="main-content" id="main-content" role="main" tabindex="-1">
         <div class="page-header">
             <h1 class="page-title">System Settings</h1>
+            <p class="text-muted" style="margin-top:6px;font-size:13px;">
+                Each group below is either <strong>Editable</strong> (saved here and used by the app) or
+                <strong>Read-only</strong> (shown for reference; the running app takes the value from server
+                configuration). Nothing on this page is configurable in a way the app then ignores.
+            </p>
         </div>
         
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -548,10 +554,10 @@
         <div class="card tab-content" id="generalTab">
             <div class="card-header">
                 <h2 class="card-title">General Settings</h2>
-                <span class="badge badge-warning">Not active in V1</span>
+                <span class="badge badge-warning">Read-only &middot; managed by server</span>
             </div>
             <div class="alert alert-warning">
-                These fields are stored but not read anywhere else in ScanStory V1 yet - changing them here would have no effect on the live app, so the controls are shown read-only rather than implying they do something.
+                These values are stored but nothing in the running app reads them, so changing them here would have no effect. They are shown read-only rather than implying they do something. To change any of these, change the server configuration.
             </div>
 
             <div id="generalSettings" role="group" aria-label="General settings read-only">
@@ -614,7 +620,8 @@
         <div class="card tab-content" id="trialTab" style="display: none;">
             <div class="card-header">
                 <h2 class="card-title">Trial Settings</h2>
-                <button type="submit" form="trialForm" class="btn btn-primary">Save Changes</button>
+                <span class="badge badge-success">Editable</span>
+                <button type="submit" form="trialForm" class="btn btn-primary" data-busy-label="Saving&hellip;">Save Changes</button>
             </div>
             
             <form id="trialForm" method="POST" action="{{ url_for('admin_settings') }}">
@@ -645,10 +652,10 @@
         <div class="card tab-content" id="paymentTab" style="display: none;">
             <div class="card-header">
                 <h2 class="card-title">Payment Settings</h2>
-                <span class="badge badge-warning">Not active in V1</span>
+                <span class="badge badge-warning">Read-only &middot; managed by server</span>
             </div>
             <div class="alert alert-warning">
-                These toggles are not wired to the live Razorpay integration yet - the app currently reads its Razorpay/live-vs-test behavior from server environment configuration, not from these stored values. Shown read-only to avoid implying a switch here changes payment behavior.
+                Payment behaviour, including live-versus-test mode, is read from server configuration and not from these stored values. They are shown read-only so that a switch here cannot appear to change how payments are taken.
             </div>
 
             <div id="paymentSettings" role="group" aria-label="Payment settings read-only">
@@ -683,10 +690,10 @@
         <div class="card tab-content" id="securityTab" style="display: none;">
             <div class="card-header">
                 <h2 class="card-title">Security Settings</h2>
-                <span class="badge badge-warning">Not active in V1</span>
+                <span class="badge badge-warning">Read-only &middot; managed by server</span>
             </div>
             <div class="alert alert-warning">
-                These fields are not read anywhere else in ScanStory V1 yet (admin login lockout uses its own fixed policy, and there is no app-level session-timeout enforcement wired to this value). Shown read-only rather than implying a save here changes account security behavior.
+                Nothing in the running app reads these values: admin sign-in lockout uses its own fixed policy, and no session timeout is enforced from this setting. They are shown read-only rather than implying a save here changes account security.
             </div>
 
             <div id="securitySettings" role="group" aria-label="Security settings read-only">
@@ -730,6 +737,19 @@
     </div>
 
     <script>
+        // Real POST + redirect; without this the Save button looks inert.
+        document.addEventListener('DOMContentLoaded', function () {
+            var trialForm = document.getElementById('trialForm');
+            if (!trialForm) return;
+            trialForm.addEventListener('submit', function () {
+                var button = document.querySelector('button[form="trialForm"]');
+                if (!button || button.disabled) return;
+                button.disabled = true;
+                button.setAttribute('aria-busy', 'true');
+                button.innerHTML = button.getAttribute('data-busy-label') || 'Saving&hellip;';
+            });
+        });
+
         function toggleDropdown() {
             const dropdown = document.getElementById('userDropdown');
             dropdown.classList.toggle('show');

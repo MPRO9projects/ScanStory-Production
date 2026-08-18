@@ -422,6 +422,7 @@
 </head>
 
 <body class="ss-admin-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     <!-- Navbar -->
     <nav class="navbar">
         <a href="/admin/dashboard" class="navbar-brand">
@@ -454,7 +455,7 @@
     </div>
 
     <!-- Main Content -->
-    <div class="main-content">
+    <div class="main-content" id="main-content" role="main" tabindex="-1">
         <div class="page-header">
             <h1 class="page-title">Edit Plan: {{ plan.plan_name }}</h1>
             <div>
@@ -505,12 +506,12 @@
                 Editing this configuration can affect current and future entitlements differently. Project and scan limits are materialized when a plan is activated; pairs-per-project is read live by current project limits. Deactivating this plan removes it from new purchases only and does not delete historical subscriptions.
             </div>
             <div class="alert alert-warning" data-testid="v11-plan-editor-contract">
-                <strong>V1.1 plan policy status:</strong>
-                This form edits price, validity, project capacity, scan allowance and pairs per project.
+                <strong>Plan policy status:</strong>
+                This form edits price, validity, project capacity, scan allowance and content sets per story.
                 Plan family ({{ plan_family_label(plan.plan_family) }}), base storage allowance, media policy,
                 experience entitlements and lifecycle/revision status ({{ plan.lifecycle_status }} / rev {{ plan.plan_revision }})
                 are live SubscriptionPlan fields shown read-only here — no admin form writes them yet, so editing this
-                plan leaves them unchanged. Supported V1.1 experience labels are Direct QR, Detect Once and Tracked Overlay.
+                plan leaves them unchanged. Supported experience labels are Direct QR, Detect Once and Tracked Overlay.
             </div>
             <form method="POST" action="/admin/plans/{{ plan.id }}/edit">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
