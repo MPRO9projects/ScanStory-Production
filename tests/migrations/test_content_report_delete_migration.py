@@ -120,9 +120,15 @@ def _project(name):
         {"n": name},
     )
     shared_db.session.commit()
-    return shared_db.session.execute(
+    project_id = shared_db.session.execute(
         text("SELECT id FROM projects WHERE name = :n"), {"n": name}
     ).scalar()
+    # The SELECT above autobegins its own transaction that commit() never closes
+    # on its own - left open, it sits idle-in-transaction holding a read lock
+    # into whatever the caller does next, including an Alembic DDL call on a
+    # second connection. Close it out before returning.
+    shared_db.session.commit()
+    return project_id
 
 
 def _admin(email="moderator@example.com"):
@@ -130,9 +136,11 @@ def _admin(email="moderator@example.com"):
         text("INSERT INTO admins (email, password_hash) VALUES (:e, 'x')"), {"e": email}
     )
     shared_db.session.commit()
-    return shared_db.session.execute(
+    admin_id = shared_db.session.execute(
         text("SELECT id FROM admins WHERE email = :e"), {"e": email}
     ).scalar()
+    shared_db.session.commit()
+    return admin_id
 
 
 def _report(project_id, **overrides):
@@ -165,7 +173,9 @@ def _report(project_id, **overrides):
         values,
     )
     shared_db.session.commit()
-    return shared_db.session.execute(text("SELECT MAX(id) FROM content_reports")).scalar()
+    report_id = shared_db.session.execute(text("SELECT MAX(id) FROM content_reports")).scalar()
+    shared_db.session.commit()
+    return report_id
 
 
 def _project_id_column():
@@ -206,6 +216,11 @@ def test_upgrade_preserves_every_existing_report_row(migration_app):
         _report(first)
         _report(second, reason="SPAM", status="OPEN")
         before = shared_db.session.execute(text("SELECT COUNT(*) FROM content_reports")).scalar()
+        # Close out the read transaction this SELECT autobegins - on PostgreSQL an
+        # uncommitted session here sits idle-in-transaction holding AccessShareLock
+        # on content_reports, which then blocks Alembic's ALTER TABLE ... DROP
+        # CONSTRAINT (needs AccessExclusiveLock) on its own connection forever.
+        shared_db.session.commit()
 
         migrate_upgrade(revision=REPORT_REVISION)
 
@@ -367,7 +382,11 @@ def test_detached_report_keeps_all_reporter_metadata(migration_app):
 def test_upgrade_works_on_an_empty_content_reports_table(migration_app):
     with migration_app.app_context():
         migrate_upgrade(revision=PRIOR_REVISION)
-        assert shared_db.session.execute(text("SELECT COUNT(*) FROM content_reports")).scalar() == 0
+        empty_count = shared_db.session.execute(text("SELECT COUNT(*) FROM content_reports")).scalar()
+        # Same trailing-read leak as _project/_admin/_report - close the transaction
+        # this SELECT autobegins before Alembic's DDL runs on a second connection.
+        shared_db.session.commit()
+        assert empty_count == 0
 
         migrate_upgrade(revision=REPORT_REVISION)
 
