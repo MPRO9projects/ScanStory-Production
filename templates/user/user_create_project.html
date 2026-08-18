@@ -4570,7 +4570,7 @@
           // decision.action === 'retry'. We do NOT ask the server where it
           // got to first: re-sending the same bytes at the same offset is
           // idempotent by contract, so one request answers both "did you
-          // get it?" and "here it is again" — and on a 0.3 Mbps link that
+          // get it?" and "here it is again" — and on a very weak uplink that
           // saved round-trip is real time. If the server did receive it,
           // the reply is a duplicate-ignored with the true offset.
           if (attempt >= RESUMABLE_SHRINK_AFTER_ATTEMPTS) {
@@ -4756,7 +4756,7 @@
           // which is why stored.currentOffset is never read here.
           currentOffset: session.current_offset || 0,
           // Tuning hints DO survive a refresh — re-learning the link speed
-          // from scratch on a 0.3 Mbps connection wastes the first minute.
+          // from scratch on a very weak connection wastes the first minute.
           chunkBytes: stored?.chunkBytes || 0,
           smoothedBytesPerSecond: stored?.smoothedBytesPerSecond || 0,
           retryCount: stored?.retryCount || 0,
