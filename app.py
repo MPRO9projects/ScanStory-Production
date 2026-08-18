@@ -8997,7 +8997,17 @@ def handle_upload():
 # docs/development/resumable-upload-api-contract.md for the wire contract.
 # --------------------------------------------------------------------------------------------
 UPLOAD_SESSION_TTL_MINUTES = int(os.environ.get("SCANSTORY_UPLOAD_SESSION_TTL_MINUTES", "1440"))
-UPLOAD_SESSION_ABANDONED_STALE_MINUTES = int(os.environ.get("SCANSTORY_UPLOAD_SESSION_ABANDONED_STALE_MINUTES", "120"))
+# LONG-PAUSE RECOVERY (Phase 2). Both windows below are INACTIVITY-based, so
+# the SHORTER of the two is what actually bounds how long a paused upload
+# survives - and at the old default of 120 it silently undercut the 1440-minute
+# headline TTL by a factor of twelve. A creator told "resume when you're ready"
+# lost their bytes after two hours. The default now matches the TTL so the
+# advertised window is the real one; an operator under temp-storage pressure can
+# still set it lower deliberately, and genuinely abandoned uploads are still
+# reaped, just after a day of true inactivity rather than two hours.
+UPLOAD_SESSION_ABANDONED_STALE_MINUTES = int(
+    os.environ.get("SCANSTORY_UPLOAD_SESSION_ABANDONED_STALE_MINUTES", str(UPLOAD_SESSION_TTL_MINUTES))
+)
 UPLOAD_SESSION_CLEANUP_BATCH_LIMIT = int(os.environ.get("SCANSTORY_UPLOAD_CLEANUP_BATCH_LIMIT", "200"))
 RESUMABLE_UPLOAD_CHUNK_MAX_BYTES = int(os.environ.get("SCANSTORY_RESUMABLE_CHUNK_MAX_BYTES", str(1024 * 1024)))
 if RESUMABLE_UPLOAD_CHUNK_MAX_BYTES <= 0:
@@ -9631,6 +9641,21 @@ def upload_session_status(session_id):
     session_row = UploadSession.query.get(session_id)
     if not session_row or not _upload_session_owned(session_row, user, admin):
         return _upload_api_error("NOT_FOUND", "Upload session not found.", 404)
+    # LIVENESS TOUCH (Phase 2). An owner reading their own session's status is
+    # proof the creator is still there, so it slides the same INACTIVITY
+    # deadline an accepted chunk slides. This is what keeps a content set that
+    # finished its bytes early alive while its siblings are still crawling: in
+    # a three-set upload on a 0.15 Mbps link, set 1 goes quiet for many hours
+    # through no fault of its own, and reaping it for "inactivity" while the
+    # group is actively progressing would destroy bytes the creator already
+    # paid for in time. An already-expired session is never resurrected here.
+    # ponytail: no separate keepalive endpoint - the client must read this
+    # route anyway to honour server-authoritative state, so the read is the
+    # keepalive.
+    now = get_utc_now()
+    if session_row.status == "active" and session_row.expires_at >= now:
+        session_row.expires_at = now + timedelta(minutes=UPLOAD_SESSION_TTL_MINUTES)
+        db.session.commit()
     response = jsonify({"success": True, "session": _upload_session_payload(session_row)})
     response.headers["Cache-Control"] = "no-store"
     return response
