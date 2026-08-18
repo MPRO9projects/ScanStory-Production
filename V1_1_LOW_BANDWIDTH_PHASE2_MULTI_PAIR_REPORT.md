@@ -28,8 +28,10 @@ branch --show-current`, `git rev-parse HEAD`).
 ## 2. Ending HEAD
 
 ```
-66393e1673462db28a90d1a36b3df35a17b5905e
+64fd97530a780a2a1a6e972277adae4421d2e53f
 ```
+
+(`66393e1` is the last code/doc commit; `64fd975` adds this report.)
 
 ## 3. Commits
 
@@ -40,6 +42,7 @@ branch --show-current`, `git rev-parse HEAD`).
 | `05aaee7` | Upload every content set resumably, and say so honestly |
 | `1b8b50b` | Cover the 25 multi-content-set scenarios, re-point two shape guards |
 | `66393e1` | Measure the larger-file claims, document the new contract |
+| `64fd975` | Report the multi-content-set upload pass |
 
 Split so each is independently revertable. The long-pause default is its own
 commit precisely because it is a policy knob an operator may want to reason
@@ -58,6 +61,9 @@ about separately from the architecture.
  tests/integration/test_multi_pair_resumable_upload.py | 995 ++++++++++++++++
  8 files changed, 2937 insertions(+), 266 deletions(-)
 ```
+
+Plus `V1_1_LOW_BANDWIDTH_PHASE2_MULTI_PAIR_REPORT.md` (this file), for nine in
+total across the range.
 
 `app.py`'s large number is mostly the one generalised finalize function being
 rewritten in place rather than new surface: the net new server code is the
@@ -704,21 +710,14 @@ across the whole range.
 
 ```
 $ git status --short
-?? .agents/
-?? SCANSTORY_SAAS_AUDIT.md
-?? SCANSTORY_V1_FEATURE_PARITY_AUDIT.md
-?? SCANSTORY_V1_REPOSITORY_LINEAGE_AUDIT.md
-?? V1_1_LOW_BANDWIDTH_PHASE2_MULTI_PAIR_REPORT.md
-?? claude/
-?? full-test-output.txt
-?? gate-jr/
-?? tools/
-?? universal-claude-setup/
+$ git status
+On branch agent/v1.1-platform-admin
+nothing to commit, working tree clean
 ```
 
-Every tracked file from this pass is committed. The remaining entries are
-pre-existing untracked artefacts that were present at the starting HEAD, plus
-this report.
+Empty. Every file this pass touched is committed and nothing is left behind -
+no stray scratch files, no uncommitted edits. `git diff --name-only
+29eb9fa..HEAD` lists exactly the nine intended files and nothing else.
 
 ## 31. Remaining limitations
 
