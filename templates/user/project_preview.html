@@ -398,6 +398,8 @@
                     {% if pair.image_filename %}
                     <img src="{{ url_for('serve_image', project_id=project.id, image_id=pair.pair_index) }}" 
                          class="w-full h-full object-cover"
+                         loading="lazy"
+                         decoding="async"
                          onerror="this.style.display='none'">
                     <div class="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-3">
                         <a href="{{ url_for('serve_image', project_id=project.id, image_id=pair.pair_index) }}" download
@@ -417,6 +419,7 @@
                     {% if pair.video_filename %}
                     <video src="{{ url_for('serve_video', project_id=project.id, image_id=pair.pair_index) }}" 
                            class="w-full h-full object-cover"
+                           preload="metadata"
                            controls></video>
                     <div class="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition">
                         <a href="{{ url_for('serve_video', project_id=project.id, image_id=pair.pair_index) }}" download

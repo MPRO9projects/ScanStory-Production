@@ -2008,9 +2008,29 @@ def test_overlay_video_has_native_loop_enabled():
     controlsList/aria-hidden to the same tag afterward, so this now matches the updated tag."""
     html = _scanner_html()
     assert (
-        '<video id="overlay" autoplay playsinline loop preload="auto" disablePictureInPicture\n'
+        '<video id="overlay" autoplay playsinline loop preload="metadata" disablePictureInPicture\n'
         '        controlsList="nodownload nofullscreen noremoteplayback" aria-hidden="true"></video>'
     ) in html
+
+
+def test_scanner_target_guide_prioritizes_first_target_only():
+    html = _scanner_html()
+    target_start = html.index('<div id="targetGuide"')
+    target_end = html.index('{% if targets | length > 6 %}', target_start)
+    target_block = html[target_start:target_end]
+    assert 'loading="{% if loop.first %}eager{% else %}lazy{% endif %}"' in target_block
+    assert 'decoding="async"' in target_block
+    assert '{% if loop.first %}fetchpriority="high"{% endif %}' in target_block
+
+
+def test_preview_media_uses_lazy_images_and_metadata_video_preload():
+    for html in (
+        _project_preview_html(),
+        Path("templates/admin/project_preview.html").read_text(encoding="utf-8", errors="ignore"),
+    ):
+        assert 'loading="lazy"' in html
+        assert 'decoding="async"' in html
+        assert 'preload="metadata"' in html
 
 
 def test_video_ended_does_not_drop_tracking():

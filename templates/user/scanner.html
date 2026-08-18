@@ -905,7 +905,10 @@
            class="{% if targets | length == 1 %}single{% elif targets | length > 6 %}many{% else %}gallery{% endif %}">
         {% for target in targets %}
         <figure class="target-card{% if loop.index > 6 %} target-extra{% endif %}">
-          <img src="{{ target.image_url }}" alt="{{ target.label }}" loading="lazy">
+          <img src="{{ target.image_url }}" alt="{{ target.label }}"
+               loading="{% if loop.first %}eager{% else %}lazy{% endif %}"
+               decoding="async"
+               {% if loop.first %}fetchpriority="high"{% endif %}>
           <figcaption>{{ target.label }}</figcaption>
         </figure>
         {% endfor %}
@@ -938,7 +941,7 @@
     <video id="cam" autoplay playsinline muted></video>
 
     <div id="overlayWrap">
-      <video id="overlay" autoplay playsinline loop preload="auto" disablePictureInPicture
+      <video id="overlay" autoplay playsinline loop preload="metadata" disablePictureInPicture
         controlsList="nodownload nofullscreen noremoteplayback" aria-hidden="true"></video>
     </div>
     <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" id="wm-logo" alt="ScanStory">
