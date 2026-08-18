@@ -21,7 +21,7 @@ integration HEAD (`da25e648`) when work began, as stated in the task brief and r
 
 ## 3. Ending HEAD
 
-`f6004395a3d952790898495ba839f50ed0f818f2`
+`6a5f4f6473542ed1ddead40e5b80103ffd4a7dde`
 
 ## 4. Commits
 
@@ -30,7 +30,7 @@ integration HEAD (`da25e648`) when work began, as stated in the task brief and r
 | `7da3013` | Make Creator story state visible and repair feedback honest |
 | `60cd663` | Unify the admin shell and speak operational language |
 | `f2e6d48` | Give every screen a landmark, a skip link and named controls |
-| `f600439` | Restore admin nav on two pages and certify the pass |
+| `6a5f4f6` | Restore admin nav on two pages and certify the pass |
 
 Four commits, split by concern rather than by file: one Creator-surface commit, one admin-console
 commit, one cross-cutting accessibility commit, and one closing commit carrying the last hierarchy
