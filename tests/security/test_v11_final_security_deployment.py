@@ -233,4 +233,23 @@ def test_scanner_page_receives_compatible_security_headers(client, project_with_
     assert "camera=(self)" in response.headers["Permissions-Policy"]
     assert "blob:" in header
     assert "'wasm-unsafe-eval'" in header
+    assert "'unsafe-eval'" in header
+    assert "connect-src" in header and "data:" in header
     assert "https://checkout.razorpay.com" in header
+
+
+def test_opencv_eval_csp_exception_is_scanner_scoped(client, project_with_pair):
+    project, _pair = project_with_pair
+
+    normal = client.get("/")
+    scanner = client.get(f"/scanner/{project.id}")
+
+    normal_header = normal.headers.get("Content-Security-Policy-Report-Only") or normal.headers.get("Content-Security-Policy")
+    scanner_header = scanner.headers.get("Content-Security-Policy-Report-Only") or scanner.headers.get("Content-Security-Policy")
+    assert normal.status_code == 200
+    assert scanner.status_code == 200
+    assert "'unsafe-eval'" not in normal_header
+    assert "'unsafe-eval'" in scanner_header
+    assert "'wasm-unsafe-eval'" in scanner_header
+    assert "connect-src" in scanner_header and "data:" in scanner_header
+    assert not any(part.startswith("connect-src") and "data:" in part for part in normal_header.split(";"))
