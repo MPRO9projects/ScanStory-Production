@@ -82,6 +82,126 @@ def test_duplicate_enqueue_returns_active_job(app_module, db_session, normal_use
     assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 1
 
 
+def test_completed_job_allows_explicit_reprocess_attempt(app_module, db_session, normal_user, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "fake")
+    monkeypatch.delenv("SCANSTORY_QUEUE_REQUIRED", raising=False)
+    monkeypatch.delenv("SCANSTORY_PRODUCTION", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+
+    first, first_created = app_module.enqueue_project_pair_processing(project.id)
+    first.status = "completed"
+    first.completed_at = app_module.dt.utcnow()
+    db_session.commit()
+
+    second, second_created = app_module.enqueue_project_pair_processing(project.id, attempt_scope="reprocess")
+
+    assert first_created is True
+    assert second_created is True
+    assert second.id != first.id
+    assert second.status == "queued"
+    assert second.queue_job_id == f"fake-{second.id}"
+    assert second.idempotency_key.startswith(f"process_project_pairs:project:{project.id}:pair:-:attempt:")
+    assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 2
+
+
+@pytest.mark.parametrize("active_status", ["queued", "processing", "running", "retrying"])
+def test_explicit_reprocess_reuses_active_attempt(app_module, db_session, normal_user, active_status):
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    first, _created = app_module.enqueue_project_pair_processing(project.id)
+    first.status = active_status
+    first.queue_job_id = f"active-{first.id}"
+    db_session.commit()
+
+    second, second_created = app_module.enqueue_project_pair_processing(project.id, attempt_scope="reprocess")
+
+    assert second_created is False
+    assert second.id == first.id
+    assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 1
+
+
+def test_active_attempt_without_queue_id_is_reused_not_enqueued_again(
+    app_module, db_session, normal_user, monkeypatch
+):
+    import processing_queue
+
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    job, _created = app_module.enqueue_project_pair_processing(project.id)
+    job.queue_job_id = None
+    job.status = "queued"
+    db_session.commit()
+
+    def duplicate_transport_should_not_run(_job):
+        raise AssertionError("duplicate active request must not enqueue the same job twice")
+
+    monkeypatch.setattr(processing_queue, "_enqueue_transport", duplicate_transport_should_not_run)
+
+    reused, created = app_module.enqueue_project_pair_processing(project.id, attempt_scope="reprocess")
+
+    assert created is False
+    assert reused.id == job.id
+    assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 1
+
+
+def test_failed_job_allows_explicit_reprocess_and_preserves_history(app_module, db_session, normal_user, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "fake")
+    monkeypatch.delenv("SCANSTORY_QUEUE_REQUIRED", raising=False)
+    monkeypatch.delenv("SCANSTORY_PRODUCTION", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    failed, _created = app_module.enqueue_project_pair_processing(project.id)
+    failed.status = "failed"
+    failed.safe_error_code = "SOURCE_MISSING"
+    failed.completed_at = app_module.dt.utcnow()
+    db_session.commit()
+
+    retry, retry_created = app_module.enqueue_project_pair_processing(project.id, attempt_scope="reprocess")
+
+    assert retry_created is True
+    assert retry.id != failed.id
+    assert app_module.ProcessingJob.query.get(failed.id).safe_error_code == "SOURCE_MISSING"
+    assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 2
+
+
+def test_creator_reprocess_route_schedules_new_attempt_after_completed_job(
+    client, app_module, db_session, login_user, monkeypatch
+):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "fake")
+    monkeypatch.delenv("SCANSTORY_QUEUE_REQUIRED", raising=False)
+    monkeypatch.delenv("SCANSTORY_PRODUCTION", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    project, pair = _make_project_pair(app_module, db_session, owner_user=login_user)
+    completed, _created = app_module.enqueue_project_pair_processing(project.id)
+    completed.status = "completed"
+    completed.completed_at = app_module.dt.utcnow()
+    db_session.commit()
+
+    response = client.post(f"/projects/{project.id}/reprocess")
+
+    assert response.status_code == 302
+    jobs = app_module.ProcessingJob.query.filter_by(project_id=project.id).order_by(app_module.ProcessingJob.id.asc()).all()
+    assert [job.status for job in jobs] == ["completed", "queued"]
+    assert jobs[1].idempotency_key.startswith(f"process_project_pairs:project:{project.id}:pair:-:attempt:")
+    db_session.refresh(pair)
+    assert pair.processing_status == "processing"
+    assert pair.feature_extraction_status == "extracting"
+
+
+def test_creator_double_reprocess_reuses_active_attempt(client, app_module, db_session, login_user, monkeypatch):
+    monkeypatch.setenv("SCANSTORY_QUEUE_MODE", "fake")
+    monkeypatch.delenv("SCANSTORY_QUEUE_REQUIRED", raising=False)
+    monkeypatch.delenv("SCANSTORY_PRODUCTION", raising=False)
+    monkeypatch.delenv("REDIS_URL", raising=False)
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=login_user)
+
+    first = client.post(f"/projects/{project.id}/reprocess")
+    second = client.post(f"/projects/{project.id}/reprocess")
+
+    assert first.status_code == 302
+    assert second.status_code == 302
+    assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 1
+
+
 def test_enqueue_failure_records_safe_failed_state(app_module, db_session, normal_user, monkeypatch):
     project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
     monkeypatch.setenv("SCANSTORY_QUEUE_REQUIRED", "1")

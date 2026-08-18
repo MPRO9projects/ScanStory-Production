@@ -110,10 +110,32 @@ def active_project_job(project_id, job_type="process_project_pairs"):
     ).order_by(ProcessingJob.created_at.desc()).first()
 
 
-def create_processing_job(job_type, project_id=None, pair_id=None, owner_user_id=None, owner_admin_id=None, max_attempts=None):
+def _project_job_idempotency_key(job_type, project_id=None, pair_id=None, attempt_scope="initial"):
+    base = f"{job_type}:project:{project_id or '-'}:pair:{pair_id or '-'}"
+    if attempt_scope == "reprocess":
+        return f"{base}:attempt:{uuid.uuid4().hex}"
+    return base
+
+
+def _lock_project_for_job(project_id):
+    if not project_id:
+        return None
+    return Project.query.filter(Project.id == project_id).with_for_update().first()
+
+
+def create_processing_job(
+    job_type,
+    project_id=None,
+    pair_id=None,
+    owner_user_id=None,
+    owner_admin_id=None,
+    max_attempts=None,
+    attempt_scope="initial",
+):
     if job_type not in QUEUE_JOB_TYPES:
         raise InvalidJobType("unknown processing job type")
     if project_id:
+        _lock_project_for_job(project_id)
         existing = active_project_job(project_id, job_type)
         if existing:
             return existing, False
@@ -126,7 +148,7 @@ def create_processing_job(job_type, project_id=None, pair_id=None, owner_user_id
         pair_id=pair_id,
         owner_user_id=owner_user_id,
         owner_admin_id=owner_admin_id,
-        idempotency_key=f"{job_type}:project:{project_id or '-'}:pair:{pair_id or '-'}",
+        idempotency_key=_project_job_idempotency_key(job_type, project_id, pair_id, attempt_scope),
         max_attempts=max_attempts or int(os.environ.get("RQ_MAX_RETRIES", "3")),
         queued_at=get_utc_now(),
         available_at=get_utc_now(),
@@ -170,15 +192,23 @@ def _enqueue_transport(job):
         raise QueueUnavailable("queue unavailable") from exc
 
 
-def enqueue_processing_job(job_type, project_id=None, pair_id=None, owner_user_id=None, owner_admin_id=None):
+def enqueue_processing_job(
+    job_type,
+    project_id=None,
+    pair_id=None,
+    owner_user_id=None,
+    owner_admin_id=None,
+    attempt_scope="initial",
+):
     job, created = create_processing_job(
         job_type,
         project_id=project_id,
         pair_id=pair_id,
         owner_user_id=owner_user_id,
         owner_admin_id=owner_admin_id,
+        attempt_scope=attempt_scope,
     )
-    if not created and job.queue_job_id:
+    if not created:
         return job, False
     if queue_required() and not queue_available():
         job.status = "failed"
@@ -209,11 +239,11 @@ def enqueue_processing_job(job_type, project_id=None, pair_id=None, owner_user_i
         raise QueueUnavailable("queue unavailable") from exc
 
 
-def enqueue_project_pair_processing(project_id):
+def enqueue_project_pair_processing(project_id, attempt_scope="initial"):
     project = Project.query.get(project_id)
     if not project:
         raise ValueError("project not found")
-    return enqueue_processing_job("process_project_pairs", project_id=project.id, **_owner_fields(project))
+    return enqueue_processing_job("process_project_pairs", project_id=project.id, attempt_scope=attempt_scope, **_owner_fields(project))
 
 
 def mark_job_processing(job):
