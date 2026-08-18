@@ -2192,7 +2192,18 @@ class MigrationCheckpoint(db.Model):
 # ---------------------------------------------------------------------
 # Resumable uploads (V1 Wave 5)
 # ---------------------------------------------------------------------
-UPLOAD_SESSION_PURPOSES = {"project_pair"}
+# "project_pair"        - a standalone session that finalizes into its own
+#                         new single-pair Project (the V1 Wave 5 shape).
+# "project_content_set" - one content set of a MULTI-content-set project. It
+#                         may only be finalized through the project-finalize
+#                         route together with its siblings; the single-session
+#                         finalize route refuses it, so a client bug cannot
+#                         turn content set 2 of 3 into a stray one-pair
+#                         project. This is a new allowed VALUE in the existing
+#                         String(30) `purpose` column - no schema change, and
+#                         no CHECK constraint covers `purpose`, so no
+#                         migration.
+UPLOAD_SESSION_PURPOSES = {"project_pair", "project_content_set"}
 UPLOAD_SESSION_STATUSES = {
     "active",       # accepting chunks
     "finalizing",   # atomic transition target while finalize is assembling/validating

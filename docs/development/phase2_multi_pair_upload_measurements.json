@@ -1,0 +1,333 @@
+{
+  "single_set": [
+    {
+      "size_bytes": 5242880,
+      "size_mb": 5.0,
+      "mbps": 0.6,
+      "completed": true,
+      "server_offset_correct": true,
+      "final_bytes_identical": true,
+      "requests": 11,
+      "retries": 0,
+      "retransmitted_bytes": 0,
+      "chunk_bytes_first": 131072,
+      "chunk_bytes_final": 524288,
+      "chunk_size_steps": 2,
+      "chunk_evolution": [
+        131072,
+        524288
+      ],
+      "analytic_duration_seconds": 71.6,
+      "analytic_duration_minutes": 1.2,
+      "peak_traced_memory_kb": 4575.3,
+      "session_still_active": true,
+      "inactivity_deadline_extended": true,
+      "session_id": 1
+    },
+    {
+      "size_bytes": 20971520,
+      "size_mb": 20.0,
+      "mbps": 0.6,
+      "completed": true,
+      "server_offset_correct": true,
+      "final_bytes_identical": true,
+      "requests": 41,
+      "retries": 0,
+      "retransmitted_bytes": 0,
+      "chunk_bytes_first": 131072,
+      "chunk_bytes_final": 524288,
+      "chunk_size_steps": 2,
+      "chunk_evolution": [
+        131072,
+        524288
+      ],
+      "analytic_duration_seconds": 285.8,
+      "analytic_duration_minutes": 4.8,
+      "peak_traced_memory_kb": 16737.2,
+      "session_still_active": true,
+      "inactivity_deadline_extended": true,
+      "session_id": 2
+    },
+    {
+      "size_bytes": 20971520,
+      "size_mb": 20.0,
+      "mbps": 0.3,
+      "completed": true,
+      "server_offset_correct": true,
+      "final_bytes_identical": true,
+      "requests": 81,
+      "retries": 0,
+      "retransmitted_bytes": 0,
+      "chunk_bytes_first": 131072,
+      "chunk_bytes_final": 262144,
+      "chunk_size_steps": 2,
+      "chunk_evolution": [
+        131072,
+        262144
+      ],
+      "analytic_duration_seconds": 571.4,
+      "analytic_duration_minutes": 9.5,
+      "peak_traced_memory_kb": 10258.1,
+      "session_still_active": true,
+      "inactivity_deadline_extended": true,
+      "session_id": 3
+    },
+    {
+      "size_bytes": 5242880,
+      "size_mb": 5.0,
+      "mbps": 1.0,
+      "completed": true,
+      "server_offset_correct": true,
+      "final_bytes_identical": true,
+      "requests": 7,
+      "retries": 0,
+      "retransmitted_bytes": 0,
+      "chunk_bytes_first": 131072,
+      "chunk_bytes_final": 851968,
+      "chunk_size_steps": 2,
+      "chunk_evolution": [
+        131072,
+        851968
+      ],
+      "analytic_duration_seconds": 43.0,
+      "analytic_duration_minutes": 0.7,
+      "peak_traced_memory_kb": 7005.1,
+      "session_still_active": true,
+      "inactivity_deadline_extended": true,
+      "session_id": 4
+    },
+    {
+      "size_bytes": 5242880,
+      "size_mb": 5.0,
+      "mbps": 0.3,
+      "completed": true,
+      "server_offset_correct": true,
+      "final_bytes_identical": true,
+      "requests": 21,
+      "retries": 0,
+      "retransmitted_bytes": 0,
+      "chunk_bytes_first": 131072,
+      "chunk_bytes_final": 262144,
+      "chunk_size_steps": 2,
+      "chunk_evolution": [
+        131072,
+        262144
+      ],
+      "analytic_duration_seconds": 143.0,
+      "analytic_duration_minutes": 2.4,
+      "peak_traced_memory_kb": 5673.1,
+      "session_still_active": true,
+      "inactivity_deadline_extended": true,
+      "session_id": 5
+    },
+    {
+      "size_bytes": 52428800,
+      "size_mb": 50.0,
+      "mbps": 0.6,
+      "completed": true,
+      "server_offset_correct": true,
+      "final_bytes_identical": true,
+      "requests": 101,
+      "retries": 0,
+      "retransmitted_bytes": 0,
+      "chunk_bytes_first": 131072,
+      "chunk_bytes_final": 524288,
+      "chunk_size_steps": 2,
+      "chunk_evolution": [
+        131072,
+        524288
+      ],
+      "analytic_duration_seconds": 714.2,
+      "analytic_duration_minutes": 11.9,
+      "peak_traced_memory_kb": 22264.2,
+      "session_still_active": true,
+      "inactivity_deadline_extended": true,
+      "session_id": 6
+    }
+  ],
+  "multi_set": [
+    {
+      "post_finalize_sets": [
+        {
+          "set_index": 0,
+          "status": "failed",
+          "assembled_bytes_on_disk": 0,
+          "expected_total_size": 5242880
+        },
+        {
+          "set_index": 1,
+          "status": "active",
+          "assembled_bytes_on_disk": 5242880,
+          "expected_total_size": 5242880
+        },
+        {
+          "set_index": 2,
+          "status": "active",
+          "assembled_bytes_on_disk": 5242880,
+          "expected_total_size": 5242880
+        }
+      ],
+      "post_finalize_siblings_preserved": true,
+      "set_count": 3,
+      "set_size_mb": 5.0,
+      "mbps": 0.6,
+      "sets": [
+        {
+          "size_bytes": 5242880,
+          "size_mb": 5.0,
+          "mbps": 0.6,
+          "completed": true,
+          "server_offset_correct": true,
+          "final_bytes_identical": true,
+          "requests": 11,
+          "retries": 0,
+          "retransmitted_bytes": 0,
+          "chunk_bytes_first": 131072,
+          "chunk_bytes_final": 524288,
+          "chunk_size_steps": 2,
+          "chunk_evolution": [
+            131072,
+            524288
+          ],
+          "analytic_duration_seconds": 71.6,
+          "analytic_duration_minutes": 1.2,
+          "peak_traced_memory_kb": 6020.7,
+          "session_still_active": true,
+          "inactivity_deadline_extended": true,
+          "session_id": 7
+        },
+        {
+          "size_bytes": 5242880,
+          "size_mb": 5.0,
+          "mbps": 0.6,
+          "completed": true,
+          "server_offset_correct": true,
+          "final_bytes_identical": true,
+          "requests": 11,
+          "retries": 0,
+          "retransmitted_bytes": 0,
+          "chunk_bytes_first": 131072,
+          "chunk_bytes_final": 524288,
+          "chunk_size_steps": 2,
+          "chunk_evolution": [
+            131072,
+            524288
+          ],
+          "analytic_duration_seconds": 71.6,
+          "analytic_duration_minutes": 1.2,
+          "peak_traced_memory_kb": 6015.0,
+          "session_still_active": true,
+          "inactivity_deadline_extended": true,
+          "session_id": 8
+        },
+        {
+          "size_bytes": 5242880,
+          "size_mb": 5.0,
+          "mbps": 0.6,
+          "completed": true,
+          "server_offset_correct": true,
+          "final_bytes_identical": true,
+          "requests": 11,
+          "retries": 0,
+          "retransmitted_bytes": 0,
+          "chunk_bytes_first": 131072,
+          "chunk_bytes_final": 524288,
+          "chunk_size_steps": 2,
+          "chunk_evolution": [
+            131072,
+            524288
+          ],
+          "analytic_duration_seconds": 71.6,
+          "analytic_duration_minutes": 1.2,
+          "peak_traced_memory_kb": 6027.0,
+          "session_still_active": true,
+          "inactivity_deadline_extended": true,
+          "session_id": 9
+        }
+      ],
+      "total_mb": 15.0,
+      "analytic_total_minutes": 3.6,
+      "sets_needing_resend_after_reconcile": 0,
+      "all_sets_intact": true,
+      "finalize_status": 422,
+      "finalize_code": "VIDEO_VALIDATION_FAILED"
+    },
+    {
+      "post_finalize_sets": [
+        {
+          "set_index": 0,
+          "status": "failed",
+          "assembled_bytes_on_disk": 0,
+          "expected_total_size": 20971520
+        },
+        {
+          "set_index": 1,
+          "status": "active",
+          "assembled_bytes_on_disk": 20971520,
+          "expected_total_size": 20971520
+        }
+      ],
+      "post_finalize_siblings_preserved": true,
+      "set_count": 2,
+      "set_size_mb": 20.0,
+      "mbps": 0.3,
+      "sets": [
+        {
+          "size_bytes": 20971520,
+          "size_mb": 20.0,
+          "mbps": 0.3,
+          "completed": true,
+          "server_offset_correct": true,
+          "final_bytes_identical": true,
+          "requests": 81,
+          "retries": 0,
+          "retransmitted_bytes": 0,
+          "chunk_bytes_first": 131072,
+          "chunk_bytes_final": 262144,
+          "chunk_size_steps": 2,
+          "chunk_evolution": [
+            131072,
+            262144
+          ],
+          "analytic_duration_seconds": 571.4,
+          "analytic_duration_minutes": 9.5,
+          "peak_traced_memory_kb": 8274.9,
+          "session_still_active": true,
+          "inactivity_deadline_extended": true,
+          "session_id": 10
+        },
+        {
+          "size_bytes": 20971520,
+          "size_mb": 20.0,
+          "mbps": 0.3,
+          "completed": true,
+          "server_offset_correct": true,
+          "final_bytes_identical": true,
+          "requests": 81,
+          "retries": 0,
+          "retransmitted_bytes": 0,
+          "chunk_bytes_first": 131072,
+          "chunk_bytes_final": 262144,
+          "chunk_size_steps": 2,
+          "chunk_evolution": [
+            131072,
+            262144
+          ],
+          "analytic_duration_seconds": 571.4,
+          "analytic_duration_minutes": 9.5,
+          "peak_traced_memory_kb": 9949.2,
+          "session_still_active": true,
+          "inactivity_deadline_extended": true,
+          "session_id": 11
+        }
+      ],
+      "total_mb": 40.0,
+      "analytic_total_minutes": 19.0,
+      "sets_needing_resend_after_reconcile": 0,
+      "all_sets_intact": true,
+      "finalize_status": 422,
+      "finalize_code": "VIDEO_VALIDATION_FAILED"
+    }
+  ],
+  "workdir": "C:\\Users\\Lenovo\\AppData\\Local\\Temp\\scanstory_phase2_measure_q2m4gipt"
+}
