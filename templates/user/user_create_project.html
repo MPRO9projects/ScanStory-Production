@@ -3760,9 +3760,15 @@
     }
 
     /* ===================== Upload states =====================
-       Nine visible states, all driven off work the uploader was already doing:
-       preparing / uploading / slow / retrying / interrupted / resuming / uploaded
-       (bytes are across, server is assembling) / processing / ready / failed.
+       Eleven visible states, all driven off work the uploader was already doing:
+       preparing / uploading / slow / retrying / interrupted / resuming / paused
+       (bounded automatic retries spent; the session and its confirmed bytes are
+       intact and waiting) / uploaded (bytes are across, server is assembling) /
+       processing / ready / failed.
+
+       "paused" is deliberately NOT a transfer state: the stall watch must not
+       flag a pause it caused. And "uploaded" onward the creator is free to
+       leave — processing runs in RQ on the server, not in this tab.
 
        "Slow" is deliberately qualitative. We never quote a required bandwidth, because
        any number we printed would be wrong for somebody. */
@@ -3772,7 +3778,9 @@
       slow: 'Slow connection detected. This is taking a while, but the upload is still going — you can leave this tab open.',
       retrying: 'Retrying the last step. Nothing you already uploaded is lost.',
       interrupted: 'Upload interrupted. Waiting for your connection to come back — it will pick up where it stopped.',
-      resuming: 'Connection is back. Resuming from where the upload stopped.',
+      resuming: 'Connection restored. Resuming upload…',
+      paused: 'Upload paused. Resume when you’re ready — everything already uploaded is safe.',
+      uploaded: 'Your upload is complete. Processing continues automatically.',
       failed: 'Upload failed. You can start it again — your files are still selected.',
       ready: 'Your ScanStory is ready.'
     };
@@ -3889,6 +3897,29 @@
       updateFormFields();
     }
 
+    /* Paused is a resting state, not a failure state. resetUploadSubmit()
+       re-enables the form (that IS the resume affordance — a second submit
+       reads the saved session, asks the server for its confirmed offset and
+       carries on), so all this adds is honest labelling. */
+    function pauseUploadForNetwork(submitBtn) {
+      uploadPausedForNetwork = true;
+      resetUploadSubmit(submitBtn);
+      if (submitBtn) submitBtn.innerHTML = '<i class="fas fa-rotate-right"></i> Resume upload';
+    }
+
+    // The browser tells us when the link is back, so a paused upload can
+    // pick itself up without the creator watching for it. Bounded, because
+    // a flapping connection must not become an infinite resume loop.
+    window.addEventListener('online', () => {
+      if (!uploadPausedForNetwork || uploadActive) return;
+      if (uploadAutoResumeCount >= UPLOAD_AUTO_RESUME_LIMIT) return;
+      uploadAutoResumeCount += 1;
+      setUploadProgress('Resuming upload', 0, 'Connection restored. Resuming upload…', '', 'resuming');
+      const form = document.getElementById('projectForm');
+      if (form?.requestSubmit) form.requestSubmit();
+      else document.getElementById('submitBtn')?.click();
+    });
+
     function enableUploadNavigationWarning() {
       if (uploadBeforeUnloadActive) return;
       uploadBeforeUnloadActive = true;
@@ -3960,13 +3991,183 @@
       fd.append(`marker_${index}_display_orientation`, (pair.originalWidth >= pair.originalHeight) ? 'landscape' : 'portrait');
     }
 
-    const RESUMABLE_UPLOAD_CHUNK_SIZE = 1024 * 1024;
-    const RESUMABLE_UPLOAD_STORAGE_KEY = 'scanstory.resumableUpload.v1';
+    /* ============ Extreme-low-bandwidth resumable upload ============
+       Design invariant: every byte the server has confirmed stays confirmed.
+       Slow is acceptable. Restarting from zero after a recoverable failure
+       is not. Everything below exists to serve that one sentence.
+
+       One chunk in flight at a time, always. Parallel chunks on a weak
+       mobile link buy nothing and cost a retry storm, so the only thing
+       tuned here is how big a single sequential chunk is. */
+    const RESUMABLE_CHUNK_MIN_BYTES = 128 * 1024;
+    const RESUMABLE_CHUNK_MAX_BYTES = 5 * 1024 * 1024;
+    const RESUMABLE_CHUNK_STEP_BYTES = 64 * 1024;
+    // Aim for a chunk that takes roughly this long: short enough that a
+    // dropped connection loses little, long enough that per-request
+    // overhead stays a rounding error.
+    const RESUMABLE_CHUNK_TARGET_SECONDS = 8;
+    // Newest-sample weight for the throughput EWMA. Deliberately low: one
+    // lucky or unlucky chunk must not resize the next one.
+    const RESUMABLE_THROUGHPUT_SMOOTHING = 0.25;
+    // Only resize when the smoothed target is at least this far from the
+    // current size. Pure anti-oscillation hysteresis.
+    const RESUMABLE_CHUNK_RESIZE_RATIO = 1.5;
+    const RESUMABLE_RETRY_BACKOFF_MS = [1000, 2000, 4000, 8000, 15000, 30000];
+    const RESUMABLE_RETRY_MAX_ATTEMPTS = RESUMABLE_RETRY_BACKOFF_MS.length;
+    const RESUMABLE_RETRY_AFTER_CAP_MS = 60000;
+    // Shrink the chunk once a retry at the same offset has already failed
+    // twice: a link that cannot carry this chunk will not carry it on the
+    // third attempt either.
+    const RESUMABLE_SHRINK_AFTER_ATTEMPTS = 2;
+    const RESUMABLE_FINGERPRINT_BLOCK_BYTES = 64 * 1024;
+    const RESUMABLE_UPLOAD_STORAGE_KEY = 'scanstory.resumableUpload.v2';
+    const RESUMABLE_UPLOAD_STORAGE_VERSION = 2;
     const RESUMABLE_POLL_MAX_ATTEMPTS = 8;
+    const UPLOAD_AUTO_RESUME_LIMIT = 3;
     // Terminality is read from the session payload's `is_terminal` (see
     // _upload_session_payload() in app.py) rather than duplicating the server's status set
     // here — the duplicate matched today but nothing kept the two in step.
     let activeResumableUpload = null;
+    let uploadPausedForNetwork = false;
+    let uploadAutoResumeCount = 0;
+
+    // navigator.connection is a HINT, and only for the very first chunk.
+    // From the second chunk onward the measured throughput of real chunks
+    // is the authoritative signal, because the hint routinely disagrees
+    // with what the uplink actually does.
+    function resumableChunkCap(serverMaxBytes) {
+      const serverCap = Number.isFinite(serverMaxBytes) && serverMaxBytes > 0 ? serverMaxBytes : RESUMABLE_CHUNK_MAX_BYTES;
+      return Math.max(RESUMABLE_CHUNK_MIN_BYTES, Math.min(serverCap, RESUMABLE_CHUNK_MAX_BYTES));
+    }
+
+    function initialChunkBytes(serverMaxBytes) {
+      const cap = resumableChunkCap(serverMaxBytes);
+      const effective = navigator.connection?.effectiveType || '';
+      if (effective === 'slow-2g' || effective === '2g') return Math.min(RESUMABLE_CHUNK_MIN_BYTES, cap);
+      if (effective === '3g') return Math.min(256 * 1024, cap);
+      return Math.min(512 * 1024, cap);
+    }
+
+    function roundChunkBytes(bytes, serverMaxBytes) {
+      const cap = resumableChunkCap(serverMaxBytes);
+      const stepped = Math.round((bytes || 0) / RESUMABLE_CHUNK_STEP_BYTES) * RESUMABLE_CHUNK_STEP_BYTES;
+      return Math.max(RESUMABLE_CHUNK_MIN_BYTES, Math.min(stepped || RESUMABLE_CHUNK_MIN_BYTES, cap));
+    }
+
+    function nextChunkBytes(currentBytes, smoothedBytesPerSecond, serverMaxBytes) {
+      if (!Number.isFinite(smoothedBytesPerSecond) || smoothedBytesPerSecond <= 0) return currentBytes;
+      const target = roundChunkBytes(smoothedBytesPerSecond * RESUMABLE_CHUNK_TARGET_SECONDS, serverMaxBytes);
+      const ratio = target > currentBytes ? target / currentBytes : currentBytes / target;
+      if (ratio < RESUMABLE_CHUNK_RESIZE_RATIO) return currentBytes;
+      // Growth is capped at a doubling per step so a single fast chunk
+      // cannot jump straight to 5 MB. Shrinking goes directly to the
+      // target: a collapsing link needs the small chunk now, not three
+      // chunks from now.
+      return target > currentBytes
+        ? Math.min(target, roundChunkBytes(currentBytes * 2, serverMaxBytes))
+        : target;
+    }
+
+    // Qualitative only. We never quote a required bandwidth, because any
+    // number printed here would be wrong for somebody.
+    function networkQualityLabel(bytesPerSecond) {
+      if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) return 'unknown';
+      if (bytesPerSecond < 32 * 1024) return 'very slow';
+      if (bytesPerSecond < 96 * 1024) return 'slow';
+      if (bytesPerSecond < 512 * 1024) return 'normal';
+      return 'fast';
+    }
+
+    /* Retryable vs terminal. Codes are checked BEFORE status, because a
+       500 STORAGE_INCONSISTENT is not worth retrying however retryable its
+       status class looks, and a 413 CHUNK_TOO_LARGE is recoverable by
+       sending something smaller rather than by sending the same thing
+       again. */
+    const UPLOAD_TERMINAL_CODES = new Set([
+      'UNAUTHENTICATED', 'ACCOUNT_BLOCKED', 'NOT_FOUND',
+      'PROJECT_LIMIT_REACHED', 'STORAGE_LIMIT_REACHED', 'PLAN_NOT_CONFIGURED', 'SUBSCRIPTION_LIMIT',
+      'INVALID_SIZE', 'IMAGE_TOO_LARGE', 'VIDEO_TOO_LARGE', 'TOTAL_TOO_LARGE',
+      'INVALID_CHECKSUM', 'CHECKSUM_MISMATCH', 'INVALID_OFFSET', 'EMPTY_CHUNK',
+      'CHUNK_EXCEEDS_EXPECTED_SIZE', 'INVALID_EXPERIENCE_PLAYBACK',
+      'IMAGE_VALIDATION_FAILED', 'VIDEO_VALIDATION_FAILED',
+      'SESSION_EXPIRED', 'SESSION_CANCELLED', 'SESSION_FAILED', 'STORAGE_INCONSISTENT'
+    ]);
+
+    // Retry-After is either delta-seconds or an HTTP-date. Both are honoured;
+    // anything unparseable falls back to our own backoff table.
+    function parseRetryAfterMs(header) {
+      if (!header) return null;
+      const seconds = Number(header);
+      if (Number.isFinite(seconds) && seconds >= 0) return Math.round(seconds * 1000);
+      const when = Date.parse(header);
+      if (Number.isFinite(when)) return Math.max(0, when - Date.now());
+      return null;
+    }
+
+    function uploadRetryDecision(err, attempt) {
+      // 'resync': the server already told us where it actually is, so
+      // there is nothing to wait for.
+      if (err?.code === 'OFFSET_MISMATCH') return { action: 'resync', waitMs: 0 };
+      if (err?.code === 'CHUNK_TOO_LARGE') return { action: 'shrink', waitMs: 0 };
+      if (err?.code && UPLOAD_TERMINAL_CODES.has(err.code)) return { action: 'stop', waitMs: 0 };
+      const status = err?.status ?? 0;
+      // fetch() reports a dead transport as a rejected promise, which
+      // surfaces here as status 0 / TypeError rather than an HTTP code.
+      const transport = status === 0 || err?.name === 'TypeError';
+      const retryable = transport || status === 408 || status === 429 || (status >= 500 && status <= 599);
+      if (!retryable) return { action: 'stop', waitMs: 0 };
+      if (attempt >= RESUMABLE_RETRY_MAX_ATTEMPTS) return { action: 'pause', waitMs: 0 };
+      const base = RESUMABLE_RETRY_BACKOFF_MS[Math.min(attempt, RESUMABLE_RETRY_BACKOFF_MS.length - 1)];
+      // Honour Retry-After when the server actually sent one: it knows
+      // more about its own load than our backoff table does.
+      const waitMs = Number.isFinite(err?.retryAfterMs) && err.retryAfterMs > 0
+        ? Math.min(err.retryAfterMs, RESUMABLE_RETRY_AFTER_CAP_MS)
+        : base + Math.floor(Math.random() * Math.min(base, 1000));
+      return { action: 'retry', waitMs };
+    }
+
+    async function sha256Hex(buffer) {
+      if (!window.crypto?.subtle) return null;
+      const digest = await crypto.subtle.digest('SHA-256', buffer);
+      return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    /* Cheap identity proof for "is this still the same file?". Never hashes
+       the whole file: a first block plus a last block catches a different
+       take of the same clip, and hashing 200 MB on a phone just to resume
+       would cost more than the resume saves. */
+    async function fileFingerprint(file) {
+      if (!file) return null;
+      const base = { name: file.name || '', size: file.size || 0, lastModified: file.lastModified || 0 };
+      try {
+        const headHash = await sha256Hex(await file.slice(0, RESUMABLE_FINGERPRINT_BLOCK_BYTES).arrayBuffer());
+        const tailStart = Math.max(0, base.size - RESUMABLE_FINGERPRINT_BLOCK_BYTES);
+        const tailHash = tailStart > 0 ? await sha256Hex(await file.slice(tailStart).arrayBuffer()) : headHash;
+        return { ...base, headSha256: headHash, tailSha256: tailHash };
+      } catch (_err) {
+        // Insecure context / no SubtleCrypto: fall back to metadata-only
+        // identity rather than refusing to resume at all.
+        return { ...base, headSha256: null, tailSha256: null };
+      }
+    }
+
+    function fingerprintsMatch(stored, current) {
+      if (!stored || !current) return false;
+      if (stored.name !== current.name) return false;
+      if (stored.size !== current.size) return false;
+      if (stored.lastModified !== current.lastModified) return false;
+      // A recorded hash must match. A recorded null (a browser without
+      // SubtleCrypto) can only ever fall back to metadata equality.
+      if (stored.headSha256 && current.headSha256 && stored.headSha256 !== current.headSha256) return false;
+      if (stored.tailSha256 && current.tailSha256 && stored.tailSha256 !== current.tailSha256) return false;
+      return true;
+    }
+    /* ==== end of pure low-bandwidth policy helpers ====
+       Everything between the "Extreme-low-bandwidth resumable upload" banner
+       above and this line is deliberately free of DOM dependencies, so
+       tests/integration/test_extreme_low_bandwidth_upload.py can slice it
+       out of this template and execute the REAL shipped policy code in Node
+       instead of asserting on strings. Keep both markers intact. */
 
     class UploadApiError extends Error {
       constructor(code, message, status, payload = null) {
@@ -4005,6 +4206,8 @@
         QUEUE_ENQUEUE_FAILED: 'Your ScanStory was saved, but processing could not be queued. Please try again in a moment.',
         INCOMPLETE_UPLOAD: 'The upload is incomplete. Resuming from the server offset.',
         OFFSET_MISMATCH: 'The server and browser upload offsets differed. Resynchronizing.',
+        CHUNK_TOO_LARGE: 'Sending a smaller piece of the upload and continuing.',
+        UPLOAD_PAUSED_NETWORK: 'Upload paused. Resume when you’re ready — everything already uploaded is safe.',
         STORAGE_INCONSISTENT: 'Upload storage became inconsistent. Please cancel and try again.'
       };
       return messages[code] || 'Upload failed. Please try again.';
@@ -4015,19 +4218,45 @@
       if (cancelBtn) cancelBtn.style.display = visible ? 'inline-flex' : 'none';
     }
 
+    /* Refresh recovery lives in localStorage, not IndexedDB. What has to
+       survive a reload is a few hundred bytes of metadata (session id,
+       confirmed offset, file fingerprints, tuning hints) — localStorage
+       stores exactly that, synchronously, with no schema and no upgrade
+       path to maintain. IndexedDB would only earn its complexity if we
+       could persist the File handles themselves, and a page cannot: after
+       a reload the creator must re-pick the files regardless, which is
+       precisely why the fingerprint below exists.
+
+       Nothing here is sensitive: no auth token, no CSRF token, no URL that
+       grants access. The session id alone is useless to another account —
+       every /api/uploads/sessions route re-checks ownership server-side
+       and 404s a session that is not yours. */
     function saveResumableUploadState(state) {
       try {
         localStorage.setItem(RESUMABLE_UPLOAD_STORAGE_KEY, JSON.stringify({
-          version: 1,
+          version: RESUMABLE_UPLOAD_STORAGE_VERSION,
           sessionId: state.sessionId,
           projectName: state.projectName,
+          experience_type: state.experience_type,
+          playback_mode: state.playback_mode,
           imageName: state.imageName,
           imageSize: state.imageSize,
           videoName: state.videoName,
           videoSize: state.videoSize,
           videoLastModified: state.videoLastModified || 0,
+          imageFingerprint: state.imageFingerprint || null,
+          videoFingerprint: state.videoFingerprint || null,
           expectedTotalSize: state.expectedTotalSize,
+          // Local bookkeeping only. On resume the SERVER's current_offset
+          // always wins — see resumeOffsetFromServer().
           currentOffset: state.currentOffset || 0,
+          chunkBytes: state.chunkBytes || 0,
+          smoothedBytesPerSecond: state.smoothedBytesPerSecond || 0,
+          networkQuality: state.networkQuality || 'unknown',
+          retryCount: state.retryCount || 0,
+          resumeCount: state.resumeCount || 0,
+          pauseCount: state.pauseCount || 0,
+          lastSuccessAt: state.lastSuccessAt || null,
           updatedAt: Date.now()
         }));
       } catch (_err) {}
@@ -4047,17 +4276,27 @@
       } catch (_err) {}
     }
 
-    function storedSessionMatchesFiles(stored, markerFile, videoFile, projectName, experiencePayload) {
-      return !!stored
-        && stored.version === 1
-        && stored.projectName === projectName
-        && stored.experience_type === experiencePayload.experience_type
-        && stored.playback_mode === experiencePayload.playback_mode
-        && stored.imageName === (markerFile?.name || null)
-        && stored.imageSize === (markerFile?.size || 0)
-        && stored.videoName === videoFile.name
-        && stored.videoSize === videoFile.size
-        && stored.videoLastModified === (videoFile.lastModified || 0);
+    /* Resume eligibility. A mismatch is never an error the creator has to
+       act on — it just means this is a different upload, so we start a
+       fresh session instead of appending the wrong bytes to a half-finished
+       one. The fingerprint check is the load-bearing half: name/size/
+       lastModified alone cannot tell two exports of the same clip apart. */
+    function storedSessionMatchesFiles(stored, markerFile, videoFile, projectName, experiencePayload, fingerprints) {
+      if (!stored || stored.version !== RESUMABLE_UPLOAD_STORAGE_VERSION) return false;
+      if (stored.projectName !== projectName) return false;
+      if (stored.experience_type !== experiencePayload.experience_type) return false;
+      if (stored.playback_mode !== experiencePayload.playback_mode) return false;
+      if (stored.imageName !== (markerFile?.name || null)) return false;
+      if (stored.imageSize !== (markerFile?.size || 0)) return false;
+      if (stored.videoName !== videoFile.name) return false;
+      if (stored.videoSize !== videoFile.size) return false;
+      if (stored.videoLastModified !== (videoFile.lastModified || 0)) return false;
+      if (!fingerprintsMatch(stored.videoFingerprint, fingerprints?.video)) return false;
+      // A marker-less (Direct QR) session records null on both sides.
+      if (stored.imageFingerprint || fingerprints?.image) {
+        if (!fingerprintsMatch(stored.imageFingerprint, fingerprints?.image)) return false;
+      }
+      return true;
     }
 
     function sequentialUploadSlice(markerFile, videoFile, offset, length) {
@@ -4091,7 +4330,9 @@
         payload = await response.json();
       } catch (_err) {}
       if (!response.ok || payload?.success === false) {
-        throw new UploadApiError(payload?.code, safeUploadErrorMessage(payload?.code), response.status, payload);
+        const err = new UploadApiError(payload?.code, safeUploadErrorMessage(payload?.code), response.status, payload);
+        err.retryAfterMs = parseRetryAfterMs(response.headers.get('Retry-After'));
+        throw err;
       }
       return payload || {};
     }
@@ -4198,29 +4439,66 @@
     async function uploadResumableStream(session, markerFile, videoFile, uploadState) {
       const sessionId = session.id;
       const expectedTotal = session.expected_total_size;
+      const serverMaxBytes = session.max_chunk_bytes;
+      // The offset we start from is the SERVER's, never a local counter.
       let offset = session.current_offset || 0;
-      let resumeAttempts = 0;
-      const startedAt = performance.now();
+      let chunkBytes = activeResumableUpload.chunkBytes || initialChunkBytes(serverMaxBytes);
+      let smoothed = activeResumableUpload.smoothedBytesPerSecond || null;
+      let attempt = 0;
+
+      const persist = () => {
+        activeResumableUpload.currentOffset = offset;
+        activeResumableUpload.chunkBytes = chunkBytes;
+        activeResumableUpload.smoothedBytesPerSecond = smoothed || 0;
+        activeResumableUpload.networkQuality = networkQualityLabel(smoothed);
+        activeResumableUpload.expectedTotalSize = expectedTotal;
+        saveResumableUploadState(activeResumableUpload);
+      };
+      persist();
 
       while (offset < expectedTotal) {
         if (activeResumableUpload?.cancelled) throw new UploadApiError('SESSION_CANCELLED', 'Upload cancelled', 0);
-        const chunk = sequentialUploadSlice(markerFile, videoFile, offset, RESUMABLE_UPLOAD_CHUNK_SIZE);
+        const chunk = sequentialUploadSlice(markerFile, videoFile, offset, chunkBytes);
         if (!chunk.size) throw new UploadApiError('EMPTY_CHUNK', 'Empty chunk', 400);
+        const chunkStart = performance.now();
         try {
           const response = await uploadResumableChunk(sessionId, offset, chunk, activeResumableUpload.controller.signal);
+          const duplicate = response.note === 'duplicate_chunk_ignored';
           offset = response.current_offset;
-          activeResumableUpload.currentOffset = offset;
-          saveResumableUploadState({ ...activeResumableUpload, currentOffset: offset, expectedTotalSize: expectedTotal });
-          const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.001);
-          const avgBytesPerSecond = offset / elapsedSeconds;
+          attempt = 0;
+          activeResumableUpload.lastSuccessAt = Date.now();
+          if (!duplicate) {
+            // A duplicate is a replay the server discarded, so it says
+            // nothing about the link's speed and never feeds the estimator.
+            const chunkSeconds = Math.max((performance.now() - chunkStart) / 1000, 0.001);
+            const sample = chunk.size / chunkSeconds;
+            smoothed = smoothed === null
+              ? sample
+              : (smoothed * (1 - RESUMABLE_THROUGHPUT_SMOOTHING)) + (sample * RESUMABLE_THROUGHPUT_SMOOTHING);
+            const resized = nextChunkBytes(chunkBytes, smoothed, serverMaxBytes);
+            if (resized !== chunkBytes) {
+              logClientStage('RESUMABLE CLIENT CHUNK RESIZE', {
+                upload_id: uploadState.uploadId,
+                session_id: sessionId,
+                from_bytes: chunkBytes,
+                to_bytes: resized,
+                measured_bytes_per_second: Math.round(smoothed),
+                network_quality: networkQualityLabel(smoothed)
+              });
+              chunkBytes = resized;
+            }
+          }
+          persist();
           const percent = expectedTotal ? (offset / expectedTotal) * 100 : 0;
-          const etaSeconds = avgBytesPerSecond > 0 ? Math.max(expectedTotal - offset, 0) / avgBytesPerSecond : null;
+          // ETA off the smoothed rate, not the average since start: a link
+          // that just recovered should stop quoting the stall it recovered from.
+          const etaSeconds = smoothed > 0 ? Math.max(expectedTotal - offset, 0) / smoothed : null;
           const etaText = etaSeconds === null ? 'ETA calculating' : `About ${formatDuration(etaSeconds)} remaining`;
           uploadState.lastLoaded = offset;
           uploadClientLog('UPLOAD CLIENT PROGRESS', uploadState, {
             bytes_uploaded: offset,
             total_bytes: expectedTotal,
-            estimated_upload_speed: Math.round(avgBytesPerSecond),
+            estimated_upload_speed: Math.round(smoothed || 0),
             estimated_remaining_time: etaSeconds === null ? null : Math.round(etaSeconds),
             current_phase: 'Uploading video'
           });
@@ -4229,37 +4507,98 @@
             session_id: sessionId,
             offset,
             expected_total_size: expectedTotal,
-            duplicate_chunk: response.note === 'duplicate_chunk_ignored'
+            chunk_bytes: chunkBytes,
+            network_quality: networkQualityLabel(smoothed),
+            duplicate_chunk: duplicate
           });
           noteUploadProgressTick();
           setUploadProgress(
             `Uploading video — ${Math.round(percent)}%`,
             Math.min(90, 10 + percent * 0.8),
-            `${formatRate(avgBytesPerSecond)} · ${etaText}`,
+            `${formatRate(smoothed)} · ${etaText}`,
             `${formatBytes(offset)} of ${formatBytes(expectedTotal)}`,
             uploadTransferState(etaSeconds)
           );
-          resumeAttempts = 0;
         } catch (err) {
           if (activeResumableUpload?.cancelled || err.name === 'AbortError') throw new UploadApiError('SESSION_CANCELLED', 'Upload cancelled', 0);
-          if (err.code === 'OFFSET_MISMATCH' || err.status === 0 || err.name === 'TypeError') {
-            resumeAttempts += 1;
-            if (resumeAttempts > 5) throw err;
-            setUploadState('retrying');
-            const statusPayload = await getUploadSessionStatus(sessionId, activeResumableUpload.controller.signal);
-            offset = statusPayload.session.current_offset;
-            activeResumableUpload.currentOffset = offset;
-            saveResumableUploadState({ ...activeResumableUpload, currentOffset: offset, expectedTotalSize: expectedTotal });
-            setUploadProgress('Uploading video', Math.min(90, 10 + (offset / expectedTotal) * 80), 'Connection recovered. Resuming from the server offset.', `${formatBytes(offset)} of ${formatBytes(expectedTotal)}`, 'resuming');
-            logClientStage('RESUMABLE CLIENT RESUME', {
+          const decision = uploadRetryDecision(err, attempt);
+          if (decision.action === 'stop') throw err;
+          if (decision.action === 'pause') {
+            activeResumableUpload.pauseCount = (activeResumableUpload.pauseCount || 0) + 1;
+            persist();
+            logClientStage('RESUMABLE CLIENT PAUSED', {
               upload_id: uploadState.uploadId,
               session_id: sessionId,
               current_offset: offset,
+              attempts: attempt,
               reason: err.code || err.name || 'network'
+            });
+            // Bounded automatic attempts are spent, so we stop trying —
+            // but the session and every confirmed byte stay exactly where
+            // they are. Resuming is a decision for the creator now.
+            throw new UploadApiError('UPLOAD_PAUSED_NETWORK', 'Upload paused after repeated network failures', 0);
+          }
+          attempt += 1;
+          activeResumableUpload.retryCount = (activeResumableUpload.retryCount || 0) + 1;
+
+          if (decision.action === 'shrink') {
+            const ceiling = Number.isFinite(err.payload?.max_chunk_bytes) ? err.payload.max_chunk_bytes : chunkBytes;
+            chunkBytes = roundChunkBytes(Math.min(ceiling, Math.max(RESUMABLE_CHUNK_MIN_BYTES, chunkBytes / 2)), ceiling);
+            persist();
+            logClientStage('RESUMABLE CLIENT CHUNK SHRINK', {
+              upload_id: uploadState.uploadId, session_id: sessionId, to_bytes: chunkBytes, reason: err.code
             });
             continue;
           }
-          throw err;
+
+          if (decision.action === 'resync') {
+            // The rejection carried the authoritative offset with it, so
+            // re-slice in place instead of spending a round-trip asking.
+            offset = Number.isFinite(err.payload?.current_offset)
+              ? err.payload.current_offset
+              : (await getUploadSessionStatus(sessionId, activeResumableUpload.controller.signal)).session.current_offset;
+            activeResumableUpload.resumeCount = (activeResumableUpload.resumeCount || 0) + 1;
+            persist();
+            setUploadState('resuming');
+            setUploadProgress('Uploading video', Math.min(90, 10 + (offset / expectedTotal) * 80), 'Resuming from the last byte the server confirmed.', `${formatBytes(offset)} of ${formatBytes(expectedTotal)}`, 'resuming');
+            logClientStage('RESUMABLE CLIENT RESUME', {
+              upload_id: uploadState.uploadId, session_id: sessionId, current_offset: offset, reason: err.code || 'offset_mismatch'
+            });
+            continue;
+          }
+
+          // decision.action === 'retry'. We do NOT ask the server where it
+          // got to first: re-sending the same bytes at the same offset is
+          // idempotent by contract, so one request answers both "did you
+          // get it?" and "here it is again" — and on a 0.3 Mbps link that
+          // saved round-trip is real time. If the server did receive it,
+          // the reply is a duplicate-ignored with the true offset.
+          if (attempt >= RESUMABLE_SHRINK_AFTER_ATTEMPTS) {
+            chunkBytes = roundChunkBytes(Math.max(RESUMABLE_CHUNK_MIN_BYTES, chunkBytes / 2), serverMaxBytes);
+            // Halving mid-retry changes the chunk length, so the replay is
+            // now a partial overlap the server will reject with the
+            // authoritative offset — which the resync branch above handles.
+          }
+          persist();
+          setUploadState('retrying');
+          setUploadProgress(
+            'Retrying upload',
+            Math.min(90, 10 + (offset / expectedTotal) * 80),
+            `Connection problem. Retrying in ${Math.max(1, Math.round(decision.waitMs / 1000))}s — nothing you already uploaded is lost.`,
+            `${formatBytes(offset)} of ${formatBytes(expectedTotal)}`,
+            'retrying'
+          );
+          logClientStage('RESUMABLE CLIENT RETRY', {
+            upload_id: uploadState.uploadId,
+            session_id: sessionId,
+            current_offset: offset,
+            attempt,
+            wait_ms: decision.waitMs,
+            honoured_retry_after: Number.isFinite(err.retryAfterMs) && err.retryAfterMs > 0,
+            http_status: err.status ?? 0,
+            reason: err.code || err.name || 'network'
+          });
+          if (decision.waitMs > 0) await new Promise(resolve => setTimeout(resolve, decision.waitMs));
         }
       }
       return offset;
@@ -4321,6 +4660,7 @@
       const pair = item.pair;
       const controller = new AbortController();
       activeResumableUpload = { controller, cancelled: false, sessionId: null, projectName };
+      uploadPausedForNetwork = false;
       setCancelUploadVisible(true);
       enableUploadNavigationWarning();
 
@@ -4340,7 +4680,21 @@
 
         let sessionPayload = null;
         const stored = loadResumableUploadState();
-        if (storedSessionMatchesFiles(stored, resumableMarkerFile, pair.video, projectName, experiencePayload)) {
+        const fingerprints = {
+          image: await fileFingerprint(resumableMarkerFile),
+          video: await fileFingerprint(pair.video)
+        };
+        if (stored && !storedSessionMatchesFiles(stored, resumableMarkerFile, pair.video, projectName, experiencePayload, fingerprints)) {
+          // Different files (or a different story) than the saved session
+          // was uploading. Resuming would append these bytes onto someone
+          // else's half-finished stream, so the saved session is dropped
+          // and a clean one is created below.
+          logClientStage('RESUMABLE CLIENT RESUME REJECTED', {
+            upload_id: uploadId, session_id: stored.sessionId || null, reason: 'file_identity_mismatch'
+          });
+          clearResumableUploadState();
+        }
+        if (storedSessionMatchesFiles(stored, resumableMarkerFile, pair.video, projectName, experiencePayload, fingerprints)) {
           try {
             sessionPayload = await getUploadSessionStatus(stored.sessionId, controller.signal);
             if (sessionPayload.session?.status === 'completed' && sessionPayload.session.project_id) {
@@ -4392,10 +4746,22 @@
           videoName: pair.video.name,
           videoSize: pair.video.size,
           videoLastModified: pair.video.lastModified || 0,
+          imageFingerprint: fingerprints.image,
+          videoFingerprint: fingerprints.video,
           experience_type: experiencePayload.experience_type,
           playback_mode: experiencePayload.playback_mode,
           expectedTotalSize: session.expected_total_size,
+          // The SERVER's offset, always. A stored local counter is a hint
+          // for the UI at most; on any disagreement the server value wins,
+          // which is why stored.currentOffset is never read here.
           currentOffset: session.current_offset || 0,
+          // Tuning hints DO survive a refresh — re-learning the link speed
+          // from scratch on a 0.3 Mbps connection wastes the first minute.
+          chunkBytes: stored?.chunkBytes || 0,
+          smoothedBytesPerSecond: stored?.smoothedBytesPerSecond || 0,
+          retryCount: stored?.retryCount || 0,
+          resumeCount: (stored?.resumeCount || 0) + (stored?.sessionId === session.id ? 1 : 0),
+          pauseCount: stored?.pauseCount || 0,
           finalizeStarted: false
         };
         saveResumableUploadState(activeResumableUpload);
@@ -4440,6 +4806,22 @@
       } catch (err) {
         if (err.code === 'SESSION_CANCELLED') {
           setUploadProgress('Upload cancelled', 0, 'The upload was cancelled safely.', '', '');
+        } else if (err.code === 'UPLOAD_PAUSED_NETWORK') {
+          // Not a failure. The bytes are safe on the server and the saved
+          // session is deliberately left in place, so pressing Resume
+          // continues from the last confirmed byte rather than from zero.
+          const uploaded = activeResumableUpload?.currentOffset || 0;
+          const total = activeResumableUpload?.expectedTotalSize || 0;
+          uploadClientLog('UPLOAD CLIENT PAUSED', uploadState, { bytes_uploaded: uploaded, total_bytes: total, current_phase: 'Paused' });
+          setUploadProgress(
+            'Upload paused',
+            total ? Math.min(90, 10 + (uploaded / total) * 80) : 0,
+            'Your connection dropped. Your uploaded progress is safe.',
+            `${formatBytes(uploaded)} of ${formatBytes(total)}`,
+            'paused'
+          );
+          pauseUploadForNetwork(submitBtn);
+          return;
         } else {
           const message = safeUploadErrorMessage(err.code);
           uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { http_status: err.status, current_phase: uploadState.phase });
