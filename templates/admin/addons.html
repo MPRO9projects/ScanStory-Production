@@ -1,57 +1,28 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Add-on Catalogue - Admin Panel</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin-console.css') }}">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-        body { background-color: #050505; color: #e6e6e9; }
-        .navbar { background: #0b0b0f; color: #fff; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #1c1c22; }
-        .navbar a { color: #e6e6e9; text-decoration: none; }
-        .wrap { max-width: 1200px; margin: 0 auto; padding: 24px 20px 60px; }
-        h1 { font-size: 22px; margin-bottom: 6px; }
-        .lede { color: #9a9aa5; font-size: 14px; margin-bottom: 24px; max-width: 70ch; line-height: 1.5; }
-        .card { background: #0b0b0f; border: 1px solid #1c1c22; border-radius: 10px; padding: 20px; margin-bottom: 24px; }
-        .card h2 { font-size: 16px; margin-bottom: 16px; }
-        table { width: 100%; border-collapse: collapse; font-size: 14px; }
-        th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid #1c1c22; vertical-align: top; }
-        th { color: #9a9aa5; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
-        label { display: block; font-size: 12px; color: #9a9aa5; margin-bottom: 5px; }
-        input[type=text], input[type=number], select, textarea {
-            width: 100%; padding: 9px 10px; background: #050505; color: #e6e6e9;
-            border: 1px solid #26262e; border-radius: 6px; font-size: 14px;
-        }
-        .checks { display: flex; gap: 20px; align-items: center; margin: 16px 0; font-size: 14px; }
-        .checks label { display: flex; gap: 7px; align-items: center; color: #e6e6e9; margin: 0; font-size: 14px; }
-        .btn { display: inline-block; padding: 9px 16px; border-radius: 6px; border: 1px solid #26262e;
-               background: #16161c; color: #e6e6e9; font-size: 14px; cursor: pointer; text-decoration: none; }
-        .btn-primary { background: #2f6df6; border-color: #2f6df6; color: #fff; }
-        .btn-sm { padding: 5px 10px; font-size: 12px; }
-        .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; border: 1px solid #26262e; }
-        .on { color: #4ade80; border-color: #1e5233; }
-        .off { color: #f87171; border-color: #5a2626; }
-        .flash { padding: 11px 14px; border-radius: 8px; margin-bottom: 8px; font-size: 14px; border: 1px solid #26262e; }
-        .flash.error { color: #fca5a5; border-color: #5a2626; }
-        .flash.success { color: #86efac; border-color: #1e5233; }
-        details summary { cursor: pointer; color: #9a9aa5; font-size: 13px; }
-        .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .muted { color: #6f6f79; font-size: 12px; }
-        .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-        .table-scroll table { min-width: 860px; }
-    </style>
-</head>
-<body class="ss-admin-scope">
-    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
-    <nav class="navbar">
-        <a href="/admin/dashboard"><strong>ScanStory Admin</strong></a>
-        <span>Welcome, {{ admin.name }}</span>
-    </nav>
+{% extends "admin/base.html" %}
 
-    <div class="wrap" id="main-content" role="main" tabindex="-1">
+{% block title %}Add-on Catalogue{% endblock %}
+
+{% block extra_css %}
+<style>
+    .addon-admin-wrap { max-width: 1200px; }
+    .lede { color: #9a9aa5; font-size: 14px; margin-bottom: 24px; max-width: 70ch; line-height: 1.5; }
+    .card h2 { font-size: 16px; margin-bottom: 16px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 14px; }
+    .checks { display: flex; gap: 20px; align-items: center; margin: 16px 0; font-size: 14px; flex-wrap: wrap; }
+    .checks label { display: flex; gap: 7px; align-items: center; color: #e6e6e9; margin: 0; font-size: 14px; }
+    .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; border: 1px solid #26262e; }
+    .on { color: #4ade80; border-color: #1e5233; }
+    .off { color: #f87171; border-color: #5a2626; }
+    details summary { cursor: pointer; color: #9a9aa5; font-size: 13px; min-height: 44px; display: inline-flex; align-items: center; }
+    .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .muted { color: #9aa1ac; font-size: 12px; }
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .table-scroll table { min-width: 860px; }
+</style>
+{% endblock %}
+
+{% block content %}
+    <div class="addon-admin-wrap">
         <h1>Add-on Catalogue</h1>
         <p class="lede">
             Items listed here are what <code>/api/addons/catalog</code> offers to customers.
@@ -61,17 +32,11 @@
             because purchase history and refunds reference them.
         </p>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-          {% for category, message in messages %}
-            <div class="flash {{ category }}">{{ message }}</div>
-          {% endfor %}
-        {% endwith %}
-
         <div class="card">
             <h2>Current items</h2>
             {% if items %}
             <div class="table-scroll">
-            <table>
+            <table class="table">
                 <thead>
                     <tr>
                         <th>Code</th><th>Name</th><th>Type</th><th>Price</th>
@@ -179,5 +144,4 @@
             </form>
         </div>
     </div>
-</body>
-</html>
+{% endblock %}

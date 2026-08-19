@@ -4,12 +4,12 @@
 </a>
 
 <div class="sidebar-title">User Management</div>
-<a href="{{ url_for('admin_users') }}" class="sidebar-link {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_user_profiles', 'admin_view_user_dashboard') %}active{% endif %}" {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_user_profiles', 'admin_view_user_dashboard') %}aria-current="page"{% endif %}>
+<a href="{{ url_for('admin_users') }}" class="sidebar-link {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_view_user_dashboard') %}active{% endif %}" {% if request.endpoint in ('admin_users', 'admin_view_user', 'admin_view_user_dashboard') %}aria-current="page"{% endif %}>
     <i class="fas fa-users" aria-hidden="true"></i><span>Users</span>
 </a>
 
 <div class="sidebar-title">Content</div>
-<a href="{{ url_for('admin_projects') }}" class="sidebar-link {% if request.endpoint in ('admin_projects', 'admin_view_project', 'admin_my_projects') %}active{% endif %}" {% if request.endpoint in ('admin_projects', 'admin_view_project', 'admin_my_projects') %}aria-current="page"{% endif %}>
+<a href="{{ url_for('admin_projects') }}" class="sidebar-link {% if request.endpoint in ('admin_projects', 'admin_view_project') %}active{% endif %}" {% if request.endpoint in ('admin_projects', 'admin_view_project') %}aria-current="page"{% endif %}>
     <i class="fas fa-project-diagram" aria-hidden="true"></i><span>Projects</span>
 </a>
 {% if admin_can('admin.reports.view') %}

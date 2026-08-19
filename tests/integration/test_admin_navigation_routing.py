@@ -11,7 +11,12 @@ Root causes fixed:
    "User Projects" -> admin_projects) pointing at two different routes for
    what is conceptually the same "admin project management" destination.
 """
+from pathlib import Path
+
 import pytest
+
+
+ADMIN_TEMPLATES = Path("templates/admin")
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +364,36 @@ def test_admin_nav_hides_capacity_link_for_admin_without_permission(client, seco
     body = response.data.decode()
     assert "Capacity" not in body
     assert 'href="/admin/capacity"' not in body
+
+
+def test_admin_low_risk_list_pages_extend_shared_shell():
+    for name in ("activity_logs.html", "subscriptions.html", "addons.html"):
+        html = (ADMIN_TEMPLATES / name).read_text(encoding="utf-8")
+        assert html.startswith('{% extends "admin/base.html" %}')
+        assert "<!DOCTYPE" not in html
+        assert '{% include "admin/_sidebar_links.html" %}' not in html
+
+
+def test_retired_admin_templates_are_deleted():
+    assert not (ADMIN_TEMPLATES / "my_projects.html").exists()
+    assert not (ADMIN_TEMPLATES / "user_profiles.html").exists()
+
+
+def test_sidebar_active_state_contains_no_redirect_only_endpoints():
+    html = (ADMIN_TEMPLATES / "_sidebar_links.html").read_text(encoding="utf-8")
+    assert "admin_user_profiles" not in html
+    assert "admin_my_projects" not in html
+
+
+def test_admin_addons_shared_shell_keeps_critical_forms(client, login_admin):
+    response = client.get("/admin/addons")
+    assert response.status_code == 200
+    body = response.data
+    assert b'id="adminSidebar"' in body
+    assert b"/admin/addons/create" in body
+    assert b'name="addon_type"' in body
+    assert b'name="unit_amount"' in body
+    assert b"Items are never deleted, only deactivated" in body
 
 
 def test_admin_capacity_direct_access_denied_for_admin_without_permission(client, secondary_admin):

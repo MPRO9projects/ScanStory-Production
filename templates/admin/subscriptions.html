@@ -1,67 +1,19 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Subscriptions - Admin Panel</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin-console.css') }}">
-    <style>
-        body { margin: 0; background-color: #050505; color: #e6e6e9; font-family: Segoe UI, Tahoma, sans-serif; }
-        .navbar { height: 70px; background: #0b0b0f; color: #fff; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; position: fixed; inset: 0 0 auto 0; z-index: 1000; }
-        .navbar a { color: #fff; text-decoration: none; font-weight: 700; }
-        .sidebar { position: fixed; top: 70px; bottom: 0; left: 0; width: 250px; background: #0b0b0f; border-right: 1px solid rgba(255,255,255,0.08); padding: 20px 0; }
-        .sidebar-link { display: block; padding: 12px 20px; color: #c9ced8; background: transparent; text-decoration: none; border: 1px solid transparent; transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease; }
-        .sidebar-link:visited { color: #c9ced8; }
-        .sidebar-link:hover { background: rgba(255,255,255,0.06); color: #fff; border-color: rgba(255,255,255,0.16); }
-        .sidebar-link:focus-visible { background: rgba(255,255,255,0.08); color: #fff; border-color: #00d4ff; box-shadow: 0 0 0 3px rgba(0,212,255,0.28); outline: none; }
-        .sidebar-link.active { background: rgba(255,0,122,0.14); color: #fff; border-color: rgba(255,0,122,0.32); }
-        .main-content { margin-left: 250px; margin-top: 70px; padding: 30px; }
-        .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; }
-        .page-title { font-size: 28px; color: #e6e6e9; margin: 0; }
-        .card { background: #0b0b0f; border-radius: 12px; padding: 22px; box-shadow: none; border: 1px solid rgba(255,255,255,0.08); margin-bottom: 24px; }
-        .filter-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; align-items: end; }
-        label { display: block; font-size: 13px; font-weight: 600; color: rgba(255,255,255,0.6); margin-bottom: 6px; }
-        .form-control { width: 100%; padding: 10px; border: 1px solid rgba(255,255,255,0.16); border-radius: 8px; }
-        .btn { display: inline-block; border: 0; border-radius: 8px; padding: 9px 14px; text-decoration: none; cursor: pointer; font-weight: 600; font-size: 13px; }
-        .btn-primary { background: #ff007a; color: #fff; }
-        .btn-secondary { background: rgba(255,255,255,0.08); color: #fff; }
-        .btn-warning { background: #f59e0b; color: #fff; }
-        .btn-danger { background: #ef4444; color: #fff; }
-        .btn-sm { padding: 6px 9px; font-size: 12px; }
-        .table-container { overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; border-bottom: 1px solid rgba(255,255,255,0.08); text-align: left; vertical-align: top; }
-        th { background: transparent; color: rgba(255,255,255,0.6); font-size: 12px; text-transform: uppercase; }
-        .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
-        .badge-success { background: rgba(34,197,94,0.14); color: #4ade80; }
-        .badge-danger { background: rgba(239,68,68,0.14); color: #f87171; }
-        .actions { display: flex; gap: 8px; flex-wrap: wrap; }
-        .actions form { display: inline-flex; gap: 6px; align-items: center; }
-        .alert { padding: 12px; border-radius: 8px; margin-bottom: 18px; }
-        .alert-success { background-color: rgba(34,197,94,0.14); color: #4ade80; }
-        .alert-error { background-color: rgba(239,68,68,0.14); color: #f87171; }
-    </style>
-</head>
-<body class="ss-admin-scope">
-    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
-    <nav class="navbar">
-        <a href="/admin/dashboard">ScanStory Admin</a>
-        <div>Welcome, {{ admin.name }}</div>
-    </nav>
-    <aside class="sidebar">
-        {% include "admin/_sidebar_links.html" %}
-    </aside>
-    <main class="main-content">
+{% extends "admin/base.html" %}
+
+{% block title %}Subscriptions{% endblock %}
+
+{% block extra_css %}
+<style>
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+    .actions form { display: inline-flex; gap: 6px; align-items: center; }
+</style>
+{% endblock %}
+
+{% block content %}
         <div class="page-header">
             <h1 class="page-title">Subscriptions</h1>
             <div>{{ pagination.total }} matching subscriptions</div>
         </div>
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% for category, message in messages %}
-                <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}">{{ message }}</div>
-            {% endfor %}
-        {% endwith %}
         <section class="card">
             <form class="filter-form" method="GET" action="/admin/subscriptions">
                 <div>
@@ -96,7 +48,7 @@
             </form>
         </section>
         <section class="card table-container">
-            <table>
+            <table class="table">
                 <thead>
                     <tr><th>Order</th><th>User</th><th>Plan</th><th>Period</th><th>Remaining</th><th>Status</th><th>Actions</th></tr>
                 </thead>
@@ -134,6 +86,4 @@
             {% if pagination.has_prev %}<a class="btn btn-secondary btn-sm" href="{{ url_for('admin_subscriptions', page=pagination.prev_num, status=status, plan_id=selected_plan_id, search=search, per_page=per_page) }}">Previous</a>{% endif %}
             {% if pagination.has_next %}<a class="btn btn-secondary btn-sm" href="{{ url_for('admin_subscriptions', page=pagination.next_num, status=status, plan_id=selected_plan_id, search=search, per_page=per_page) }}">Next</a>{% endif %}
         </section>
-    </main>
-</body>
-</html>
+{% endblock %}

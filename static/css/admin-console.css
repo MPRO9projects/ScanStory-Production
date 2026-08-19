@@ -189,6 +189,25 @@ body.ss-admin-scope {
     box-shadow: none;
 }
 
+.ss-admin-scope .btn-primary {
+    background-color: var(--ss-primary, #ff007a);
+    border-color: var(--ss-primary, #ff007a);
+    color: #fff;
+}
+
+.ss-admin-scope .btn-primary:hover,
+.ss-admin-scope .btn-primary:focus {
+    background-color: #ff2d90;
+    border-color: #ff2d90;
+    color: #fff;
+}
+
+.ss-admin-scope .btn-secondary {
+    background-color: rgba(255, 255, 255, 0.08);
+    border-color: var(--admin-shell-border-strong);
+    color: var(--admin-shell-text);
+}
+
 .ss-admin-scope .table-container,
 .ss-admin-scope .table-responsive {
     width: 100%;
