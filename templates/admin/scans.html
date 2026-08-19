@@ -1,130 +1,10 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Scan Usage Monitoring - Admin Panel</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin-console.css') }}">
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
+{% extends "admin/base.html" %}
 
-        body {
-            background-color: #050505;
-            color: #e6e6e9;
-        }
+{% block title %}Scans{% endblock %}
 
-        .navbar {
-            background: #0b0b0f;
-            color: white;
-            padding: 0 20px;
-            height: 70px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            box-shadow: none; border-bottom: 1px solid rgba(255,255,255,0.08);
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 1000;
-        }
-
-        .navbar-brand {
-            font-size: 24px;
-            font-weight: bold;
-            text-decoration: none;
-            color: white;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .navbar-menu {
-            display: flex;
-            align-items: center;
-            gap: 20px;
-        }
-
-        .nav-link {
-            color: rgba(255, 255, 255, 0.9);
-            text-decoration: none;
-            padding: 8px 15px;
-            border-radius: 8px;
-            transition: all 0.3s;
-        }
-
-        .nav-link:hover {
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-        }
-
-        .user-menu {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            position: relative;
-        }
-
-        .user-avatar {
-            width: 40px;
-            height: 40px;
-            background: rgba(255, 255, 255, 0.2);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-        }
-
-        .dropdown-menu {
-            position: absolute;
-            top: 100%;
-            right: 0;
-            background: #12121a;
-            border-radius: 8px;
-            box-shadow: 0 12px 32px rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08);
-            min-width: 200px;
-            display: none;
-            overflow: hidden;
-            z-index: 1001;
-        }
-
-        .dropdown-menu.show {
-            display: block;
-        }
-
-        .dropdown-item {
-            display: block;
-            padding: 12px 20px;
-            color: #e6e6e9;
-            text-decoration: none;
-            transition: all 0.3s;
-        }
-
-        .dropdown-item:hover {
-            background: rgba(255,255,255,0.06);
-        }
-
-        .sidebar {
-            position: fixed;
-            left: 0;
-            top: 70px;
-            bottom: 0;
-            width: 250px;
-            background: #0b0b0f;
-            border-right: 1px solid rgba(255,255,255,0.08);
-            padding: 20px 0;
-            overflow-y: auto;
-            z-index: 999;
-        }
-
-        .sidebar-section {
+{% block extra_css %}
+<style>
+.sidebar-section {
             margin-bottom: 25px;
         }
 
@@ -138,29 +18,11 @@
             margin-bottom: 10px;
         }
 
-        .sidebar-link {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 12px 20px;
-            color: #c9ced8;
-            background: transparent;
-            text-decoration: none;
-            transition: all 0.3s;
-            border: 1px solid transparent;
-            border-left: 0;
-        }
 
         .sidebar-link:visited {
             color: #c9ced8;
         }
 
-        .sidebar-link:hover {
-            background: rgba(255,255,255,0.06);
-            color: #fff;
-            border-color: rgba(255,255,255,0.16);
-            border-left: 0;
-        }
 
         .sidebar-link:focus-visible {
             background: rgba(255,255,255,0.08);
@@ -171,12 +33,6 @@
             outline: none;
         }
 
-        .sidebar-link.active {
-            background: rgba(255,0,122,0.14);
-            color: #fff;
-            border-color: rgba(255,0,122,0.32);
-            border-left: 0;
-        }
 
         .sidebar-link[aria-disabled="true"],
         .sidebar-link.disabled {
@@ -187,18 +43,7 @@
             pointer-events: none;
         }
 
-        .sidebar-link i {
-            color: currentColor;
-            width: 20px;
-            text-align: center;
-        }
 
-        .main-content {
-            margin-left: 250px;
-            margin-top: 70px;
-            padding: 30px;
-            min-height: calc(100vh - 70px);
-        }
 
         .page-header {
             display: flex;
@@ -460,33 +305,17 @@
         }
 
         @media (max-width: 992px) {
-            .sidebar {
-                width: 70px;
-            }
 
             .sidebar .sidebar-title,
             .sidebar .sidebar-link span {
                 display: none;
             }
 
-            .sidebar-link {
-                justify-content: center;
-                padding: 15px;
-            }
 
-            .main-content {
-                margin-left: 70px;
-            }
         }
 
         @media (max-width: 768px) {
-            .navbar-menu {
-                display: none;
-            }
 
-            .main-content {
-                padding: 20px;
-            }
 
             .filter-form {
                 grid-template-columns: 1fr;
@@ -502,43 +331,10 @@
                 flex-wrap: wrap;
             }
         }
-    </style>
-</head>
-<body class="ss-admin-scope">
-    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
-    <!-- Navbar -->
-    <nav class="navbar">
-        <a href="/admin/dashboard" class="navbar-brand">
-            <span>ScanStory Admin</span>
-        </a>
+</style>
+{% endblock %}
 
-        <div class="navbar-menu">
-            <span class="nav-link">Welcome, {{ admin.name }}</span>
-        </div>
-
-        <div class="user-menu">
-            <div class="user-avatar">
-                {{ admin.name[0] if admin.name else 'A' }}
-            </div>
-            <div class="dropdown-menu" id="userDropdown">
-                <a href="/admin/dashboard" class="dropdown-item">Dashboard</a>
-                {% if admin_can('superadmin.settings.manage') %}
-                <a href="/admin/settings" class="dropdown-item">Settings</a>
-                {% endif %}
-                <div class="dropdown-divider"></div>
-                <a href="/admin/logout" class="dropdown-item">Logout</a>
-            </div>
-            <span onclick="toggleDropdown()" style="cursor: pointer;">▼</span>
-        </div>
-    </nav>
-
-    <!-- Sidebar -->
-    <div class="sidebar">
-        {% include "admin/_sidebar_links.html" %}
-    </div>
-
-    <!-- Main Content -->
-    <div class="main-content" id="main-content" role="main" tabindex="-1">
+{% block content %}
         <div class="page-header">
             <h1 class="page-title">Scan Usage Monitoring</h1>
             <div style="display: flex; gap: 15px; align-items: center;">
@@ -767,10 +563,11 @@
                 </div>
             </div>
         </div>
-    </div>
+{% endblock %}
 
-    <script>
-        function toggleDropdown() {
+{% block extra_js %}
+<script>
+function toggleDropdown() {
             const dropdown = document.getElementById('userDropdown');
             dropdown.classList.toggle('show');
         }
@@ -803,6 +600,5 @@
             document.getElementById('start_date')?.setAttribute('max', today);
             document.getElementById('end_date')?.setAttribute('max', today);
         });
-    </script>
-</body>
-</html>
+</script>
+{% endblock %}

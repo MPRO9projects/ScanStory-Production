@@ -18,6 +18,43 @@ import pytest
 
 ADMIN_TEMPLATES = Path("templates/admin")
 
+AUTHENTICATED_ADMIN_SHELL_TEMPLATES = (
+    "activity_logs.html",
+    "add_admin.html",
+    "add_plan.html",
+    "addons.html",
+    "capacity.html",
+    "dashboard.html",
+    "edit_admin.html",
+    "edit_plan.html",
+    "manage_admins.html",
+    "moderation.html",
+    "operations.html",
+    "ownership.html",
+    "payments.html",
+    "plans.html",
+    "projects.html",
+    "scans.html",
+    "settings.html",
+    "subscriptions.html",
+    "user_dashboard_context.html",
+    "user_scans.html",
+    "users.html",
+    "view_payment.html",
+    "view_project.html",
+    "view_user.html",
+    "webhook_events.html",
+)
+
+INTENTIONAL_STANDALONE_ADMIN_TEMPLATES = (
+    "base.html",
+    "forgot_password.html",
+    "login.html",
+    "project_preview.html",
+    "reset_password.html",
+    "reset_password_email.html",
+)
+
 
 # ---------------------------------------------------------------------------
 # 1-3: Admin/Super Admin dashboard access
@@ -366,12 +403,21 @@ def test_admin_nav_hides_capacity_link_for_admin_without_permission(client, seco
     assert 'href="/admin/capacity"' not in body
 
 
-def test_admin_low_risk_list_pages_extend_shared_shell():
-    for name in ("activity_logs.html", "subscriptions.html", "addons.html"):
+def test_authenticated_admin_templates_extend_shared_shell():
+    for name in AUTHENTICATED_ADMIN_SHELL_TEMPLATES:
         html = (ADMIN_TEMPLATES / name).read_text(encoding="utf-8")
         assert html.startswith('{% extends "admin/base.html" %}')
         assert "<!DOCTYPE" not in html
         assert '{% include "admin/_sidebar_links.html" %}' not in html
+
+
+def test_only_auth_email_and_preview_admin_templates_are_standalone():
+    standalone = {
+        path.name
+        for path in ADMIN_TEMPLATES.glob("*.html")
+        if "<!DOCTYPE" in path.read_text(encoding="utf-8") or "<html" in path.read_text(encoding="utf-8")
+    }
+    assert standalone == set(INTENTIONAL_STANDALONE_ADMIN_TEMPLATES)
 
 
 def test_retired_admin_templates_are_deleted():
@@ -394,6 +440,32 @@ def test_admin_addons_shared_shell_keeps_critical_forms(client, login_admin):
     assert b'name="addon_type"' in body
     assert b'name="unit_amount"' in body
     assert b"Items are never deleted, only deactivated" in body
+
+
+def test_migrated_admin_workspace_pages_keep_critical_controls(client, login_admin):
+    checks = {
+        "/admin/users": (b'id="adminSidebar"', b"User Management", b"name=\"search\""),
+        "/admin/projects": (b'id="adminSidebar"', b"Projects", b"name=\"owner_type\""),
+        "/admin/payments": (b'id="adminSidebar"', b"Payments", b"name=\"method\""),
+        "/admin/scans": (b'id="adminSidebar"', b"Scans", b"Scan"),
+        "/admin/plans": (b'id="adminSidebar"', b"Plan Management", b"Add New Plan"),
+        "/admin/admins": (b'id="adminSidebar"', b"Admin Management", b"Add New Admin"),
+        "/admin/settings": (b'id="adminSidebar"', b"Admin Settings", b"Trial Settings"),
+    }
+    for path, expected in checks.items():
+        response = client.get(path)
+        assert response.status_code == 200
+        body = response.data
+        for marker in expected:
+            assert marker in body
+
+
+def test_admin_console_css_hardens_tables_forms_and_modals():
+    css = Path("static/css/admin-console.css").read_text(encoding="utf-8")
+    assert "overflow-wrap: anywhere" in css
+    assert ".ss-admin-scope .table-container" in css
+    assert ".ss-admin-scope .modal.show" in css
+    assert ".ss-admin-scope .action-buttons .btn" in css
 
 
 def test_admin_capacity_direct_access_denied_for_admin_without_permission(client, secondary_admin):

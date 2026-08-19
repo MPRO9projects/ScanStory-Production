@@ -173,6 +173,10 @@ body.ss-admin-scope {
 
 .ss-admin-scope .page-header {
     gap: 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1.5rem;
 }
 
 .ss-admin-scope .page-title,
@@ -187,6 +191,59 @@ body.ss-admin-scope {
     background: var(--admin-shell-surface);
     border: 1px solid var(--admin-shell-border);
     box-shadow: none;
+    border-radius: 8px;
+    padding: clamp(1rem, 2vw, 1.35rem);
+    margin-bottom: 1.25rem;
+}
+
+.ss-admin-scope .card-header,
+.ss-admin-scope .card-title {
+    border-color: var(--admin-shell-border);
+}
+
+.ss-admin-scope .stat-card,
+.ss-admin-scope .stats-card,
+.ss-admin-scope .stats-grid > *,
+.ss-admin-scope .metric-card {
+    min-width: 0;
+    border-radius: 8px;
+}
+
+.ss-admin-scope .stat-value,
+.ss-admin-scope .metric-value,
+.ss-admin-scope .stats-grid [style*="font-size: 32px"] {
+    font-variant-numeric: tabular-nums;
+    line-height: 1.05;
+}
+
+.ss-admin-scope .info-grid,
+.ss-admin-scope .stats-grid,
+.ss-admin-scope .form-grid,
+.ss-admin-scope .permissions-grid,
+.ss-admin-scope .settings-grid {
+    min-width: 0;
+}
+
+.ss-admin-scope .info-row,
+.ss-admin-scope .detail-row,
+.ss-admin-scope .summary-row {
+    min-width: 0;
+    gap: 0.75rem;
+}
+
+.ss-admin-scope .info-label,
+.ss-admin-scope .detail-label {
+    color: var(--admin-shell-muted);
+}
+
+.ss-admin-scope .info-value,
+.ss-admin-scope .detail-value,
+.ss-admin-scope .project-title,
+.ss-admin-scope .user-email,
+.ss-admin-scope .payment-id,
+.ss-admin-scope .order-id {
+    min-width: 0;
+    overflow-wrap: anywhere;
 }
 
 .ss-admin-scope .btn-primary {
@@ -217,6 +274,8 @@ body.ss-admin-scope {
     overscroll-behavior-inline: contain;
     -webkit-overflow-scrolling: touch;
     border-radius: 10px;
+    border: 1px solid var(--admin-shell-border);
+    background: rgba(255, 255, 255, 0.015);
 }
 
 .ss-admin-scope .table-container > table,
@@ -228,6 +287,29 @@ body.ss-admin-scope {
 .ss-admin-scope th,
 .ss-admin-scope td {
     vertical-align: top;
+}
+
+.ss-admin-scope table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.ss-admin-scope th {
+    color: var(--admin-shell-muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.ss-admin-scope th,
+.ss-admin-scope td {
+    padding: 0.78rem;
+    border-bottom: 1px solid var(--admin-shell-border);
+}
+
+.ss-admin-scope tbody tr:last-child td {
+    border-bottom: 0;
 }
 
 .ss-admin-scope td,
@@ -264,6 +346,7 @@ body.ss-admin-scope {
     display: flex;
     flex-wrap: wrap;
     gap: 0.4rem;
+    align-items: center;
 }
 
 .ss-admin-scope .filter-form {
@@ -282,6 +365,30 @@ body.ss-admin-scope {
     background-color: rgba(255, 255, 255, 0.03);
     color: var(--admin-shell-text);
     border-color: var(--admin-shell-border-strong);
+}
+
+.ss-admin-scope label {
+    color: var(--admin-shell-muted);
+    font-weight: 600;
+}
+
+.ss-admin-scope .form-group,
+.ss-admin-scope .filter-form > div {
+    min-width: 0;
+}
+
+.ss-admin-scope .badge,
+.ss-admin-scope [class*="badge-"],
+.ss-admin-scope .status-badge,
+.ss-admin-scope .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: 999px;
+    min-height: 1.65rem;
+    padding: 0.28rem 0.62rem;
+    font-weight: 700;
+    line-height: 1.1;
 }
 
 .ss-admin-scope select option {
@@ -311,6 +418,22 @@ body.ss-admin-scope {
 .ss-admin-scope .drawer,
 .ss-admin-scope .sheet {
     overflow: auto;
+}
+
+.ss-admin-scope .modal.show {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+}
+
+.ss-admin-scope .modal-close {
+    min-width: 44px;
+    min-height: 44px;
+    border: 1px solid var(--admin-shell-border-strong);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--admin-shell-text);
 }
 
 @media (max-width: 992px) and (min-width: 769px) {
@@ -434,6 +557,25 @@ body.ss-admin-scope {
     .ss-admin-scope .table-responsive > table,
     .ss-admin-scope .table {
         min-width: 680px;
+    }
+
+    .ss-admin-scope .action-buttons,
+    .ss-admin-scope .actions,
+    .ss-admin-scope .row-actions {
+        width: 100%;
+    }
+
+    .ss-admin-scope .action-buttons .btn,
+    .ss-admin-scope .actions .btn,
+    .ss-admin-scope .row-actions .btn {
+        flex: 1 1 11rem;
+    }
+
+    .ss-admin-scope .info-row,
+    .ss-admin-scope .detail-row,
+    .ss-admin-scope .summary-row {
+        display: grid;
+        grid-template-columns: 1fr;
     }
 }
 
