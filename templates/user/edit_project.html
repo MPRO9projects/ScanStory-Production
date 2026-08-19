@@ -10,6 +10,10 @@
      (before this page's own <style>). See _head_assets.html. #}
   {% include 'user/_head_assets.html' %}
 
+  <!-- Shared Creator UI helpers (ssToast): the same accessible toast the other
+       Creator pages use. Presentation only - no replacement behaviour depends on it. -->
+  <script defer src="{{ url_for('static', filename='js/ss-ui.js') }}"></script>
+
   <style>
     :root {
       --primary: #ff007a;
@@ -97,18 +101,49 @@
       line-height: 1.6;
     }
 
+    /* Two banners in the same cyan read as one long paragraph nobody finishes.
+       The first states the CONSEQUENCE of a replacement (the thing a creator has
+       to understand before choosing a file) and keeps the accent; the second is a
+       storage caveat and is deliberately quieter. The wording of both is
+       unchanged - it is already the truthful description of what the backend
+       does, and this pass only changes how loudly each one speaks. */
     .info-banner {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       gap: 12px;
-      padding: 14px 18px;
+      padding: 16px 18px;
       border-radius: var(--radius-md);
       background: rgba(0,212,255,0.06);
       border: 1px solid rgba(0,212,255,0.2);
-      color: #00d4ff;
+      color: rgba(255,255,255,0.86);
       font-size: 13px;
-      font-weight: 600;
+      font-weight: 500;
+      line-height: 1.65;
+      margin-bottom: 16px;
+    }
+
+    .info-banner i {
+      color: #00d4ff;
+      font-size: 15px;
+      margin-top: 2px;
+      flex: none;
+    }
+
+    .info-banner strong {
+      color: #fff;
+      font-weight: 800;
+    }
+
+    .info-banner.is-quiet {
+      background: rgba(255,255,255,0.03);
+      border-color: rgba(255,255,255,0.10);
+      color: rgba(255,255,255,0.62);
+      font-size: 12.5px;
       margin-bottom: 28px;
+    }
+
+    .info-banner.is-quiet i {
+      color: rgba(255,255,255,0.45);
     }
 
     .panel {
@@ -361,6 +396,121 @@
       from { transform: translateX(20px); opacity: 0; }
       to { transform: translateX(0); opacity: 1; }
     }
+
+    /* =====================================================================
+       MANAGE MEDIA PASS - presentation only. No form field, no action target
+       and none of the (already correct) consequence copy changes here.
+       ===================================================================== */
+
+    /* Focus was browser-default only, i.e. effectively invisible on dark glass. */
+    :is(a, button, summary, [tabindex]):focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+      border-radius: 8px;
+    }
+
+    /* The file input is transparent and stretched over its zone, so ring the
+       zone - that is the thing a keyboard user can actually see. */
+    .file-zone:has(input[type="file"]:focus-visible) {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+      border-color: rgba(0,212,255,0.5);
+    }
+
+    /* Content set header: number + name on the left, status pushed to the right
+       so it scans as a column down a multi-set page. */
+    .pair-label { font-size: 11px; }
+
+    .pair-label .status-tag { margin-left: auto; }
+
+    .status-tag {
+      min-height: 26px;
+      white-space: nowrap;
+    }
+
+    .nav-back { min-height: 44px; }
+
+    .current-files {
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.025);
+      border: 1px solid rgba(255,255,255,0.07);
+      margin-bottom: 16px;
+    }
+
+    .cf-label {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.42);
+      flex: 1 0 100%;
+      margin: 0 0 4px;
+    }
+
+    /* A dropzone that is 22px tall is hard to hit and reads as a caption. */
+    .file-zone {
+      min-height: 132px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 2px;
+      padding: 20px 16px;
+    }
+
+    .fz-title {
+      font-size: 13px;
+      color: rgba(255,255,255,0.88);
+      font-weight: 800;
+    }
+
+    .fz-sub {
+      font-size: 11.5px;
+      line-height: 1.5;
+      letter-spacing: 0;
+      color: rgba(255,255,255,0.55);
+      text-transform: none;
+    }
+
+    /* Was two inline style writes from onFileChosen; a class keeps the selected
+       state in the stylesheet where the rest of the state lives. */
+    .file-zone.has-selection {
+      border-style: solid;
+      border-color: rgba(52,211,153,0.5);
+      background: rgba(52,211,153,0.05);
+    }
+
+    .fz-selected {
+      overflow-wrap: anywhere;
+    }
+
+    .btn-save,
+    .btn-cancel {
+      min-height: 52px;
+    }
+
+    /* One breakpoint for the whole page instead of 500px for the buttons and
+       600px for the upload row, so nothing lands in a half-collapsed state. */
+    @media (max-width: 640px) {
+      .page { padding: 24px 16px 64px; }
+      .panel { padding: 22px; }
+      .pair-block { padding: 18px; }
+      .page-header h1 { font-size: 26px; }
+      .upload-row { grid-template-columns: 1fr; }
+      .action-row { grid-template-columns: 1fr; }
+    }
+
+    /* Long filenames must not widen the page (checked at 320px). */
+    .page, .panel, .pair-block, .upload-slot { min-width: 0; }
+    body { overflow-x: hidden; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .flash-message { animation: none; }
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+      }
+    }
   </style>
 </head>
 
@@ -408,7 +558,7 @@
       </span>
   </div>
 
-  <div class="info-banner">
+  <div class="info-banner is-quiet">
     <i class="fas fa-database" aria-hidden="true"></i>
       <span>If your account is over its storage allowance, a smaller replacement may still be accepted while an
         equal or larger one can be blocked. Nothing you already uploaded is deleted.</span>
@@ -420,7 +570,7 @@
       <div class="panel pair-block">
         {# "Content set" is what this is called on the dashboard and on My
            Stories. It used to be "Story Pair" only here. #}
-        <div class="pair-label">
+        <h2 class="pair-label">
           <span class="pair-num">{{ pair.pair_index + 1 }}</span>
           Content set {{ pair.pair_index + 1 }}
           {% if pair.is_processed %}
@@ -430,7 +580,7 @@
           {% else %}
           <span class="status-tag status-pending"><i class="fas fa-clock" aria-hidden="true"></i> Processing</span>
           {% endif %}
-        </div>
+        </h2>
 
         {# These used to print pair.image_filename / pair.video_filename, i.e.
            the internal storage names, which are literally "{project id}_{index}"
@@ -499,12 +649,21 @@
     function onFileChosen(input, zoneId, selId) {
       const zone = document.getElementById(zoneId);
       const sel = document.getElementById(selId);
-      if (input.files && input.files[0]) {
-        sel.textContent = 'Selected: ' + input.files[0].name;
-        sel.style.display = 'block';
-        zone.style.borderColor = 'rgba(52,211,153,0.5)';
-        zone.style.background = 'rgba(52,211,153,0.04)';
+      if (!zone || !sel) return;
+      // A cleared picker used to leave the zone looking permanently "selected".
+      if (!input.files || !input.files[0]) {
+        zone.classList.remove('has-selection');
+        sel.textContent = '';
+        sel.style.display = 'none';
+        return;
       }
+      const name = input.files[0].name;
+      sel.textContent = 'Selected: ' + name;
+      sel.style.display = 'block';
+      zone.classList.add('has-selection');
+      // The selected filename is inside a .fz-selected that is not a live region,
+      // so announce it once - otherwise a screen reader gets no confirmation at all.
+      if (window.ssToast) window.ssToast('Selected ' + name + '. It is saved when you press Save replacements.', 'success');
     }
 
     setTimeout(() => {

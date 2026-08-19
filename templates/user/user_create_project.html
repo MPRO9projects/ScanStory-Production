@@ -10,8 +10,14 @@
      (before this page's own <style>). See _head_assets.html. #}
   {% include 'user/_head_assets.html' %}
 
-  <!-- QR Code Library (bundled locally - see static/vendor/qrcode; do not restore the CDN reference) -->
-  <script src="{{ url_for('static', filename='vendor/qrcode/qrcode.min.js') }}"></script>
+  <!-- QR Code Library (bundled locally - see static/vendor/qrcode; do not restore the CDN reference)
+       defer: nothing runs QRCode.toCanvas before DOMContentLoaded (updateQRPreview is called from
+       the DOMContentLoaded handler and from oninput), and deferred scripts execute in order before
+       that event, so this stops being a render-blocking request in <head> at no behavioural cost. -->
+  <script defer src="{{ url_for('static', filename='vendor/qrcode/qrcode.min.js') }}"></script>
+  <!-- Shared Creator UI helpers: ssToast / ssConfirm / ssCopy (accessible, focus-trapped).
+       Same file the other Creator pages load. Only presentation - no upload logic depends on it. -->
+  <script defer src="{{ url_for('static', filename='js/ss-ui.js') }}"></script>
 
   <style>
     :root {
@@ -1774,7 +1780,7 @@
         display: none;
       }
       .crop-toolbar .crop-btn {
-        min-height: 42px;
+        min-height: 44px;
       }
       .crop-toolbar .mobile-confirm {
         display: inline-flex;
@@ -1812,6 +1818,634 @@
       to {
         transform: translateX(0);
         opacity: 1;
+      }
+    }
+
+    /* =====================================================================
+       CREATOR STUDIO PASS
+       Everything below is presentation only. It is appended after the rules
+       above on purpose: the crop-modal and mobile-wizard blocks above are
+       load-bearing (they are asserted, byte-for-byte, by
+       tests/gate_jr/test_marker_selection_upload.py and
+       tests/gate_jr/test_v11_experience_ux.py), so nothing here edits them —
+       every desktop rule is scoped inside `@media (min-width: 641px)` so it
+       cannot reach into the mobile wizard, and nothing here targets
+       `.wizard-progress` / `.wizard-actions` / `.wizard-pane-wrap`.
+       ===================================================================== */
+
+    /* --- Focus visibility (was: browser default only, invisible on this
+       dark glass) ------------------------------------------------------- */
+    .ss-user-scope :is(a, button, summary, [tabindex]):focus-visible,
+    .ss-user-scope input[type="file"]:focus-visible,
+    .ss-user-scope input[type="radio"]:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+      border-radius: 6px;
+    }
+
+    /* A file input is invisible and stretched over its tile, so its own ring is
+       useless. Ring the tile instead — that is what the creator sees. */
+    .upload-area:has(.file-input:focus-visible) {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+
+    /* --- Secondary/help prose. `.help-text` was used on four elements and
+       had no rule at all, so it rendered as full-size white body copy and
+       competed with the thing it was explaining. ------------------------ */
+    .help-text {
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .help-text strong {
+      color: rgba(255, 255, 255, 0.86);
+      font-weight: 700;
+    }
+
+    .help-text.is-caution {
+      color: #ffcf6b;
+    }
+
+    /* --- Desktop studio stage rail ------------------------------------- */
+    .studio-rail {
+      display: none;
+      list-style: none;
+      counter-reset: studio-stage;
+      margin: 0 0 26px;
+      padding: 14px 18px;
+      border-radius: var(--radius-md);
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid rgba(255, 255, 255, 0.10);
+    }
+
+    .studio-rail-step {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+      counter-increment: studio-stage;
+    }
+
+    /* A display:none stage does not increment, so hiding Playback for Direct QR
+       renumbers Media/Review/Create automatically. */
+    .studio-rail-num::before {
+      content: counter(studio-stage);
+    }
+
+    .studio-rail-num {
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      flex: 0 0 24px;
+      border-radius: 50%;
+      font-size: 11px;
+      font-weight: 900;
+      color: rgba(255, 255, 255, 0.5);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      transition: all 0.3s var(--ease);
+    }
+
+    .studio-rail-name {
+      font-size: 10.5px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.5);
+      white-space: nowrap;
+    }
+
+    .studio-rail-step.is-done .studio-rail-num {
+      color: #050505;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .studio-rail-step.is-done .studio-rail-name {
+      color: rgba(255, 255, 255, 0.92);
+    }
+
+    .studio-rail-line {
+      flex: 1;
+      height: 1px;
+      min-width: 12px;
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    /* --- Section chrome inside the left (controls) panel ---------------- */
+    .studio-eyebrow {
+      display: block;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.42);
+      margin: 26px 0 8px;
+    }
+
+    .studio-eyebrow:first-of-type {
+      margin-top: 0;
+    }
+
+    /* --- Experience / playback choice cards ---------------------------- */
+    .wizard-type-option {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      column-gap: 12px;
+      align-items: start;
+      min-height: 44px;
+      position: relative;
+    }
+
+    .wizard-type-icon {
+      grid-row: 1 / 4;
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 11px;
+      font-size: 14px;
+      color: var(--accent);
+      background: rgba(0, 212, 255, 0.10);
+      border: 1px solid rgba(0, 212, 255, 0.22);
+    }
+
+    .wizard-type-option.active .wizard-type-icon,
+    .wizard-type-option[aria-pressed="true"] .wizard-type-icon,
+    .playback-option:has(input:checked) .wizard-type-icon {
+      color: #050505;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    /* The radio keeps its own column; the icon takes the one after it. */
+    .playback-option {
+      grid-template-columns: auto 34px 1fr;
+    }
+
+    .playback-option input[type="radio"] {
+      grid-row: 1 / 4;
+      width: 18px;
+      height: 18px;
+      flex: none;
+    }
+
+    .wizard-type-option:not(.active):not(:has(input:checked)):hover {
+      border-color: rgba(0, 212, 255, 0.3);
+      background: rgba(255, 255, 255, 0.045);
+    }
+
+    /* A disabled radio group (Direct QR) must not read as merely dim. */
+    #playbackModeGroup:has(input:disabled) {
+      opacity: 0.5;
+    }
+
+    /* --- Target / video upload tiles ----------------------------------- */
+    .upload-area {
+      min-height: 168px;
+    }
+
+    .upload-area .ua-sub {
+      text-transform: none;
+      letter-spacing: 0.01em;
+      font-size: 11.5px;
+      line-height: 1.45;
+      max-width: 24ch;
+      color: rgba(255, 255, 255, 0.5);
+    }
+
+    /* A hover-only "Replace" affordance is invisible on every touch device,
+       and the selected filename was never shown on the tile at all. This
+       strip is always present once a file exists, on every input type. */
+    .ua-caption {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 4;
+      display: block;
+      padding: 8px 10px;
+      font-size: 10.5px;
+      font-weight: 700;
+      line-height: 1.35;
+      color: rgba(255, 255, 255, 0.92);
+      background: linear-gradient(to top, rgba(0, 0, 0, 0.86), rgba(0, 0, 0, 0));
+      text-align: left;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .ua-caption em {
+      display: block;
+      font-style: normal;
+      font-weight: 700;
+      font-size: 9.5px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+    }
+
+    /* --- Marker tools -------------------------------------------------- */
+    .marker-option {
+      min-height: 44px;
+    }
+
+    .marker-status {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+    }
+
+    /* --- Recognition preview (SIG-1: the same four-corner quad the scanner
+       draws live). Static CSS corners only: this explains the relationship
+       target image -> scan -> video. It performs no recognition, reports no
+       score of any kind, and reads nothing from the CV pipeline. ---------- */
+    .recognition-frame {
+      position: relative;
+      display: block;
+      margin: 10px 0;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #000;
+    }
+
+    .recognition-frame img {
+      display: block;
+      width: 100%;
+      margin: 0;
+    }
+
+    .recognition-frame::before,
+    .recognition-frame::after,
+    .recognition-frame > .rq-b::before,
+    .recognition-frame > .rq-b::after {
+      content: '';
+      position: absolute;
+      width: 22px;
+      height: 22px;
+      border: 2px solid var(--accent);
+      pointer-events: none;
+    }
+
+    .recognition-frame::before {
+      top: 7px;
+      left: 7px;
+      border-right: 0;
+      border-bottom: 0;
+      border-top-left-radius: 5px;
+    }
+
+    .recognition-frame::after {
+      top: 7px;
+      right: 7px;
+      border-left: 0;
+      border-bottom: 0;
+      border-top-right-radius: 5px;
+    }
+
+    .recognition-frame > .rq-b::before {
+      bottom: 7px;
+      left: 7px;
+      border-right: 0;
+      border-top: 0;
+      border-bottom-left-radius: 5px;
+    }
+
+    .recognition-frame > .rq-b::after {
+      bottom: 7px;
+      right: 7px;
+      border-left: 0;
+      border-top: 0;
+      border-bottom-right-radius: 5px;
+    }
+
+    .recognition-caption {
+      margin-top: 8px;
+      font-size: 11.5px;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.62);
+    }
+
+    /* The target -> scan -> video chain, stated once, in the creator's own
+       vocabulary. Both variants are in the markup; which one applies is
+       decided by body[data-experience-type], so no JS keeps them in step. */
+    .recognition-flow {
+      display: grid;
+      gap: 8px;
+      margin: 0 0 18px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: rgba(0, 212, 255, 0.05);
+      border: 1px solid rgba(0, 212, 255, 0.18);
+    }
+
+    .recognition-flow-row {
+      display: grid;
+      grid-template-columns: 20px 1fr;
+      gap: 10px;
+      align-items: start;
+      font-size: 12px;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.74);
+    }
+
+    .recognition-flow-row i {
+      color: var(--accent);
+      font-size: 13px;
+      margin-top: 2px;
+      text-align: center;
+    }
+
+    body[data-experience-type="direct_qr"] .flow-image-video,
+    body:not([data-experience-type="direct_qr"]) .flow-direct-qr,
+    body[data-experience-type="direct_qr"] .studio-stage-playback,
+    body[data-experience-type="direct_qr"] .next-image-video,
+    body:not([data-experience-type="direct_qr"]) .next-direct-qr {
+      display: none;
+    }
+
+    /* --- Review / recap ------------------------------------------------
+       #wizardRecap is the single source of truth for the review summary, and
+       it is now the desktop studio's review panel as well as the mobile
+       wizard's step 3. `.wizard-recap` stays in the default-hidden wizard
+       chrome list above (it IS the wizard's recap on mobile); this extra
+       class is what opts the same element into being visible on desktop, so
+       there is one recap and one updateWizardRecap() feeding it. --------- */
+    .wizard-recap-row dt {
+      color: rgba(255, 255, 255, 0.5);
+      font-weight: 700;
+    }
+
+    .recap-next {
+      margin-top: 18px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid rgba(255, 255, 255, 0.09);
+    }
+
+    .recap-next h3 {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.5);
+      margin-bottom: 10px;
+    }
+
+    .recap-next ol {
+      list-style: none;
+      counter-reset: recap-next;
+      display: grid;
+      gap: 8px;
+    }
+
+    .recap-next li {
+      counter-increment: recap-next;
+      display: grid;
+      grid-template-columns: 20px 1fr;
+      gap: 10px;
+      align-items: start;
+      font-size: 12px;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.72);
+    }
+
+    .recap-next li::before {
+      content: counter(recap-next);
+      display: grid;
+      place-items: center;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      font-size: 10px;
+      font-weight: 900;
+      color: var(--accent);
+      background: rgba(0, 212, 255, 0.12);
+      border: 1px solid rgba(0, 212, 255, 0.3);
+    }
+
+    /* --- Submit area --------------------------------------------------- */
+    .submit-blocked-hint {
+      margin: 0 0 12px;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.5;
+      color: #ffcf6b;
+    }
+
+    .submit-blocked-hint[hidden] {
+      display: none;
+    }
+
+    .action-btn {
+      min-height: 48px;
+    }
+
+    /* Create is the page's one primary action; it should not sit in a 2x2
+       grid of equals. Source order is unchanged (an upload test asserts it) —
+       only the visual order moves. */
+    .action-buttons #submitBtn {
+      grid-column: 1 / -1;
+      order: -1;
+    }
+
+    .action-buttons #cancelUploadBtn {
+      grid-column: 1 / -1;
+    }
+
+    .upload-set-progress {
+      display: grid;
+      gap: 6px;
+      margin: 0 0 14px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.72);
+    }
+
+    .upload-set-progress[hidden] {
+      display: none;
+    }
+
+    .upload-set-row {
+      padding: 8px 12px;
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    /* --- Crop modal: dialog chrome ------------------------------------- */
+    .crop-title {
+      font-size: 15px;
+      font-weight: 900;
+      letter-spacing: -0.01em;
+    }
+
+    .crop-side strong {
+      display: block;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.62);
+    }
+
+    .crop-keyboard-hint {
+      margin-top: 12px;
+      font-size: 11.5px;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.55);
+    }
+
+    #cropCanvas:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: -4px;
+    }
+
+    /* --- Long, unbreakable strings (filenames) must never widen the page
+       (checked at 320px) ------------------------------------------------ */
+    .content-grid > *,
+    .panel,
+    .pair-item,
+    .preview-card,
+    .wizard-recap-row dd {
+      min-width: 0;
+    }
+
+    .video-metadata span,
+    .pair-summary-files,
+    .wizard-recap-row dd {
+      overflow-wrap: anywhere;
+    }
+
+    /* --- 320-430px: the wizard is already a wizard, this only stops the
+       densest rows from overflowing ------------------------------------- */
+    @media (max-width: 430px) {
+      .marker-options {
+        grid-template-columns: 1fr;
+      }
+
+      .action-icon {
+        width: 44px;
+        height: 44px;
+      }
+
+      .studio-eyebrow {
+        margin-top: 22px;
+      }
+    }
+
+    /* --- 641px and up: the studio ------------------------------------- */
+    @media (min-width: 641px) {
+      /* Wraps rather than scrolls: at 768px the six stage names are within a few
+         pixels of the available width, and a rail that scrolls sideways with no
+         affordance is worse than a rail on two rows. */
+      .studio-rail {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px;
+      }
+
+      /* Wizard chrome stays gone; the recap becomes the studio's review
+         panel, fed by the same updateWizardRecap(). */
+      .studio-recap {
+        display: block;
+        margin-bottom: 20px;
+      }
+
+      .wizard-recap-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 14px;
+        padding: 10px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        font-size: 13px;
+      }
+
+      .wizard-recap-row dd {
+        color: #fff;
+        font-weight: 800;
+        text-align: right;
+      }
+
+      /* The two steps inside the controls panel read as two sections rather
+         than one continuous form. */
+      .panel > [data-wizard-pane="2"] {
+        margin-top: 30px;
+        padding-top: 28px;
+        border-top: 1px solid rgba(255, 255, 255, 0.10);
+      }
+    }
+
+    /* --- 641-1024px: single column, so the stage must not be a footnote - */
+    @media (min-width: 641px) and (max-width: 1024px) {
+      .main-container {
+        padding: 22px;
+      }
+
+      .panel {
+        padding: 26px;
+      }
+
+      .preview-list {
+        max-height: none;
+      }
+    }
+
+    /* --- 1025px and up: controls left, consequence right, both in view - */
+    @media (min-width: 1025px) {
+      .content-grid {
+        align-items: start;
+      }
+
+      /* The stage tracks the creator down the controls column instead of
+         scrolling out of sight. `overflow-x: clip` on body (below) is what
+         makes this possible; in a browser without `clip` the declaration is
+         dropped, sticky quietly degrades to static, and the layout is exactly
+         what it is today. */
+      .content-grid > [data-wizard-pane="3"] > .panel {
+        position: sticky;
+        top: 22px;
+        max-height: calc(100vh - 44px);
+        overflow-y: auto;
+      }
+
+      .preview-list {
+        max-height: 300px;
+      }
+    }
+
+    /* Paired with the sticky rule above. `hidden` first so a browser without
+       `clip` keeps today's behaviour. */
+    body {
+      overflow-x: hidden;
+      overflow-x: clip;
+    }
+
+    /* --- Motion ------------------------------------------------------- */
+    @media (prefers-reduced-motion: reduce) {
+      .header::after {
+        animation: none;
+      }
+
+      .flash-message {
+        animation: none;
+      }
+
+      *,
+      *::before,
+      *::after {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
       }
     }
   </style>
@@ -1878,13 +2512,54 @@
         </div>
       </div>
 
+      <!-- Desktop-only stage rail. Deliberately NOT wizard chrome: it carries no
+           data-wizard-progress/data-wizard-pane attribute, drives nothing, and is
+           display:none below 641px where #wizardProgress is the real indicator. It
+           names the six stages of one creation so the desktop form reads as a guided
+           studio rather than a long page. -->
+      <ol class="studio-rail" id="studioRail" aria-label="Stages of creating a ScanStory">
+        <li class="studio-rail-step" data-studio-stage="story">
+          <span class="studio-rail-num" aria-hidden="true"></span>
+          <span class="studio-rail-name">Story</span>
+        </li>
+        <li class="studio-rail-line" aria-hidden="true"></li>
+        <li class="studio-rail-step" data-studio-stage="experience">
+          <span class="studio-rail-num" aria-hidden="true"></span>
+          <span class="studio-rail-name">Experience</span>
+        </li>
+        <!-- Playback sits here, not after Media, because the playback_mode radios are
+             pinned inside wizard pane 1 by contract; the rail states the real order of
+             the page rather than an idealised one. Its number comes from a CSS counter,
+             so hiding this stage for Direct QR renumbers the rest with no JS. -->
+        <li class="studio-rail-line studio-stage-playback" aria-hidden="true"></li>
+        <li class="studio-rail-step studio-stage-playback" data-studio-stage="playback">
+          <span class="studio-rail-num" aria-hidden="true"></span>
+          <span class="studio-rail-name">Playback</span>
+        </li>
+        <li class="studio-rail-line" aria-hidden="true"></li>
+        <li class="studio-rail-step" data-studio-stage="media">
+          <span class="studio-rail-num" aria-hidden="true"></span>
+          <span class="studio-rail-name">Media</span>
+        </li>
+        <li class="studio-rail-line" aria-hidden="true"></li>
+        <li class="studio-rail-step" data-studio-stage="review">
+          <span class="studio-rail-num" aria-hidden="true"></span>
+          <span class="studio-rail-name">Review</span>
+        </li>
+        <li class="studio-rail-line" aria-hidden="true"></li>
+        <li class="studio-rail-step" data-studio-stage="create">
+          <span class="studio-rail-num" aria-hidden="true"></span>
+          <span class="studio-rail-name">Create</span>
+        </li>
+      </ol>
+
       <div class="content-grid">
 
         <!-- Left Panel -->
         <div class="wizard-pane-wrap" data-wizard-pane="1 2">
         <div class="panel">
           <div data-wizard-pane="1">
-            <div class="panel-title"><span class="step-chip">1</span> Story details</div>
+            <h2 class="panel-title"><span class="step-chip">1</span> Story details</h2>
 
             <!-- First-run explainer. <details> is used on purpose: it opens by default for
                  a first-time creator, collapses with no JavaScript, and stays keyboard and
@@ -1904,32 +2579,65 @@
               </ol>
             </details>
 
+            <span class="studio-eyebrow">Name it</span>
             <div class="project-name-group">
               <label class="input-label" for="projectName">Story Name<span class="wizard-name-required">*</span></label>
               <input type="text" name="name" id="projectName" class="input-field" placeholder="Enter story name" required
                 oninput="updateQRPreview(); updateFormFields(); clearStoryNameError();" />
               <div class="wizard-name-error" id="storyNameError" role="alert">Please give your ScanStory a name.</div>
+              <p class="help-text" style="margin:8px 0 0 5px;">Only you see this. It labels the ScanStory in your
+                dashboard and on its QR code page.</p>
             </div>
 
+            <span class="studio-eyebrow">Choose the experience</span>
             <label class="input-label">Choose Experience Type</label>
             <div class="wizard-type-options" id="experienceTypeOptions">
               <button type="button" class="wizard-type-option active" id="experienceTypeImageVideo"
-                onclick="setExperienceType('image_video')">
+                aria-pressed="true" onclick="setExperienceType('image_video')">
+                <span class="wizard-type-icon" aria-hidden="true"><i class="fas fa-crosshairs"></i></span>
                 <strong>Image &rarr; Video</strong>
                 <span>Viewers scan the QR code, point their camera at your photo, and the video plays over it.</span>
               </button>
               <button type="button" class="wizard-type-option" id="experienceTypeDirectQr"
-                onclick="setExperienceType('direct_qr')">
+                aria-pressed="false" onclick="setExperienceType('direct_qr')">
+                <span class="wizard-type-icon" aria-hidden="true"><i class="fas fa-qrcode"></i></span>
                 <strong>Direct QR Video</strong>
                 <span>Viewers scan the QR code and the video plays straight away. No camera or target photo needed.</span>
                 <span class="type-badge" id="directQrBadge" hidden>Coming soon</span>
               </button>
             </div>
             <input type="hidden" name="experience_type" id="experienceType" value="image_video" />
-            <p class="help-text" id="directQrNotice" style="margin:-12px 0 18px;display:none;">
+            <p class="help-text is-caution" id="directQrNotice" style="margin:-12px 0 18px;display:none;">
               Direct QR Video is not ready to publish yet, so this ScanStory cannot be created with it selected.
               Switch back to Image &rarr; Video to continue.
             </p>
+
+            <!-- What the chosen experience actually does, end to end. Both variants are
+                 rendered; body[data-experience-type] decides which one is visible, so no
+                 JavaScript has to keep this in step with the choice above. Nothing here
+                 performs or predicts recognition - it is an explanation, not a measurement. -->
+            <div class="recognition-flow" id="recognitionFlow">
+              <div class="recognition-flow-row flow-image-video">
+                <i class="fas fa-image" aria-hidden="true"></i>
+                <span>Your <strong>target image</strong> is the real-world thing people point a camera at.</span>
+              </div>
+              <div class="recognition-flow-row flow-image-video">
+                <i class="fas fa-crosshairs" aria-hidden="true"></i>
+                <span>Their camera recognises it, then holds on to it.</span>
+              </div>
+              <div class="recognition-flow-row flow-image-video">
+                <i class="fas fa-play" aria-hidden="true"></i>
+                <span>Your <strong>video</strong> plays on the target.</span>
+              </div>
+              <div class="recognition-flow-row flow-direct-qr">
+                <i class="fas fa-qrcode" aria-hidden="true"></i>
+                <span>Your QR code opens the ScanStory. <strong>No target image, no camera.</strong></span>
+              </div>
+              <div class="recognition-flow-row flow-direct-qr">
+                <i class="fas fa-play" aria-hidden="true"></i>
+                <span>Your <strong>video</strong> plays straight away on their screen.</span>
+              </div>
+            </div>
 
             <!-- Playback Style only exists for Image -> Video: Direct QR has exactly one way
                  to play, so the group is hidden AND its radios disabled for that type. A
@@ -1938,21 +2646,27 @@
                  unreachable from this form rather than merely discouraged. The server-side
                  check in _validate_project_experience_playback() stays the real authority. -->
             <div id="playbackModeGroup">
+              <span class="studio-eyebrow">Choose how it plays</span>
               <label class="input-label" id="playbackModeLabel">Choose Playback Style</label>
               <div class="wizard-type-options" id="playbackModeOptions" role="radiogroup" aria-labelledby="playbackModeLabel">
                 <label class="wizard-type-option playback-option">
                   <input type="radio" name="playback_mode" value="tracked_overlay" checked
                     onchange="updateWizardRecap()" />
+                  <span class="wizard-type-icon" aria-hidden="true"><i class="fas fa-arrows-to-dot"></i></span>
                   <strong>Tracked Overlay</strong>
                   <span>The video stays attached to your photo and keeps following it while the camera tracks it.</span>
                 </label>
                 <label class="wizard-type-option playback-option">
                   <input type="radio" name="playback_mode" value="detect_once"
                     onchange="updateWizardRecap()" />
+                  <span class="wizard-type-icon" aria-hidden="true"><i class="fas fa-forward"></i></span>
                   <strong>Detect Once</strong>
                   <span>Recognize your photo once, then the video plays uninterrupted even if the camera looks away.</span>
                 </label>
               </div>
+              <p class="help-text" style="margin:-12px 0 18px;">Not sure? <strong>Tracked Overlay</strong> is the
+                default and the more cinematic of the two. Pick <strong>Detect Once</strong> when your viewers are
+                likely to lower the phone once the video starts.</p>
             </div>
 
             {% if viewer_is_business_vendor %}
@@ -1989,7 +2703,7 @@
           </div>
 
           <div data-wizard-pane="2">
-            <div class="panel-title" id="contentStepTitle"><span class="step-chip">2</span> Add your photo &amp; video</div>
+            <h2 class="panel-title" id="contentStepTitle"><span class="step-chip">2</span> Add your photo &amp; video</h2>
             <p class="help-text" id="contentStepHelp" style="margin-top:-8px;margin-bottom:16px;">
               For each content set: pick the photo people will scan, the video that plays when they scan it, and (optionally) adjust the exact area that triggers it.
             </p>
@@ -2003,7 +2717,7 @@
             </ul>
 
           <div id="pairsContainer"></div>
-          <div class="help-text" id="pairLimitMessage" style="margin-bottom:16px; color:#d1d5db; font-size:0.95rem;">
+          <div class="help-text" id="pairLimitMessage" style="margin-bottom:16px;" aria-live="polite">
             {% if is_admin %}
             Admin mode: unlimited content sets allowed per ScanStory.
             {% elif dev_test_entitled %}
@@ -2025,7 +2739,12 @@
         <div class="panel">
           <div class="panel-title"><i class="fas fa-eye"></i> Story Preview</div>
 
-          <dl class="wizard-recap" id="wizardRecap">
+          <!-- ONE review summary, shared by the mobile wizard's step 3 and the desktop
+               studio. `.wizard-recap` keeps it in the default-hidden wizard-chrome list;
+               `.studio-recap` is what opts the same element into being visible from 641px
+               up, so there is a single element and a single updateWizardRecap() feeding
+               it rather than two summaries that can disagree. -->
+          <dl class="wizard-recap studio-recap" id="wizardRecap">
             <div class="wizard-recap-row">
               <dt>Story name</dt>
               <dd id="recapStoryName">Not set yet</dd>
@@ -2034,9 +2753,21 @@
               <dt>Experience type</dt>
               <dd id="recapExperienceType">Image &rarr; Video</dd>
             </div>
+            <div class="wizard-recap-row recap-target">
+              <dt>Target image</dt>
+              <dd id="recapTargetImage">Not added yet</dd>
+            </div>
+            <div class="wizard-recap-row">
+              <dt>Video</dt>
+              <dd id="recapVideo">Not added yet</dd>
+            </div>
             <div class="wizard-recap-row">
               <dt>Playback style</dt>
               <dd id="recapPlaybackMode">Tracked Overlay</dd>
+            </div>
+            <div class="wizard-recap-row">
+              <dt>Content sets</dt>
+              <dd id="recapPairCount">0 ready</dd>
             </div>
             {% if viewer_is_business_vendor %}
             <div class="wizard-recap-row">
@@ -2049,6 +2780,26 @@
             </div>
             {% endif %}
           </dl>
+
+          <!-- What actually happens after Create. Both variants are rendered and
+               body[data-experience-type] picks one, so a Direct QR ScanStory never
+               claims an image-recognition step it does not have. The wording is the
+               product's own state vocabulary and nothing else. -->
+          <div class="recap-next" id="recapNextSteps">
+            <h3>After you press Create</h3>
+            <ol class="next-image-video">
+              <li>Your photo and video upload. You can watch the progress here.</li>
+              <li>We prepare your ScanStory so a camera can recognise your photo.</li>
+              <li>Your content set shows <strong>Processing</strong>, then <strong>Ready</strong>.</li>
+              <li>Your QR code works from the moment the ScanStory is created and never changes.</li>
+            </ol>
+            <ol class="next-direct-qr">
+              <li>Your video uploads. You can watch the progress here.</li>
+              <li>There is no target image, so nothing has to be analysed &mdash; it is
+                <strong>Ready</strong> as soon as it is saved.</li>
+              <li>Your QR code works immediately and never changes.</li>
+            </ol>
+          </div>
 
           <div class="preview-list" id="previewList">
             <div class="preview-card empty-state">
@@ -2064,9 +2815,9 @@
             <div id="qrPreviewContainer">
               <canvas id="qrPreviewCanvas"></canvas>
             </div>
-            <p
-              style="font-size:11px; color: rgba(255,255,255,.42); margin-top: 12px; letter-spacing:.12em; text-transform:uppercase;">
-              Share or print this so people can open your ScanStory
+            <p class="help-text" style="margin-top:12px;">
+              Share or print this so people can open your ScanStory. This is a live preview &mdash;
+              the real QR code is generated when you press Create, and it never changes afterwards.
             </p>
           </div>
 
@@ -2080,6 +2831,12 @@
           <div class="upload-set-progress" id="uploadSetProgress" aria-live="polite" hidden></div>
 
           <div class="upload-state-note" id="uploadStateNote" aria-live="polite"></div>
+
+          <!-- Desktop counterpart of #wizardCreateHint: Create can be disabled by a
+               condition several sections up the page, and a greyed-out button that never
+               says why is the single most common complaint about this form. Same
+               wizardCreateBlockedReason() text, no second source of truth. -->
+          <p class="submit-blocked-hint" id="submitBlockedHint" role="status" aria-live="polite" hidden></p>
 
           <div class="action-buttons">
             <button type="button" class="action-btn clear-btn" id="testExperienceBtn" onclick="testExperiencePreview()">
@@ -2110,31 +2867,42 @@
     </form>
   </main>
 
-  <div class="crop-modal" id="cropModal" aria-hidden="true">
+  <div class="crop-modal" id="cropModal" aria-hidden="true" role="dialog" aria-modal="true"
+    aria-labelledby="cropModalTitle" aria-describedby="cropModalDesc">
     <div class="crop-shell">
       <div class="crop-toolbar">
         <div>
-          <strong>Crop marker area</strong>
-          <div style="font-size:12px;color:rgba(255,255,255,.68);margin-top:4px;">Select the exact card, poster, label, artwork, package or printed area that should trigger the video.</div>
+          <h2 class="crop-title" id="cropModalTitle">Crop marker area</h2>
+          <div class="help-text" id="cropModalDesc" style="margin-top:4px;">Select the exact card, poster, label, artwork, package or printed area that should trigger the video.</div>
         </div>
         <button type="button" class="crop-btn" onclick="closeCropModal()"><span class="desktop-label">Close</span><span class="mobile-label">Cancel</span></button>
         <button type="button" class="crop-btn primary mobile-confirm" onclick="useCurrentMarker()">Use this marker</button>
       </div>
       <div class="crop-stage">
         <div class="crop-canvas-wrap">
-          <canvas id="cropCanvas"></canvas>
+          <canvas id="cropCanvas" tabindex="0" role="img"
+            aria-label="Marker crop area. Drag to move or resize it. With this focused, the arrow keys move the crop and Shift with the arrow keys resizes it."></canvas>
         </div>
         <aside class="crop-side">
           <strong>This area will become the marker</strong>
-          <img id="cropPreview" alt="Marker crop preview">
+          <!-- SIG-1: the same four-corner recognition quad the live scanner draws, as
+               static CSS corners. It is an explanation of what the camera will look for,
+               not a recognition result: no CV runs here and no score is reported. -->
+          <span class="recognition-frame">
+            <img id="cropPreview" alt="Marker crop preview">
+            <span class="rq-b" aria-hidden="true"></span>
+          </span>
+          <p class="recognition-caption">This is what your viewer's camera will look for.</p>
           <div class="marker-status" id="cropQuality"><strong>Usable marker</strong><span>Adjust crop to evaluate marker quality.</span></div>
           <div class="crop-debug-panel{% if crop_debug_enabled %} active{% endif %}" id="cropDebugPanel">Crop debug waiting...</div>
-          <ul style="font-size:12px;line-height:1.55;color:rgba(255,255,255,.70);padding-left:18px;margin-top:12px;">
+          <ul class="help-text" style="padding-left:18px;margin-top:12px;">
             <li>Crop tightly around the intended marker.</li>
             <li>Exclude tables, walls, floors, hands and nearby objects.</li>
             <li>Use an image with clear visual detail.</li>
             <li>Avoid blur, glare and large blank areas.</li>
           </ul>
+          <p class="crop-keyboard-hint">Prefer not to crop? <strong>Use full image as marker</strong> below takes the
+            whole photo &mdash; it is a complete keyboard alternative to dragging.</p>
         </aside>
       </div>
       <div class="crop-actions">
@@ -2165,10 +2933,29 @@
     let cropListenersAttached = false;
     let cropAttachedCanvas = null;
     let cropScrollLock = null;
+    let cropReturnFocus = null;
+    const CROP_NUDGE_STEP = 0.01;
     const cropCanvas = () => document.getElementById('cropCanvas');
     const cropCtx = () => cropCanvas().getContext('2d');
     const DEFAULT_MARKER_CROP = Object.freeze({ x: 0.1, y: 0.1, width: 0.8, height: 0.8 });
     const MIN_MARKER_CROP_FRACTION = 0.08;
+
+    /* ===================== Shared notices =====================
+       static/js/ss-ui.js supplies the accessible toast and the focus-trapped
+       confirm the other Creator pages already use. These two wrappers are the
+       only thing this page needs from it, and they keep the native primitives
+       as a fallback so a validation refusal can never end up silent if that
+       script fails to load. Nothing about the upload pipeline goes through
+       here - it is presentation for what used to be a native blocking box. */
+    function notify(message, tone) {
+      if (window.ssToast) { window.ssToast(message, tone); return; }
+      window.alert(message);
+    }
+
+    function askConfirm(options) {
+      if (window.ssConfirm) return window.ssConfirm(options);
+      return Promise.resolve(window.confirm(options.body || options.title));
+    }
 
     function defaultMarkerCrop() {
       return { ...DEFAULT_MARKER_CROP };
@@ -2333,7 +3120,44 @@
       if (recapCreatedFor) {
         recapCreatedFor.textContent = createdForValue() === 'customer' ? 'A customer' : 'My business / myself';
       }
+      // Presence, counted from the same currentFiles the uploader reads. No claim
+      // about processing, quality or recognition - just what is and is not there.
+      const pairs = Object.values(currentFiles);
+      const recapTarget = document.getElementById('recapTargetImage');
+      const recapVideo = document.getElementById('recapVideo');
+      const recapCount = document.getElementById('recapPairCount');
+      if (recapTarget) recapTarget.textContent = pairs.some(p => p?.image) ? 'Added' : 'Not added yet';
+      if (recapVideo) recapVideo.textContent = pairs.some(p => p?.video) ? 'Added' : 'Not added yet';
+      if (recapCount) {
+        const ready = pairs.filter(pairIsComplete).length;
+        recapCount.textContent = ready === 1 ? '1 ready' : `${ready} ready`;
+      }
+      updateStudioRail();
       updateWizardCreateHint();
+    }
+
+    /* Desktop stage rail. Reads the exact conditions that gate #submitBtn, so a
+       lit stage always means the same thing the Create button means. Purely
+       decorative: nothing reads it back and no form value depends on it. */
+    function updateStudioRail() {
+      const rail = document.getElementById('studioRail');
+      if (!rail) return;
+      const named = !!document.getElementById('projectName').value.trim();
+      const complete = Object.values(currentFiles).some(pairIsComplete);
+      const creatable = !document.getElementById('submitBtn').disabled;
+      const done = {
+        story: named,
+        // A valid experience_type and playback_mode are always selected (the
+        // defaults are real, submitted values), so these are settled from the start.
+        experience: true,
+        playback: true,
+        media: complete,
+        review: creatable,
+        create: false
+      };
+      rail.querySelectorAll('[data-studio-stage]').forEach(step => {
+        step.classList.toggle('is-done', !!done[step.dataset.studioStage]);
+      });
     }
 
     /* Vendor-only. Absent for an Individual account, so every reader guards on null. */
@@ -2362,26 +3186,37 @@
     // longer see. Mirrors the three conditions that disable #submitBtn, in the same order.
     function wizardCreateBlockedReason() {
       if (!document.getElementById('projectName').value.trim()) {
-        return 'Add a story name in step 1 to continue.';
+        return 'Add a story name to continue.';
       }
       if (experienceType() === 'direct_qr' && !DIRECT_QR_BACKEND_READY) {
-        return 'Direct QR Video cannot be published yet. Switch back to Image → Video in step 1.';
+        return 'Direct QR Video cannot be published yet. Switch back to Image → Video to continue.';
       }
       if (!Object.values(currentFiles).some(pairIsComplete)) {
         return experienceType() === 'direct_qr'
-          ? 'Add a video in step 2 to continue.'
-          : 'Add an image and a video in step 2 to continue.';
+          ? 'Add a video to continue.'
+          : 'Add a photo and a video to continue.';
       }
       return '';
     }
 
     function updateWizardCreateHint() {
+      const reason = wizardCreateBlockedReason();
       const hint = document.getElementById('wizardCreateHint');
       const create = document.getElementById('wizardCreateBtn');
-      if (!hint || !create) return;
-      const reason = create.hidden || !create.disabled ? '' : wizardCreateBlockedReason();
-      hint.textContent = reason;
-      hint.hidden = !reason;
+      if (hint && create) {
+        const wizardReason = create.hidden || !create.disabled ? '' : reason;
+        hint.textContent = wizardReason;
+        hint.hidden = !wizardReason;
+      }
+      // Desktop has no wizard step to hide the blocker on, but it does have the
+      // same disabled Create button, so it gets the same sentence.
+      const submit = document.getElementById('submitBtn');
+      const deskHint = document.getElementById('submitBlockedHint');
+      if (deskHint && submit) {
+        const deskReason = submit.disabled ? reason : '';
+        deskHint.textContent = deskReason;
+        deskHint.hidden = !deskReason;
+      }
     }
 
     /* ===================== Experience type =====================
@@ -2405,8 +3240,14 @@
       const value = type === 'direct_qr' ? 'direct_qr' : 'image_video';
       document.getElementById('experienceType').value = value;
       document.body.dataset.experienceType = value;
-      document.getElementById('experienceTypeImageVideo').classList.toggle('active', value === 'image_video');
-      document.getElementById('experienceTypeDirectQr').classList.toggle('active', value === 'direct_qr');
+      const imageVideoBtn = document.getElementById('experienceTypeImageVideo');
+      const directQrBtn = document.getElementById('experienceTypeDirectQr');
+      imageVideoBtn.classList.toggle('active', value === 'image_video');
+      directQrBtn.classList.toggle('active', value === 'direct_qr');
+      // These are toggle buttons, not links: without aria-pressed a screen reader
+      // reads two identical buttons and cannot tell which one is selected.
+      imageVideoBtn.setAttribute('aria-pressed', String(value === 'image_video'));
+      directQrBtn.setAttribute('aria-pressed', String(value === 'direct_qr'));
 
       const notice = document.getElementById('directQrNotice');
       if (notice) notice.style.display = (value === 'direct_qr' && !DIRECT_QR_BACKEND_READY) ? 'block' : 'none';
@@ -2463,15 +3304,15 @@
       if (!complete) return;
 
       const thumb = pairData.processedPreviewUrl || pairData.imageUrl;
-      const files = [pairData.image?.name, pairData.video?.name].filter(Boolean).join(' · ');
+      const files = [pairData.image?.name, pairData.video?.name].filter(Boolean).map(escapeHtml).join(' · ');
       summary.innerHTML = `
-        ${thumb ? `<img src="${thumb}" alt="Target preview">` : ''}
+        ${thumb ? `<img src="${thumb}" alt="Target image preview">` : ''}
         <div class="pair-summary-text">
-          <div class="pair-summary-title">Pair ${pairId}</div>
+          <div class="pair-summary-title">Content set ${pairId}</div>
           <div class="pair-summary-files">${files || 'Video ready'}</div>
         </div>
         <div class="pair-summary-actions">
-          <button type="button" class="icon-btn" onclick="expandPair(${pairId})" title="Edit pair" aria-label="Edit pair">
+          <button type="button" class="icon-btn" onclick="expandPair(${pairId})" title="Edit this content set" aria-label="Edit this content set">
             <i class="fa-solid fa-pen"></i>
           </button>
           ${pairId > 1 ? `
@@ -2501,7 +3342,7 @@
       const pairIds = Object.keys(currentFiles).map(n => parseInt(n, 10)).sort((a, b) => a - b);
       const ready = pairIds.map(id => currentFiles[id]).find(pairIsComplete);
       if (!ready) {
-        alert('Add a photo and a video first, then you can test your experience.');
+        notify('Add a photo and a video first, then you can test your experience.', 'error');
         return;
       }
       const card = document.querySelector('#previewList .preview-card');
@@ -2533,7 +3374,7 @@
     function addPair() {
       const currentCount = document.querySelectorAll('.pair-item').length;
       if (!IS_ADMIN && !IS_DEV_TEST && currentCount >= MAX_PAIRS_PER_PROJECT) {
-        alert(`Your current plan allows up to ${MAX_PAIRS_PER_PROJECT} pair(s) per ScanStory.`);
+        notify(`Your current plan allows up to ${MAX_PAIRS_PER_PROJECT} pair(s) per ScanStory.`, 'error');
         return;
       }
 
@@ -2547,7 +3388,7 @@
           <div class="pair-header">
             <div class="pair-title">
               <span class="pair-number">${pairId}</span>
-              Pair ${pairId}
+              Content set ${pairId}
             </div>
 
             ${pairId > 1 ? `
@@ -2648,15 +3489,22 @@
     }
 
 
-    function removePair(pairId) {
+    async function removePair(pairId) {
       const pairElement = document.getElementById(`pair-${pairId}`);
       if (!pairElement) return;
 
       // Confirm only when there is actually work to lose. Confirming an empty
-      // content set would train people to click through the dialog.
+      // content set would train people to click through the dialog. Same gate as
+      // before, asked in a focus-trapped dialog instead of window.confirm.
       const held = currentFiles[pairId];
       if (held && (held.image || held.video)) {
-        if (!window.confirm('Remove this content set? The photo and video you picked for it will be cleared.')) return;
+        const confirmed = await askConfirm({
+          title: 'Remove this content set?',
+          body: 'The photo and video you picked for it will be cleared. Nothing else in this ScanStory changes.',
+          confirmLabel: 'Remove content set',
+          destructive: true
+        });
+        if (!confirmed) return;
       }
 
       // Revoke object URLs
@@ -2688,8 +3536,8 @@
         title.childNodes.forEach(n => {
           if (n.nodeType === Node.TEXT_NODE) n.textContent = '';
         });
-        // Keep "Pair X" text by setting via template (simple)
-        title.insertAdjacentText('beforeend', ` Pair ${newId}`);
+        // Keep the "Content set X" text by setting via template (simple)
+        title.insertAdjacentText('beforeend', ` Content set ${newId}`);
 
         // update upload areas ids
         const imageArea = pair.querySelector('#image-area-' + oldId) || pair.querySelector('[id^="image-area-"]');
@@ -2727,7 +3575,7 @@
           if (!deleteBtn) {
             const header = pair.querySelector('.pair-header');
             header.insertAdjacentHTML('beforeend', `
-              <button type="button" class="icon-btn danger" onclick="removePair(${newId})" title="Delete Pair" aria-label="Delete Pair">
+              <button type="button" class="icon-btn danger" onclick="removePair(${newId})" title="Remove this content set" aria-label="Remove this content set">
                 <i class="fa-solid fa-trash"></i>
               </button>
             `);
@@ -2750,6 +3598,27 @@
       updatePairLimit();
     }
 
+    /* A local filename is attacker-controllable in exactly one sense - the
+       creator can name their own file `<img onerror=...>` - and it is now
+       printed on the tile, so it goes through here first. */
+    function escapeHtml(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    /* The selected-file state of an upload tile. The "Replace" pill above it is
+       hover-only, which no touch device ever shows, and the chosen filename was
+       never visible on the tile at all - so this strip states both, always. */
+    function uploadTileMarkup(type, url, file) {
+      const media = type === 'image'
+        ? `<img src="${url}" alt="Target image preview">`
+        : `<video src="${url}" muted playsinline></video>`;
+      const label = type === 'image' ? 'Target image' : 'Video';
+      const name = escapeHtml(file?.name || (type === 'image' ? 'Selected photo' : 'Selected video'));
+      return `${media}<span class="ua-caption"><em>${label} &middot; tap to replace</em>${name}</span>`;
+    }
+
     function refreshAllUploadAreas() {
       Object.keys(currentFiles).forEach((idStr) => {
         const pairId = parseInt(idStr, 10);
@@ -2761,7 +3630,7 @@
         if (imageArea && imagePreview) {
           if (pairData.imageUrl) {
             imageArea.classList.add('has-file');
-            imagePreview.innerHTML = `<img src="${pairData.imageUrl}" alt="Image Preview">`;
+            imagePreview.innerHTML = uploadTileMarkup('image', pairData.imageUrl, pairData.image);
           } else {
             imageArea.classList.remove('has-file');
             imagePreview.innerHTML = '';
@@ -2774,7 +3643,7 @@
         if (videoArea && videoPreview) {
           if (pairData.videoUrl) {
             videoArea.classList.add('has-file');
-            videoPreview.innerHTML = `<video src="${pairData.videoUrl}" muted playsinline></video>`;
+            videoPreview.innerHTML = uploadTileMarkup('video', pairData.videoUrl, pairData.video);
           } else {
             videoArea.classList.remove('has-file');
             videoPreview.innerHTML = '';
@@ -2877,8 +3746,13 @@
       attachCropPointerListeners();
       lockBackgroundScroll();
       const modal = document.getElementById('cropModal');
+      // Only on a real open: re-opening over an already-open modal would record the
+      // canvas itself, and closing would then try to focus a display:none element.
+      if (modal.getAttribute('aria-hidden') !== 'false') cropReturnFocus = document.activeElement;
       modal.style.display = 'block';
       modal.setAttribute('aria-hidden', 'false');
+      // A modal that traps neither focus nor Escape is a modal only visually.
+      document.addEventListener('keydown', onCropModalKeydown, true);
       resizeCropCanvas();
       cropDebug('[CROP INIT]', {
         event: 'modal-opened',
@@ -2888,6 +3762,8 @@
       });
       drawCropCanvas();
       updateCropPreview();
+      // The canvas is the primary control and is where the arrow keys act.
+      cropCanvas()?.focus({ preventScroll: true });
     }
 
     function closeCropModal() {
@@ -2896,7 +3772,11 @@
       modal.setAttribute('aria-hidden', 'true');
       cropDebug('[CROP POINTER UP]', { event: 'modal-close' });
       cropDrag = null;
+      document.removeEventListener('keydown', onCropModalKeydown, true);
       unlockBackgroundScroll();
+      // Back to whatever opened it, so a keyboard user is not dropped at the top.
+      if (cropReturnFocus && cropReturnFocus.focus) cropReturnFocus.focus({ preventScroll: true });
+      cropReturnFocus = null;
     }
 
     function lockBackgroundScroll() {
@@ -3120,6 +4000,71 @@
       pair.quality = evaluateMarkerQuality(pair);
       document.getElementById('cropQuality').innerHTML = `<strong>${pair.quality.status}</strong><span>${pair.quality.guidance.join(' ')}</span>`;
       updateMarkerControls(activeCropPairId);
+    }
+
+    /* ===================== Crop modal keyboard behaviour =====================
+       Installed only while the modal is open (see openCropModal/closeCropModal).
+       Escape cancels, Tab is trapped inside the dialog, and the arrow keys move
+       or resize the crop while the canvas has focus.
+
+       IMPORTANT: this adds no crop maths. It writes a candidate rectangle and
+       then hands it to sanitizeCrop() - the same and only clamp the pointer path
+       uses - so a keyboard edit can never reach a crop a drag could not. */
+    function cropFocusables() {
+      const modal = document.getElementById('cropModal');
+      if (!modal) return [];
+      return Array.prototype.filter.call(
+        modal.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'),
+        node => !node.disabled && node.offsetParent !== null
+      );
+    }
+
+    function onCropModalKeydown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeCropModal();
+        return;
+      }
+      if (event.key === 'Tab') {
+        const items = cropFocusables();
+        if (!items.length) return;
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+        return;
+      }
+      nudgeCropFromKeyboard(event);
+    }
+
+    function nudgeCropFromKeyboard(event) {
+      const canvas = cropCanvas();
+      if (!canvas || document.activeElement !== canvas) return;
+      const deltas = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+      const delta = deltas[event.key];
+      if (!delta) return;
+      const pair = currentFiles[activeCropPairId];
+      if (!pair || pair.markerMode !== 'crop') return;
+      event.preventDefault();
+      const step = CROP_NUDGE_STEP * (event.altKey ? 5 : 1);
+      const next = { ...pair.crop };
+      if (event.shiftKey) {
+        // Resize from the bottom-right, which is what an 'se' handle drag does.
+        next.width = Math.min(1, Math.max(MIN_MARKER_CROP_FRACTION, next.width + delta[0] * step));
+        next.height = Math.min(1, Math.max(MIN_MARKER_CROP_FRACTION, next.height + delta[1] * step));
+      } else {
+        next.x += delta[0] * step;
+        next.y += delta[1] * step;
+      }
+      pair.crop = next;
+      sanitizeCrop(pair, activeCropImage);
+      drawCropCanvas();
+      updateCropPreview();
     }
 
     async function useCurrentMarker() {
@@ -3436,7 +4381,7 @@
       // Validate size
       const maxSize = type === 'image' ? 50 * 1024 * 1024 : 1024 * 1024 * 1024;
       if (file.size > maxSize) {
-        alert(`This ${type === 'image' ? 'photo' : 'video'} is larger than the ${Math.round(maxSize / (1024 * 1024))} MB limit. Please choose a smaller file.`);
+        notify(`This ${type === 'image' ? 'photo' : 'video'} is larger than the ${Math.round(maxSize / (1024 * 1024))} MB limit. Please choose a smaller file.`, 'error');
         input.value = '';
         return;
       }
@@ -3445,12 +4390,12 @@
       const validImageTypes = ['image/jpeg', 'image/png', 'image/jpg'];
       const validVideoTypes = ['video/mp4', 'video/mpeg', 'video/quicktime'];
       if (type === 'image' && !validImageTypes.includes(file.type)) {
-        alert('That photo format is not supported. Please choose a JPG or PNG.');
+        notify('That photo format is not supported. Please choose a JPG or PNG.', 'error');
         input.value = '';
         return;
       }
       if (type === 'video' && !validVideoTypes.includes(file.type)) {
-        alert('That video format is not supported. Please choose an MP4.');
+        notify('That video format is not supported. Please choose an MP4.', 'error');
         input.value = '';
         return;
       }
@@ -3483,7 +4428,7 @@
         const preview = document.getElementById(`image-preview-${pairId}`);
         if (area && preview) {
           area.classList.add('has-file');
-          preview.innerHTML = `<img src="${fileUrl}" alt="Image Preview">`;
+          preview.innerHTML = uploadTileMarkup('image', fileUrl, file);
         }
         try {
           const image = await loadImageForPair(pairId);
@@ -3501,8 +4446,9 @@
         const preview = document.getElementById(`video-preview-${pairId}`);
         if (area && preview) {
           area.classList.add('has-file');
-          // no controls in upload tile; hover shows "Replace" and click opens picker
-          preview.innerHTML = `<video src="${fileUrl}" muted playsinline></video>`;
+          // No controls in the tile: the caption strip states the filename and that a
+          // tap replaces it, and the full preview with controls lives in the stage panel.
+          preview.innerHTML = uploadTileMarkup('video', fileUrl, file);
         }
         detectVideoMetadata(pairId, file, fileUrl);
       }
@@ -3542,7 +4488,7 @@
         }
 
         if (pairLimitMessage) {
-          pairLimitMessage.textContent = `${IS_ADMIN ? 'Admin mode' : 'Development test account'}: unlimited pairs allowed per ScanStory. Current pairs: ${pairCount}.`;
+          pairLimitMessage.textContent = `${IS_ADMIN ? 'Admin mode' : 'Development test account'}: unlimited content sets allowed per ScanStory. Currently ${pairCount}.`;
         }
 
         return;
@@ -3561,7 +4507,7 @@
       }
 
       if (pairLimitMessage) {
-        pairLimitMessage.textContent = `Your current plan allows up to ${MAX_PAIRS_PER_PROJECT} pair(s) per ScanStory.`;
+        pairLimitMessage.textContent = `Your current plan allows up to ${MAX_PAIRS_PER_PROJECT} image + video set${MAX_PAIRS_PER_PROJECT === 1 ? '' : 's'} per ScanStory.`;
       }
     }
 
@@ -3590,7 +4536,7 @@
         const previewHTML = `
           <div class="preview-card" id="preview-card-${pairId}">
             <div class="preview-card-header">
-              <div class="preview-card-title">Pair ${pairId}</div>
+              <div class="preview-card-title">Content set ${pairId}</div>
               <div class="preview-actions">
                 <button type="button" class="action-icon recap-target" onclick="replaceFile(${pairId}, 'image')" title="Replace photo" aria-label="Replace photo">
                   <i class="fa-solid fa-image"></i>
@@ -3599,7 +4545,7 @@
                   <i class="fa-solid fa-video"></i>
                 </button>
                 ${pairId > 1 ? `
-                  <button type="button" class="action-icon danger" onclick="removePairFromPreview(${pairId})" title="Delete Pair" aria-label="Delete Pair">
+                  <button type="button" class="action-icon danger" onclick="removePairFromPreview(${pairId})" title="Remove this content set" aria-label="Remove this content set">
                     <i class="fa-solid fa-trash"></i>
                   </button>
                 ` : ``}
@@ -3696,8 +4642,14 @@
       }
     }
 
-    function clearAll() {
-      if (!confirm('Clear this ScanStory and start again? Your name, photos and videos will be removed.')) return;
+    async function clearAll() {
+      const confirmed = await askConfirm({
+        title: 'Clear this ScanStory and start again?',
+        body: 'Your name, photos and videos will be removed from this page. Nothing you have already created is affected.',
+        confirmLabel: 'Clear everything',
+        destructive: true
+      });
+      if (!confirmed) return;
       if (!uploadActive) {
         disableUploadNavigationWarning();
       }
@@ -3768,7 +4720,7 @@
 
        "paused" is deliberately NOT a transfer state: the stall watch must not
        flag a pause it caused. And "uploaded" onward the creator is free to
-       leave — processing runs in RQ on the server, not in this tab.
+       leave — the rest of the work continues on the server, not in this tab.
 
        "Slow" is deliberately qualitative. We never quote a required bandwidth, because
        any number we printed would be wrong for somebody. */
@@ -4203,7 +5155,7 @@
         VIDEO_VALIDATION_FAILED: 'The video could not be validated.',
         CHECKSUM_MISMATCH: 'The uploaded bytes did not match the expected checksum.',
         PROJECT_CREATION_FAILED: 'Your ScanStory could not be created. Please try again.',
-        QUEUE_ENQUEUE_FAILED: 'Your ScanStory was saved, but processing could not be queued. Please try again in a moment.',
+        QUEUE_ENQUEUE_FAILED: 'Your ScanStory was saved, but processing could not be started. Please try again in a moment.',
         INCOMPLETE_UPLOAD: 'The upload is incomplete. Resuming from the server offset.',
         OFFSET_MISMATCH: 'The server and browser upload offsets differed. Resynchronizing.',
         CHUNK_TOO_LARGE: 'Sending a smaller piece of the upload and continuing.',
@@ -4421,14 +5373,13 @@
         const payload = await fetchUploadJson(`/api/processing/jobs/${jobId}`, { method: 'GET', signal });
         const status = payload.status || payload.job?.status;
         if (status === 'completed' || status === 'failed') return payload;
-        // Honest mapping only: processing_job_status_payload() (processing_queue.py) only ever
-        // reports 'queued' or an active status such as 'processing' while work is in flight - there
-        // is no separate backend signal for "optimizing media" vs "preparing recognition", so we
-        // don't invent one here.
+        // Honest mapping only: the processing status API reports either a waiting status or an
+        // active one such as 'processing' while work is in flight - there is no separate backend
+        // signal for "optimizing media" vs "preparing recognition", so we don't invent one here.
         if (status === 'processing') {
           setUploadProgress('Preparing your project', 99, 'Optimizing your media for scanning. This can continue in the background.', '', 'processing');
         } else {
-          setUploadProgress('Processing queued', 98, 'Your marker is queued for processing.', '', 'processing');
+          setUploadProgress('Preparing your ScanStory', 98, 'We are getting your ScanStory ready to scan.', '', 'processing');
         }
         await new Promise(resolve => setTimeout(resolve, delay));
         delay = Math.min(delay * 1.6, 6000);
@@ -4669,7 +5620,7 @@
           delay *= 2;
         }
       }
-      throw new UploadApiError('QUEUE_ENQUEUE_FAILED', 'Queue unavailable', 502);
+      throw new UploadApiError('QUEUE_ENQUEUE_FAILED', 'Processing could not be started', 502);
     }
 
     async function submitResumableSinglePair(context) {
@@ -4810,9 +5761,9 @@
           throw new UploadApiError(finalSession?.failure_code || 'PROJECT_CREATION_FAILED', safeUploadErrorMessage(finalSession?.failure_code), 409, finalized);
         }
 
-        uploadState.phase = 'Processing queued';
+        uploadState.phase = 'Preparing your ScanStory';
         const jobId = finalized.processing_job?.id || finalized.job?.id || finalized.job_id || null;
-        setUploadProgress('Processing queued', 98, 'Your marker is queued for processing.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'processing');
+        setUploadProgress('Preparing your ScanStory', 98, 'We are getting your ScanStory ready to scan.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'processing');
         await pollProcessingJobIfAvailable(jobId, controller.signal);
         clearResumableUploadState();
         uploadClientLog('UPLOAD CLIENT COMPLETE', uploadState, { current_phase: 'Project ready' });
@@ -4924,7 +5875,7 @@
           delay *= 2;
         }
       }
-      throw new UploadApiError('QUEUE_ENQUEUE_FAILED', 'Queue unavailable', 502);
+      throw new UploadApiError('QUEUE_ENQUEUE_FAILED', 'Processing could not be started', 502);
     }
 
     /* Per-content-set progress, the one thing a multi-set creator cannot read
@@ -4968,6 +5919,11 @@
       const note = document.getElementById('uploadStateNote');
       if (note) {
         note.textContent = 'Re-select the same video to continue your upload. Your uploaded progress is safe.';
+        // DEFECT FIX (presentation only): .upload-state-note is display:none by
+        // default and only setUploadState() ever un-hides it, so this message was
+        // written into the DOM and never shown - the one place a creator most
+        // needs it, after a reload mid-upload.
+        note.style.display = 'block';
       }
       renderContentSetProgress(Array.isArray(stored.sets) ? stored.sets : null, -1);
     }
@@ -5206,8 +6162,8 @@
         if (!finalSession || finalSession.status !== 'completed') {
           throw new UploadApiError(finalSession?.failure_code || 'PROJECT_CREATION_FAILED', safeUploadErrorMessage(finalSession?.failure_code), 409, finalized);
         }
-        uploadState.phase = 'Processing queued';
-        setUploadProgress('Processing queued', 98, 'Your markers are queued for processing.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'processing');
+        uploadState.phase = 'Preparing your ScanStory';
+        setUploadProgress('Preparing your ScanStory', 98, 'We are getting your ScanStory ready to scan.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'processing');
         await pollProcessingJobIfAvailable(finalized.session?.processing_job?.id || null, controller.signal);
         goToProject(finalSession.project_id, totalBytes);
       } catch (err) {
@@ -5307,15 +6263,15 @@
       // exists the creator must not start an upload it cannot finish.
       if (experienceType() === 'direct_qr' && !DIRECT_QR_BACKEND_READY) {
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: 'Preparing project' });
-        alert('Direct QR Video cannot be published yet. Switch to Image → Video to create this ScanStory.');
+        notify('Direct QR Video cannot be published yet. Switch to Image → Video to create this ScanStory.', 'error');
         return;
       }
 
       if (!readyPairs.length) {
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: 'Preparing project' });
-        alert(experienceType() === 'direct_qr'
+        notify(experienceType() === 'direct_qr'
           ? 'Please add at least one video.'
-          : 'Please add at least one complete pair with a photo and a video.');
+          : 'Please add at least one content set with a photo and a video.', 'error');
         return;
       }
       uploadClientLog('UPLOAD CLIENT VALIDATION DONE', uploadState, { current_phase: 'Preparing project' });
@@ -5418,7 +6374,7 @@
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: uploadState.phase });
         resetUploadSubmit(submitBtn);
         setUploadProgress('Upload failed', 0, 'The marker could not be prepared. Please try again.', '', 'failed');
-        alert('The marker could not be prepared. Please try again.');
+        notify('The marker could not be prepared. Please try again.', 'error');
         return;
       }
 
@@ -5565,20 +6521,20 @@
           uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { http_status: xhr.status, current_phase: uploadState.phase });
           resetUploadSubmit(submitBtn);
           setUploadProgress('Upload failed', 0, 'The server rejected the upload. Please try again.', '', 'failed');
-          alert('Upload failed. Please try again.');
+          notify('Upload failed. Please try again.', 'error');
         }
       };
       xhr.onerror = () => {
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: uploadState.phase });
         resetUploadSubmit(submitBtn);
         setUploadProgress('Upload failed', 0, 'The upload could not reach the server. Please try again.', '', 'failed');
-        alert('The upload could not reach the server. Please try again.');
+        notify('The upload could not reach the server. Please try again.', 'error');
       };
       xhr.onabort = () => {
         uploadClientLog('UPLOAD CLIENT ABORTED', uploadState, { current_phase: uploadState.phase });
         resetUploadSubmit(submitBtn);
         setUploadProgress('Upload aborted', 0, 'The upload was cancelled before completion.', '', '');
-        alert('Upload aborted before completion.');
+        notify('Upload aborted before completion.');
       };
       enableUploadNavigationWarning();
       xhr.send(fd);

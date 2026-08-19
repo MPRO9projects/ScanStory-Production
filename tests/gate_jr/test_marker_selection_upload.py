@@ -399,7 +399,12 @@ def test_resumable_upload_progress_bytes_percent_speed_eta_are_visible():
     # recovered must stop quoting the stall it recovered from.
     assert "`${formatRate(smoothed)} · ${etaText}`" in block
     assert "setUploadProgress('Finalizing upload'" in html
-    assert "setUploadProgress('Processing queued'" in html
+    # Creator-facing phase copy must not expose the internal pipeline vocabulary
+    # ("queue"/"queued"/"worker"/"RQ"). This phase is the same phase it always
+    # was - the same 98%, the same 'processing' state, the same call site - it is
+    # now named in the product's own words.
+    assert "setUploadProgress('Preparing your ScanStory'" in html
+    assert "Processing queued" not in html
     assert "setUploadProgress('Project ready'" in html
 
 
