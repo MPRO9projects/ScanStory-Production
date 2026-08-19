@@ -1,10 +1,13 @@
 from datetime import timedelta
+from io import BytesIO
 import json
 from pathlib import Path
 
 import pytest
 from PIL import Image
 from werkzeug.security import generate_password_hash
+
+from public_keys import generate_unique_public_key
 
 
 def _make_project_pair(app_module, db_session, owner_user=None, owner_admin=None, tmp_image=True):
@@ -629,3 +632,191 @@ def test_final_failure_after_max_attempts(app_module, db_session, normal_user):
     failed = app_module.ProcessingJob.query.get(job.id)
     assert failed.status == "failed"
     assert failed.attempt_count == 1
+
+
+# ===========================================================================
+# Media replacement reprocessing: a completed project's FIRST ProcessingJob
+# permanently occupies the "initial" idempotency key
+# (process_project_pairs:project:<id>:pair:-). Replacing media later is a new
+# logical processing generation, not that same attempt reborn - it must not
+# collide with the historical row on uq_processing_job_project_idempotency.
+# ===========================================================================
+def _complete(job, db_session, app_module):
+    job.status = "completed"
+    job.completed_at = app_module.dt.utcnow()
+    db_session.commit()
+
+
+def test_repeated_edit_reprocess_after_completion_does_not_collide(
+    app_module, db_session, normal_user
+):
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    initial_job, _ = app_module.enqueue_project_pair_processing(project.id)
+    _complete(initial_job, db_session, app_module)
+
+    # This is what user_edit_project now does on a media replacement - the
+    # exact call the reported UniqueViolation crashed on.
+    reprocess_job, created = app_module.enqueue_project_pair_processing(
+        project.id, attempt_scope="reprocess"
+    )
+
+    assert created is True
+    assert reprocess_job.id != initial_job.id
+    assert reprocess_job.idempotency_key != initial_job.idempotency_key
+    db_session.expire_all()
+    assert app_module.ProcessingJob.query.get(initial_job.id).status == "completed"
+    assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 2
+
+
+def test_sequential_replacement_generations_do_not_collide_with_each_other(
+    app_module, db_session, normal_user
+):
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    initial_job, _ = app_module.enqueue_project_pair_processing(project.id)
+    _complete(initial_job, db_session, app_module)
+
+    first_replacement, created_1 = app_module.enqueue_project_pair_processing(
+        project.id, attempt_scope="reprocess"
+    )
+    _complete(first_replacement, db_session, app_module)
+
+    second_replacement, created_2 = app_module.enqueue_project_pair_processing(
+        project.id, attempt_scope="reprocess"
+    )
+
+    assert created_1 is True
+    assert created_2 is True
+    keys = {
+        initial_job.idempotency_key,
+        first_replacement.idempotency_key,
+        second_replacement.idempotency_key,
+    }
+    assert len(keys) == 3  # all three generations are distinct
+    assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 3
+
+
+def test_duplicate_replacement_submission_before_completion_collapses_to_one_job(
+    app_module, db_session, normal_user
+):
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    initial_job, _ = app_module.enqueue_project_pair_processing(project.id)
+    _complete(initial_job, db_session, app_module)
+
+    first, created_1 = app_module.enqueue_project_pair_processing(
+        project.id, attempt_scope="reprocess"
+    )
+    # A second submission of the SAME replacement (double-click, retried POST)
+    # arrives while the first is still active - must reuse it, not enqueue a
+    # second worker operation for the same generation.
+    second, created_2 = app_module.enqueue_project_pair_processing(
+        project.id, attempt_scope="reprocess"
+    )
+
+    assert created_1 is True
+    assert created_2 is False
+    assert second.id == first.id
+    assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 2
+
+
+def test_create_processing_job_resolves_integrity_error_to_active_winner(
+    app_module, db_session, normal_user, monkeypatch
+):
+    import processing_queue
+
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    winner = app_module.ProcessingJob(
+        public_key=generate_unique_public_key(db_session, app_module.ProcessingJob, "job"),
+        job_type="process_project_pairs",
+        status="queued",
+        project_id=project.id,
+        idempotency_key=f"process_project_pairs:project:{project.id}:pair:-",
+        max_attempts=3,
+    )
+    db_session.add(winner)
+    db_session.commit()
+
+    # Simulate a genuine race: by the time create_processing_job decides to
+    # insert, a concurrent request already committed the identical
+    # (project_id, idempotency_key) row - the active_project_job() pre-check
+    # ran a moment too early and saw nothing yet.
+    monkeypatch.setattr(processing_queue, "active_project_job", lambda *a, **k: None)
+
+    job, created = processing_queue.create_processing_job(
+        "process_project_pairs", project_id=project.id, attempt_scope="initial"
+    )
+
+    assert created is False
+    assert job.id == winner.id
+    db_session.expire_all()
+    assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 1
+
+
+def test_create_processing_job_does_not_report_false_success_on_terminal_collision(
+    app_module, db_session, normal_user, monkeypatch
+):
+    """A collision against a TERMINAL row is not "already scheduled" - nothing
+    is actually going to process this. Must not swallow the conflict."""
+    import processing_queue
+    from sqlalchemy.exc import IntegrityError
+
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    stale = app_module.ProcessingJob(
+        public_key=generate_unique_public_key(db_session, app_module.ProcessingJob, "job"),
+        job_type="process_project_pairs",
+        status="completed",
+        project_id=project.id,
+        idempotency_key=f"process_project_pairs:project:{project.id}:pair:-",
+        max_attempts=3,
+    )
+    db_session.add(stale)
+    db_session.commit()
+
+    monkeypatch.setattr(processing_queue, "active_project_job", lambda *a, **k: None)
+
+    with pytest.raises(IntegrityError):
+        processing_queue.create_processing_job(
+            "process_project_pairs", project_id=project.id, attempt_scope="initial"
+        )
+
+    # The session must still be usable afterward - not left poisoned.
+    db_session.rollback()
+    assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 1
+
+
+def test_edit_project_media_replacement_reprocesses_after_prior_completion(
+    app_module, db_session, normal_user, login_user, client
+):
+    """End-to-end through the real /projects/<id>/edit route - the exact
+    reported reproduction: a ready project, media replaced, submit."""
+    project, pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    initial_job, _ = app_module.enqueue_project_pair_processing(project.id)
+    _complete(initial_job, db_session, app_module)
+    pair.is_processed = True
+    pair.processing_status = "completed"
+    db_session.commit()
+
+    # An image replacement is what actually flips is_processed back to False
+    # and puts the pair back on the reprocessing path (a video-only swap needs
+    # no feature re-extraction, since ORB features come from the image).
+    replacement_image = BytesIO()
+    Image.new("RGB", (640, 480), (10, 20, 30)).save(replacement_image, format="JPEG", quality=88)
+    replacement_image.seek(0)
+
+    response = client.post(
+        f"/projects/{project.id}/edit",
+        data={"image_0": (replacement_image, "replacement.jpg")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code in (200, 302)
+    db_session.expire_all()
+    jobs = (
+        app_module.ProcessingJob.query.filter_by(project_id=project.id)
+        .order_by(app_module.ProcessingJob.id)
+        .all()
+    )
+    assert len(jobs) == 2
+    assert jobs[0].id == initial_job.id
+    assert jobs[0].status == "completed"
+    assert jobs[1].idempotency_key != jobs[0].idempotency_key
+    assert jobs[1].status in ("queued", "processing", "completed")

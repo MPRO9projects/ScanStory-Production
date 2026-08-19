@@ -8033,7 +8033,16 @@ def user_edit_project(project_id):
             load_features.cache_clear()
 
     if pairs_to_process:
-        job = _schedule_project_pair_processing(project_id)
+        # attempt_scope="reprocess": this project already has a settled (likely
+        # completed/terminal) ProcessingJob from its FIRST processing pass, which
+        # permanently occupies the "initial" idempotency key
+        # (process_project_pairs:project:<id>:pair:-). A media replacement is a
+        # new logical processing generation, not the original attempt reborn -
+        # reusing "initial" here collides with that historical row's key on the
+        # DB-level uq_processing_job_project_idempotency unique constraint. The
+        # explicit "Try again" route (user_reprocess_project) already uses this
+        # same scope for the identical reason.
+        job = _schedule_project_pair_processing(project_id, attempt_scope="reprocess")
         if not job:
             return redirect(url_for("user_edit_project_page", project_id=project_id))
 

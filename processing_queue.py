@@ -3,6 +3,8 @@ import re
 import uuid
 from datetime import timedelta
 
+from sqlalchemy.exc import IntegrityError
+
 from public_keys import generate_unique_public_key
 from models import Admin, ProcessingJob, Project, ProjectPair, User, db, get_utc_now
 
@@ -168,6 +170,7 @@ def create_processing_job(
         existing = active_project_job(project_id, job_type)
         if existing:
             return existing, False
+    idempotency_key = _project_job_idempotency_key(job_type, project_id, pair_id, attempt_scope)
     job = ProcessingJob(
         public_key=generate_unique_public_key(db.session, ProcessingJob, "job"),
         workspace_id=None,
@@ -177,13 +180,30 @@ def create_processing_job(
         pair_id=pair_id,
         owner_user_id=owner_user_id,
         owner_admin_id=owner_admin_id,
-        idempotency_key=_project_job_idempotency_key(job_type, project_id, pair_id, attempt_scope),
+        idempotency_key=idempotency_key,
         max_attempts=max_attempts or int(os.environ.get("RQ_MAX_RETRIES", "3")),
         queued_at=get_utc_now(),
         available_at=get_utc_now(),
     )
     db.session.add(job)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # A concurrent request minted the identical (project_id, idempotency_key)
+        # row and won the race between our active_project_job() check above and
+        # this insert. Not swallowed: roll back the poisoned transaction and
+        # deterministically resolve to whichever row actually made it in. Only
+        # treat that as "already scheduled, nothing to do" if it is genuinely
+        # ACTIVE - a TERMINAL collision (e.g. a stale same-key row from a much
+        # older attempt) means nothing is actually going to process this, so
+        # re-raise rather than silently reporting false success.
+        db.session.rollback()
+        winner = ProcessingJob.query.filter_by(
+            project_id=project_id, idempotency_key=idempotency_key
+        ).first()
+        if winner and winner.status in ACTIVE_STATUSES:
+            return winner, False
+        raise
     return job, True
 
 
