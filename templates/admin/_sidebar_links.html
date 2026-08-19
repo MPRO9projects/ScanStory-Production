@@ -32,9 +32,11 @@
     <i class="fas fa-list-alt" aria-hidden="true"></i><span>Plans</span>
 </a>
 {% endif %}
+{% if admin_can('superadmin.operations.view') %}
 <a href="{{ url_for('admin_subscriptions') }}" class="sidebar-link {% if 'admin_subscriptions' in request.endpoint %}active{% endif %}" {% if 'admin_subscriptions' in request.endpoint %}aria-current="page"{% endif %}>
     <i class="fas fa-receipt" aria-hidden="true"></i><span>Subscriptions</span>
 </a>
+{% endif %}
 <a href="{{ url_for('admin_payments') }}" class="sidebar-link {% if request.endpoint in ('admin_payments', 'admin_view_payment') %}active{% endif %}" {% if request.endpoint in ('admin_payments', 'admin_view_payment') %}aria-current="page"{% endif %}>
     <i class="fas fa-credit-card" aria-hidden="true"></i><span>Payments</span>
 </a>
@@ -58,6 +60,8 @@
     <i class="fas fa-cog" aria-hidden="true"></i><span>Settings</span>
 </a>
 {% endif %}
+{% if admin_can('superadmin.audit.view') %}
 <a href="{{ url_for('admin_activity_logs') }}" class="sidebar-link {% if request.endpoint == 'admin_activity_logs' %}active{% endif %}" {% if request.endpoint == 'admin_activity_logs' %}aria-current="page"{% endif %}>
     <i class="fas fa-clipboard-list" aria-hidden="true"></i><span>Activity Logs</span>
 </a>
+{% endif %}

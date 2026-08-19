@@ -198,3 +198,32 @@ def test_normal_admin_navigation_hides_superadmin_links(client, secondary_admin)
     assert "/admin/admins" not in body
     assert "/admin/plans" not in body
     assert "/admin/settings" not in body
+    assert "/admin/subscriptions" not in body
+    assert "/admin/activity-logs" not in body
+
+
+def test_superadmin_navigation_shows_platform_links_and_admin_console_css(client, admin):
+    _login_as(client, admin)
+
+    body = client.get("/admin/dashboard").get_data(as_text=True)
+
+    assert "css/design-system.css" in body
+    assert "css/admin-console.css" in body
+    for href in (
+        "/admin/admins",
+        "/admin/plans",
+        "/admin/settings",
+        "/admin/subscriptions",
+        "/admin/activity-logs",
+    ):
+        assert href in body
+
+
+def test_standalone_admin_pages_load_admin_console_overflow_layer(client, admin):
+    _login_as(client, admin)
+
+    for path in ("/admin/users", "/admin/projects", "/admin/payments"):
+        body = client.get(path).get_data(as_text=True)
+        assert "css/design-system.css" in body
+        assert "css/admin-console.css" in body
+        assert "table-container" in body

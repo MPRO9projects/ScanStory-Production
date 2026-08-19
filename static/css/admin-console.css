@@ -1,0 +1,428 @@
+/*
+ * ScanStory Admin Console
+ * Shared override layer for the legacy standalone admin templates and the
+ * inherited admin/base.html shell. Keep this file boring: layout stability,
+ * predictable states, readable tables, and mobile navigation.
+ */
+
+:root {
+    --admin-shell-bg: #050505;
+    --admin-shell-surface: #0b0b0f;
+    --admin-shell-surface-2: #12121a;
+    --admin-shell-border: rgba(255, 255, 255, 0.08);
+    --admin-shell-border-strong: rgba(255, 255, 255, 0.16);
+    --admin-shell-text: #e6e6e9;
+    --admin-shell-muted: #9aa1ac;
+    --admin-sidebar-width: 250px;
+    --admin-topbar-height: 70px;
+    --admin-focus: #00d4ff;
+}
+
+html {
+    color-scheme: dark;
+    background: var(--admin-shell-bg);
+    overflow-x: hidden;
+}
+
+body.ss-admin-scope {
+    min-width: 0;
+    overflow-x: clip;
+    background: var(--admin-shell-bg);
+    color: var(--admin-shell-text);
+    -webkit-tap-highlight-color: rgba(0, 212, 255, 0.18);
+}
+
+.ss-admin-scope *,
+.ss-admin-scope *::before,
+.ss-admin-scope *::after {
+    box-sizing: border-box;
+}
+
+.ss-admin-scope a,
+.ss-admin-scope button,
+.ss-admin-scope input,
+.ss-admin-scope select,
+.ss-admin-scope textarea {
+    touch-action: manipulation;
+}
+
+.ss-admin-scope a:focus-visible,
+.ss-admin-scope button:focus-visible,
+.ss-admin-scope input:focus-visible,
+.ss-admin-scope select:focus-visible,
+.ss-admin-scope textarea:focus-visible,
+.ss-admin-scope [tabindex]:focus-visible {
+    outline: 2px solid var(--admin-focus);
+    outline-offset: 2px;
+}
+
+.ss-admin-scope .navbar {
+    min-width: 0;
+    background: var(--admin-shell-surface) !important;
+    border-bottom: 1px solid var(--admin-shell-border);
+}
+
+.ss-admin-scope .navbar-brand,
+.ss-admin-scope .navbar-menu,
+.ss-admin-scope .user-menu {
+    min-width: 0;
+}
+
+.ss-admin-scope .navbar-brand {
+    max-width: min(62vw, 320px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ss-admin-scope .nav-link,
+.ss-admin-scope .dropdown-item {
+    color: var(--admin-shell-text);
+}
+
+.ss-admin-scope .nav-link:hover,
+.ss-admin-scope .dropdown-item:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.ss-admin-scope .sidebar {
+    background: var(--admin-shell-surface);
+    border-right: 1px solid var(--admin-shell-border);
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}
+
+.ss-admin-scope .sidebar-title {
+    color: var(--admin-shell-muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+}
+
+.ss-admin-scope .sidebar-link {
+    min-width: 0;
+    color: #c9ced8;
+    background: transparent;
+    border: 1px solid transparent;
+    transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease;
+}
+
+.ss-admin-scope .sidebar-link:visited {
+    color: #c9ced8;
+}
+
+.ss-admin-scope .sidebar-link:hover {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--admin-shell-border-strong);
+}
+
+.ss-admin-scope .sidebar-link:focus-visible {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--admin-focus);
+    box-shadow: 0 0 0 3px rgba(0, 212, 255, 0.28);
+    outline: none;
+}
+
+.ss-admin-scope .sidebar-link.active,
+.ss-admin-scope .sidebar-link[aria-current="page"] {
+    color: #fff;
+    background: rgba(255, 0, 122, 0.16);
+    border-color: rgba(255, 0, 122, 0.34);
+}
+
+.ss-admin-scope .sidebar-link.disabled,
+.ss-admin-scope .sidebar-link[aria-disabled="true"] {
+    color: #5b6170;
+    background: transparent;
+    border-color: transparent;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.ss-admin-scope .sidebar-link i {
+    color: currentColor;
+    flex: none;
+}
+
+.ss-admin-scope main,
+.ss-admin-scope #main-content,
+.ss-admin-scope .main-content,
+.ss-admin-scope .content-wrapper,
+.ss-admin-scope .container-fluid,
+.ss-admin-scope .row,
+.ss-admin-scope [class*="col-"] {
+    min-width: 0;
+}
+
+.ss-admin-scope .main-content,
+.ss-admin-scope .content-wrapper {
+    max-width: 100%;
+}
+
+.ss-admin-scope .page-header,
+.ss-admin-scope .filter-form,
+.ss-admin-scope .form-row,
+.ss-admin-scope .action-buttons,
+.ss-admin-scope .status-tabs,
+.ss-admin-scope .pagination {
+    min-width: 0;
+}
+
+.ss-admin-scope .page-header {
+    gap: 1rem;
+}
+
+.ss-admin-scope .page-title,
+.ss-admin-scope h1,
+.ss-admin-scope h2,
+.ss-admin-scope h3 {
+    text-wrap: balance;
+}
+
+.ss-admin-scope .card {
+    max-width: 100%;
+    background: var(--admin-shell-surface);
+    border: 1px solid var(--admin-shell-border);
+    box-shadow: none;
+}
+
+.ss-admin-scope .table-container,
+.ss-admin-scope .table-responsive {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: visible;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 10px;
+}
+
+.ss-admin-scope .table-container > table,
+.ss-admin-scope .table-responsive > table,
+.ss-admin-scope .table {
+    min-width: 760px;
+}
+
+.ss-admin-scope th,
+.ss-admin-scope td {
+    vertical-align: top;
+}
+
+.ss-admin-scope td,
+.ss-admin-scope th,
+.ss-admin-scope small,
+.ss-admin-scope .info-value,
+.ss-admin-scope .dropdown-item,
+.ss-admin-scope .badge,
+.ss-admin-scope code,
+.ss-admin-scope pre {
+    overflow-wrap: anywhere;
+    word-break: normal;
+}
+
+.ss-admin-scope code,
+.ss-admin-scope pre,
+.ss-admin-scope .font-monospace,
+.ss-admin-scope .mono {
+    font-variant-numeric: tabular-nums;
+}
+
+.ss-admin-scope .btn,
+.ss-admin-scope .status-tab {
+    min-height: 40px;
+}
+
+.ss-admin-scope .btn,
+.ss-admin-scope .status-tab,
+.ss-admin-scope .badge {
+    white-space: normal;
+}
+
+.ss-admin-scope .action-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.ss-admin-scope .filter-form {
+    grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+}
+
+.ss-admin-scope .form-row {
+    grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)) !important;
+}
+
+.ss-admin-scope input,
+.ss-admin-scope select,
+.ss-admin-scope textarea,
+.ss-admin-scope .form-control {
+    max-width: 100%;
+    background-color: rgba(255, 255, 255, 0.03);
+    color: var(--admin-shell-text);
+    border-color: var(--admin-shell-border-strong);
+}
+
+.ss-admin-scope select option {
+    background: var(--admin-shell-surface-2);
+    color: var(--admin-shell-text);
+}
+
+.ss-admin-scope .dropdown-menu {
+    max-width: min(92vw, 320px);
+    overflow-wrap: anywhere;
+}
+
+.ss-admin-scope .modal,
+.ss-admin-scope [role="dialog"] {
+    overscroll-behavior: contain;
+}
+
+.ss-admin-scope .modal-dialog,
+.ss-admin-scope .modal-content,
+.ss-admin-scope .drawer,
+.ss-admin-scope .sheet {
+    max-width: min(96vw, 760px);
+    max-height: calc(100dvh - 2rem);
+}
+
+.ss-admin-scope .modal-content,
+.ss-admin-scope .drawer,
+.ss-admin-scope .sheet {
+    overflow: auto;
+}
+
+@media (max-width: 992px) and (min-width: 769px) {
+    .ss-admin-scope .sidebar {
+        width: 82px;
+    }
+
+    .ss-admin-scope .main-content {
+        margin-left: 82px;
+    }
+}
+
+@media (max-width: 768px) {
+    :root {
+        --admin-topbar-height: 60px;
+    }
+
+    body.ss-admin-scope {
+        overflow-x: hidden;
+    }
+
+    .ss-admin-scope .navbar {
+        height: var(--admin-topbar-height);
+        padding-inline: max(1rem, env(safe-area-inset-left)) max(1rem, env(safe-area-inset-right));
+    }
+
+    .ss-admin-scope .navbar-menu {
+        display: none !important;
+    }
+
+    .ss-admin-scope #adminSidebar.sidebar {
+        position: fixed;
+        top: var(--admin-topbar-height);
+        bottom: 0;
+        left: 0;
+        width: min(86vw, 320px) !important;
+        min-height: 0;
+        padding: 1rem 0 max(2rem, env(safe-area-inset-bottom));
+        overflow-y: auto;
+        transform: translateX(-100%);
+        transition: transform 180ms ease;
+        z-index: 1002;
+    }
+
+    .ss-admin-scope #adminSidebar.sidebar.is-open {
+        transform: translateX(0);
+    }
+
+    .ss-admin-scope .sidebar:not(#adminSidebar) {
+        position: sticky;
+        top: var(--admin-topbar-height);
+        width: 100% !important;
+        max-height: 42dvh;
+        margin-top: var(--admin-topbar-height);
+        padding: 0.65rem;
+        overflow: auto;
+        transform: none;
+        border-right: 0;
+        border-bottom: 1px solid var(--admin-shell-border);
+        z-index: 998;
+    }
+
+    .ss-admin-scope .sidebar:not(#adminSidebar) + .main-content {
+        margin-top: 0;
+    }
+
+    .ss-admin-scope .sidebar:not(#adminSidebar) .sidebar-title {
+        padding-inline: 0.35rem;
+        margin: 0.7rem 0 0.35rem;
+    }
+
+    .ss-admin-scope .sidebar:not(#adminSidebar) .sidebar-link {
+        border-radius: 8px;
+        margin: 0.12rem 0;
+    }
+
+    .ss-admin-scope .sidebar .sidebar-title,
+    .ss-admin-scope .sidebar .sidebar-link span {
+        display: inline;
+    }
+
+    .ss-admin-scope .sidebar-link {
+        justify-content: flex-start;
+        padding: 0.8rem 1rem;
+    }
+
+    .ss-admin-scope .main-content {
+        margin-left: 0 !important;
+        margin-top: var(--admin-topbar-height);
+        padding: 1rem;
+        min-height: calc(100dvh - var(--admin-topbar-height));
+    }
+
+    .ss-admin-scope .content-wrapper {
+        padding: 1rem;
+    }
+
+    .ss-admin-scope .page-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .ss-admin-scope .page-title {
+        font-size: clamp(1.35rem, 7vw, 1.75rem);
+    }
+
+    .ss-admin-scope .card {
+        padding: 1rem;
+        border-radius: 10px;
+    }
+
+    .ss-admin-scope .table-container,
+    .ss-admin-scope .table-responsive {
+        margin-inline: -1rem;
+        width: calc(100% + 2rem);
+        max-width: calc(100% + 2rem);
+        border-radius: 0;
+    }
+
+    .ss-admin-scope .table-container > table,
+    .ss-admin-scope .table-responsive > table,
+    .ss-admin-scope .table {
+        min-width: 680px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ss-admin-scope .sidebar,
+    .ss-admin-scope .sidebar-link,
+    .ss-admin-scope .btn,
+    .ss-admin-scope .status-tab {
+        transition-duration: 0.001ms !important;
+    }
+}

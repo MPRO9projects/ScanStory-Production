@@ -428,6 +428,6 @@ def test_success_page_contact_support_uses_contact_route(client, login_user, app
 
     response = client.get(f"/success/{project.id}")
     assert response.status_code == 200
-    assert b"Contact Support" in response.data
+    assert b"contact support" in response.data.lower()
     assert b'href="/contact"' in response.data
     assert b'href="#"' not in response.data

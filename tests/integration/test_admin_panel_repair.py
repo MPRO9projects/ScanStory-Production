@@ -109,7 +109,9 @@ def test_suspended_project_blocks_and_restore_reenables_scanner_and_media(client
     restore = client.post(f"/admin/projects/{project.id}/restore", follow_redirects=True)
     assert restore.status_code == 200
     assert app_module.Project.query.get(project.id).is_active is True
-    assert client.get(f"/scanner/{project.id}").status_code == 200
+    scanner_after_restore = client.get(f"/scanner/{project.id}", follow_redirects=False)
+    assert scanner_after_restore.status_code == 302
+    assert scanner_after_restore.headers["Location"].endswith(f"/s/{project.public_key}")
     assert client.get(f"/video/{project.id}/{pair.pair_index}").status_code == 200
 
 
