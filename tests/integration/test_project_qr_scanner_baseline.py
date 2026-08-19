@@ -23,6 +23,10 @@ def test_project_pair_persistence(app_module, project_with_pair):
 def test_scanner_route_resolves_for_existing_project(client, project_with_pair):
     project, pair = project_with_pair
     response = client.get(f"/scanner/{project.id}?user_id={project.owner_user_id}&user_name=Normal")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith(f"/s/{project.public_key}")
+
+    response = client.get(f"/s/{project.public_key}")
     assert response.status_code == 200
     assert b"SCANSTORY" in response.data
     assert b"opencv.js" in response.data
@@ -36,7 +40,10 @@ def test_scanner_overlay_video_is_non_interactive(client, project_with_pair):
     from #overlayWrap). DOM/attribute-level only - this cannot and does not certify real
     iOS Safari touch behavior; see the real-device checklist in the audit report."""
     project, _pair = project_with_pair
-    response = client.get(f"/scanner/{project.id}?user_id={project.owner_user_id}&user_name=Normal")
+    response = client.get(
+        f"/scanner/{project.id}?user_id={project.owner_user_id}&user_name=Normal",
+        follow_redirects=True,
+    )
     html = response.data.decode("utf-8")
 
     overlay_start = html.index('<video id="overlay"')

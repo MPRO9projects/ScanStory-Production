@@ -519,9 +519,13 @@ def test_renewal_order_requires_the_project_id(app_module, client, db_session, l
 # ===========================================================================
 # G. Public content reporting
 # ===========================================================================
+def _scanner_html(client, project):
+    return client.get(f"/scanner/{project.id}", follow_redirects=True).get_data(as_text=True)
+
+
 def test_scanner_exposes_a_report_action_without_touching_the_lens(client, project_with_pair):
     project, _pair = project_with_pair
-    body = client.get(f"/scanner/{project.id}").get_data(as_text=True)
+    body = _scanner_html(client, project)
     assert 'id="reportOpenBtn"' in body
     assert 'id="reportSheet"' in body
     # The report sheet must not be injected into the camera surface or the
@@ -532,7 +536,7 @@ def test_scanner_exposes_a_report_action_without_touching_the_lens(client, proje
 
 def test_scanner_report_reasons_match_the_backend_codes_exactly(app_module, client, project_with_pair):
     project, _pair = project_with_pair
-    body = client.get(f"/scanner/{project.id}").get_data(as_text=True)
+    body = _scanner_html(client, project)
     for code, label in app_module.CONTENT_REPORT_REASON_LABELS.items():
         assert f'value="{code}"' in body
         assert label in body
@@ -557,7 +561,7 @@ def test_anonymous_viewer_can_submit_a_report(app_module, client, db_session, pr
 
 def test_report_success_copy_never_promises_removal_or_a_ban(app_module, client, project_with_pair):
     project, _pair = project_with_pair
-    body = client.get(f"/scanner/{project.id}").get_data(as_text=True)
+    body = _scanner_html(client, project)
     assert "Report submitted for review." in body
     for forbidden in ("Content removed", "Creator banned", "Violation confirmed"):
         assert forbidden not in body
@@ -566,7 +570,7 @@ def test_report_success_copy_never_promises_removal_or_a_ban(app_module, client,
 
 def test_report_rate_limit_is_surfaced_as_readable_copy(client, project_with_pair):
     project, _pair = project_with_pair
-    body = client.get(f"/scanner/{project.id}").get_data(as_text=True)
+    body = _scanner_html(client, project)
     assert "sent several reports already" in body
     # The report block itself never prints a backend code. ("RATE_LIMITED"
     # appears elsewhere in this page as pre-existing scanner telemetry.)
@@ -770,7 +774,7 @@ def test_scanner_recovery_and_playback_contract_not_regressed(client, project_wi
     """Guards the prior checkpoints: the report addition must not have moved
     or removed any existing in-lens recovery control."""
     project, _pair = project_with_pair
-    body = client.get(f"/scanner/{project.id}").get_data(as_text=True)
+    body = _scanner_html(client, project)
     for marker in (
         'id="fallbackPanel"',
         'id="fallbackRetryBtn"',
