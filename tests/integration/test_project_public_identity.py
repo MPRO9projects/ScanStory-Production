@@ -110,6 +110,93 @@ def test_canonical_qr_url_contains_no_owner_identity(app_module, db_session, nor
     assert "admin_name=" not in scanner_url
 
 
+def _login(client, user):
+    with client.session_transaction() as session:
+        session["user_id"] = user.id
+
+
+# ---------------------------------------------------------------------------
+# Creator-facing share surfaces.
+#
+# Every place a creator is handed "the link to your ScanStory" must render the
+# CANONICAL /s/<public_key> address resolved by _canonical_public_scanner_url,
+# never the persisted Project.scanner_url column. That column is written once
+# when the QR is generated and historically embedded the creator's own user id
+# in its query string, so publishing it is both stale and a disclosure. The
+# fixture deliberately stores "/legacy-placeholder" there: if any of these
+# surfaces reaches for the column instead of the helper, that sentinel appears
+# in the page and the assertion fails.
+# ---------------------------------------------------------------------------
+
+def test_ready_page_shares_the_canonical_link_not_the_stored_column(
+    app_module, client, db_session, normal_user
+):
+    project = _make_live_project(app_module, db_session, normal_user, index=1)
+    _login(client, normal_user)
+
+    response = client.get(f"/success/{project.id}")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert f"/s/{project.public_key}" in html
+    assert "/legacy-placeholder" not in html
+    # Ready-state framing and the title as the identity, not a sequence number.
+    assert "Your ScanStory" in html and "is ready." in html
+    assert project.name in html
+    assert "Project #" not in html
+
+
+def test_project_detail_page_shares_the_canonical_link_not_the_stored_column(
+    app_module, client, db_session, normal_user
+):
+    project = _make_live_project(app_module, db_session, normal_user, index=2)
+    _login(client, normal_user)
+
+    response = client.get(f"/project/{project.id}/preview")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert f"/s/{project.public_key}" in html
+    assert "/legacy-placeholder" not in html
+    # The blank "Viewing ScanStory <display_number>" / "#" readouts are gone:
+    # this route never assigned display_number, so both rendered empty.
+    assert "Project #" not in html
+
+
+def test_project_list_copy_link_uses_the_canonical_address(
+    app_module, client, db_session, normal_user
+):
+    project = _make_live_project(app_module, db_session, normal_user, index=3)
+    _login(client, normal_user)
+
+    response = client.get("/projects")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert "data-copy-link" in html
+    assert f"/s/{project.public_key}" in html
+    assert "/legacy-placeholder" not in html
+
+
+def test_no_creator_share_surface_leaks_an_owner_identity(
+    app_module, client, db_session, normal_user
+):
+    project = _make_live_project(app_module, db_session, normal_user, index=5)
+    _login(client, normal_user)
+
+    for path in (f"/success/{project.id}", f"/project/{project.id}/preview", "/projects", "/dashboard"):
+        html = client.get(path).get_data(as_text=True)
+        share_marker = f"/s/{project.public_key}"
+        if share_marker not in html:
+            continue
+        # Isolate the rendered share address and prove nothing owner-identifying
+        # rides along in it.
+        start = html.index(share_marker)
+        rendered = html[start:start + len(share_marker) + 80].split('"')[0]
+        for forbidden in ("user_id=", "user_name=", "admin_id=", "admin_name="):
+            assert forbidden not in rendered, (path, forbidden)
+
+
 def test_transfer_preserves_public_identity_and_scanner_url(app_module, db_session, normal_user):
     recipient = _make_user(app_module, db_session, "public-transfer@example.com", limit=5, used=0)
     project = _make_live_project(app_module, db_session, normal_user, index=4)

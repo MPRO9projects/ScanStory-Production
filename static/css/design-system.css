@@ -1157,3 +1157,283 @@ body.ss-menu-open { overflow: hidden; }
 .ss-sheet-status { margin-top: var(--ss-space-3); font-size: 12px; font-weight: 700; line-height: 1.5; }
 .ss-sheet-status[data-tone="error"]   { color: #fca5a5; }
 .ss-sheet-status[data-tone="success"] { color: #86efac; }
+
+/* =========================================================================
+   CREATOR SHELL - typography rhythm, share surfaces, dialog, toasts.
+
+   Added in the Creator UI pass. Everything here is either (a) a class that was
+   already being USED by a template but had no definition anywhere - a live
+   visual defect, not a redesign - or (b) the shared rhythm/share/confirm
+   primitives the Creator pages had each been re-inventing inline.
+   ========================================================================= */
+
+/* ---------- Used-but-undefined, now defined ----------
+ * .ss-spin was referenced 3x by templates/user/projects.html (the "Repair in
+ * progress" indicator and the busy-button swap) and .ss-action-button 2x by
+ * templates/user/project_preview.html (the Ownership panel's controls). Neither
+ * class existed in any stylesheet, so the spinner did not spin and the
+ * ownership controls rendered as unstyled default browser widgets in the middle
+ * of a designed panel. */
+.ss-spin { animation: ss-spin 0.9s linear infinite; display: inline-block; }
+
+.ss-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ss-space-2);
+  min-height: 44px;
+  padding: 0 var(--ss-space-4);
+  border-radius: var(--ss-radius-pill);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--ss-border-strong);
+  color: var(--ss-text);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  transition: border-color var(--ss-duration-fast) var(--ss-ease),
+              background-color var(--ss-duration-fast) var(--ss-ease);
+}
+.ss-action-button:hover:not(:disabled) {
+  border-color: var(--ss-accent);
+  background: rgba(0, 212, 255, 0.08);
+}
+.ss-action-button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ---------- Page rhythm ----------
+ * One measure, one vertical rhythm, one heading scale for every Creator page,
+ * so "how much space is a section" stops being decided per template. Sizes are
+ * clamped rather than stepped at a breakpoint: the same rule holds from 320px
+ * to a large desktop with no jump, and nothing can overflow its gutter.
+ */
+.ss-page {
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: clamp(20px, 4vw, 48px) clamp(16px, 4vw, 40px) clamp(48px, 8vw, 96px);
+}
+.ss-page-narrow { max-width: 780px; }
+.ss-section + .ss-section { margin-top: clamp(32px, 6vw, 72px); }
+
+.ss-page-head { margin-bottom: clamp(20px, 4vw, 40px); }
+.ss-h1 {
+  margin: 0;
+  font-size: clamp(1.75rem, 5vw, 2.75rem);
+  font-weight: 900;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  overflow-wrap: break-word;
+}
+.ss-h2 {
+  margin: 0;
+  font-size: clamp(1.25rem, 3vw, 1.75rem);
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  overflow-wrap: break-word;
+}
+.ss-eyebrow {
+  display: block;
+  font-size: 0.6875rem;
+  font-weight: 800;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ss-text-faint);
+  margin-bottom: var(--ss-space-3);
+}
+.ss-lead {
+  margin: var(--ss-space-3) 0 0;
+  font-size: clamp(0.9375rem, 1.6vw, 1.0625rem);
+  line-height: 1.65;
+  color: var(--ss-text-muted);
+  max-width: 62ch;
+}
+
+/* ---------- Numbered step rail (image -> scan -> experience) ----------
+ * Wraps instead of scrolling: three steps at 320px become three stacked rows,
+ * never a horizontally scrolling strip.
+ */
+.ss-steps {
+  display: grid;
+  gap: var(--ss-space-4);
+  grid-template-columns: 1fr;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: ss-step;
+}
+@media (min-width: 720px) {
+  .ss-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+.ss-step {
+  min-width: 0;
+  background: var(--ss-surface-1);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-lg);
+  padding: clamp(16px, 2.5vw, 24px);
+}
+.ss-step::before {
+  counter-increment: ss-step;
+  content: "0" counter(ss-step);
+  display: block;
+  font-size: 0.6875rem;
+  font-weight: 900;
+  letter-spacing: 0.2em;
+  color: var(--ss-primary);
+  margin-bottom: var(--ss-space-3);
+}
+.ss-step h3 {
+  margin: 0 0 var(--ss-space-2);
+  font-size: 1.0625rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.ss-step p {
+  margin: 0;
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--ss-text-muted);
+}
+
+/* ---------- Share surface ----------
+ * The canonical public link is a DELIVERABLE, so it gets a real surface: the
+ * URL is selectable and wraps (never truncated to something a creator could
+ * mis-transcribe), Copy sits next to it, and the QR is framed as an asset.
+ */
+.ss-share {
+  background: var(--ss-surface-1);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-lg);
+  padding: clamp(16px, 3vw, 24px);
+}
+.ss-share-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ss-space-3);
+  align-items: stretch;
+}
+.ss-share-url {
+  flex: 1 1 240px;
+  min-width: 0;
+  background: var(--ss-surface-2);
+  border: 1px solid var(--ss-border);
+  border-radius: var(--ss-radius-md);
+  padding: var(--ss-space-3) var(--ss-space-4);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  color: var(--ss-text);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.ss-share-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ss-space-2);
+  align-items: center;
+}
+@media (max-width: 520px) {
+  .ss-share-actions { width: 100%; }
+  .ss-share-actions > * { flex: 1 1 140px; }
+}
+
+.ss-qr-frame {
+  display: inline-block;
+  background: #fff;
+  padding: 14px;
+  border-radius: var(--ss-radius-md);
+  line-height: 0;
+  max-width: 100%;
+}
+.ss-qr-frame img {
+  display: block;
+  width: 220px;
+  max-width: 100%;
+  height: auto;
+}
+
+/* ---------- Accessible confirm dialog + toast (static/js/ss-ui.js) ----------
+ * Replaces window.confirm()/alert() for destructive and success moments. The
+ * dialog gates exactly the same action the native confirm gated - it is only
+ * the presentation that changes.
+ */
+.ss-dialog[hidden] { display: none; }
+.ss-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--ss-space-4);
+  background: rgba(0, 0, 0, 0.74);
+}
+.ss-dialog-card {
+  width: 100%;
+  max-width: 420px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  background: var(--ss-surface-1);
+  border: 1px solid var(--ss-border-strong);
+  border-radius: var(--ss-radius-lg);
+  padding: clamp(16px, 3vw, 24px);
+  text-align: left;
+}
+.ss-dialog-title {
+  margin: 0 0 var(--ss-space-2);
+  font-size: 1.0625rem;
+  font-weight: 800;
+  overflow-wrap: break-word;
+}
+.ss-dialog-body {
+  margin: 0 0 var(--ss-space-4);
+  font-size: 0.875rem;
+  line-height: 1.65;
+  color: var(--ss-text-muted);
+  overflow-wrap: break-word;
+}
+.ss-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--ss-space-2);
+  justify-content: flex-end;
+}
+.ss-dialog-actions > * { flex: 0 1 auto; }
+@media (max-width: 420px) {
+  .ss-dialog-actions { flex-direction: column-reverse; }
+  .ss-dialog-actions > * { width: 100%; }
+}
+
+.ss-toast-stack {
+  position: fixed;
+  z-index: 10060;
+  top: max(16px, env(safe-area-inset-top));
+  right: 16px;
+  left: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--ss-space-2);
+  pointer-events: none;
+}
+@media (min-width: 520px) { .ss-toast-stack { left: auto; max-width: 380px; } }
+.ss-toast-stack .ss-toast {
+  pointer-events: auto;
+  max-width: 100%;
+  opacity: 1;
+  transition: opacity var(--ss-duration) var(--ss-ease);
+}
+.ss-toast-stack .ss-toast[data-leaving="true"] { opacity: 0; }
+
+/* ---------- Guards that apply everywhere ----------
+ * No Creator page may scroll sideways, and a long unbroken project title or
+ * public link must wrap rather than push the layout wider than the viewport.
+ */
+.ss-user-scope { overflow-wrap: break-word; }
+.ss-truncate {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

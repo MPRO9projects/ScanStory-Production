@@ -4,13 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Edit Story | {{ project.name }}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
+  {# Fonts + icons + design-system.css, in the order design-system.css needs
+     (before this page's own <style>). See _head_assets.html. #}
+  {% include 'user/_head_assets.html' %}
 
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
-
     :root {
       --primary: #ff007a;
       --secondary: #7000ff;
@@ -369,7 +369,7 @@
   <div class="blob" style="width:500px;height:500px;background:#7000ff;top:-10%;left:-8%;"></div>
   <div class="blob" style="width:460px;height:460px;background:#ff007a;bottom:-10%;right:-8%;"></div>
 
-  <div class="flash-messages">
+  <div class="flash-messages" role="status" aria-live="polite">
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% for category, message in messages %}
@@ -387,58 +387,96 @@
     </div>
 
     <div class="page-header">
-      <h1>Edit Story</h1>
-      <p>Replace only the files you want to update. Empty fields will keep the current media.</p>
+      <h1>Manage media</h1>
+      <p>{{ project.name }} &mdash; replace only the files you want to update. Any slot you leave empty keeps the media it already has.</p>
     </div>
 
+  {# TRUTHFUL consequences. The previous copy said "uploading a new image or
+     video will reprocess only that story pair", which is not what the backend
+     does: in user_edit_project (app.py) only `kind == "images"` flips
+     pair.is_processed=False and reaches _schedule_project_pair_processing. A
+     video-only swap writes the new file and is live immediately - it never
+     re-analyses anything. Promising a creator a reprocessing step that does not
+     happen makes them wait for a state change that will never arrive. #}
   <div class="info-banner">
-    <i class="fas fa-circle-info"></i>
-      <span>Uploading a new image or video will reprocess only that story pair. Your QR code stays the same. If your account is over storage, smaller replacements may be allowed while equal or larger replacements can be blocked.</span>
+    <i class="fas fa-circle-info" aria-hidden="true"></i>
+      <span>
+        <strong>Replacing the target image</strong> means we analyse it again, so that content set goes back to
+        Processing for a short while before it can be scanned.
+        <strong>Replacing only the video</strong> takes effect straight away &mdash; nothing is re-analysed.
+        Either way your QR code and share link never change.
+      </span>
+  </div>
+
+  <div class="info-banner">
+    <i class="fas fa-database" aria-hidden="true"></i>
+      <span>If your account is over its storage allowance, a smaller replacement may still be accepted while an
+        equal or larger one can be blocked. Nothing you already uploaded is deleted.</span>
   </div>
 
     <form method="POST" enctype="multipart/form-data" action="{{ url_for('user_edit_project', project_id=project.id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       {% for pair in pairs %}
       <div class="panel pair-block">
+        {# "Content set" is what this is called on the dashboard and on My
+           Stories. It used to be "Story Pair" only here. #}
         <div class="pair-label">
           <span class="pair-num">{{ pair.pair_index + 1 }}</span>
-          Story Pair {{ pair.pair_index + 1 }}
+          Content set {{ pair.pair_index + 1 }}
           {% if pair.is_processed %}
-          <span class="status-tag status-ok"><i class="fas fa-check"></i> Ready</span>
+          <span class="status-tag status-ok"><i class="fas fa-check" aria-hidden="true"></i> Ready</span>
           {% elif pair.processing_status == 'failed' %}
-          <span class="status-tag status-fail"><i class="fas fa-xmark"></i> Needs Fix</span>
+          <span class="status-tag status-fail"><i class="fas fa-xmark" aria-hidden="true"></i> Needs attention</span>
           {% else %}
-          <span class="status-tag status-pending"><i class="fas fa-clock"></i> Processing</span>
+          <span class="status-tag status-pending"><i class="fas fa-clock" aria-hidden="true"></i> Processing</span>
           {% endif %}
         </div>
 
+        {# These used to print pair.image_filename / pair.video_filename, i.e.
+           the internal storage names, which are literally "{project id}_{index}"
+           - a raw database id shown to the creator as if it were a file they had
+           named. What matters here is only whether each slot is filled. #}
         <div class="current-files">
-          <span class="cf-label">Current files</span>
-          <span class="status-tag status-ok"><i class="fas fa-image"></i> {{ pair.image_filename }}</span>
-          <span class="status-tag status-ok"><i class="fas fa-film"></i> {{ pair.video_filename }}</span>
+          <span class="cf-label">Currently in place</span>
+          {% if pair.image_filename %}
+          <span class="status-tag status-ok"><i class="fas fa-image" aria-hidden="true"></i> Target image</span>
+          {% else %}
+          <span class="status-tag status-pending"><i class="fas fa-image" aria-hidden="true"></i> No target image</span>
+          {% endif %}
+          {% if pair.video_filename %}
+          <span class="status-tag status-ok"><i class="fas fa-film" aria-hidden="true"></i> Video</span>
+          {% else %}
+          <span class="status-tag status-pending"><i class="fas fa-film" aria-hidden="true"></i> No video</span>
+          {% endif %}
         </div>
 
         <div class="upload-row">
           <div class="upload-slot">
-            <label>Replace Image</label>
+            <label for="image_{{ pair.pair_index }}">Replace target image</label>
             <div class="file-zone" id="img-zone-{{ pair.pair_index }}">
-              <input type="file" name="image_{{ pair.pair_index }}" accept="image/*"
+              <input type="file" id="image_{{ pair.pair_index }}" name="image_{{ pair.pair_index }}" accept="image/*"
+                     aria-describedby="img-help-{{ pair.pair_index }}"
                      onchange="onFileChosen(this, 'img-zone-{{ pair.pair_index }}', 'img-sel-{{ pair.pair_index }}')">
-              <i class="fas fa-image"></i>
-              <div class="fz-title">Upload new image</div>
-              <div class="fz-sub">JPG, PNG - leave empty to keep current</div>
+              <i class="fas fa-image" aria-hidden="true"></i>
+              <div class="fz-title">Upload a new image</div>
+              <div class="fz-sub" id="img-help-{{ pair.pair_index }}">
+                JPG or PNG. Goes back to Processing while we analyse it. Leave empty to keep the current image.
+              </div>
               <div class="fz-selected" id="img-sel-{{ pair.pair_index }}"></div>
             </div>
           </div>
 
           <div class="upload-slot">
-            <label>Replace Video</label>
+            <label for="video_{{ pair.pair_index }}">Replace video</label>
             <div class="file-zone" id="vid-zone-{{ pair.pair_index }}">
-              <input type="file" name="video_{{ pair.pair_index }}" accept="video/*"
+              <input type="file" id="video_{{ pair.pair_index }}" name="video_{{ pair.pair_index }}" accept="video/*"
+                     aria-describedby="vid-help-{{ pair.pair_index }}"
                      onchange="onFileChosen(this, 'vid-zone-{{ pair.pair_index }}', 'vid-sel-{{ pair.pair_index }}')">
-              <i class="fas fa-film"></i>
-              <div class="fz-title">Upload new video</div>
-              <div class="fz-sub">MP4 - leave empty to keep current</div>
+              <i class="fas fa-film" aria-hidden="true"></i>
+              <div class="fz-title">Upload a new video</div>
+              <div class="fz-sub" id="vid-help-{{ pair.pair_index }}">
+                MP4. Live as soon as it is saved &mdash; nothing is re-analysed. Leave empty to keep the current video.
+              </div>
               <div class="fz-selected" id="vid-sel-{{ pair.pair_index }}"></div>
             </div>
           </div>
@@ -448,10 +486,10 @@
 
       <div class="action-row">
         <button type="submit" class="btn-save">
-          <i class="fas fa-floppy-disk"></i> Save Changes
+          <i class="fas fa-floppy-disk" aria-hidden="true"></i> Save replacements
         </button>
         <a href="{{ url_for('projects_page') }}" class="btn-cancel">
-          <i class="fas fa-xmark"></i> Cancel
+          <i class="fas fa-xmark" aria-hidden="true"></i> Cancel
         </a>
       </div>
     </form>

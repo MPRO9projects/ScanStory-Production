@@ -5,7 +5,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     <title>ScanStory - AR Experience Platform | Create Interactive AR Content</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+    {# design-system.css used to be linked HERE, ahead of Tailwind and of this
+       page's own <style> - i.e. everything overrode it. It now loads with the
+       other shared assets further down, after Tailwind. #}
     <meta name="title" content="ScanStory - AR Experience Platform | Create Interactive AR Content">
     <meta name="description"
         content="Create AR experiences instantly with ScanStory. Upload photos and videos, generate QR scan codes, and turn printed memories, cards, packaging, and learning materials into interactive WebAR experiences.">
@@ -216,12 +218,16 @@
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
     <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/vanilla-tilt/1.7.0/vanilla-tilt.min.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    {# vanilla-tilt only decorates the demo panel far below the fold. It was a
+       blocking <script> in <head>, so it sat on the critical path of the first
+       paint of the hero; defer moves it off it without changing what it does. #}
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/vanilla-tilt/1.7.0/vanilla-tilt.min.js" defer></script>
+
+    {# Fonts + icons + design-system.css, in the order design-system.css needs
+       (after Tailwind, before this page's own <style>). See _head_assets.html. #}
+    {% include 'user/_head_assets.html' %}
 
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800;900&display=swap');
-
         :root {
             --primary: #ff007a;
             --secondary: #7000ff;
@@ -1500,6 +1506,176 @@
             font-size: 10px;
             margin-top: 2px;
         }
+
+        /* =================================================================
+           HERO + HOW IT WORKS
+
+           The first screen used to be a headline, a keyword sentence and two
+           equally-loud buttons - one of which was Login, an action for people
+           who are already customers and which is already in the navbar twice.
+           So the hero asked a first-time visitor to choose between "trial" and
+           "log in" before it had told them what the product does.
+
+           Now: one dominant action, one quiet action that leads into the
+           mechanism, and the mechanism itself (image -> scan -> video) stated
+           immediately below the fold-line instead of being spread across five
+           later sections. Nothing is added that autoplays or animates forever.
+           ================================================================= */
+        .hero-eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 7px 16px;
+            margin-bottom: 26px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.03);
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: 0.24em;
+            text-transform: uppercase;
+            color: rgba(255, 255, 255, 0.62);
+        }
+
+        .hero-eyebrow i { color: var(--accent); }
+
+        .hero-lead {
+            max-width: 46ch;
+            margin: 1.5rem auto 0;
+            font-size: clamp(1rem, 2.2vw, 1.3rem);
+            font-weight: 300;
+            line-height: 1.6;
+            color: rgba(255, 255, 255, 0.62);
+        }
+
+        .hero-lead strong {
+            font-weight: 700;
+            color: #fff;
+        }
+
+        /* Deliberately NOT class="flex": the mobile block above targets
+           `#hero-section .flex` and would force this row to stack even where
+           there is room for both actions side by side. */
+        .hero-cta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            justify-content: center;
+            align-items: center;
+            margin-top: 2.25rem;
+        }
+
+        .hero-cta-primary {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 56px;
+            padding: 0 2.25rem;
+            border-radius: 18px;
+            background: var(--primary);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 900;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            text-decoration: none;
+            transition: transform 0.35s cubic-bezier(0.19, 1, 0.22, 1),
+                        box-shadow 0.35s cubic-bezier(0.19, 1, 0.22, 1),
+                        background-color 0.35s ease;
+        }
+
+        .hero-cta-primary:hover {
+            transform: translateY(-2px);
+            background: #ff2d90;
+            box-shadow: 0 18px 44px rgba(255, 0, 122, 0.32);
+        }
+
+        .hero-cta-quiet {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            min-height: 56px;
+            padding: 0 1.5rem;
+            border-radius: 18px;
+            border: 1px solid transparent;
+            color: rgba(255, 255, 255, 0.62);
+            font-size: 12px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.18em;
+            text-decoration: none;
+            transition: color 0.3s ease, border-color 0.3s ease;
+        }
+
+        .hero-cta-quiet:hover {
+            color: #fff;
+            border-color: rgba(255, 255, 255, 0.16);
+        }
+
+        #how-it-works {
+            position: relative;
+            padding: clamp(56px, 9vw, 104px) clamp(20px, 5vw, 80px);
+        }
+
+        .hiw-head {
+            max-width: 720px;
+            margin: 0 auto clamp(32px, 5vw, 56px);
+            text-align: center;
+        }
+
+        .hiw-kicker {
+            display: block;
+            margin-bottom: 14px;
+            font-size: 10px;
+            font-weight: 900;
+            letter-spacing: 0.35em;
+            text-transform: uppercase;
+            color: var(--primary);
+        }
+
+        .hiw-title {
+            margin: 0;
+            font-size: clamp(1.9rem, 5.2vw, 3rem);
+            font-weight: 900;
+            line-height: 1.05;
+            letter-spacing: -0.02em;
+            text-transform: uppercase;
+            font-style: italic;
+        }
+
+        .hiw-sub {
+            margin: 1rem auto 0;
+            max-width: 52ch;
+            font-size: clamp(0.9375rem, 1.8vw, 1.0625rem);
+            line-height: 1.65;
+            color: rgba(255, 255, 255, 0.55);
+            font-weight: 300;
+        }
+
+        /* .ss-steps / .ss-step come from design-system.css - one definition of a
+           numbered step rail rather than a landing-page-only copy of one. They
+           stack to a single column below 720px, so three steps never turn into a
+           horizontally scrolling strip on a phone. */
+        .hiw-grid {
+            max-width: 1080px;
+            margin: 0 auto;
+        }
+
+        .hiw-outcome {
+            max-width: 1080px;
+            margin: clamp(24px, 4vw, 40px) auto 0;
+            padding: clamp(18px, 3vw, 26px);
+            border-radius: 20px;
+            border: 1px solid rgba(0, 212, 255, 0.18);
+            background: rgba(0, 212, 255, 0.05);
+            font-size: 0.9375rem;
+            line-height: 1.7;
+            color: rgba(255, 255, 255, 0.72);
+            text-align: center;
+        }
+
+        .hiw-outcome strong { color: #fff; }
 </style>
 </head>
 
@@ -1538,6 +1714,7 @@
                     <i class="fas fa-chevron-down text-[9px]"></i>
                 </div>
                 <div class="nav-dropdown-menu">
+                    <a href="#how-it-works" class="nav-dropdown-item">How it works</a>
                     <a href="#what-section" class="nav-dropdown-item">What is it</a>
                     <a href="#why-section" class="nav-dropdown-item">Why It Matters</a>
                     <a href="#use-cases" class="nav-dropdown-item">Works With</a>
@@ -1568,6 +1745,7 @@
             <div class="flex flex-col items-center gap-5">
                 <div class="menu-item text-white">Insights</div>
                 <div class="flex flex-col items-center gap-4 text-xl md:text-2xl normal-case font-bold tracking-normal">
+                    <a href="#how-it-works" class="menu-item hover:text-pink-400 transition-colors">How it works</a>
                     <a href="#what-section" class="menu-item hover:text-cyan-400 transition-colors">What is it</a>
                     <a href="#why-section" class="menu-item hover:text-pink-400 transition-colors">Why It Matters</a>
                     <a href="#use-cases" class="menu-item hover:text-cyan-400 transition-colors">Works With</a>
@@ -1588,22 +1766,78 @@
     <main id="main-content" tabindex="-1">
 <section id="hero-section" class="px-6 text-center">
         <div class="max-w-6xl mx-auto">
+            <span class="hero-eyebrow" data-aos="fade-down">
+                <i class="fas fa-mobile-screen" aria-hidden="true"></i> No app to install
+            </span>
             <h1 class="text-[clamp(2.8rem,10vw,7rem)] font-black leading-[0.9] uppercase mb-4" data-aos="zoom-in-up">
                 Create AR Experiences <br> <span class="animated-gradient-text italic">Instantly</span>
             </h1>
-            <p class="max-w-2xl text-slate-500 text-xl sm:text-2xl font-light mb-4 mx-auto" data-aos="fade-up">
-                Create AR experiences online with ScanStory, a no-code WebAR platform in India for photo-to-video AR
-                using QR codes.
+            {# The mechanism, in the first screen, in the order it happens.
+               The keyword sentence that used to be here said what category the
+               product is in; this says what the product does to you. #}
+            <p class="hero-lead" data-aos="fade-up">
+                Attach a video to any photo and ScanStory gives you a QR code. Whoever scans it points their
+                camera at the printed image &mdash; and <strong>your video plays on top of it, in their
+                    browser.</strong> A no-code WebAR platform for photo-to-video AR.
             </p>
 
-            <div class="flex flex-wrap gap-4 justify-center" data-aos="fade-up">
-                <a href="/register/"
-                    class="glow-btn bg-pink-600 px-8 py-3 sm:px-10 sm:py-4 rounded-2xl font-black uppercase tracking-widest text-xs shadow-2xl inline-block">Start
-                    Free Trial</a>
-                <a href="/login/"
-                    class="glow-btn px-8 py-3 sm:px-10 sm:py-4 rounded-2xl border border-white/10 bg-white/5 font-black uppercase tracking-widest text-xs inline-block">Login</a>
+            <div class="hero-cta" data-aos="fade-up">
+                <a href="/register/" class="hero-cta-primary">
+                    Start free trial
+                    <i class="fas fa-arrow-right" aria-hidden="true"></i>
+                </a>
+                {# Login used to be the hero's second button, styled as loudly as
+                   the trial. It is an action for existing customers and already
+                   appears in the navbar and the mobile menu; the second slot now
+                   belongs to the question a first-time visitor actually has. #}
+                <a href="#how-it-works" class="hero-cta-quiet">
+                    <i class="fas fa-play" aria-hidden="true"></i>
+                    See how it works
+                </a>
             </div>
         </div>
+    </section>
+
+    <!-- HOW IT WORKS: the three steps, once, in order -->
+    <section id="how-it-works">
+        <div class="scan-line-decor top-0"></div>
+        <div class="hiw-head" data-aos="fade-up">
+            <span class="hiw-kicker">How ScanStory works</span>
+            <h2 class="hiw-title">Three steps. <span class="text-pink-500">One QR code.</span></h2>
+            <p class="hiw-sub">
+                You do the first two once. The third happens every time someone scans, on any modern phone,
+                with nothing to download.
+            </p>
+        </div>
+
+        <ol class="ss-steps hiw-grid">
+            <li class="ss-step" data-aos="fade-up" data-aos-delay="80">
+                <h3>Upload your image and video</h3>
+                <p>
+                    Pick the printed photo, card, page or label people will point a camera at, and the video you
+                    want it to play. ScanStory learns to recognise that image.
+                </p>
+            </li>
+            <li class="ss-step" data-aos="fade-up" data-aos-delay="160">
+                <h3>Get your QR code</h3>
+                <p>
+                    You get a QR code and a share link for the same experience. Print the code, put it on
+                    packaging, or send the link &mdash; both point at the same place.
+                </p>
+            </li>
+            <li class="ss-step" data-aos="fade-up" data-aos-delay="240">
+                <h3>They scan, the video plays</h3>
+                <p>
+                    Your audience scans, points their camera at the image, and the video appears on top of it in
+                    their mobile browser. No app, no account, no headset.
+                </p>
+            </li>
+        </ol>
+
+        <p class="hiw-outcome" data-aos="fade-up">
+            <strong>Replace the video later and the QR code keeps working.</strong>
+            The printed code you handed out never has to be reprinted.
+        </p>
     </section>
 
     <!-- WHAT IS SCANSTORY SECTION -->
@@ -2427,7 +2661,15 @@
         });
 
         AOS.init({ duration: 1000, once: true, mirror: false });
-        VanillaTilt.init(document.querySelectorAll("[data-tilt]"), { max: 3, speed: 300, glare: false });
+        // vanilla-tilt is now deferred (off the hero's critical path), so it is not
+        // yet defined while this inline script runs. Deferred scripts finish before
+        // DOMContentLoaded, which is why the init moves here rather than staying
+        // top-level, and the guard keeps a blocked CDN from throwing.
+        document.addEventListener('DOMContentLoaded', function () {
+            if (window.VanillaTilt) {
+                VanillaTilt.init(document.querySelectorAll("[data-tilt]"), { max: 3, speed: 300, glare: false });
+            }
+        });
 
         // Blob scroll parallax — increased height multiplier (0.05 → 0.18)
         const b1 = document.getElementById('blob1');

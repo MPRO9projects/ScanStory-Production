@@ -4,16 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ project.name }} - Preview | ScanStory</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
-    
+
     <!-- Tailwind CSS -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    
+
+    {# Fonts + icons + design-system.css, in the order design-system.css needs
+       (after Tailwind, before this page's own <style>). See _head_assets.html. #}
+    {% include 'user/_head_assets.html' %}
+
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
-        
         body {
             font-family: 'Plus Jakarta Sans', sans-serif;
             background: #050505;
@@ -77,22 +76,23 @@
             <i class="fas fa-arrow-left text-xs" aria-hidden="true"></i>
             <span class="text-xs font-bold uppercase tracking-wider">Dashboard</span>
         </a>
-        <div class="text-right">
-            <div class="text-xs text-white/50">Viewing ScanStory {{ project.display_number }}</div>
-            <h1 class="font-bold text-lg md:text-2xl leading-tight">{{ project.name }}</h1>
+        {# The project TITLE is the identity of a ScanStory. The two lines that
+           used to sit here - "Viewing ScanStory {{ project.display_number }}" and
+           a "Project #" readout - printed an attribute this route never assigns,
+           so both rendered blank ("Viewing ScanStory" and a bare "#"). Removed
+           rather than backfilled: a raw sequence number is not a name, and the
+           title below already is one. #}
+        <div class="text-right min-w-0">
+            <div class="text-xs text-white/50">Viewing ScanStory</div>
+            <h1 class="font-bold text-lg md:text-2xl leading-tight break-words">{{ project.name }}</h1>
         </div>
     </div>
 
     <main id="main-content" tabindex="-1">
-    
+
     <!-- Project Info Bar -->
     <div class="glass p-4 mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div class="flex items-center gap-4">
-            <div>
-                <span class="text-xs text-white/50">Project #</span>
-                <div class="font-mono text-sm font-bold text-cyan-400">#{{ project.display_number }}</div>
-            </div>
-            <div class="w-px h-8 bg-white/10"></div>
+        <div class="flex items-center gap-4 flex-wrap">
             <div>
                 <span class="text-xs text-white/50">Content sets</span>
                 <div class="font-bold">{{ pairs|length }}</div>
@@ -114,13 +114,48 @@
             <i class="fas fa-vial"></i> Test Experience
         </a>
         {% else %}
-        <a href="{{ project.scanner_url or url_for('public_scanner', public_key=project.public_key) }}" target="_blank"
+        {# share_url is the canonical /s/{public_key} address resolved by the
+           route. It replaces `project.scanner_url or url_for(...)`: the stored
+           column was only a fallback candidate here, and preferring it meant a
+           legacy row could still hand an admin the pre-public-key link. #}
+        <a href="{{ share_url }}" target="_blank" rel="noopener"
            class="bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 px-5 py-2 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-cyan-500/30 transition flex items-center gap-2">
             <i class="fas fa-qrcode"></i> Scan AR
         </a>
         {% endif %}
     </div>
-    
+
+    {# ---------------------------------------------------------------------
+       Share. This page manages a ScanStory, so the thing a creator most often
+       comes here to get - the public link and the QR code - now lives on it
+       instead of only on the one-time ready screen they may have navigated
+       away from.
+       --------------------------------------------------------------------- #}
+    {% if not admin_view %}
+    <section class="ss-share mb-6" aria-labelledby="shareHeading">
+        <h2 class="ss-h2" id="shareHeading" style="font-size:0.9375rem;">
+            <i class="fas fa-link text-cyan-400" aria-hidden="true"></i> Share this ScanStory
+        </h2>
+        <p class="text-xs text-white/50 leading-relaxed mt-2 mb-4">
+            Anyone with this link opens your ScanStory in a phone browser &mdash; no app, no sign-in. The same
+            address is what the QR code points at, and it does not change when you replace the media inside.
+        </p>
+        <div class="ss-share-row">
+            <code class="ss-share-url" id="shareUrl">{{ share_url }}</code>
+            <div class="ss-share-actions">
+                <button type="button" class="ss-btn ss-btn-secondary ss-btn-sm" id="copyShareUrl">
+                    <i class="fas fa-copy" aria-hidden="true"></i> Copy link
+                </button>
+                <a href="{{ url_for('download_project_qr', project_id=project.id) }}"
+                   class="ss-btn ss-btn-secondary ss-btn-sm">
+                    <i class="fas fa-qrcode" aria-hidden="true"></i> QR code
+                </a>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+
     {# =====================================================================
        V1.1 - Ownership & ScanStory Coverage.
 
@@ -493,6 +528,21 @@
       })();
     </script>
     {% endif %}
+
+    <script src="{{ url_for('static', filename='js/ss-ui.js') }}"></script>
+    <script>
+        // Copy the canonical share link. ssCopy reports success/failure in a
+        // toast and falls back to a selection copy where the async clipboard
+        // API is unavailable (insecure origins, some in-app browsers).
+        (function () {
+            var button = document.getElementById('copyShareUrl');
+            var target = document.getElementById('shareUrl');
+            if (!button || !target) return;
+            button.addEventListener('click', function () {
+                window.ssCopy(target.textContent.trim(), 'Share link copied.');
+            });
+        })();
+    </script>
 
     <script>
         // Simple image fallback

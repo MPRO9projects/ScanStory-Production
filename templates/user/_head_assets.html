@@ -1,0 +1,34 @@
+{# ---------------------------------------------------------------------------
+   Shared <head> asset block for the Creator-facing pages.
+
+   WHY THIS EXISTS. Every user/*.html page is a standalone document with its own
+   <head>, and each one had hand-copied its own font/icon/design-system links.
+   That produced three concrete defects, all fixed by including this partial:
+
+   1. LOAD ORDER. design-system.css was linked FIRST on every page, before
+      tailwind.build.css and before the page's own <style> block - so Tailwind
+      utilities and page-local rules silently overrode the .ss-* tokens the file
+      exists to provide, inverting its own documented intent. This partial is
+      included AFTER a page's tailwind link and BEFORE its <style> block, which
+      is the order design-system.css declares it needs.
+
+   2. FONT LOADING. The family was pulled with `@import url(fonts...)` from
+      INSIDE each page's <style>, so the browser could not even discover the
+      font request until it had parsed that stylesheet - a serialised round
+      trip on the critical path. A <link> with preconnect starts it during
+      HTML parse instead.
+
+   3. ICON VERSION DRIFT. Pages loaded Font Awesome 6.4.0 or 6.4.2 depending on
+      when they were written. One version here, once.
+
+   Deliberately NOT in this partial: tailwind.build.css. Only some Creator pages
+   load Tailwind, and adding its preflight reset to a page that was never built
+   against it would change that page's layout. Each page keeps its own Tailwind
+   link (above this include) or keeps not having one.
+--------------------------------------------------------------------------- #}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;700;800;900&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">

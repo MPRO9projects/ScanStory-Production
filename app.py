@@ -7311,7 +7311,11 @@ def dashboard():
                 
                 # Also add pairs count for each project (useful in template)
                 project.pairs_count = ProjectPair.query.filter_by(project_id=project.id).count()
-                
+
+                # Canonical public address for the card's "Copy link" control.
+                # Same rule as /projects: never the persisted scanner_url column.
+                project.public_share_url = _canonical_public_scanner_url(project)
+
             print(f"DEBUG: Found {len(projects)} projects for user {user.id}")
         except Exception as e:
             print(f"❌ Error fetching projects: {e}")
@@ -7556,6 +7560,11 @@ def projects_page():
         # user ever has hundreds of projects on one page, batch it inside
         # project_public_access_state, not here.
         project.coverage_summary = project_coverage_summary(project)
+        # Presentation passthrough, same as the rollup counts above: the card's
+        # "Copy link" affordance needs the CANONICAL public address. Resolved
+        # here so the template never reaches for the persisted
+        # project.scanner_url column, which predates /s/<public_key>.
+        project.public_share_url = _canonical_public_scanner_url(project)
         projects.append(project)
 
     has_any_projects = db.session.query(Project.id).filter(project_user_access_filter(user.id)).first() is not None
@@ -13098,7 +13107,13 @@ def success_page(project_id):
         is_admin=False,
         qr_download_url=url_for("download_project_qr", project_id=project.id),
         projects_url=url_for("projects_page"),
-        test_scanner_url=url_for("scanner_test_entry", project_id=project.id)
+        test_scanner_url=url_for("scanner_test_entry", project_id=project.id),
+        # THE shareable address of this ScanStory, resolved here rather than in
+        # the template. project.scanner_url is the value persisted when the QR
+        # was first generated and is not guaranteed to be the current canonical
+        # /s/<public_key> form, so the ready page must never publish it: the
+        # helper is the one place that knows the canonical shape.
+        share_url=_canonical_public_scanner_url(project),
     )
 
 # --------------------------------------------------------------------------------------------
@@ -14574,6 +14589,9 @@ def project_preview(project_id):
                          project=project,
                          pairs=pairs,
                          admin_view=admin_view,
+                         # Canonical public address, never the persisted
+                         # project.scanner_url column (see _canonical_public_scanner_url).
+                         share_url=_canonical_public_scanner_url(project),
                          coverage=project_coverage_summary(project),
                          ownership=project_ownership_context(project, user))
 
@@ -17972,7 +17990,11 @@ def admin_success_page(project_id):
         is_admin=True,
         qr_download_url=url_for("admin_download_project_qr", project_id=project.id),
         projects_url=url_for("admin_my_projects"),
-        test_scanner_url=url_for("admin_scanner_test_entry", project_id=project.id)
+        test_scanner_url=url_for("admin_scanner_test_entry", project_id=project.id),
+        # Same canonical share address as the creator ready page - this route
+        # renders the SAME user/success.html template, so it has to supply the
+        # same context key or the share panel would render with an empty link.
+        share_url=_canonical_public_scanner_url(project),
     )
 
 @app.route("/admin/projects/<int:project_id>/qr")

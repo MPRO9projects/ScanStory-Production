@@ -5,16 +5,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ScanStory | Dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
 
     <!-- External Libraries -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
     <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" />
+
+    {# Fonts + icons + design-system.css, in the order design-system.css needs
+       (after Tailwind, before this page's own <style>). See _head_assets.html. #}
+    {% include 'user/_head_assets.html' %}
 
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
-
         :root {
             --primary: #ff007a;
             --secondary: #7000ff;
@@ -706,7 +706,10 @@
         <section class="glass card mb-10" data-aos="fade-up" data-aos-delay="120" data-testid="effective-entitlement-summary">
             <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4 mb-5">
                 <div>
-                    <h2 class="text-xl font-black uppercase tracking-widest text-[12px] text-white/70">Effective Entitlement</h2>
+                    {# "Effective Entitlement" is internal vocabulary from the
+                       backend resolver, not something a creator says. The
+                       data-testid is unchanged so nothing that keys off it moves. #}
+                    <h2 class="text-xl font-black uppercase tracking-widest text-[12px] text-white/70">What your plan allows</h2>
                     <p class="text-white/60 text-sm mt-2">What your account can do right now, including anything you have bought on top of your plan.</p>
                 </div>
                 <span class="badge">
@@ -795,15 +798,18 @@
                 {% set scan_count = project.scan_logs|length if project.scan_logs else 0 %}
                 <div class="glass project-card rounded-2xl p-5">
                     <div class="flex items-start justify-between mb-4">
-                        <div class="flex-1">
-                            <h3 class="font-bold text-lg mb-1 truncate">Project {{ project.display_number }}: {{
-                                project.name }}</h3>
+                        <div class="flex-1 min-w-0">
+                            {# Title only. The card used to lead with "Project 3: My
+                               Wedding Album" - a sequence number the creator never
+                               chose, ahead of the name they did. The name is the
+                               identity of a ScanStory; the number identified nothing. #}
+                            <h3 class="font-bold text-lg mb-1 break-words">{{ project.name }}</h3>
                             <p class="text-white/50 text-xs">
-                                Created: {{ project.created_at.strftime('%d %b %Y') }}
+                                Created {{ project.created_at.strftime('%d %b %Y') }}
                             </p>
                         </div>
-                        <div class="bg-white/5 rounded-full p-2 ml-2">
-                            <i class="fas fa-qrcode text-cyan-400"></i>
+                        <div class="bg-white/5 rounded-full p-2 ml-2 shrink-0">
+                            <i class="fas fa-qrcode text-cyan-400" aria-hidden="true"></i>
                         </div>
                     </div>
 
@@ -818,17 +824,45 @@
                         </div>
                     </div>
 
+                    {# State, always stated - not only when something is wrong.
+                       A card that said nothing at all was indistinguishable from
+                       a card that was still being prepared. Derived from the same
+                       pair rollup /projects uses; no new rule is introduced here,
+                       and a suspended ScanStory is deliberately its own state that
+                       never collapses into "processing". #}
                     {% set ready_pairs = project.pairs | selectattr('is_processed', 'equalto', true) | list | length %}
+                    {% set failed_pairs = project.pairs | selectattr('processing_status', 'equalto', 'failed') | list | length %}
                     {% set total_pairs = project.pairs | length %}
-                    {% if total_pairs > 0 and ready_pairs < total_pairs %} <div
-                        class="flex items-center gap-2 mt-2 px-2 py-1 bg-yellow-500/10 border border-yellow-500/20 rounded-lg text-xs text-yellow-300">
-                        <span class="inline-block w-2 h-2 rounded-full bg-yellow-400 animate-pulse"></span>
-                        Processing: {{ ready_pairs }}/{{ total_pairs }} pairs ready
-                </div>
-                {% endif %}
+                    <div class="mt-3">
+                        {% if not project.is_active %}
+                        <span class="ss-chip" data-tone="stop">
+                            <i class="fas fa-ban" aria-hidden="true"></i> Suspended
+                        </span>
+                        {% elif total_pairs == 0 %}
+                        <span class="ss-chip" data-tone="wait">
+                            <i class="fas fa-triangle-exclamation" aria-hidden="true"></i> Needs attention
+                        </span>
+                        {% elif failed_pairs > 0 %}
+                        <span class="ss-chip" data-tone="stop">
+                            <i class="fas fa-circle-exclamation" aria-hidden="true"></i> Needs attention
+                        </span>
+                        {% elif ready_pairs >= total_pairs %}
+                        <span class="ss-chip" data-tone="ok">
+                            <i class="fas fa-circle-check" aria-hidden="true"></i> Ready to scan
+                        </span>
+                        {% else %}
+                        <span class="ss-chip" data-tone="wait">
+                            <i class="fas fa-rotate ss-spin" aria-hidden="true"></i>
+                            Processing {{ ready_pairs }} of {{ total_pairs }} content sets
+                        </span>
+                        {% endif %}
+                    </div>
 
                 <div class="flex gap-2 mt-4 flex-wrap">
-                    <a href="/project/{{ project.id }}/preview{% if admin_view %}?admin_view=true&user_id={{ user.id }}{% endif %}"
+                    {# url_for rather than the hand-built "/project/{id}/preview"
+                       string this used to interpolate: one route definition, one
+                       place it can change. #}
+                    <a href="{% if admin_view %}{{ url_for('project_preview', project_id=project.id, admin_view='true', user_id=user.id) }}{% else %}{{ url_for('project_preview', project_id=project.id) }}{% endif %}"
                         class="ss-btn ss-btn-primary ss-btn-sm" style="flex:1;">
                         <i class="fas fa-eye" aria-hidden="true"></i> View
                     </a>
@@ -842,10 +876,23 @@
                         <i class="fas fa-vial" aria-hidden="true"></i> Test Experience
                     </a>
                     {% endif %}
+                    {% if not admin_view %}
                     <a href="{{ url_for('download_project_qr', project_id=project.id) }}"
                         class="ss-btn ss-btn-secondary ss-btn-sm" style="flex:1;">
                         <i class="fas fa-download" aria-hidden="true"></i> QR
                     </a>
+                    {# Copy link. The value is the CANONICAL /s/{public_key}
+                       address resolved by the route, never the persisted
+                       project.scanner_url column and never anything containing a
+                       project id or a user id. #}
+                    {% if project.public_share_url %}
+                    <button type="button" class="ss-btn ss-btn-secondary ss-btn-sm" style="flex:1;"
+                        data-copy-link data-share-url="{{ project.public_share_url }}"
+                        aria-label="Copy the share link for {{ project.name }}">
+                        <i class="fas fa-link" aria-hidden="true"></i> Copy link
+                    </button>
+                    {% endif %}
+                    {% endif %}
                 </div>
             </div>
             {% endfor %}
@@ -907,8 +954,16 @@
 
     <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
     <script src="{{ url_for('static', filename='js/nav.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/ss-ui.js') }}"></script>
     <script>
         AOS.init({ duration: 1100, once: true });
+
+        // Copy the canonical share link straight off a card.
+        document.querySelectorAll('[data-copy-link]').forEach(function (button) {
+            button.addEventListener('click', function () {
+                window.ssCopy(button.getAttribute('data-share-url'), 'Share link copied.');
+            });
+        });
 
         window.addEventListener('scroll', () => {
             const scroll = window.pageYOffset;

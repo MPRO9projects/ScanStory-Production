@@ -4,16 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Stories | ScanStory</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
     <link rel="apple-touch-icon" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
 
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
     <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
 
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
+    {# Fonts + icons + design-system.css, in the order design-system.css needs
+       (before this page's own <style>). See _head_assets.html. #}
+    {% include 'user/_head_assets.html' %}
 
+    <style>
         :root {
             --primary: #ff007a;
             --secondary: #7000ff;
@@ -875,6 +875,17 @@
                         <a href="{{ url_for('download_project_qr', project_id=project.id) }}" class="action-btn btn-qr">
                             <i class="fas fa-qrcode" aria-hidden="true"></i> QR
                         </a>
+                        {# Copy link. The value is the CANONICAL /s/{public_key}
+                           address resolved by the route (project.public_share_url),
+                           never the persisted project.scanner_url column, and it
+                           carries no project id, user id or admin id. #}
+                        {% if project.public_share_url %}
+                        <button type="button" class="action-btn btn-view" data-copy-link
+                                data-share-url="{{ project.public_share_url }}"
+                                aria-label="Copy the share link for {{ project.name }}">
+                            <i class="fas fa-link" aria-hidden="true"></i> Copy link
+                        </button>
+                        {% endif %}
                         <a href="{{ url_for('user_edit_project_page', project_id=project.id) }}" class="action-btn btn-edit">
                             <i class="fas fa-pen" aria-hidden="true"></i> Edit
                         </a>
@@ -903,6 +914,9 @@
 
                         <form method="POST" action="{{ url_for('user_delete_project', project_id=project.id) }}"
                             data-confirm="Delete &quot;{{ project.name }}&quot;? This cannot be undone."
+                            data-ss-confirm-title="Delete this ScanStory?"
+                            data-ss-confirm-label="Delete permanently"
+                            data-ss-confirm-destructive
                             style="flex:1; min-width:60px;">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                             <button type="submit" class="action-btn btn-delete" style="width:100%;"
@@ -943,6 +957,7 @@
     </main>
 
     <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script src="{{ url_for('static', filename='js/ss-ui.js') }}"></script>
     <script>
         AOS.init({ duration: 600, easing: 'ease-out-cubic', once: true });
 
@@ -977,27 +992,45 @@
                 }
             }
 
-            document.querySelectorAll('form[data-repair-form]').forEach(function (form) {
+            /* Confirmation. Same gate as before - nothing submits until the
+             * creator answers yes - but through the on-brand, focus-trapped,
+             * screen-reader-announced ss-dialog instead of window.confirm().
+             * ssConfirm resolves false for Escape, backdrop and Cancel, so the
+             * safe answer is still the default on every dismissal path. */
+            function gate(form, options) {
                 form.addEventListener('submit', function (event) {
-                    if (form.dataset.submitted === '1') { event.preventDefault(); return; }
-                    if (!window.confirm('Repair this ScanStory? Your QR code will not change.')) {
-                        event.preventDefault();
-                        return;
-                    }
-                    form.dataset.submitted = '1';
-                    markBusy(form);
+                    if (form.dataset.submitted === '1') return;
+                    event.preventDefault();
+                    window.ssConfirm(options).then(function (answer) {
+                        if (!answer) return;
+                        form.dataset.submitted = '1';
+                        markBusy(form);
+                        form.requestSubmit ? form.requestSubmit() : form.submit();
+                    });
+                });
+            }
+
+            document.querySelectorAll('form[data-repair-form]').forEach(function (form) {
+                gate(form, {
+                    title: 'Fix this ScanStory?',
+                    body: 'We will prepare its content again. Your QR code and share link stay exactly the same, and nothing is deleted.',
+                    confirmLabel: 'Start fixing'
                 });
             });
 
             document.querySelectorAll('form[data-confirm]').forEach(function (form) {
-                form.addEventListener('submit', function (event) {
-                    if (form.dataset.submitted === '1') { event.preventDefault(); return; }
-                    if (!window.confirm(form.getAttribute('data-confirm'))) {
-                        event.preventDefault();
-                        return;
-                    }
-                    form.dataset.submitted = '1';
-                    markBusy(form);
+                gate(form, {
+                    title: form.getAttribute('data-ss-confirm-title') || 'Are you sure?',
+                    body: form.getAttribute('data-confirm'),
+                    confirmLabel: form.getAttribute('data-ss-confirm-label') || 'Continue',
+                    destructive: form.hasAttribute('data-ss-confirm-destructive')
+                });
+            });
+
+            // Copy the canonical share link straight off a card.
+            document.querySelectorAll('[data-copy-link]').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    window.ssCopy(button.getAttribute('data-share-url'), 'Share link copied.');
                 });
             });
 
