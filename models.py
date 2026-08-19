@@ -574,6 +574,13 @@ class PaymentOrder(db.Model):
     currency = db.Column(db.String(3), default="INR")
     offer_amount = db.Column(db.Float, nullable=True)
     total_amount = db.Column(db.Float, nullable=False)
+    base_amount = db.Column(db.Float, nullable=True)
+    base_currency = db.Column(db.String(3), nullable=True)
+    quoted_amount = db.Column(db.Float, nullable=True)
+    quoted_currency = db.Column(db.String(3), nullable=True)
+    fx_rate = db.Column(db.Float, nullable=True)
+    fx_rate_source = db.Column(db.String(80), nullable=True)
+    fx_rate_timestamp = db.Column(db.DateTime, nullable=True)
     
     # Payment method
     payment_method = db.Column(db.String(50), nullable=True)  # card/upi/netbanking/wallet
@@ -862,6 +869,13 @@ class AddonPurchase(db.Model):
     amount = db.Column(db.Float, nullable=False)
     total_amount = db.Column(db.Float, nullable=False)
     currency = db.Column(db.String(3), default="INR", nullable=False)
+    base_amount = db.Column(db.Float, nullable=True)
+    base_currency = db.Column(db.String(3), nullable=True)
+    quoted_amount = db.Column(db.Float, nullable=True)
+    quoted_currency = db.Column(db.String(3), nullable=True)
+    fx_rate = db.Column(db.Float, nullable=True)
+    fx_rate_source = db.Column(db.String(80), nullable=True)
+    fx_rate_timestamp = db.Column(db.DateTime, nullable=True)
     status = db.Column(db.String(20), nullable=False, default="pending", index=True)
     razorpay_order_id = db.Column(db.String(255), unique=True, nullable=True, index=True)
     razorpay_payment_id = db.Column(db.String(255), unique=True, nullable=True, index=True)

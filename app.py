@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import calendar
+from dataclasses import dataclass
 import shutil
 import mimetypes
 import threading
@@ -641,15 +642,101 @@ def verify_recaptcha_v3(expected_action):
         app.logger.error(f"reCAPTCHA verification error: {e}")
         return False, "Security verification failed. Please try again."
     
-INR_PER_USD = float(os.environ.get("INR_PER_USD", "95.11"))
+@dataclass(frozen=True)
+class FxRateQuote:
+    base_currency: str
+    quote_currency: str
+    rate: float
+    source: str
+    fetched_at: dt
+    stale: bool = False
+
+
+FX_BASE_CURRENCY = "INR"
+FX_REFERENCE_CURRENCY = "USD"
+_FX_CACHE = {"quote": None}
+
+
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _fx_cache_ttl_seconds():
+    return max(60, int(_env_float("SCANSTORY_FX_CACHE_TTL_SECONDS", 6 * 60 * 60)))
+
+
+def _fallback_inr_per_usd():
+    # Compatibility for existing deployments: INR_PER_USD becomes an explicit
+    # configured fallback, not the always-current display source.
+    return _env_float("SCANSTORY_FX_FALLBACK_INR_PER_USD", os.environ.get("INR_PER_USD", "95.11"))
+
+
+def _configured_inr_per_usd_quote(stale=False):
+    return FxRateQuote(
+        base_currency=FX_BASE_CURRENCY,
+        quote_currency=FX_REFERENCE_CURRENCY,
+        rate=_fallback_inr_per_usd(),
+        source=os.environ.get("SCANSTORY_FX_SOURCE", "configured-fallback"),
+        fetched_at=dt.utcnow(),
+        stale=stale,
+    )
+
+
+def fetch_inr_per_usd_quote():
+    """Fetch the current reference FX quote.
+
+    No external network dependency is introduced in this batch. Production can
+    feed the value through environment/config management; later provider wiring
+    only needs to replace this seam while preserving the cache/quote contract.
+    """
+    return _configured_inr_per_usd_quote(stale=False)
+
+
+def current_inr_per_usd_quote():
+    cached = _FX_CACHE.get("quote")
+    now = dt.utcnow()
+    if cached and (now - cached.fetched_at).total_seconds() <= _fx_cache_ttl_seconds():
+        return cached
+    try:
+        quote = fetch_inr_per_usd_quote()
+        if not quote or quote.rate <= 0:
+            raise ValueError("invalid FX rate")
+        _FX_CACHE["quote"] = quote
+        return quote
+    except Exception:
+        if cached:
+            stale = FxRateQuote(
+                base_currency=cached.base_currency,
+                quote_currency=cached.quote_currency,
+                rate=cached.rate,
+                source=cached.source,
+                fetched_at=cached.fetched_at,
+                stale=True,
+            )
+            _FX_CACHE["quote"] = stale
+            return stale
+        quote = _configured_inr_per_usd_quote(stale=True)
+        _FX_CACHE["quote"] = quote
+        return quote
+
+
+def convert_inr_to_usd(amount, quote=None):
+    try:
+        amount = float(amount or 0)
+        quote = quote or current_inr_per_usd_quote()
+        if quote.rate <= 0:
+            return 0
+        return round(amount / quote.rate, 2)
+    except Exception:
+        return 0
+
 
 @app.template_filter("inr_to_usd")
 def inr_to_usd(amount):
-    try:
-        amount = float(amount or 0)
-        return round(amount / INR_PER_USD, 2)
-    except Exception:
-        return 0
+    return convert_inr_to_usd(amount)
 
 
 
@@ -3531,6 +3618,57 @@ def _add_calendar_months(start, months):
     month += 1
     day = min(start.day, calendar.monthrange(year, month)[1])
     return start.replace(year=year, month=month, day=day)
+
+
+def _extend_subscription_end_calendar_months(current_end, months, now=None):
+    now = now or dt.utcnow()
+    base = current_end if current_end and current_end > now else now
+    return _add_calendar_months(base, months)
+
+
+def _gateway_minor_units(amount):
+    amount_paise = int(round(float(amount or 0) * 100))
+    return max(100, amount_paise)
+
+
+def _inr_checkout_quote(amount):
+    amount = round(float(amount or 0), 2)
+    return {
+        "base_amount": amount,
+        "base_currency": FX_BASE_CURRENCY,
+        "quoted_amount": amount,
+        "quoted_currency": FX_BASE_CURRENCY,
+        "fx_rate": 1.0,
+        "fx_rate_source": "canonical-inr-checkout",
+        "fx_rate_timestamp": dt.utcnow(),
+    }
+
+
+def _trial_days_from_plan(trial_plan):
+    return int((trial_plan.trial_days if trial_plan else get_system_config("free_trial_days", 7)) or 7)
+
+
+def _repair_missing_trial_details(user, trial_plan=None):
+    """Rebuild TrialDetails from the original trial anchor, never from now."""
+    if user.subscription_status not in ("trial", "limit_reached"):
+        return None, False
+    trial = TrialDetails.query.filter_by(user_id=user.id).first()
+    if trial:
+        return trial, False
+    anchor = user.subscription_taken_at or user.created_at
+    if not anchor:
+        user.subscription_status = "expired"
+        return None, True
+    trial_plan = trial_plan or SubscriptionPlan.query.filter_by(is_trial_plan=True, is_active=True).first()
+    trial = TrialDetails(
+        user_id=user.id,
+        trial_start=anchor,
+        trial_end=anchor + timedelta(days=_trial_days_from_plan(trial_plan)),
+        trial_project_limit=int(get_system_config("free_trial_projects", 1) or 1),
+        trial_scan_limit=int(get_system_config("free_trial_scans", 50) or 50),
+    )
+    db.session.add(trial)
+    return trial, True
 
 
 def purchased_scan_capacity(user):
@@ -7031,22 +7169,10 @@ def dashboard():
             
             if not trial:
                 try:
-                    now = dt.utcnow()
-                    days = int(
-                        (trial_plan.trial_days if trial_plan else get_system_config("free_trial_days", 7)) or 7
-                    )
-
-                    trial = TrialDetails(
-                        user_id=user.id,
-                        trial_start=now,
-                        trial_end=now + timedelta(days=days),
-                        trial_project_limit=int(get_system_config("free_trial_projects", 1) or 1),
-                        trial_scan_limit=int(get_system_config("free_trial_scans", 50) or 50),
-                    )
-                    db.session.add(trial)
-                    changed = True
+                    trial, repaired = _repair_missing_trial_details(user, trial_plan)
+                    changed = changed or repaired
                 except Exception as e:
-                    print(f"❌ Error creating trial details: {e}")
+                    print(f"❌ Error repairing trial details: {e}")
 
             # Trial expired
             if trial and not trial.is_active and user.subscription_status != "active":
@@ -8362,22 +8488,12 @@ def login():
         # Ensure TrialDetails exists
         trial = TrialDetails.query.filter_by(user_id=user.id).first()
         if not trial:
-            now = dt.utcnow()
             trial_plan = SubscriptionPlan.query.filter_by(is_trial_plan=True, is_active=True).first()
-            days = int((trial_plan.trial_days if trial_plan else get_system_config("free_trial_days", 7)) or 7)
-
-            trial = TrialDetails(
-                user_id=user.id,
-                trial_start=now,
-                trial_end=now + timedelta(days=days),
-                trial_project_limit=int(get_system_config("free_trial_projects", 1) or 1),
-                trial_scan_limit=int(get_system_config("free_trial_scans", 50) or 50),
-            )
-            db.session.add(trial)
-            changed = True
+            trial, repaired = _repair_missing_trial_details(user, trial_plan)
+            changed = changed or repaired
 
         # Trial expired → mark expired
-        if not trial.is_active:
+        if not trial or not trial.is_active:
             user.subscription_status = "expired"
             db.session.commit()
             flash("Your free trial has expired. Please upgrade to continue.", "warning")
@@ -11643,6 +11759,8 @@ def create_addon_order():
     ok, code, message = _validate_addon_catalog_for_purchase(item)
     if not ok:
         return jsonify({"success": False, "code": code, "error": message}), 400
+    if (item.currency or FX_BASE_CURRENCY).upper() != FX_BASE_CURRENCY:
+        return jsonify({"success": False, "code": "UNSUPPORTED_CURRENCY", "error": "This currency is not available for checkout yet."}), 400
 
     # Project targeting (Domain 2B): renewal add-ons bind to exactly one
     # project the buyer is authorised to manage; account-level add-ons must not
@@ -11666,9 +11784,8 @@ def create_addon_order():
         return jsonify({"success": False, "code": "PAYMENT_NOT_CONFIGURED", "error": "Payment gateway not configured."}), 503
 
     total_amount = round(float(item.unit_amount) * quantity, 2)
-    amount_paise = int(round(total_amount * 100))
-    if amount_paise < 100:
-        amount_paise = 100
+    quote = _inr_checkout_quote(total_amount)
+    amount_paise = _gateway_minor_units(quote["quoted_amount"])
     purchase = AddonPurchase(
         order_id=f"ADDON_{user.id}_{int(time.time())}_{uuid.uuid4().hex[:8]}",
         user_id=user.id,
@@ -11679,6 +11796,7 @@ def create_addon_order():
         total_amount=total_amount,
         currency=item.currency,
         status="pending",
+        **quote,
     )
     db.session.add(purchase)
     db.session.flush()
@@ -12078,6 +12196,8 @@ def create_razorpay_order():
     # by posting its id directly at this endpoint.
     if not plan or not plan.is_purchasable or plan.is_trial_plan:
         return jsonify({"success": False, "error": "Invalid plan"})
+    if (plan.currency or FX_BASE_CURRENCY).upper() != FX_BASE_CURRENCY:
+        return jsonify({"success": False, "error": "This currency is not available for checkout yet."}), 400
 
     # Check if Razorpay is configured
     if not razorpay_client:
@@ -12101,9 +12221,8 @@ def create_razorpay_order():
 
     # Calculate amount in paise (Razorpay expects amount in smallest currency unit)
     try:
-        amount_paise = int(plan.effective_price * 100)
-        if amount_paise < 100:  # Minimum amount for Razorpay is 100 paise (₹1)
-            amount_paise = 100
+        quote = _inr_checkout_quote(plan.effective_price)
+        amount_paise = _gateway_minor_units(quote["quoted_amount"])
     except Exception as e:
         _release_capacity_slot(reservation, "released", "invalid-amount")
         return jsonify({"success": False, "error": f"Invalid amount: {str(e)}"})
@@ -12148,7 +12267,8 @@ def create_razorpay_order():
             currency=plan.currency,
             status="pending",
             purchased_project_limit=plan.total_project_limit,
-            purchased_scan_limit=plan.total_scan_limit
+            purchased_scan_limit=plan.total_scan_limit,
+            **quote,
         )
         db.session.add(payment_order)
         db.session.flush()
@@ -15789,11 +15909,10 @@ def admin_extend_subscription(order_id):
         flash("Please enter a positive number of months.", "error")
         return redirect(url_for("admin_subscriptions"))
     
-    # Extend subscription
-    if payment_order.subscription_end:
-        payment_order.subscription_end = payment_order.subscription_end + timedelta(days=30 * extension_months)
-    else:
-        payment_order.subscription_end = dt.utcnow() + timedelta(days=30 * extension_months)
+    payment_order.subscription_end = _extend_subscription_end_calendar_months(
+        payment_order.subscription_end,
+        extension_months,
+    )
     
     # Update user subscription
     user = User.query.get(payment_order.user_id)
