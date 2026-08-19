@@ -2544,6 +2544,50 @@
       showFallbackPanel(code, safe);
     }
 
+    // Shared by the explicit "Retry Camera" button AND the very first "Start
+    // Camera" press when it lands on a scanner already parked in 'fallback'
+    // for a RECOVERABLE pre-camera reason (OpenCV's own automatic first-load
+    // timeout, which can fire while the viewer is still reading the intro
+    // screen, before Start Camera has ever been pressed). Camera acquisition
+    // is independent of vision-engine readiness, so a slow/failed OpenCV load
+    // must never be the reason getUserMedia() is skipped on the FIRST press -
+    // this reuses the exact same recovery sequence Retry Camera already used,
+    // rather than a second, divergent copy of it.
+    async function recoverFallbackAndOpenCamera(reason) {
+      try {
+        sessionStorage.removeItem('scanstoryScannerPriorFailure');
+      } catch (_) { /* sessionStorage unavailable (private mode quota, etc.) - non-fatal */ }
+      detectionFailCount = 0;
+      recoveryAttempt = 0;
+      // Wave 7: also restarts the request scheduler cleanly - no leftover rate-limit
+      // backoff carried over from whatever attempt led to this fallback state.
+      detectionPolicy.resetBackoff();
+      scannerGeneration++;
+      window.__scannerUiGeneration = scannerGeneration;
+      setScannerUiState('camera_starting', reason);
+      setScannerGuidance('looking', reason);
+      if (scannerState.state === 'fallback') safeTransition('requesting_camera', reason);
+      stopDetectLoop(reason);
+      stopTrackingLoop();
+      if (!cvReady) {
+        opencvLoadAttempts = 0;
+        opencvLoadFailed = false;
+        const loaded = await loadOpenCV({ forceRetry: true });
+        if (!loaded || !cvReady) return false;
+      }
+      await setupCamera();
+      if (!isStreamDead()) {
+        startDetectLoop();
+        startTrackingLoop();
+        setScannerGuidance('looking', 'camera_retry_succeeded');
+        closeFallbackVideoPanel('camera_retry_succeeded');
+        clearVerifiedFallbackPairContext('camera_retry_succeeded');
+        hideFallbackPanel('retry_succeeded');
+        return true;
+      }
+      return false;
+    }
+
     async function retryCameraFromFallback() {
       if (fallbackRetryInProgress || diagState.cameraStartInProgress) return; // no concurrent starts
       fallbackRetryInProgress = true;
@@ -2551,38 +2595,8 @@
       fallbackRetryBtn.disabled = true;
       fallbackRetryBtn.textContent = 'Retrying…';
       try {
-        sessionStorage.removeItem('scanstoryScannerPriorFailure');
-        detectionFailCount = 0;
-        recoveryAttempt = 0;
-        // Wave 7: Retry Camera restarts the request scheduler cleanly too — no leftover
-        // rate-limit backoff from whatever attempt led to this fallback panel.
-        detectionPolicy.resetBackoff();
-        scannerGeneration++;
-        window.__scannerUiGeneration = scannerGeneration;
-        setScannerUiState('camera_starting', 'fallback_retry');
-        setScannerGuidance('looking', 'fallback_retry');
-        if (scannerState.state === 'fallback') safeTransition('requesting_camera', 'fallback_retry');
-        stopDetectLoop('fallback_retry');
-        stopTrackingLoop();
-        if (!cvReady) {
-          opencvLoadAttempts = 0;
-          opencvLoadFailed = false;
-          const loaded = await loadOpenCV({ forceRetry: true });
-          if (!loaded || !cvReady) {
-            fallbackRetryBtn.disabled = false;
-            fallbackRetryBtn.textContent = 'Retry Camera';
-            return;
-          }
-        }
-        await setupCamera();
-        if (!isStreamDead()) {
-          startDetectLoop();
-          startTrackingLoop();
-          setScannerGuidance('looking', 'camera_retry_succeeded');
-          closeFallbackVideoPanel('camera_retry_succeeded');
-          clearVerifiedFallbackPairContext('camera_retry_succeeded');
-          hideFallbackPanel('retry_succeeded');
-        } else {
+        const succeeded = await recoverFallbackAndOpenCamera('fallback_retry');
+        if (!succeeded) {
           fallbackRetryBtn.disabled = false;
           fallbackRetryBtn.textContent = 'Retry Camera';
         }
@@ -4153,11 +4167,24 @@
       return SERVER_PLAYBACK_MODE === 'detect_once' ? 'detect_once' : 'tracked_overlay';
     }
 
-    function startCameraFromIntro() {
+    async function startCameraFromIntro() {
       if (experienceIntroDismissed) return;
       scannerPlaybackMode = selectedPlaybackMode();
       scannerDiagnostics.push('experience_intro_start_camera', { playbackMode: scannerPlaybackMode });
       hideExperienceIntro();
+      // The viewer has been looking at the intro screen this whole time, so this
+      // is genuinely their FIRST camera request - even if OpenCV's own automatic
+      // load timeout already parked the scanner in 'fallback' behind the intro.
+      // Only the recoverable vision-engine reason gets auto-recovered here; a
+      // genuine camera/permission/context fallback can only be reached AFTER a
+      // real getUserMedia() attempt (i.e. after Start Camera has already run
+      // once), so it is intentionally left alone for the existing Retry Camera
+      // panel to handle.
+      if (scannerState.state === 'fallback' && diagState.fallbackReason === 'OPENCV_LOAD_FAILED') {
+        if (fallbackRetryInProgress || diagState.cameraStartInProgress) return;
+        await recoverFallbackAndOpenCamera('experience_intro_start_camera');
+        return;
+      }
       setupCamera();
     }
 

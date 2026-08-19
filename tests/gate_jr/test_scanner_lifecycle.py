@@ -9,6 +9,8 @@ before its own declaration line runs) — that class of bug parses fine and only
 execution time, which is exactly what caused the "stuck on Initializing AR Engine"
 regression this file's startup-checkpoint tests guard against.
 """
+import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -262,6 +264,233 @@ def test_scanner_startup_smoke_reaches_camera_setup():
         assert pos != -1, marker + " never logged — startup stalled before reaching it:\n" + result.stdout + result.stderr
         seen_positions.append(pos)
     assert seen_positions == sorted(seen_positions), "checkpoints fired out of order"
+
+
+# --- P0 fix: first Start Camera press must not be a false CAMERA_UNAVAILABLE no-op ----
+# Confirmed root cause (SCANSTORY_PROJECT_ID_QR_SECURITY_CAMERA_AUDIT.md): OpenCV's
+# automatic first-load 15000ms timer can fire before the viewer ever presses Start
+# Camera (parking the scanner in 'fallback' behind the still-visible intro screen). The
+# FIRST Start Camera press then hit setupCameraInner()'s `if (scannerState.state ===
+# 'fallback') return;` guard and never called getUserMedia() at all - Retry Camera
+# worked only because it explicitly exits 'fallback' before calling setupCamera().
+# The fix: startCameraFromIntro() now recognizes this ONE recoverable reason
+# (OPENCV_LOAD_FAILED - never a genuine camera/permission/context failure, which cannot
+# occur before a real getUserMedia() attempt has ever been made) and recovers through
+# the exact same sequence Retry Camera already used, via a new shared
+# recoverFallbackAndOpenCamera() helper.
+
+_INTERACTIVE_DOM_AUGMENTATION = r"""
+// Augments the shared DOM stub above with just enough to drive this one scenario:
+// (a) click listeners are actually stored per element id instead of discarded,
+// (b) ONLY the 15000ms OpenCV load timer is intercepted - every other timer (rAF's
+// 0ms shim, watchdogs, etc.) still runs for real through the original setTimeout, and
+// (c) a REAL constructible URL - the shared prelude's `forceGlobal('URL', {...})` is a
+// plain object (fine for the startup-only smoke test, which never reaches
+// enterFallback()), but this scenario deliberately drives execution into
+// enterFallback() -> showFallbackPanel() -> discoverFallbackVideo(), which does
+// `new URL(...)` and throws "URL is not a constructor" against the plain-object stub.
+const __RealURL = require('url').URL;
+__RealURL.createObjectURL = function () { return 'blob:fake'; };
+__RealURL.revokeObjectURL = function () {};
+global.URL = __RealURL;
+// The shared prelude's fake `location` has no `origin` (real browsers derive it from
+// href automatically) - discoverFallbackVideo()'s `new URL(path, window.location.origin)`
+// needs a real base to resolve a relative path against.
+global.location.origin = 'http://localhost';
+// No real network I/O in this harness - discoverFallbackVideo() probes a fallback-
+// video endpoint via fetch(); Node's built-in undici fetch would otherwise attempt a
+// genuine (and here unservable) HTTP request.
+global.fetch = function () { return Promise.reject(new Error('fetch disabled in harness')); };
+
+const __elementsById = {};
+const __getUserMediaCalls = [];
+function makeFakeElement(tag, id) {
+  const store = { style: {}, dataset: {}, classList: {
+    add(){}, remove(){}, contains(){ return false; }, toggle(){}
+  }, children: [], __listeners: {} };
+  const handler = {
+    get(target, prop) {
+      if (prop === 'addEventListener') return function (event, cb) {
+        (store.__listeners[event] = store.__listeners[event] || []).push(cb);
+      };
+      if (prop === 'removeEventListener') return function () {};
+      if (prop in store) return store[prop];
+      if (prop === 'getContext') return function () { return makeFakeElement('context'); };
+      if (prop === 'getBoundingClientRect') return function () { return { width: 300, height: 300, top: 0, left: 0 }; };
+      if (prop === 'appendChild' || prop === 'insertBefore' || prop === 'removeChild') return function (node) { return node; };
+      if (prop === 'cloneNode') return function () { return makeFakeElement(tag); };
+      if (prop === 'play') return function () { return Promise.resolve(); };
+      if (prop === 'pause') return function () {};
+      if (prop === 'querySelector' || prop === 'querySelectorAll') return function () { return null; };
+      if (prop === 'parentNode' || prop === 'nextSibling' || prop === 'firstChild') return makeFakeElement(tag);
+      if (prop === 'nodeName' || prop === 'tagName') return String(tag || 'DIV').toUpperCase();
+      if (prop === 'remove') return function () {};
+      if (typeof prop === 'symbol') return undefined;
+      return function () { return makeFakeElement(tag); };
+    },
+    set(target, prop, value) { store[prop] = value; return true; }
+  };
+  const el = new Proxy(store, handler);
+  if (id) __elementsById[id] = el;
+  return el;
+}
+document.getElementById = function (id) {
+  if (__elementsById[id]) return __elementsById[id];
+  return makeFakeElement('div', id);
+};
+document.createElement = function (tag) { return makeFakeElement(tag); };
+document.head = makeFakeElement('head');
+document.body = makeFakeElement('body');
+
+navigator.mediaDevices = {
+  getUserMedia: function (constraints) {
+    __getUserMediaCalls.push(constraints);
+    return Promise.resolve({
+      getVideoTracks: function () { return [{ addEventListener: function () {} }]; }
+    });
+  }
+};
+
+let __opencvTimeoutCallback = null;
+const __realSetTimeout = global.setTimeout;
+global.setTimeout = function (cb, delay) {
+  if (delay === 15000) {
+    __opencvTimeoutCallback = cb;
+    return 999999;
+  }
+  return __realSetTimeout(cb, delay);
+};
+"""
+
+
+def _run_first_start_camera_recovery_scenario(html):
+    """Drives the EXACT reported timeline through the REAL scanner script (plus the
+    real scanner-runtime.js) under Node: the automatic OpenCV load timer fires BEFORE
+    the viewer ever presses Start Camera, then the viewer's first (and only) Start
+    Camera click is simulated, then the forced OpenCV retry it triggers is made to
+    succeed - exactly what happens on a real device where the retry simply warms up
+    and finishes. Returns (parsed RESULT payload, raw subprocess result)."""
+    if not shutil.which("node"):
+        pytest.skip("node is not available on PATH")
+    runtime_js = Path("static/js/scanner-runtime.js").read_text(encoding="utf-8")
+    inline_script = _render_jinja_stubs(_extract_inline_scanner_script(html))
+    trailer = r"""
+setTimeout(function () {
+  try {
+    if (typeof __opencvTimeoutCallback !== 'function') {
+      console.log('RESULT:' + JSON.stringify({ error: 'no 15000ms OpenCV timer was scheduled' }));
+      process.exit(0);
+      return;
+    }
+    __opencvTimeoutCallback();
+
+    const startListeners = (__elementsById['startCameraBtn'] || {}).__listeners || {};
+    const clickHandlers = startListeners['click'] || [];
+    if (!clickHandlers.length) {
+      console.log('RESULT:' + JSON.stringify({ error: 'no click listener registered on startCameraBtn' }));
+      process.exit(0);
+      return;
+    }
+    clickHandlers[0]();
+
+    if (window.Module && typeof window.Module.onRuntimeInitialized === 'function') {
+      window.Module.onRuntimeInitialized();
+    }
+  } catch (e) {
+    console.log('RESULT:' + JSON.stringify({ error: String((e && e.stack) || e) }));
+    process.exit(0);
+    return;
+  }
+  setTimeout(function () {
+    console.log('RESULT:' + JSON.stringify({
+      getUserMediaCallCount: __getUserMediaCalls.length,
+      finalState: (typeof scannerState !== 'undefined' && scannerState.state) || null,
+      cvReady: typeof cvReady !== 'undefined' ? cvReady : null
+    }));
+    process.exit(0);
+  }, 50);
+}, 10);
+"""
+    harness = (
+        _NODE_DOM_PRELUDE + "\n" + _INTERACTIVE_DOM_AUGMENTATION + "\n"
+        + runtime_js + "\n" + inline_script + "\n" + trailer
+    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(harness)
+        harness_path = f.name
+    try:
+        result = subprocess.run(["node", harness_path], capture_output=True, text=True, timeout=15)
+    finally:
+        Path(harness_path).unlink(missing_ok=True)
+    marker = "RESULT:"
+    idx = result.stdout.rfind(marker)
+    assert idx != -1, "harness never printed a RESULT line:\n" + result.stdout + result.stderr
+    return json.loads(result.stdout[idx + len(marker):].strip().splitlines()[0]), result
+
+
+def test_first_start_camera_recovers_after_automatic_opencv_timeout():
+    """Executes the actual reported bug end to end against the real shipped script:
+    automatic OpenCV timeout before Start Camera is pressed, then the viewer's ONE
+    Start Camera click, then the forced retry it triggers succeeding. getUserMedia
+    must be invoked exactly once and the scanner must leave 'fallback' - no separate
+    Retry Camera click involved anywhere in this sequence."""
+    payload, result = _run_first_start_camera_recovery_scenario(_scanner_html())
+    assert "error" not in payload, (
+        "scenario failed: " + str(payload) + "\n" + result.stdout + result.stderr
+    )
+    assert payload["getUserMediaCallCount"] == 1, (
+        "getUserMedia was not invoked by the first Start Camera press: " + str(payload)
+    )
+    assert payload["finalState"] != "fallback", "scanner did not recover out of fallback: " + str(payload)
+    assert payload["cvReady"] is True
+
+
+def test_recover_fallback_helper_is_shared_by_retry_and_first_start():
+    html = _scanner_html()
+    assert "async function recoverFallbackAndOpenCamera(reason)" in html
+    retry_start = html.index("async function retryCameraFromFallback()")
+    retry_body = html[retry_start:retry_start + html[retry_start:].index("\n    }\n\n    fallbackRetryBtn")]
+    assert "recoverFallbackAndOpenCamera('fallback_retry')" in retry_body
+
+    start_intro_start = html.index("async function startCameraFromIntro()")
+    start_intro_body = html[start_intro_start:start_intro_start + html[start_intro_start:].index("\n    /* Direct QR Video")]
+    assert "recoverFallbackAndOpenCamera('experience_intro_start_camera')" in start_intro_body
+
+
+def test_first_start_only_auto_recovers_the_recoverable_opencv_reason():
+    """A genuine camera/permission/context fallback must be left for the existing
+    Retry Camera panel - only OPENCV_LOAD_FAILED (which cannot occur before a real
+    getUserMedia() attempt) is safe to recover from automatically on Start Camera."""
+    html = _scanner_html()
+    start_intro_start = html.index("async function startCameraFromIntro()")
+    start_intro_body = html[start_intro_start:start_intro_start + html[start_intro_start:].index("\n    /* Direct QR Video")]
+    assert "diagState.fallbackReason === 'OPENCV_LOAD_FAILED'" in start_intro_body
+    # Must not be a blanket "any fallback state" check without the reason guard.
+    assert "if (scannerState.state === 'fallback') {" not in start_intro_body.replace(
+        "if (scannerState.state === 'fallback' && diagState.fallbackReason === 'OPENCV_LOAD_FAILED') {", ""
+    )
+
+
+def test_setup_camera_inner_guard_and_getusermedia_are_unchanged():
+    """The fix only changes WHO calls setupCamera() and WHEN - setupCameraInner()
+    itself (including its own fallback guard, used by both callers) is untouched."""
+    html = _scanner_html()
+    assert "if (scannerState.state === 'fallback') return;" in html
+    assert "cameraStream = await navigator.mediaDevices.getUserMedia(constraints);" in html
+    assert "enterFallback(denied ? 'CAMERA_PERMISSION_DENIED' : 'CAMERA_UNAVAILABLE');" in html
+
+
+def test_scanner_runtime_js_and_scanner_runtime_py_are_byte_identical_to_baseline():
+    """CV/geometry/tracking code must never move for a startup-state fix. Guards the
+    exact SHA256 hashes (LF-normalized) recorded immediately before this fix landed."""
+    baselines = {
+        "static/js/scanner-runtime.js": "05badbd03e00c22715edbdba168db8721ae621493acab8a211a54dbf76acc5b2",
+        "scanner_runtime.py": "eda140bf24f534e160d365c863c618469d68bbcf9619273d499674590324cec0",
+    }
+    for path, expected in baselines.items():
+        content = Path(path).read_bytes().replace(b"\r\n", b"\n")
+        actual = hashlib.sha256(content).hexdigest()
+        assert actual == expected, f"{path} changed - CV/tracking code must remain untouched by this fix"
 
 
 # --- Root cause: camera health vs. detection health -----------------------------------
@@ -888,18 +1117,28 @@ def test_select_runtime_mode_prior_failure_false_never_forces_fallback_alone():
 
 
 def test_retry_camera_invokes_guarded_recovery_and_avoids_concurrent_starts():
+    """Retry Camera's own no-concurrent-starts guard stays in retryCameraFromFallback();
+    the actual recovery steps (stop loops, conditional OpenCV reload, camera restart)
+    live in the shared recoverFallbackAndOpenCamera('fallback_retry') helper it calls -
+    also used by the first Start Camera press recovering from a pre-camera fallback."""
     html = _scanner_html()
     assert "async function retryCameraFromFallback()" in html
     assert "if (fallbackRetryInProgress || diagState.cameraStartInProgress) return;" in html
     assert "fallbackRetryBtn.addEventListener('click', retryCameraFromFallback);" in html
-    assert "stopDetectLoop('fallback_retry');" in html
+    assert "recoverFallbackAndOpenCamera('fallback_retry')" in html
+    assert "async function recoverFallbackAndOpenCamera(reason) {" in html
+    assert "stopDetectLoop(reason);" in html
     assert "stopTrackingLoop();" in html
     assert "await setupCamera();" in html
 
 
 def test_retry_camera_after_opencv_failure_reloads_opencv_once_before_camera_restart():
+    """Retry Camera's actual recovery steps now live in the shared
+    recoverFallbackAndOpenCamera() helper (also used by the first Start Camera press
+    when it recovers from a pre-camera OpenCV fallback) - retryCameraFromFallback()
+    itself is just the button-specific wrapper around it."""
     html = _scanner_html()
-    retry_start = html.index("async function retryCameraFromFallback()")
+    retry_start = html.index("async function recoverFallbackAndOpenCamera(reason)")
     retry_end = html.index("fallbackRetryBtn.addEventListener('click', retryCameraFromFallback);")
     body = html[retry_start:retry_end]
     assert "if (!cvReady) {" in body
@@ -918,7 +1157,7 @@ def test_successful_retry_hides_fallback_panel():
     html = _scanner_html()
     assert "function hideFallbackPanel(reason)" in html
     assert "hideFallbackPanel('retry_succeeded');" in html
-    retry_start = html.index("async function retryCameraFromFallback()")
+    retry_start = html.index("async function recoverFallbackAndOpenCamera(reason)")
     retry_end = html.index("fallbackRetryBtn.addEventListener('click', retryCameraFromFallback);")
     body = html[retry_start:retry_end]
     assert "if (!isStreamDead()) {" in body
@@ -6652,7 +6891,7 @@ def test_wave6_successful_match_closes_recognition_timeout_panel():
 
 def test_wave6_successful_camera_retry_closes_fallback_playback():
     html = _scanner_html()
-    retry_start = html.index("async function retryCameraFromFallback()")
+    retry_start = html.index("async function recoverFallbackAndOpenCamera(reason)")
     retry_body = html[retry_start:html.index("fallbackRetryBtn.addEventListener", retry_start)]
     assert "closeFallbackVideoPanel('camera_retry_succeeded');" in retry_body
     assert "clearVerifiedFallbackPairContext('camera_retry_succeeded');" in retry_body
