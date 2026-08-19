@@ -338,6 +338,68 @@ def retry_failed_job(job_id):
     return job, True
 
 
+def _stale_job_has_live_queue_entry(job):
+    """True only when this job's OWN last-known RQ job id is still queued/started.
+
+    Only meaningful in 'rq' mode: fake/inline have no independent queue-side
+    lifecycle to check, and re-running their own enqueue is harmless. Any
+    fetch/lookup failure (job id gone, expired, Redis unreachable) is treated
+    as "not live" - recovery exists precisely because that Redis-side record
+    can vanish while the DB row is left behind.
+    """
+    if queue_mode() != "rq" or not job.queue_job_id:
+        return False
+    try:
+        from rq.job import Job
+
+        rq_job = Job.fetch(job.queue_job_id, connection=redis_connection())
+        return rq_job.get_status(refresh=True) in ("queued", "started", "deferred", "scheduled")
+    except Exception:
+        return False
+
+
+def recover_stale_processing_job(job):
+    """Re-drive one stale ProcessingJob in place: same row, no duplicate.
+
+    recover-processing-jobs previously flipped a retryable stale job's status
+    to 'retrying' and stopped - the DB record looked recovered but nothing
+    was ever pushed back onto the queue, so no worker would touch it again.
+    This mirrors retry_failed_job's mark-then-requeue shape, generalized to
+    every non-terminal status the recovery command treats as stale (not just
+    'failed').
+
+    Returns (job, requeued). requeued is False when an equivalent RQ job is
+    already live (repeated --apply is then a no-op, not a double-enqueue) or
+    when the re-enqueue attempt itself raised - either way the row stays a
+    truthful, still-recoverable 'retrying' rather than implying a worker
+    picked it up when none did.
+    """
+    if _stale_job_has_live_queue_entry(job):
+        return job, False
+    job.status = "retrying"
+    job.available_at = get_utc_now()
+    job.safe_error_code = "STALE_JOB_RETRY"
+    job.safe_error_summary = "Stale processing job marked eligible for retry."
+    job.error_code = job.safe_error_code
+    job.error_message = job.safe_error_summary
+    db.session.commit()
+    try:
+        job.queue_job_id = _enqueue_transport(job)
+        job.last_heartbeat_at = get_utc_now()
+        db.session.commit()
+        return job, True
+    except Exception as exc:
+        # Leave last_heartbeat_at untouched so the row is still visibly stale
+        # for the next recovery pass instead of hiding behind a fresh beat it
+        # never earned.
+        job.safe_error_code = "STALE_JOB_REQUEUE_FAILED"
+        job.safe_error_summary = "Stale processing job could not be re-enqueued; recovery will retry it."
+        job.error_code = job.safe_error_code
+        job.error_message = safe_error_summary(exc)
+        db.session.commit()
+        return job, False
+
+
 def processing_job_status_payload(job):
     retry_eligible = job.status == "failed" and int(job.attempt_count or 0) < int(job.max_attempts or 1)
     return {

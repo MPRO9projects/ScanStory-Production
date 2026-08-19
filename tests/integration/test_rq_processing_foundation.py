@@ -453,7 +453,167 @@ def test_recover_processing_jobs_dry_run_and_apply(app_module, db_session, norma
 
     applied = runner.invoke(args=["recover-processing-jobs", "--older-than-minutes", "30", "--apply"])
     assert applied.exit_code == 0
-    assert app_module.ProcessingJob.query.get(job.id).status == "retrying"
+    assert "requeued=True" in applied.output
+    db_session.expire_all()
+    recovered = app_module.ProcessingJob.query.get(job.id)
+    assert recovered.status == "retrying"
+    assert recovered.queue_job_id == f"fake-{job.id}"
+
+
+def test_recover_apply_reenqueues_stale_job_through_real_transport(
+    app_module, db_session, normal_user, monkeypatch
+):
+    """The proven bug: --apply must not just flip status - it must re-enqueue."""
+    import processing_queue
+
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    job, _ = app_module.enqueue_project_pair_processing(project.id)
+    job.status = "queued"
+    job.queue_job_id = None
+    job.last_heartbeat_at = app_module.dt.utcnow() - timedelta(hours=2)
+    db_session.commit()
+
+    calls = []
+
+    def spy_transport(job_arg):
+        calls.append(job_arg.id)
+        return "requeued-sentinel"
+
+    monkeypatch.setattr(processing_queue, "_enqueue_transport", spy_transport)
+
+    runner = app_module.app.test_cli_runner()
+    applied = runner.invoke(
+        args=["recover-processing-jobs", "--job-id", str(job.id), "--older-than-minutes", "0", "--apply"]
+    )
+
+    assert applied.exit_code == 0
+    assert calls == [job.id]
+    db_session.expire_all()
+    recovered = app_module.ProcessingJob.query.get(job.id)
+    assert recovered.status == "retrying"
+    assert recovered.queue_job_id == "requeued-sentinel"
+    # Same row, not a new one.
+    assert app_module.ProcessingJob.query.filter_by(project_id=project.id).count() == 1
+
+
+def test_recover_apply_is_idempotent_against_a_still_live_rq_job(
+    app_module, db_session, normal_user, monkeypatch
+):
+    """Repeated --apply must not double-enqueue a job that is already live."""
+    import processing_queue
+
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    job, _ = app_module.enqueue_project_pair_processing(project.id)
+    job.status = "queued"
+    job.last_heartbeat_at = app_module.dt.utcnow() - timedelta(hours=2)
+    db_session.commit()
+
+    monkeypatch.setattr(processing_queue, "_stale_job_has_live_queue_entry", lambda job: True)
+
+    def transport_should_not_run(_job):
+        raise AssertionError("must not re-enqueue while an equivalent RQ job is still queued/started")
+
+    monkeypatch.setattr(processing_queue, "_enqueue_transport", transport_should_not_run)
+
+    runner = app_module.app.test_cli_runner()
+    applied = runner.invoke(
+        args=["recover-processing-jobs", "--job-id", str(job.id), "--older-than-minutes", "0", "--apply"]
+    )
+
+    assert applied.exit_code == 0
+    assert "requeued=False" in applied.output
+    db_session.expire_all()
+    untouched = app_module.ProcessingJob.query.get(job.id)
+    assert untouched.status == "queued"
+
+
+def test_recover_dry_run_never_enqueues_or_mutates(app_module, db_session, normal_user, monkeypatch):
+    import processing_queue
+
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    job, _ = app_module.enqueue_project_pair_processing(project.id)
+    original_queue_job_id = job.queue_job_id
+    job.status = "queued"
+    job.last_heartbeat_at = app_module.dt.utcnow() - timedelta(hours=2)
+    db_session.commit()
+
+    def transport_should_not_run(_job):
+        raise AssertionError("dry-run must never enqueue")
+
+    monkeypatch.setattr(processing_queue, "_enqueue_transport", transport_should_not_run)
+
+    runner = app_module.app.test_cli_runner()
+    dry = runner.invoke(
+        args=["recover-processing-jobs", "--job-id", str(job.id), "--older-than-minutes", "0"]
+    )
+
+    assert dry.exit_code == 0
+    assert "Mode: dry-run" in dry.output
+    db_session.expire_all()
+    unchanged = app_module.ProcessingJob.query.get(job.id)
+    assert unchanged.status == "queued"
+    assert unchanged.queue_job_id == original_queue_job_id
+
+
+def test_recover_apply_marks_exhausted_job_failed_without_enqueue(
+    app_module, db_session, normal_user, monkeypatch
+):
+    import processing_queue
+
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    job, _ = app_module.enqueue_project_pair_processing(project.id)
+    job.status = "processing"
+    job.attempt_count = job.max_attempts
+    job.last_heartbeat_at = app_module.dt.utcnow() - timedelta(hours=2)
+    db_session.commit()
+
+    def transport_should_not_run(_job):
+        raise AssertionError("a retry-exhausted job must not be re-enqueued")
+
+    monkeypatch.setattr(processing_queue, "_enqueue_transport", transport_should_not_run)
+
+    runner = app_module.app.test_cli_runner()
+    applied = runner.invoke(
+        args=["recover-processing-jobs", "--job-id", str(job.id), "--older-than-minutes", "0", "--apply"]
+    )
+
+    assert applied.exit_code == 0
+    db_session.expire_all()
+    failed = app_module.ProcessingJob.query.get(job.id)
+    assert failed.status == "failed"
+    assert failed.safe_error_code == "STALE_JOB_FAILED"
+
+
+def test_recover_apply_leaves_truthful_state_when_reenqueue_fails(
+    app_module, db_session, normal_user, monkeypatch
+):
+    import processing_queue
+
+    project, _pair = _make_project_pair(app_module, db_session, owner_user=normal_user)
+    job, _ = app_module.enqueue_project_pair_processing(project.id)
+    job.status = "queued"
+    job.last_heartbeat_at = app_module.dt.utcnow() - timedelta(hours=2)
+    db_session.commit()
+
+    def transport_raises(_job):
+        raise processing_queue.QueueUnavailable("redis down")
+
+    monkeypatch.setattr(processing_queue, "_enqueue_transport", transport_raises)
+
+    runner = app_module.app.test_cli_runner()
+    applied = runner.invoke(
+        args=["recover-processing-jobs", "--job-id", str(job.id), "--older-than-minutes", "0", "--apply"]
+    )
+
+    assert applied.exit_code == 0
+    assert "requeued=False" in applied.output
+    db_session.expire_all()
+    row = app_module.ProcessingJob.query.get(job.id)
+    # Recoverable, not a false "a worker has it" - and still visibly stale so
+    # the very next recovery pass tries again rather than needing a human.
+    assert row.status == "retrying"
+    assert row.safe_error_code == "STALE_JOB_REQUEUE_FAILED"
+    assert row.last_heartbeat_at < app_module.dt.utcnow() - timedelta(minutes=1)
 
 
 def test_final_failure_after_max_attempts(app_module, db_session, normal_user):

@@ -88,6 +88,7 @@ from processing_queue import (
     queue_required,
     queue_worker_state,
     processing_job_status_payload,
+    recover_stale_processing_job,
     redis_connection,
     redis_ready_check,
     retry_failed_job,
@@ -5121,7 +5122,13 @@ def recover_processing_jobs(older_than_minutes, job_id, project_id, apply_change
     every mark_job_* transition refresh, so a legitimately long-running job that
     is still beating is never in the candidate set - only jobs whose worker
     stopped reporting (crash, Redis restart, lost enqueue response) are.
-    --limit bounds the batch; it was previously an unbounded .all()."""
+    --limit bounds the batch; it was previously an unbounded .all().
+
+    --apply on a retryable job does not just flip status to 'retrying' - it
+    re-enqueues the SAME ProcessingJob row through the real queue transport
+    (recover_stale_processing_job), skipping the re-enqueue only when an
+    equivalent RQ job is already live. Without that, the DB record looked
+    recovered while no worker was ever going to pick it back up."""
     cutoff = dt.utcnow() - timedelta(minutes=max(1, older_than_minutes))
     query = ProcessingJob.query.filter(
         ProcessingJob.job_type == "process_project_pairs",
@@ -5150,21 +5157,18 @@ def recover_processing_jobs(older_than_minutes, job_id, project_id, apply_change
         if not apply_changes:
             continue
         if retryable:
-            job.status = "retrying"
-            job.available_at = dt.utcnow()
-            job.safe_error_code = "STALE_JOB_RETRY"
-            job.safe_error_summary = "Stale processing job marked eligible for retry."
+            job, requeued = recover_stale_processing_job(job)
+            click.echo(f"job_id={job.id} requeued={requeued} queue_job_id={job.queue_job_id}")
         else:
             job.status = "failed"
             job.failed_at = dt.utcnow()
             job.completed_at = dt.utcnow()
             job.safe_error_code = "STALE_JOB_FAILED"
             job.safe_error_summary = "Stale processing job exceeded retry budget."
-        job.error_code = job.safe_error_code
-        job.error_message = job.safe_error_summary
-        job.last_heartbeat_at = dt.utcnow()
-    if apply_changes:
-        db.session.commit()
+            job.error_code = job.safe_error_code
+            job.error_message = job.safe_error_summary
+            job.last_heartbeat_at = dt.utcnow()
+            db.session.commit()
 
 
 def _desired_dev_test_user_values(plan):
