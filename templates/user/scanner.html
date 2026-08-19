@@ -11,10 +11,15 @@
     body {
       font-family: Arial, sans-serif;
       background: #050505;
-      padding: 12px;
+      /* Mobile-first: the scanner is held in one hand on a phone whose browser chrome and
+         home indicator both eat into the viewport. Bottom padding respects the safe area so
+         the status line / recovery controls under the lens are never sat under the home bar,
+         and the side padding keeps 320px-wide devices from ever needing a horizontal scroll. */
+      padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
       text-align: center;
       color: white;
       margin: 0;
+      overflow-x: hidden;
     }
 
     .wrap {
@@ -147,7 +152,36 @@
       border-radius: 8px;
       display: inline-block;
       min-width: 150px;
-      transition: all 0.3s ease;
+      max-width: 100%;
+      box-sizing: border-box;
+      /* `transition: all` also animated layout properties (padding/min-width/border) on every
+         status change; only the colour roles ever actually change. */
+      transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+    }
+
+    /* One primary instruction, one quiet secondary chip. #scannerGuidance is the viewer's
+       instruction AND the page's single ARIA live region, so it leads; #status is the
+       supporting state line and is visibly subordinate rather than a second equal headline. */
+    #scannerGuidance {
+      font-weight: 800;
+      letter-spacing: 0.01em;
+    }
+
+    #status {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 7px 13px;
+      min-width: 0;
+      letter-spacing: 0.02em;
+      opacity: 0.72;
+    }
+
+    /* A real failure is never the quiet line — this is the surface the startup safety net
+       writes "Scanner could not start" into, alongside its injected Retry/Return controls. */
+    #status.error {
+      font-size: 13px;
+      font-weight: 800;
+      opacity: 1;
     }
 
     .scan {
@@ -235,62 +269,46 @@
       border: 1px solid rgba(0, 212, 255, 0.3);
     }
 
-    .loading-spinner {
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: 40px;
-      height: 40px;
-      border: 3px solid rgba(255, 255, 255, 0.1);
-      border-top: 3px solid #00d4ff;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-      display: none;
-      z-index: 30;
-    }
+    /* The second .loading-spinner rule (a 40px spinning ring, z-index 30, over the live
+       camera) and its @keyframes spin are gone: the `.loading-spinner { display: none
+       !important; }` rule above always won, so the element was never visible and the
+       animation never ran — dead decoration, and one fewer infinite animation on the page.
+       loadingSpinner's JS display writes are left exactly as they were. */
 
-    @keyframes spin {
-      0% {
-        transform: translate(-50%, -50%) rotate(0deg);
-      }
-
-      100% {
-        transform: translate(-50%, -50%) rotate(360deg);
-      }
-    }
-
+    /* Lock-on confirmation. One short settle (opacity + a small scale), not a celebration
+       loop: JS still hides it after its existing 2000ms timeout. */
     .match-indicator {
       position: absolute;
       bottom: 60px;
       left: 50%;
-      transform: translateX(-50%);
-      background: rgba(0, 0, 0, 0.7);
+      background: rgba(0, 0, 0, 0.66);
       color: #00ffaa;
       padding: 8px 15px;
       border-radius: 20px;
       font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
       display: none;
       z-index: 40;
       border: 1px solid rgba(0, 255, 170, 0.3);
-      animation: fadeOut 2s ease-out forwards;
+      transform: translateX(-50%);
+      animation: lockOnSettle 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
     }
 
-    @keyframes fadeOut {
-      0% {
-        opacity: 1;
-      }
-
-      70% {
-        opacity: 1;
-      }
-
-      100% {
+    @keyframes lockOnSettle {
+      from {
         opacity: 0;
-        display: none;
+        transform: translateX(-50%) scale(0.94);
+      }
+      to {
+        opacity: 1;
+        transform: translateX(-50%) scale(1);
       }
     }
 
+    /* Device/runtime readout: real diagnostics ("mobile 4GB 4cores standard"), never public
+       viewer copy. The element and its textContent write are unchanged — it is simply not
+       rendered to viewers unless the server enabled the diagnostics build. */
     .device-info {
       position: absolute;
       bottom: 10px;
@@ -298,7 +316,12 @@
       font-size: 10px;
       color: rgba(255, 255, 255, 0.5);
       z-index: 5;
+      display: none;
     }
+
+    {% if scanner_diagnostics_enabled %}
+    .device-info { display: block; }
+    {% endif %}
 
     .progress-info {
       position: absolute;
@@ -321,41 +344,13 @@
       }
     }
 
+    /* Motion budget: the startup screen used to run six infinite animations at once (two
+       counter-rotating rings, a pinging ring, three bouncing dots) behind two 340/380px
+       blur(100px) colour blobs. It is now a single slow ring — one infinite animation,
+       no large blurred moving layers. arSpinReverse/arPing/dotBounce are gone with them. */
     @keyframes arSpin {
       to {
         transform: rotate(360deg);
-      }
-    }
-
-    @keyframes arSpinReverse {
-      to {
-        transform: rotate(-360deg);
-      }
-    }
-
-    @keyframes arPing {
-      0% {
-        transform: translate(-50%, -50%) scale(0.4);
-        opacity: 0.6;
-      }
-
-      100% {
-        transform: translate(-50%, -50%) scale(1.1);
-        opacity: 0;
-      }
-    }
-
-    @keyframes dotBounce {
-
-      0%,
-      100% {
-        transform: translateY(0);
-        opacity: 0.4;
-      }
-
-      50% {
-        transform: translateY(-6px);
-        opacity: 1;
       }
     }
 
@@ -394,75 +389,19 @@
       pointer-events: none !important;
     }
 
-    .scanner-mist-container {
+    /* The "scanner mist" is gone. It was three simultaneous infinite animations
+       (mistDrift/mistFlow/mistWave) driving a 150% x 150% layer under filter: blur(40px)
+       plus a second 120% pseudo-element under filter: blur(60px) — composited on top of the
+       live camera feed for the entire time the viewer is scanning, which is exactly the kind
+       of large blurred moving background that costs the most and helps the least. The status
+       overlay now sits on one flat scrim, so the camera image stays the brightest thing on
+       screen. Nothing here was ever read by JS. */
+    #scannerStatusScrim {
       position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
+      inset: 0;
       z-index: 1;
-    }
-
-    .scanner-mist {
-      position: absolute;
-      width: 150%;
-      height: 150%;
-      background: radial-gradient(circle at 30% 50%, rgba(112, 0, 255, 0.15) 0%, transparent 50%),
-                  radial-gradient(circle at 70% 50%, rgba(255, 0, 122, 0.15) 0%, transparent 50%),
-                  radial-gradient(circle at 50% 30%, rgba(0, 212, 255, 0.1) 0%, transparent 50%);
-      animation: mistDrift 12s ease-in-out infinite;
-      filter: blur(40px);
-    }
-
-    .scanner-mist::before {
-      content: '';
-      position: absolute;
-      top: -20%;
-      left: -20%;
-      width: 120%;
-      height: 120%;
-      background: radial-gradient(circle at 40% 60%, rgba(0, 212, 255, 0.12) 0%, transparent 60%);
-      animation: mistFlow 15s ease-in-out infinite;
-      filter: blur(60px);
-    }
-
-    .scanner-mist::after {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: linear-gradient(135deg, transparent 0%, rgba(255, 0, 122, 0.08) 50%, transparent 100%);
-      animation: mistWave 8s ease-in-out infinite;
-    }
-
-    @keyframes mistDrift {
-      0%, 100% {
-        transform: translate(0, 0) scale(1);
-      }
-      50% {
-        transform: translate(30px, -20px) scale(1.05);
-      }
-    }
-
-    @keyframes mistFlow {
-      0%, 100% {
-        transform: translate(-10px, 0) rotate(0deg);
-      }
-      50% {
-        transform: translate(20px, 15px) rotate(10deg);
-      }
-    }
-
-    @keyframes mistWave {
-      0%, 100% {
-        opacity: 0.3;
-      }
-      50% {
-        opacity: 0.6;
-      }
+      background: radial-gradient(ellipse at 50% 50%, rgba(5, 5, 5, 0.62) 0%, rgba(5, 5, 5, 0.28) 70%, transparent 100%);
+      pointer-events: none;
     }
 
     #scannerStatusContent {
@@ -488,18 +427,23 @@
     }
 
     #scannerStatusWord {
-      font-size: 18px;
+      /* min-width:240px + white-space:nowrap used to force a fixed-width single line inside
+         .wrap (overflow:hidden), so a longer word clipped at the lens edge on a 320/360px
+         phone. It now wraps and scales with the viewport instead. */
+      font-size: clamp(15px, 4.4vw, 18px);
       font-weight: 700;
-      letter-spacing: 0.12em;
+      letter-spacing: 0.1em;
+      line-height: 1.3;
       text-transform: uppercase;
-      background: linear-gradient(135deg, #ff007a, #7000ff, #00d4ff, #ff007a);
-      background-size: 300% auto;
+      max-width: min(280px, 78vw);
+      text-wrap: balance;
+      background: linear-gradient(135deg, #ff007a, #7000ff, #00d4ff);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
-      animation: statusWordPulse 1s cubic-bezier(0.175, 0.885, 0.32, 1.275), gradientShift 6s ease infinite;
-      min-width: 240px;
-      white-space: nowrap;
+      /* One finite settle on change. The former `gradientShift 6s ease infinite` companion
+         repainted gradient-clipped text forever, on top of the live camera feed. */
+      animation: statusWordPulse 900ms cubic-bezier(0.22, 1, 0.36, 1) both;
     }
 
     @keyframes statusWordPulse {
@@ -516,55 +460,153 @@
       }
     }
 
-    @keyframes gradientShift {
-      0%, 100% { background-position: 0% center; }
-      50% { background-position: 100% center; }
-    }
-
     .scanner-dots {
       display: flex;
       gap: 8px;
       justify-content: center;
     }
 
+    /* MOTION BUDGET: this three-dot progress indicator is the ONE infinite animation allowed
+       to be visible during an active scanner state. Everything else on this page that used to
+       loop forever is gone: the status-overlay mist (3), the gradient-shifting status word (1),
+       the startup screen's two counter-rotating rings + ping ring + three bouncing dots (6),
+       and the never-visible camera spinner (1). Softened here too — three continuously
+       repainted glow shadows over a live camera feed bought nothing. */
     .scanner-dot {
-      width: 8px;
-      height: 8px;
+      width: 7px;
+      height: 7px;
       border-radius: 50%;
       background: #ff007a;
       animation: scannerDotBounce 1.4s ease infinite;
-      box-shadow: 0 0 12px rgba(255, 0, 122, 0.4);
     }
 
     .scanner-dot:nth-child(2) {
       animation-delay: 0.2s;
       background: #7000ff;
-      box-shadow: 0 0 12px rgba(112, 0, 255, 0.4);
     }
 
     .scanner-dot:nth-child(3) {
       animation-delay: 0.4s;
       background: #00d4ff;
-      box-shadow: 0 0 12px rgba(0, 212, 255, 0.4);
     }
 
     @keyframes scannerDotBounce {
       0%, 100% {
-        transform: translateY(0) scale(1);
-        opacity: 0.5;
+        transform: translateY(0);
+        opacity: 0.45;
       }
       50% {
-        transform: translateY(-12px) scale(1.2);
+        transform: translateY(-7px);
         opacity: 1;
       }
     }
 
     #scannerStatusLabel {
       font-size: 11px;
-      color: rgba(255, 255, 255, 0.35);
+      color: rgba(255, 255, 255, 0.42);
       letter-spacing: 0.08em;
       text-transform: uppercase;
       font-weight: 500;
+      max-width: min(300px, 82vw);
+      line-height: 1.45;
+    }
+
+    /* ====== Recognition Quad — presentation-only aiming guide ==========================
+       A static CSS motif: four corner brackets drawn at fixed percentages of the camera
+       viewport. It is NOT the detection overlay and carries no detection data whatsoever —
+       it never reads, receives or fabricates corner coordinates, homographies or any other
+       geometry, and it is a separate element from #overlayWrap/#overlay (which the scanner
+       runtime alone positions). It exists purely so the viewer knows where to aim.
+
+       Visibility is driven entirely by the EXISTING presentation label the scanner already
+       writes on <html> (data-scanner-ui-state, see setScannerUiState / SCANNER_UI_STATES) —
+       no new state, no new timer, no new JS. It shows while the viewer is looking for the
+       image, and settles away the moment recognition locks on. It is deliberately NOT shown
+       for 'matched' or 'fallback_playing', so nothing decorative is ever drawn over the
+       tracked video. */
+    #recognitionQuad {
+      position: absolute;
+      inset: 11% 9%;
+      z-index: 20;
+      display: none;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 200ms ease, transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+      transform: scale(1.02);
+    }
+
+    #recognitionQuad span {
+      position: absolute;
+      width: 26px;
+      height: 26px;
+      border: 2px solid rgba(255, 255, 255, 0.82);
+      border-radius: 3px;
+      transition: border-color 200ms ease;
+    }
+
+    #recognitionQuad span:nth-child(1) { top: 0; left: 0; border-right: none; border-bottom: none; }
+    #recognitionQuad span:nth-child(2) { top: 0; right: 0; border-left: none; border-bottom: none; }
+    #recognitionQuad span:nth-child(3) { bottom: 0; right: 0; border-left: none; border-top: none; }
+    #recognitionQuad span:nth-child(4) { bottom: 0; left: 0; border-right: none; border-top: none; }
+
+    html[data-scanner-ui-state="scanning"] #recognitionQuad,
+    html[data-scanner-ui-state="recognition_timeout"] #recognitionQuad {
+      display: block;
+      opacity: 1;
+      transform: scale(1);
+    }
+
+    /* Signature lock-on: the corners settle inward and take the accent colour as they hand
+       over to the video. ~200ms, no glow bloom, no repeat. 'matched' is the real state the
+       scanner already emits on an accepted detection. */
+    html[data-scanner-ui-state="matched"] #recognitionQuad {
+      display: block;
+      opacity: 0;
+      transform: scale(0.94);
+    }
+
+    html[data-scanner-ui-state="matched"] #recognitionQuad span {
+      border-color: #00ffaa;
+    }
+
+    /* While the experience is live, the chrome under the lens steps back so the content
+       dominates. #scannerGuidance stays — it is the single ARIA live region and the calm
+       recovery instruction if the image is lost. Back and Report stay reachable in the
+       header at all times. */
+    html[data-scanner-ui-state="matched"] #status,
+    html[data-scanner-ui-state="fallback_playing"] #status {
+      display: none;
+    }
+
+    /* Reduced motion: keep the meaning, drop the movement. The shared design-system reset
+       already neutralises animation/transition durations globally; this states the scanner's
+       own contract explicitly — the aiming guide and the lock-on stay legible as pure
+       opacity/colour changes, and the one looping indicator stops looping. */
+    @media (prefers-reduced-motion: reduce) {
+      .scanner-dot {
+        animation: none;
+        opacity: 0.75;
+      }
+
+      #recognitionQuad,
+      #recognitionQuad span {
+        transition: none;
+      }
+
+      html[data-scanner-ui-state="scanning"] #recognitionQuad,
+      html[data-scanner-ui-state="recognition_timeout"] #recognitionQuad,
+      html[data-scanner-ui-state="matched"] #recognitionQuad {
+        transform: none;
+      }
+
+      .match-indicator,
+      #scannerStatusWord {
+        animation: none;
+      }
+
+      #arCrosshair svg {
+        animation: none !important;
+      }
     }
 
     /* ====== Pre-camera experience intro / target guide ====== */
@@ -724,17 +766,43 @@
       display: none;
     }
 
+    /* The single obvious action on the first screen. min-height is stated explicitly (not
+       merely implied by padding) so the >=44px touch target is a contract rather than a
+       side effect of the current font size, and the button is pinned above the home
+       indicator / browser chrome on a phone via the safe-area margin below. */
     .intro-btn {
       width: 100%;
-      padding: 17px 20px;
+      min-height: 52px;
+      padding: 16px 20px;
       border: none;
       border-radius: 999px;
       font-family: inherit;
-      font-size: 15px;
+      font-size: 16px;
       font-weight: 800;
+      letter-spacing: 0.01em;
       color: #fff;
       background: linear-gradient(135deg, #ff007a, #7000ff);
       cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      transition: transform 150ms ease, filter 150ms ease;
+    }
+
+    .intro-btn:hover { filter: brightness(1.08); }
+    .intro-btn:active { transform: scale(0.99); }
+
+    .intro-btn:focus-visible,
+    .intro-link:focus-visible {
+      outline: 2px solid #00d4ff;
+      outline-offset: 3px;
+    }
+
+    /* Camera / privacy reassurance directly under the CTA: short, plain, and never the
+       loudest thing on the screen. */
+    .intro-reassurance {
+      margin: 12px 0 0;
+      font-size: 12px;
+      line-height: 1.5;
+      color: rgba(255, 255, 255, 0.5);
     }
 
     /* Detect Once (after the one-shot trigger fires) and Direct QR Video both present the
@@ -813,18 +881,20 @@
     </div>
   </div>
 
-  <!-- AR ENGINE INITIALIZATION OVERLAY -->
-  <div id="arLoadingOverlay"
-    style="position: fixed; inset: 0; z-index: 9999; background: #050505; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; font-family: 'Plus Jakarta Sans', Arial, sans-serif;">
-    <div
-      style="position:absolute;top:-15%;left:-10%;width:340px;height:340px;border-radius:50%;background:#7000ff;filter:blur(100px);opacity:0.12;pointer-events:none;">
-    </div>
-    <div
-      style="position:absolute;bottom:-15%;right:-10%;width:380px;height:380px;border-radius:50%;background:#ff007a;filter:blur(100px);opacity:0.12;pointer-events:none;">
-    </div>
+  <!-- OPENING SCREEN ------------------------------------------------------------------
+       The very first thing painted while this page's own script is still being parsed. It is
+       also the surface the top-level startup safety net hides when it reports a fatal error,
+       so the element and its ids stay exactly where they were.
 
-    <div id="arCrosshair" style="position:relative;width:160px;height:160px;margin-bottom:28px;">
-      <svg width="160" height="160" style="position:absolute;top:0;left:0;animation:arSpin 3s linear infinite;">
+       Trimmed to one calm ring: the two 340/380px blur(100px) colour blobs, the
+       counter-rotating inner ring, the pinging ring and the three bouncing dots are gone
+       (six infinite animations and two very large blur layers, on the page's most
+       load-sensitive frame). Copy is plain viewer language now — it used to say
+       "Initializing AR Engine" / "Loading vision engine..." to the public. -->
+  <div id="arLoadingOverlay" role="status" aria-live="polite"
+    style="position: fixed; inset: 0; z-index: 9999; background: #050505; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; padding: 24px; font-family: 'Plus Jakarta Sans', Arial, sans-serif;">
+    <div id="arCrosshair" style="position:relative;width:132px;height:132px;margin-bottom:26px;">
+      <svg width="132" height="132" viewBox="0 0 160 160" aria-hidden="true" style="position:absolute;top:0;left:0;animation:arSpin 3s linear infinite;">
         <circle cx="80" cy="80" r="72" fill="none" stroke="url(#grad1)" stroke-width="1" stroke-dasharray="40 414"
           stroke-linecap="round" />
         <defs>
@@ -834,44 +904,23 @@
           </linearGradient>
         </defs>
       </svg>
-      <svg width="160" height="160" style="position:absolute;top:0;left:0;animation:arSpinReverse 2s linear infinite;">
-        <circle cx="80" cy="80" r="55" fill="none" stroke="rgba(112,0,255,0.5)" stroke-width="1"
-          stroke-dasharray="20 325" stroke-linecap="round" />
-      </svg>
-      <svg width="160" height="160" style="position:absolute;top:0;left:0;">
+      <svg width="132" height="132" viewBox="0 0 160 160" aria-hidden="true" style="position:absolute;top:0;left:0;">
         <path d="M 44 64 L 44 44 L 64 44" fill="none" stroke="#ff007a" stroke-width="2.5" stroke-linecap="round" />
         <path d="M 116 64 L 116 44 L 96 44" fill="none" stroke="#ff007a" stroke-width="2.5" stroke-linecap="round" />
         <path d="M 44 96 L 44 116 L 64 116" fill="none" stroke="#ff007a" stroke-width="2.5" stroke-linecap="round" />
         <path d="M 116 96 L 116 116 L 96 116" fill="none" stroke="#ff007a" stroke-width="2.5" stroke-linecap="round" />
-        <circle cx="80" cy="80" r="3" fill="#ff007a" opacity="0.8" />
-        <line x1="50" y1="80" x2="110" y2="80" stroke="rgba(0,212,255,0.3)" stroke-width="1" />
-        <line x1="80" y1="50" x2="80" y2="110" stroke="rgba(0,212,255,0.3)" stroke-width="1" />
       </svg>
-      <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}"
-        style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:38px;height:38px;object-fit:contain;opacity:0.9;" />
-      <div
-        style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:160px;height:160px;border-radius:50%;border:1px solid rgba(255,0,122,0.3);animation:arPing 2s ease-out infinite;pointer-events:none;">
-      </div>
+      <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" alt=""
+        style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:34px;height:34px;object-fit:contain;opacity:0.9;" />
     </div>
 
     <div id="arLoadingText"
-      style="font-size:13px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;background:linear-gradient(to right,#fff,#00d4ff,#ff007a);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:10px;">
-      Initializing AR Engine</div>
-
-    <div style="display:flex;gap:6px;margin-bottom:28px;">
-      <div style="width:6px;height:6px;border-radius:50%;background:#ff007a;animation:dotBounce 1.2s ease infinite 0s;">
-      </div>
-      <div
-        style="width:6px;height:6px;border-radius:50%;background:#7000ff;animation:dotBounce 1.2s ease infinite 0.2s;">
-      </div>
-      <div
-        style="width:6px;height:6px;border-radius:50%;background:#00d4ff;animation:dotBounce 1.2s ease infinite 0.4s;">
-      </div>
-    </div>
+      style="font-size:13px;font-weight:700;letter-spacing:0.16em;text-transform:uppercase;color:#fff;margin-bottom:8px;">
+      Getting your ScanStory ready</div>
 
     <div id="arStageLabel"
-      style="font-size:11px;color:rgba(255,255,255,0.28);letter-spacing:0.08em;text-transform:uppercase;font-weight:500;">
-      Loading vision engine...</div>
+      style="font-size:11px;color:rgba(255,255,255,0.4);letter-spacing:0.08em;text-transform:uppercase;font-weight:500;">
+      One moment…</div>
   </div>
 
   <!-- PRE-CAMERA EXPERIENCE INTRO ------------------------------------------------------
@@ -933,6 +982,13 @@
         This ScanStory uses your camera to recognize the target shown above.
       </p>
       <button type="button" class="intro-btn" id="startCameraBtn">Start Camera</button>
+      {# Camera/privacy reassurance sits AFTER the one CTA, quiet and short. Deliberately
+         does NOT claim "nothing leaves your device": this scanner does send camera frames to
+         be matched, so that would be untrue. It says only what is actually true — the camera
+         is used for recognition, for as long as this page is open, and nothing else. #}
+      <p class="intro-reassurance">
+        Your camera is used only to recognize the image, and only while this page is open.
+      </p>
       {% endif %}
     </div>
   </div>
@@ -949,18 +1005,30 @@
     <canvas id="poseDebugCanvas"></canvas>
     {% endif %}
 
-    <div id="scannerStatusOverlay">
-      <div class="scanner-mist-container">
-        <div class="scanner-mist"></div>
-      </div>
+    {% if experience_type != 'direct_qr' %}
+    {# Recognition Quad: a purely decorative, static aiming guide (see #recognitionQuad in the
+       stylesheet). It is NOT the detection overlay, it is a different element from
+       #overlayWrap/#overlay, and it never carries or invents any detection geometry. Not
+       rendered at all for a Direct QR Video, which has no target image to aim at. #}
+    <div id="recognitionQuad" aria-hidden="true">
+      <span></span><span></span><span></span><span></span>
+    </div>
+    {% endif %}
+
+    {# aria-hidden: this overlay is the VISUAL echo of the state the #scannerGuidance live
+       region already announces. Leaving both exposed made assistive tech read every
+       meaningful transition twice; #scannerGuidance is the single announcement channel. #}
+    <div id="scannerStatusOverlay" aria-hidden="true">
+      <div id="scannerStatusScrim"></div>
       <div id="scannerStatusContent">
-        <div id="scannerStatusWord">Preparing Camera</div>
+        <div id="scannerStatusWord">{% if experience_type == 'direct_qr' %}Getting Ready{% else %}Preparing Camera{% endif %}</div>
         <div class="scanner-dots">
           <div class="scanner-dot"></div>
           <div class="scanner-dot"></div>
           <div class="scanner-dot"></div>
         </div>
-        <div id="scannerStatusLabel">Scanning for AR markers...</div>
+        {# Direct QR has no target image, so it never renders a "find the image" instruction. #}
+        <div id="scannerStatusLabel">{% if experience_type == 'direct_qr' %}One moment…{% else %}Getting your camera ready…{% endif %}</div>
       </div>
     </div>
 
@@ -995,7 +1063,7 @@
          "Watch video instead" is the action that used to need a scroll to reach. -->
     <div id="recognitionHelpPanel" class="ss-lens-panel" role="region" aria-live="polite" aria-labelledby="recognitionHelpMessage" style="display:none;background:rgba(8,16,20,0.92);border:1px solid rgba(0,212,255,0.25);">
       <div id="recognitionHelpMessage" style="color:#00d4ff;font-weight:700;margin-bottom:12px;font-size:14px;">
-        Recognition is taking too long. Try moving closer or improving lighting.
+        Still looking for the image. Try moving a little closer, or into better light.
       </div>
       <div class="ss-scan-actions">
         <button type="button" id="recognitionContinueBtn" class="ss-scan-btn ss-scan-btn-primary">
@@ -1016,27 +1084,29 @@
   <div id="soundGate"></div>
 
   <div class="loading-spinner" id="loadingSpinner"></div>
-  <div class="info-badge" id="infoBadge">Pair: --</div>
-  <div class="match-indicator" id="matchIndicator">✨ Matched!</div>
+  <div class="info-badge" id="infoBadge" aria-hidden="true"></div>
+  <div class="match-indicator" id="matchIndicator">✨ Found it</div>
   <div class="device-info" id="deviceInfo"></div>
   <div class="progress-info" id="progressInfo"></div>
 
   <canvas id="cap" hidden></canvas>
   <canvas id="captureCanvas" hidden></canvas>
 
-  <div id="status" class="status scan">Loading OpenCV…</div>
+  {# #status is the quiet secondary state line; #scannerGuidance below is the primary
+     instruction AND the page's single ARIA live region. Neither may carry engine vocabulary. #}
+  <div id="status" class="status scan">Getting ready…</div>
   <div id="scannerGuidance"
        class="status scan"
        role="status"
        aria-live="polite"
        aria-atomic="true"
        style="margin-top:8px;font-size:clamp(14px,2.8vw,18px);opacity:.92;">
-    Looking for image…
+    {% if experience_type == 'direct_qr' %}Getting ready…{% else %}Looking for image…{% endif %}
   </div>
 
   <div id="fallbackVideoPanel" role="region" aria-live="polite" aria-labelledby="fallbackVideoTitle" style="display:none;margin:12px auto 0;max-width:520px;padding:16px;border-radius:16px;background:rgba(10,10,14,0.94);border:1px solid var(--ss-border-strong, rgba(255,255,255,0.18));text-align:center;">
-    <div id="fallbackVideoTitle" style="color:#fff;font-weight:700;margin-bottom:12px;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;">Watching fallback video</div>
-    <video id="fallbackVideo" controls playsinline preload="metadata" aria-label="Fallback video" style="width:100%;max-height:60vh;background:#000;border-radius:10px;"></video>
+    <div id="fallbackVideoTitle" style="color:#fff;font-weight:700;margin-bottom:12px;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;">Watching the video</div>
+    <video id="fallbackVideo" controls playsinline preload="metadata" aria-label="ScanStory video" style="width:100%;max-height:60vh;background:#000;border-radius:10px;"></video>
     <div id="fallbackVideoStatus" style="margin-top:10px;color:rgba(255,255,255,0.65);font-size:12px;">Use the player controls to watch the video.</div>
     {# The panel used to have no user-operable exit at all: closeFallbackVideoPanel()'s
        only caller was the camera-retry-success path, so a viewer who chose "Watch video
@@ -1091,11 +1161,17 @@
         const arOverlay = document.getElementById('arLoadingOverlay');
         if (arOverlay) arOverlay.classList.add('hide');
         const statusDivEl = document.getElementById('status');
-        if (statusDivEl) { statusDivEl.textContent = 'Scanner failed to initialize'; statusDivEl.className = 'status error'; }
+        if (statusDivEl) { statusDivEl.textContent = 'ScanStory could not start'; statusDivEl.className = 'status error'; }
         const overlayStatus = document.getElementById('scannerStatusOverlay');
         if (overlayStatus) overlayStatus.classList.remove('hidden');
         const labelEl = document.getElementById('scannerStatusLabel');
         if (labelEl) labelEl.textContent = 'Failed at: ' + lastStartupCheckpoint; // sanitized stage name only — no stack/message in the DOM
+        // A11y: #scannerStatusOverlay is aria-hidden (it is the visual echo of the status the
+        // live region announces), so a hard startup failure must be spoken through
+        // #scannerGuidance — the page's single ARIA live region — or a screen-reader user is
+        // told nothing at all. One announcement, on the one state change that matters most.
+        const guidanceEl = document.getElementById('scannerGuidance');
+        if (guidanceEl) guidanceEl.textContent = 'ScanStory could not start. Tap Retry to try again.';
         if (!document.getElementById('startupRetryBtn') && statusDivEl && statusDivEl.parentNode) {
           const retryBtn = document.createElement('button');
           retryBtn.id = 'startupRetryBtn';
@@ -1134,10 +1210,33 @@
     // DEVICE DETECTION
     // ================================================
     const runtime = window.ScanStoryScannerRuntime;
+    // Copy hygiene: this used to render the raw FSM state name straight into the opening
+    // screen ("loading opencv", "initializing scanner", "checking capabilities"), which is
+    // internal vocabulary leaking to the public. The state name still goes on
+    // <html data-scanner-state> for CSS/inspection exactly as before — only the human-facing
+    // label is mapped, and anything unmapped falls back to a neutral phrase rather than
+    // guessing an engine word.
+    const STAGE_LABELS = Object.freeze({
+      loading_shell: 'Getting ready…',
+      checking_capabilities: 'Checking your device…',
+      requesting_camera: 'Waiting for camera permission…',
+      initializing_camera: 'Starting your camera…',
+      loading_opencv: 'Getting ready…',
+      loading_wasm: 'Getting ready…',
+      initializing_scanner: 'Almost ready…',
+      ready_to_scan: 'Ready — point at the image',
+      detecting: 'Looking for the image…',
+      tracking: 'Your video is playing',
+      target_lost: 'Point back at the image',
+      recovering: 'Finding the image again…',
+      paused: 'Paused',
+      fallback: 'Cannot scan right now',
+      failed: 'Something went wrong'
+    });
     const scannerState = runtime.createStateMachine(function (state) {
       document.documentElement.dataset.scannerState = state;
       const stage = document.getElementById('arStageLabel');
-      if (stage) stage.textContent = state.replaceAll('_', ' ');
+      if (stage) stage.textContent = STAGE_LABELS[state] || 'One moment…';
     });
     const SCANNER_UI_STATES = Object.freeze([
       'camera_starting',
@@ -2056,14 +2155,17 @@
       // Fix 3/Correction 2: a retry must look/read distinctly different from the first load -
       // never an identical silent repeat of the same text. No "/N" denominator anymore since
       // there's no fixed attempt ceiling - every retry past the first is one explicit click.
+      // Copy hygiene: viewer-facing text never names the engine. A retry still reads
+      // distinctly differently from the first load (Fix 3/Correction 2) — that requirement is
+      // about distinguishability, not about the words being technical.
       statusDiv.textContent = isFirstAttempt
-        ? (deviceInfo.isLowEnd ? "Loading (may take a moment)..." : "Loading OpenCV...")
-        : `Retrying vision engine (attempt ${opencvLoadAttempts})...`;
+        ? (deviceInfo.isLowEnd ? "Getting ready (this can take a moment)…" : "Getting ready…")
+        : `Trying again (attempt ${opencvLoadAttempts})…`;
       statusDiv.className = "status scan";
       if (stageLabel) {
         stageLabel.textContent = isFirstAttempt
-          ? "Loading vision engine..."
-          : `Retrying vision engine (attempt ${opencvLoadAttempts})...`;
+          ? "Getting ready…"
+          : `Trying again (attempt ${opencvLoadAttempts})…`;
       }
       scannerDiagnostics.push(isFirstAttempt ? 'opencv_load_start' : 'opencv_load_retry', {
         attempt: opencvLoadAttempts, userInitiated: !isFirstAttempt, generation: myGeneration
@@ -2123,7 +2225,7 @@
             opencvLoadFailed = false;
             opencvLoadPromise = null;
             console.log('OpenCV initialized');
-            statusDiv.textContent = "Scan AR marker";
+            statusDiv.textContent = "Point at the ScanStory image";
             statusDiv.className = "status scan";
             setScannerGuidance('looking', 'opencv_ready');
             reportOpenCVTelemetry(isFirstAttempt ? 'first_attempt_success' : 'user_retry_success');
@@ -2395,8 +2497,8 @@
         fallbackVideoEl.src = candidate.videoUrl;
         fallbackVideoPanelEl.style.display = 'block';
         fallbackVideoStatusEl.textContent = candidate.kind === 'pair'
-          ? 'Showing the matched pair video fallback.'
-          : 'Showing the project fallback video.';
+          ? 'Playing the video for the image you scanned.'
+          : "Playing this ScanStory's video.";
         fallbackVideoEl.focus({ preventScroll: false });
         if (activeFallbackViewKey !== viewKey) {
           activeFallbackViewKey = viewKey;
@@ -2411,7 +2513,7 @@
     }
 
     fallbackVideoEl.addEventListener('error', function () {
-      fallbackVideoStatusEl.textContent = 'Fallback video could not be loaded. It may be unavailable or restricted.';
+      fallbackVideoStatusEl.textContent = 'This video could not be loaded. It may be unavailable right now.';
       scannerDiagnostics.push('fallback_video_load_failed', {
         source: fallbackCandidate ? fallbackCandidate.source : null,
         pairIndex: fallbackCandidate ? fallbackCandidate.pairIndex : null,
@@ -2428,7 +2530,7 @@
       diagState.recognitionHelpVisible = true;
       diagState.recognitionHelpReason = reason;
       setScannerUiState('recognition_timeout', reason);
-      statusDiv.textContent = "Recognition is taking too long";
+      statusDiv.textContent = "Still looking for the image";
       statusDiv.className = "status scan";
       setScannerGuidance('visible', reason || 'recognition_timeout');
       recognitionHelpPanelEl.style.display = 'block';
@@ -2459,7 +2561,7 @@
       detectionPolicy.resetBackoff();
       hideRecognitionHelp('continue_clicked');
       setScannerUiState('scanning', 'recognition_continue');
-      statusDiv.textContent = "🎯 Scan AR marker";
+      statusDiv.textContent = "Point at the ScanStory image";
       statusDiv.className = "status scan";
       setScannerGuidance('looking', 'recognition_continue');
     }
@@ -2486,6 +2588,37 @@
     fallbackWatchBtn.addEventListener('click', () => showFallbackVideoFromCandidate('camera_fallback'));
     recognitionWatchBtn.addEventListener('click', () => showFallbackVideoFromCandidate('recognition_timeout'));
     markStartupCheckpoint('scanner_dom_initialized');
+
+    /* ===================== Viewer-facing failure copy =====================
+       Presentation-only shim over runtime.ERRORS. scanner-runtime.js owns the error CODES and
+       is not touched by this pass, but two of its strings are written straight into the public
+       DOM in words a viewer should never see ("The vision engine did not load", "use
+       fallback"). This maps those codes to plain language; every code NOT listed here keeps
+       runtime.ERRORS' own wording verbatim, and an unknown code still degrades to
+       UNSUPPORTED_DEVICE exactly as before.
+
+       Each message answers "what happened" and points at the ONE recovery action actually on
+       screen, and the four failure kinds stay textually distinguishable from each other:
+       permission denied / camera missing / insecure connection / not-ready are four different
+       sentences, never one generic "camera error". */
+    const VIEWER_ERROR_MESSAGES = Object.freeze({
+      OPENCV_LOAD_FAILED: 'ScanStory could not finish getting ready. Tap Retry Camera to try again, or watch the video instead.',
+      WASM_LOAD_FAILED: 'This browser cannot run the ScanStory scanner. Try a different browser, or watch the video instead.',
+      SCANNER_INIT_TIMEOUT: 'Setting up took too long. Tap Retry Camera to try again, or watch the video instead.',
+      DETECTION_TIMEOUT: 'Still cannot find the image. Move a little closer, or watch the video instead.',
+      INVALID_DETECTION_RESPONSE: 'Something went wrong reading this ScanStory. Tap Retry Camera to try again.',
+      SCANNER_PRIOR_FAILURE: 'The scanner had trouble a moment ago. Tap Retry Camera to try again, or watch the video instead.',
+      VIDEO_LOAD_FAILED: 'This video could not play in this browser. Try a different browser.',
+      UNSUPPORTED_DEVICE: 'This device cannot follow the image live. You can still watch the video.'
+    });
+
+    function isCameraFailureCode(code) {
+      return code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' || code === 'SECURE_CONTEXT_REQUIRED';
+    }
+
+    function viewerErrorMessage(code) {
+      return VIEWER_ERROR_MESSAGES[code] || runtime.ERRORS[code] || VIEWER_ERROR_MESSAGES.UNSUPPORTED_DEVICE;
+    }
 
     function showFallbackPanel(code, message) {
       scannerDiagnostics.push('fallback_shown', { code, generation: scannerGeneration });
@@ -2531,7 +2664,7 @@
       tracking = false;
       detectInFlight = false;
       if (typeof stopOverlayImmediate === 'function') stopOverlayImmediate();
-      const safe = runtime.ERRORS[code] || runtime.ERRORS.UNSUPPORTED_DEVICE;
+      const safe = viewerErrorMessage(code);
       statusDiv.textContent = safe;
       statusDiv.className = "status error";
       const ar = document.getElementById('arLoadingOverlay');
@@ -2540,7 +2673,12 @@
         safeTransition('fallback', code);
       }
       // More specific than the generic fallback label — applied after the state-driven default.
-      scannerStatusLabel.textContent = safe;
+      // The generic word for the 'fallback' state is "Camera Unavailable", which is the truth
+      // for a camera/permission/secure-context failure and a LIE for anything else (a
+      // vision-engine load timeout is not a missing camera — that exact confusion is what the
+      // first-camera-start fix had to untangle behaviourally, and it must not creep back in as
+      // copy). So the word is chosen from the same code the message is chosen from.
+      setStatusWord(isCameraFailureCode(code) ? 'Camera Unavailable' : 'Not Quite Ready', safe);
       showFallbackPanel(code, safe);
     }
 
@@ -2736,28 +2874,33 @@
     // getUserMedia() call is made — never from a marker-loss path. requesting_camera is
     // shown before permission is granted; it is a different moment from starting the
     // stream, so it gets its own text instead of also saying "Preparing Camera".
+    // Copy hygiene pass: same states, same mapping, plain viewer language. "vision engine",
+    // "AR markers" and "AR experience" were engine vocabulary shown to the public; the image
+    // the viewer is pointing at is called what the intro screen already calls it.
     const STATE_STATUS_TEXT = {
-      requesting_camera: ["Allow Camera Access", "Waiting for camera permission..."],
-      initializing_camera: ["Preparing Camera", "Starting camera stream..."],
-      loading_opencv: ["Preparing Camera", "Loading vision engine..."],
-      loading_wasm: ["Preparing Camera", "Loading vision engine..."],
-      initializing_scanner: ["Preparing Camera", "Starting scanner..."],
-      ready_to_scan: ["Point Camera At Marker", "Scanning for AR markers..."],
-      detecting: ["Point Camera At Marker", "Scanning for AR markers..."],
-      tracking: ["Tracking Surface", "AR experience is live"],
+      requesting_camera: ["Allow Camera Access", "Waiting for your permission…"],
+      initializing_camera: ["Preparing Camera", "Starting your camera…"],
+      loading_opencv: ["Preparing Camera", "Getting ready…"],
+      loading_wasm: ["Preparing Camera", "Getting ready…"],
+      initializing_scanner: ["Preparing Camera", "Almost ready…"],
+      ready_to_scan: ["Point At The Image", "Point at the ScanStory image"],
+      detecting: ["Point At The Image", "Point at the ScanStory image"],
+      tracking: ["Tracking Surface", "Your video is playing"],
       // target_lost/recovering are entered ONLY from dropTracking/handleDetectionTimeout
       // (ordinary marker-loss reasons like insufficient_flow_points, homography_empty,
       // pose_rejected_*, detect_timeout) — never from recoverScanner, which uses
       // paused/ready_to_scan instead. So these two are unambiguously detection-loss text,
       // and never need to read as camera initialization.
-      target_lost: ["Marker Lost", "Marker lost — searching..."],
-      recovering: ["Reacquiring Marker", "Reacquiring marker..."],
+      // Calm recovery, never a crash: these two are the ordinary "you moved the camera off
+      // the image" moments, so they read as an instruction the viewer can act on.
+      target_lost: ["Find The ScanStory", "Point back at the image"],
+      recovering: ["Finding It Again", "Hold the camera on the image"],
       // 'paused' is only ever entered from recoverScanner (never from a marker-loss path —
       // dropTracking/handleDetectionTimeout do not use it), so its default text can stay
       // camera-lifecycle-flavored; 'tab_hidden' is the one genuinely different meaning
       // (the tab itself is backgrounded, not the camera reconfiguring).
-      paused: ["Reconfiguring", "Stabilizing camera view..."],
-      "paused:tab_hidden": ["Scanner Paused", "Scanner paused"],
+      paused: ["Steadying View", "Settling your camera view…"],
+      "paused:tab_hidden": ["Paused", "Come back to keep scanning"],
       // The previous status word here claimed a fallback was available with zero action
       // anywhere on the page (Part D) — the fallback panel (#fallbackPanel,
       // showFallbackPanel/hideFallbackPanel) is the real, visible, tappable
@@ -2770,7 +2913,10 @@
         scannerStatusWord.style.animation = 'none';
         setTimeout(() => {
           scannerStatusWord.textContent = word;
-          scannerStatusWord.style.animation = 'statusWordPulse 1s cubic-bezier(0.175, 0.885, 0.32, 1.275), gradientShift 6s ease infinite';
+          // Re-applied so the settle replays on a genuine change. The former companion
+          // `gradientShift 6s ease infinite` is dropped: it repainted gradient-clipped text
+          // forever, over the live camera feed, for no information gain.
+          scannerStatusWord.style.animation = 'statusWordPulse 900ms cubic-bezier(0.22, 1, 0.36, 1) both';
         }, 10);
       }
       if (label !== undefined) scannerStatusLabel.textContent = label;
@@ -3980,7 +4126,7 @@
       stopTrackingLoop();
       clearTrackingGeometry(reason);
       safeTransition('paused', reason);
-      statusDiv.textContent = "Reconfiguring scanner...";
+      statusDiv.textContent = "Steadying the view…";
       statusDiv.className = "status scan";
       scannerStatusOverlay.classList.remove('hidden');
       await new Promise(resolve => setTimeout(resolve, 250));
@@ -4114,7 +4260,7 @@
           // genuinely settled, without depending on the user doing anything.
           setTimeout(resizeScannerSurfaces, 300);
           tryAutoEnableAudio();
-          statusDiv.textContent = cvReady ? "🎯 Scan AR marker" : "Waiting for OpenCV…";
+          statusDiv.textContent = cvReady ? "Point at the ScanStory image" : "Getting ready…";
           // Root-cause fix: this never used to transition the state machine at all, so it
           // stayed at 'initializing_camera' — showing "Preparing Camera" — for the entire
           // rest of the session, even while the camera was live and detect/tracking loops
@@ -4161,6 +4307,15 @@
       experienceIntro.classList.add('is-visible');
       const arOverlay = document.getElementById('arLoadingOverlay');
       if (arOverlay) arOverlay.classList.add('hide');
+      // A11y: this is an aria-modal dialog, so a keyboard/screen-reader user must land inside
+      // it rather than at the top of a page whose content is behind it. Focus goes to the one
+      // primary action (Start Camera, or Play video on a Direct QR ScanStory).
+      // preventScroll keeps the intro's own scroll position where the viewer can read the
+      // target guide from the top.
+      const primaryAction = startCameraBtn || directQrPlayBtn;
+      if (primaryAction && primaryAction.focus) {
+        try { primaryAction.focus({ preventScroll: true }); } catch (_) { primaryAction.focus(); }
+      }
     }
 
     function selectedPlaybackMode() {
@@ -4398,11 +4553,15 @@
       }
     }
 
+    // The signature lock-on confirmation. One short settle (see .match-indicator /
+    // @keyframes lockOnSettle), then it removes itself on the existing 2000ms timeout.
+    // #infoBadge is deliberately no longer shown: it printed the internal pair index
+    // ("Pair: 2") in a chip pinned over the top of the tracked video — internal vocabulary,
+    // and the one thing item 6 says must never sit on top of the playing experience. The
+    // element and its hide-on-stop write are untouched, so nothing else has to change.
     function showMatchIndicator(pairId) {
-      matchIndicator.textContent = `✨ Matched Pair #${pairId + 1}`;
+      matchIndicator.textContent = "✨ Found it";
       matchIndicator.style.display = "block";
-      infoBadge.textContent = `🎯 Pair: ${pairId + 1}`;
-      infoBadge.style.display = "block";
       setTimeout(() => {
         matchIndicator.style.display = "none";
       }, 2000);
@@ -4410,7 +4569,7 @@
 
     function updateProgress(ready, total) {
       if (ready && total && ready < total) {
-        progressInfo.textContent = `⏳ Processing: ${ready}/${total} pairs ready`;
+        progressInfo.textContent = `⏳ Some videos are still getting ready (${ready} of ${total})`;
       } else {
         progressInfo.textContent = "";
       }
@@ -5551,7 +5710,7 @@
       safeTransition('target_lost', reason);
       safeTransition('recovering', reason);
       startScannerStatusCycle();
-      statusDiv.textContent = "🎯 Scan AR marker";
+      statusDiv.textContent = "Point back at the image";
       statusDiv.className = "status scan";
       // Task F (Pass 10): this timer is now the sole recovery owner for this loss —
       // watchdogTrackingSkipReason()'s scan_timer_pending check stands the watchdog down
@@ -5593,7 +5752,7 @@
       // timeout-retry path, a real regression. Logged with a call-site tag instead so the
       // pre-existing FSM/reality mismatch is visible for a future, non-surgical FSM fix.
       safeTransition('recovering', 'detect_timeout', { site: 'handleDetectionTimeout' });
-      statusDiv.textContent = "Recognition timed out. Trying again...";
+      statusDiv.textContent = "Still looking… trying again";
       statusDiv.className = "status scan";
       startDetectLoop();
       startTrackingLoop();
@@ -6246,7 +6405,7 @@
         prevPts = cv.matFromArray(finalPts.length / 2, 1, cv.CV_32FC2, finalPts);
         lastLockTs = performance.now();
         setScannerWorkMode('TRACKING', 'local_tracking_update');
-        statusDiv.textContent = `🎬 AR IS ON LIVE${currentPairId + 1}`;
+        statusDiv.textContent = "Playing";
         statusDiv.className = "status track";
         scannerDiagnostics.push('[TRACK UPDATE]', {
           generation: scannerGeneration, pairId: currentPairId, points: finalPts.length / 2
@@ -6654,7 +6813,7 @@
           detectionFailCount++;
           if (!tracking) {
             requestPoseHold('no_detection');
-            statusDiv.textContent = "Scan AR marker";
+            statusDiv.textContent = "Point at the ScanStory image";
             statusDiv.className = "status scan";
           }
           setScannerGuidance(guidanceFromDetection(data), data.code || data.reason || 'not_detected');
@@ -6723,7 +6882,7 @@
         if (!poseQuality.ok && tracking && currCorners) {
           recordRejection(poseQuality.reason);
           scannerDiagnostics.push('[SCAN MATCH REJECT]', { requestId, pairId: newPairId, reason: poseQuality.reason, keptTracking: true });
-          statusDiv.textContent = "Tracking marker";
+          statusDiv.textContent = "Following the image";
           statusDiv.className = "status track";
           return;
         }
@@ -6848,7 +7007,7 @@
           sourceFrameHeight: frameH
         })) playOverlay();
 
-        statusDiv.textContent = `🎬 Tracking Pair #${newPairId + 1}`;
+        statusDiv.textContent = "Playing";
         statusDiv.className = "status track";
 
         // Detect Once: this accepted detection was the trigger. Everything above ran
@@ -6875,7 +7034,7 @@
         if (e && e.name === 'AbortError') {
           handleDetectionTimeout();
         } else {
-          statusDiv.textContent = "Detection error";
+          statusDiv.textContent = "Hit a snag — still trying";
           statusDiv.className = "status scan";
         }
       } finally {
@@ -7295,7 +7454,7 @@
     window.addEventListener('resize', () => scheduleOrientationRecovery('resize'));
 
     // ================================================
-    // AR ENGINE INITIALIZATION OVERLAY
+    // OPENING SCREEN
     // ================================================
 
     function forceHideAROverlay() {
@@ -7309,20 +7468,18 @@
       }
     }
 
-    // Show overlay on page load
-    window.addEventListener('DOMContentLoaded', function () {
-      const arOverlay = document.getElementById('arLoadingOverlay');
-      if (arOverlay) {
-        arOverlay.classList.remove('hide');
-      }
+    // A DOMContentLoaded handler used to RE-SHOW this overlay and then hide it again on a
+    // 2500ms timer. Both are removed. By the time DOMContentLoaded fires, this script has
+    // already run to completion, which means showExperienceIntro() has already deliberately
+    // hidden the opening screen and put the intro (z-index 10000) in front of it — so the
+    // re-show only ever resurrected a screen we had just dismissed, then kept it animating
+    // for 2.5s behind the intro before hiding it a second time. Nothing else read either the
+    // class or the timer: the intro path, enterFallback() and the startup safety net all hide
+    // this overlay themselves, and forceHideAROverlay() below still exists for them and for
+    // the tap-to-dismiss listeners. Purely presentational; no camera, loop or state work is
+    // scheduled from here.
 
-      // Auto-hide after 2.5 seconds
-      setTimeout(function () {
-        forceHideAROverlay();
-      }, 2500);
-    });
-
-    // Optional: Click anywhere to dismiss early (for debugging)
+    // Tap anywhere on the opening screen to dismiss it early.
     document.getElementById('arLoadingOverlay')?.addEventListener('click', forceHideAROverlay);
     document.getElementById('arLoadingOverlay')?.addEventListener('touchstart', forceHideAROverlay, { passive: true });
 

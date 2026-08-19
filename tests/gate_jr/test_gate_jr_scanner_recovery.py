@@ -85,7 +85,12 @@ def test_timeout_recovers_without_immediate_camera_restart_or_capability_panel()
     assert "startDetectLoop()" in html
     assert "startTrackingLoop()" in html
     assert "showRecognitionHelp('repeated_detection_timeout')" in html
-    assert "Recognition timed out. Trying again..." in html
+    # Wording updated in the scanner copy pass: a viewer is told the scanner is still looking
+    # rather than that "recognition timed out". Still the same requirement — a sub-limit
+    # timeout says so in #status and loops again, instead of raising a capability panel.
+    assert 'statusDiv.textContent = "Still looking… trying again";' in html
+    timeout_body = html[html.index("function handleDetectionTimeout()"):html.index("function enterGrace(reason)")]
+    assert "enterFallback(" not in timeout_body
 
 
 def test_standard_mode_tracking_parameters_are_bounded():

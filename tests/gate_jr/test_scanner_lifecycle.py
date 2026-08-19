@@ -550,11 +550,23 @@ def test_preparing_camera_only_comes_from_a_real_camera_start():
 
 def test_marker_rejection_reasons_never_carry_camera_language():
     """target_lost/recovering status text (entered only from ordinary marker-loss paths)
-    must read as marker/detection language, not camera-starting language."""
+    must read as image/detection language, not camera-starting language.
+
+    The wording moved in the scanner visual/copy pass: "Marker Lost"/"Reacquiring Marker"
+    became "Find The ScanStory"/"Finding It Again" because "marker" is internal vocabulary
+    that public viewer copy must not use. This test's actual subject is unchanged and
+    re-asserted below — neither of these two ordinary target-loss states may read as the
+    camera starting up.
+    """
     html = _scanner_html()
-    assert 'target_lost: ["Marker Lost"' in html
-    assert 'recovering: ["Reacquiring Marker"' in html
+    assert 'target_lost: ["Find The ScanStory", "Point back at the image"]' in html
+    assert 'recovering: ["Finding It Again", "Hold the camera on the image"]' in html
     assert '"Preparing Camera"' in html  # still exists, just not attached to these states
+    # The point of the original bug: rotating/looking away must never claim the camera is
+    # (re)starting. Assert that directly against the two states' text, not just their literals.
+    loss_text = html[html.index('target_lost: ['):html.index('paused: [')]
+    for camera_word in ("Preparing Camera", "camera stream", "Allow Camera", "Camera Unavailable"):
+        assert camera_word not in loss_text, camera_word
 
 
 # --- Authoritative state transition function -------------------------------------------
@@ -6875,9 +6887,16 @@ def test_wave6_fallback_absent_state_hides_watch_controls():
 
 
 def test_wave6_fallback_media_error_is_visible():
+    """A media error must still put a visible explanation in the panel. Wording updated in
+    the scanner copy pass ("Fallback video" is internal vocabulary in viewer-facing text) —
+    the requirement, that the error surfaces in #fallbackVideoStatus rather than only in the
+    console, is unchanged and asserted structurally below."""
     html = _scanner_html()
     assert "fallbackVideoEl.addEventListener('error'" in html
-    assert "Fallback video could not be loaded. It may be unavailable or restricted." in html
+    assert "This video could not be loaded. It may be unavailable right now." in html
+    error_handler = html[html.index("fallbackVideoEl.addEventListener('error'"):]
+    error_handler = error_handler[:error_handler.index("});")]
+    assert "fallbackVideoStatusEl.textContent =" in error_handler
     assert "fallback_video_load_failed" in html
 
 
