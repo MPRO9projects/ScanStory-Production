@@ -262,7 +262,10 @@ def test_public_routes_use_centralized_availability_helper(client, app_module, d
     app_module.add_project_service_coverage(project, "LEGACY_COMPATIBILITY", source_reference="test")
     db_session.commit()
 
-    assert client.get(f"/scanner/{project.id}").status_code == 200
+    scanner_response = client.get(f"/scanner/{project.id}", follow_redirects=False)
+    assert scanner_response.status_code == 302
+    assert scanner_response.headers["Location"].endswith(f"/s/{project.public_key}")
+    assert client.get(f"/s/{project.public_key}").status_code == 200
     assert client.get(f"/video/{project.id}/{pair.pair_index}").status_code == 200
     assert client.get(f"/image/{project.id}/{pair.pair_index}").status_code == 200
     assert client.get(f"/qr/{project.qr_code_filename}").status_code == 200

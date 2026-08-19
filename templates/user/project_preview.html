@@ -114,7 +114,7 @@
             <i class="fas fa-vial"></i> Test Experience
         </a>
         {% else %}
-        <a href="{{ url_for('scanner', project_id=project.id) }}" target="_blank"
+        <a href="{{ project.scanner_url or url_for('public_scanner', public_key=project.public_key) }}" target="_blank"
            class="bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 px-5 py-2 rounded-full text-xs font-bold uppercase tracking-wider hover:bg-cyan-500/30 transition flex items-center gap-2">
             <i class="fas fa-qrcode"></i> Scan AR
         </a>

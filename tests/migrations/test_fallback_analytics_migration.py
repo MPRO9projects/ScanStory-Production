@@ -119,7 +119,9 @@ def test_client_event_id_unique_index_rejects_duplicate_raw_insert(bare_migratio
     app = bare_migration_app("unique_client_event_id.db")
     with app.app_context():
         migrate_upgrade()
-        shared_db.session.execute(text("INSERT INTO projects (name, is_active) VALUES ('p', 1)"))
+        shared_db.session.execute(text(
+            "INSERT INTO projects (name, is_active, public_key) VALUES ('p', 1, 'prj_fallback_unique_test')"
+        ))
         shared_db.session.commit()
         project_id = shared_db.session.execute(text("select id from projects")).fetchall()[0][0]
 
@@ -142,7 +144,9 @@ def test_check_constraint_rejects_unknown_event_type(bare_migration_app):
     app = bare_migration_app("check_event_type.db")
     with app.app_context():
         migrate_upgrade()
-        shared_db.session.execute(text("INSERT INTO projects (name, is_active) VALUES ('p', 1)"))
+        shared_db.session.execute(text(
+            "INSERT INTO projects (name, is_active, public_key) VALUES ('p', 1, 'prj_fallback_check_test')"
+        ))
         shared_db.session.commit()
         project_id = shared_db.session.execute(text("select id from projects")).fetchall()[0][0]
 

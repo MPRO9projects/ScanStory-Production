@@ -9,6 +9,7 @@ from sqlalchemy import event, inspect
 from sqlalchemy.orm import validates
 from sqlalchemy.sql import func
 from sqlalchemy.orm import scoped_session, sessionmaker
+from public_keys import generate_public_key
 
 db = SQLAlchemy()
 
@@ -1070,6 +1071,7 @@ class Project(db.Model):
     __tablename__ = "projects"
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    public_key = db.Column(db.String(64), unique=True, nullable=False, index=True)
     name = db.Column(db.String(255), nullable=False, default="Untitled Project")
     description = db.Column(db.Text, nullable=True)
 
@@ -2369,7 +2371,25 @@ class UploadSession(db.Model):
         return f"<UploadSession id={self.id} ({owner}) status={self.status}>"
 
 
-for _public_model in (Organization, Workspace, Experience, Trigger, Asset, ProcessingJob):
+def _assign_project_public_key(mapper, connection, target):
+    if getattr(target, "public_key", None):
+        return
+    table = Project.__table__
+    for _ in range(10):
+        candidate = generate_public_key("prj")
+        exists = connection.execute(
+            table.select().with_only_columns(table.c.id).where(table.c.public_key == candidate).limit(1)
+        ).first()
+        if not exists:
+            target.public_key = candidate
+            return
+    raise RuntimeError("Could not generate unique public_key for Project")
+
+
+event.listen(Project, "before_insert", _assign_project_public_key)
+
+
+for _public_model in (Project, Organization, Workspace, Experience, Trigger, Asset, ProcessingJob):
     event.listen(_public_model, "before_update", _prevent_public_key_update)
 
 

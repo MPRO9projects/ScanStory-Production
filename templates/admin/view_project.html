@@ -712,7 +712,7 @@
                     <h3>Support Information</h3>
                     <div class="info-row"><span class="info-label">QR Asset</span><span class="info-value">{{ 'Present' if qr_ready else 'Missing' }}</span></div>
                     <div class="info-row"><span class="info-label">QR Filename</span><span class="info-value">{{ safe_qr_filename }}</span></div>
-                    <div class="info-row"><span class="info-label">Scanner URL</span><span class="info-value">{{ project.scanner_url or url_for('scanner', project_id=project.id) }}</span></div>
+                    <div class="info-row"><span class="info-label">Scanner URL</span><span class="info-value">{{ project.scanner_url or url_for('public_scanner', public_key=project.public_key) }}</span></div>
                     <div class="info-row"><span class="info-label">Pair Count</span><span class="info-value">{{ pair_count }}</span></div>
                 </div>
             </div>

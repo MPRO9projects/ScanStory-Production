@@ -71,6 +71,7 @@ from models import (
     USER_ACCOUNT_TYPES,
 )
 import storage_accounting as _storage
+from public_keys import is_url_safe_public_key
 from upload_validation import UploadValidationError, validate_image, validate_video, _safe_remove
 import entitlements as _ent
 from entitlements import (
@@ -3053,6 +3054,30 @@ def _project_is_available(project):
     return bool(project_public_access_state(project)["is_live"])
 
 
+def _project_public_key(project):
+    return getattr(project, "public_key", None)
+
+
+def _canonical_public_scanner_path(project, **query):
+    public_key = _project_public_key(project)
+    if not public_key:
+        raise ValueError("Project public identity is missing.")
+    return url_for("public_scanner", public_key=public_key, **query)
+
+
+def _canonical_public_scanner_url(project, **query):
+    public_host = get_system_config("public_host")
+    if public_host:
+        return f"{public_host.rstrip('/')}{_canonical_public_scanner_path(project, **query)}"
+    return url_for("public_scanner", public_key=_project_public_key(project), _external=True, _scheme="https", **query)
+
+
+def _resolve_public_project(public_key):
+    if not is_url_safe_public_key(public_key):
+        return None
+    return Project.query.filter_by(public_key=public_key).first()
+
+
 def _admin_media_investigation_allowed():
     """May the caller read project media that is NOT publicly live?
 
@@ -3217,8 +3242,15 @@ def log_admin_activity(admin_id, activity_type, description):
 
 def get_project_display_number(project):
     """Get sequential display number (1,2,3...) for user or admin"""
-    # If a persisted per-owner index exists, prefer that (faster and stable)
-    if getattr(project, 'user_project_index', None):
+    # If a persisted creator index exists, prefer it for projects still owned by
+    # their creator. Transferred-in projects should not keep showing the
+    # sender's project number in the recipient account.
+    created_by_original_user = (
+        getattr(project, "owner_user_id", None)
+        and getattr(project, "created_by_user_id", None)
+        and project.created_by_user_id != project.owner_user_id
+    )
+    if getattr(project, 'user_project_index', None) and not created_by_original_user:
         return project.user_project_index
     if project.owner_user_id:
         # Count projects this user created before this one
@@ -3235,6 +3267,14 @@ def get_project_display_number(project):
         ).count()
         return count + 1
     return project.id
+
+
+def _next_user_project_index(user_id):
+    """Next project number for projects created by this user, not received later."""
+    max_index = db.session.query(func.max(Project.user_project_index)).filter(
+        Project.created_by_user_id == user_id
+    ).scalar()
+    return (int(max_index) if max_index and int(max_index) > 0 else 0) + 1
 
 
 def _schedule_project_pair_processing(project_id, failure_flash="Processing queue is unavailable. Please retry later.", attempt_scope="initial"):
@@ -8826,13 +8866,10 @@ def handle_upload():
             return redirect(url_for("user_create_project_page"))
 
         try:
-            max_index = db.session.query(func.max(Project.user_project_index)).filter(
-                Project.owner_user_id == user.id
-            ).scalar()
-            user_project_index = (int(max_index) if max_index and int(max_index) > 0 else 0) + 1
+            user_project_index = _next_user_project_index(user.id)
         except Exception:
             try:
-                existing_count = Project.query.filter_by(owner_user_id=user.id).count()
+                existing_count = Project.query.filter_by(created_by_user_id=user.id).count()
             except Exception:
                 existing_count = 0
             user_project_index = int(existing_count or 0) + 1
@@ -8962,24 +8999,7 @@ def handle_upload():
         flash(str(exc) if isinstance(exc, ValueError) else "Project upload failed. Please try again.", "error")
         return redirect(url_for("user_create_project_page"))
     # ✅ STEP 4: Generate QR code (FAST)
-    user_name = (user.first_name or user.email.split("@")[0]).strip()
-    # Prefer a configured public host (useful for generating QR codes accessible from mobile)
-    public_host = get_system_config('public_host')
-    if public_host:
-        base = public_host.rstrip('/')
-        scanner_path = url_for("scanner", project_id=project.id, user_id=user.id, user_name=user_name)
-        scanner_url = f"{base}{scanner_path}"
-    else:
-        # Fallback to request-based external URL. Ensure scheme matches current request.
-        scheme = request.scheme or 'http'
-        scanner_url = url_for(
-            "scanner",
-            project_id=project.id,
-            user_id=user.id,
-            user_name=user_name,
-            _external=True,
-            _scheme="https"
-        )
+    scanner_url = _canonical_public_scanner_url(project)
     
     qr_filename = f"project_{project.id}_main.png"
     qr_path = os.path.join(QR_DIR, qr_filename)
@@ -10122,10 +10142,7 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
                 playback_mode=playback_mode,
             )
         else:
-            max_index = db.session.query(func.max(Project.user_project_index)).filter(
-                Project.owner_user_id == user.id
-            ).scalar()
-            project_index = (int(max_index) if max_index and int(max_index) > 0 else 0) + 1
+            project_index = _next_user_project_index(user.id)
             project = Project(
                 name=primary.project_name or "Untitled Project",
                 owner_user_id=user.id,
@@ -10227,25 +10244,11 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
     # uses, unmodified. One QR per project, never one per content set.
     qr_start = time.perf_counter()
     if is_admin_owner:
-        admin_name = admin.name or admin.email.split("@")[0]
-        scanner_url = url_for(
-            "scanner", project_id=project.id, admin_id=admin.id, admin_name=admin_name,
-            _external=True, _scheme="https",
-        )
+        scanner_url = _canonical_public_scanner_url(project)
         qr_filename = f"project_{project.id}_admin.png"
         qr_dir = ADMIN_QR_DIR
     else:
-        user_name = (user.first_name or user.email.split("@")[0]).strip()
-        public_host = get_system_config('public_host')
-        if public_host:
-            base = public_host.rstrip('/')
-            scanner_path = url_for("scanner", project_id=project.id, user_id=user.id, user_name=user_name)
-            scanner_url = f"{base}{scanner_path}"
-        else:
-            scanner_url = url_for(
-                "scanner", project_id=project.id, user_id=user.id, user_name=user_name,
-                _external=True, _scheme="https",
-            )
+        scanner_url = _canonical_public_scanner_url(project)
         qr_filename = f"project_{project.id}_main.png"
         qr_dir = QR_DIR
 
@@ -13287,7 +13290,7 @@ def scanner_test_entry(project_id):
     if not user_can_manage_project(user, project):
         abort(404)
     token = _issue_scanner_test_token(project.id, "creator_test", user_id=user.id)
-    return redirect(url_for("scanner", project_id=project.id, test_token=token))
+    return redirect(_canonical_public_scanner_path(project, test_token=token))
 
 
 @app.route("/admin/project/<int:project_id>/scanner-test")
@@ -13300,7 +13303,68 @@ def admin_scanner_test_entry(project_id):
     if project.owner_admin_id != admin.id:
         abort(404)
     token = _issue_scanner_test_token(project.id, "admin_test", admin_id=admin.id)
-    return redirect(url_for("scanner", project_id=project.id, test_token=token))
+    return redirect(_canonical_public_scanner_path(project, test_token=token))
+
+
+def _render_scanner_project(project, test_token=None):
+    """Render scanner for a resolved public project."""
+    if not _project_is_available(project):
+        return _project_unavailable_response()
+
+    entry = resolve_scanner_entry_context(project, test_token)
+
+    project_owner_id = project_current_owner_user_id(project)
+    if project_owner_id:
+        creator_type = "user"
+        owner_user = User.query.get(project_owner_id)
+        creator_name = owner_user.full_name if owner_user else "User"
+    else:
+        creator_type = "admin"
+        creator_name = project.owner_admin.name if project.owner_admin else "Admin"
+
+    experience_type = project_experience_type(project)
+    playback_mode = project_playback_mode(project)
+    pairs = (
+        ProjectPair.query.filter_by(project_id=project.id)
+        .order_by(ProjectPair.pair_index)
+        .all()
+    )
+    targets = [
+        {
+            "index": pair.pair_index,
+            "image_url": url_for("serve_image", project_id=project.id, image_id=pair.pair_index),
+            "video_url": url_for("serve_video", project_id=project.id, image_id=pair.pair_index),
+            "label": "Target {}".format(pair.pair_index + 1),
+        }
+        for pair in pairs
+    ]
+
+    return render_template(
+        "user/scanner.html",
+        project_id=project.id,
+        project_name=project.name,
+        qr_code_url=project.qr_code_path,
+        creator_type=creator_type,
+        creator_name=creator_name,
+        experience_type=experience_type,
+        playback_mode=playback_mode,
+        targets=targets,
+        scanner_diagnostics_enabled=scanner_diagnostics_enabled(),
+        scanner_entry_context=entry["context"],
+        resolved_back_destination=entry["back_url"],
+        back_destination_reason=entry["back_destination_reason"],
+        entry_route_type=entry["entry_route_type"],
+        entry_authorization_result=entry["entry_authorization_result"],
+    )
+
+
+@app.route("/s/<public_key>")
+def public_scanner(public_key):
+    """Canonical public scanner URL using an opaque, owner-independent key."""
+    project = _resolve_public_project(public_key)
+    if not project:
+        abort(404)
+    return _render_scanner_project(project, request.args.get("test_token"))
 
 
 @app.route("/scanner/<int:project_id>")
@@ -13323,6 +13387,10 @@ def scanner(project_id):
         return "Project not found"
     if not _project_is_available(project):
         return _project_unavailable_response()
+    query = {}
+    if test_token:
+        query["test_token"] = test_token
+    return redirect(_canonical_public_scanner_path(project, **query), code=302)
 
     # Entry context is resolved purely server-side (signed token + real session ownership
     # check) — the session is never mutated by this route at all, for any project.
@@ -17683,16 +17751,7 @@ def admin_handle_upload():
     db.session.commit()
     
     # Generate QR code
-    admin_name = admin.name or admin.email.split("@")[0]
-    
-    scanner_url = url_for(
-        "scanner",
-        project_id=project.id,
-        admin_id=admin.id,
-        admin_name=admin_name,
-        _external=True,
-        _scheme="https"
-    )
+    scanner_url = _canonical_public_scanner_url(project)
     
     qr_filename = f"project_{project.id}_admin.png"
     # ✅ CHANGE 3: Save QR to ADMIN folder
