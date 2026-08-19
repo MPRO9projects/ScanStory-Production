@@ -125,10 +125,20 @@ def test_continue_scanning_resets_backoff():
 
 
 def test_retry_camera_resets_backoff():
+    """Pre-existing staleness repaired: commit 22d6aee extracted Retry Camera's recovery
+    sequence into the shared recoverFallbackAndOpenCamera() helper (so the first Start Camera
+    press could reuse the exact same sequence), which moved these three resets out of
+    retryCameraFromFallback()'s own body. The requirement is unchanged — pressing Retry Camera
+    must clear the failure streak, the rate-limit backoff and bump the generation — so it is
+    asserted where that code actually lives now, and Retry Camera is asserted to route
+    through it."""
     html = _scanner_html()
-    start = html.index("async function retryCameraFromFallback()")
-    end = html.index("fallbackRetryBtn.addEventListener", start)
-    body = html[start:end]
+    retry_start = html.index("async function retryCameraFromFallback()")
+    retry_body = html[retry_start:html.index("fallbackRetryBtn.addEventListener", retry_start)]
+    assert "recoverFallbackAndOpenCamera('fallback_retry')" in retry_body
+
+    helper_start = html.index("async function recoverFallbackAndOpenCamera(reason)")
+    body = html[helper_start:html.index("async function retryCameraFromFallback()", helper_start)]
     assert "detectionFailCount = 0;" in body
     assert "detectionPolicy.resetBackoff();" in body
     assert "scannerGeneration++;" in body
