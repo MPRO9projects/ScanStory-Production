@@ -392,7 +392,11 @@ def test_pricing_page_shows_account_family_and_experience_contract_without_fake_
     assert response.status_code == 200
     body = response.data.decode()
 
-    assert "V1.1 Account Families" in body
+    # Was "V1.1 Account Families". Internal release vocabulary is not shown to
+    # customers; the panel now leads with "Who each plan is for". Same panel,
+    # same data, customer-facing label.
+    assert "Who each plan is for" in body
+    assert "V1.1" not in body
     assert "Individual" in body
     assert "Business / Vendor" in body
     assert "Direct QR" in body
@@ -520,7 +524,10 @@ def test_user_profile_entitlement_summary_uses_backend_ledgers(
     assert response.status_code == 200
     body = response.data.decode()
 
-    assert "Effective Entitlement" in body
+    # Was "Effective Entitlement" - internal vocabulary on a customer page. The
+    # panel, its data source and its numbers are unchanged; only the heading and
+    # its note are now plain language.
+    assert "What your plan includes" in body
     # Base vs purchased capacity stays distinguishable, never one opaque total.
     assert "Project Slots" in body
     assert "Plan slots" in body

@@ -5,7 +5,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ScanStory Pricing | AR Experience Platform Plans &amp; Scan Limits</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <meta name="description"
         content="Compare ScanStory pricing plans for creating WebAR experiences. View project limits, scan limits, QR-based AR features, and choose the right AR platform plan for your needs.">
     <meta name="robots" content="index, follow">
@@ -39,10 +38,16 @@
     </script>
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    {# Font Awesome 6.4.0 was linked here while every other page linked 6.4.2 -
+       the exact version drift _head_assets.html exists to end. It comes from the
+       partial below now. #}
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    {# design-system.css + font + icons, AFTER tailwind and BEFORE this page's
+       <style> - the order design-system.css documents. It used to be linked
+       first, so Tailwind overrode every .ss-* token. The Razorpay script above
+       is deliberately left exactly where it was. #}
+    {% include "user/_head_assets.html" %}
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
 
         :root {
             --primary: #ff007a;
@@ -441,6 +446,97 @@
             margin: auto;
         }
 
+        /* Checkout review step (see the #paymentModal comment in the body). */
+        .checkout-summary {
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 18px;
+            overflow: hidden;
+            margin-bottom: 1rem;
+        }
+
+        .checkout-row {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 12px 14px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+        }
+
+        .checkout-row:last-child {
+            border-bottom: 0;
+        }
+
+        .checkout-label {
+            font-size: 11px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: rgba(255, 255, 255, 0.45);
+        }
+
+        .checkout-value {
+            font-size: 14px;
+            font-weight: 700;
+            color: #fff;
+            text-align: right;
+            /* Long plan names wrap instead of widening the dialog on a 320px
+               screen. */
+            overflow-wrap: anywhere;
+        }
+
+        .checkout-total {
+            background: rgba(255, 0, 122, 0.09);
+        }
+
+        .checkout-total .checkout-value {
+            font-size: 20px;
+            font-weight: 900;
+        }
+
+        .checkout-note {
+            font-size: 11px;
+            line-height: 1.6;
+            color: rgba(255, 255, 255, 0.45);
+            margin-bottom: 1.1rem;
+        }
+
+        .checkout-secondary-btn {
+            display: block;
+            width: 100%;
+            margin-top: 10px;
+            min-height: 44px;
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            background: transparent;
+            border-radius: 999px;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 12px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            cursor: pointer;
+        }
+
+        .checkout-secondary-btn:hover {
+            color: #fff;
+            border-color: rgba(255, 255, 255, 0.32);
+        }
+
+        .action-btn:disabled {
+            cursor: not-allowed;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
         /* Responsive design */
         @media (max-width: 1024px) {
             .plan-card {
@@ -805,21 +901,45 @@
     </nav>
 
     <!-- Flash Messages -->
+    {#
+      This is where the /payment-failed route lands: it flashes and redirects
+      here, so this block IS the payment-failure screen and there is no separate
+      failure template. It previously rendered the flash with no live region and
+      no next step, leaving "Payment failed. Please try again." with nothing to
+      try again from.
+
+      An error is announced and gains recovery guidance; a confirmation is not
+      escalated to an alert.
+    #}
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     <div class="main-content">
         {% for category, message in messages %}
-        <div class="glass-container p-4 mb-4">
-            <div class="flex items-center">
+        <div class="glass-container p-4 mb-4 {% if category == 'error' %}border border-red-400/30{% endif %}"
+            role="{% if category == 'error' %}alert{% else %}status{% endif %}">
+            <div class="flex items-start">
                 <div class="flex-shrink-0">
                     <i
-                        class="fas fa-{% if category == 'error' %}exclamation-circle text-red-400{% else %}check-circle text-green-400{% endif %} text-xl"></i>
+                        class="fas fa-{% if category == 'error' %}exclamation-circle text-red-400{% else %}check-circle text-green-400{% endif %} text-xl"
+                        aria-hidden="true"></i>
                 </div>
                 <div class="ml-3">
                     <p
                         class="text-sm font-medium {% if category == 'error' %}text-red-300{% else %}text-green-300{% endif %}">
                         {{ message }}
                     </p>
+                    {# Gated on the message actually being about a payment. The
+                       same error category also carries quota messages
+                       ("Project limit reached...", "Pairs allowed per project is
+                       not configured..."), and payment-recovery copy would be
+                       nonsense underneath those. #}
+                    {% if category == 'error' and 'payment' in message|lower %}
+                    <p class="text-xs text-gray-400 mt-2 leading-relaxed">
+                        Nothing was added to your account. If your bank shows a pending amount it is released
+                        automatically — do not pay twice. Pick your plan below to try again, or
+                        <a href="/contact" class="text-accent hover:text-white">contact support</a> if it keeps failing.
+                    </p>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -857,20 +977,43 @@
                 </div>
 
                 <!-- Current Plan Status — logged-in users only -->
+                {#
+                  Two fixes here.
+
+                  1. `trial` was never passed to this template by either
+                     pricing_page() or subscribe_page(), so the "(N days)" branch
+                     was dead on both routes and no visitor ever saw their trial
+                     countdown. user.trial_details is the relationship that
+                     actually exists (models.py User.trial_details).
+                  2. The status was printed as `subscription_status|title`, i.e.
+                     the raw column - "Limit_Reached". The four labels below are
+                     the complete backend vocabulary: trial / active / expired /
+                     limit_reached. Nothing else exists, so nothing else is shown.
+                #}
                 {% if user %}
+                {% set trial_details = user.trial_details %}
                 <div class="mt-4 md:mt-6 inline-block">
                     <div class="glass-container px-4 md:px-6 py-2 md:py-3">
                         <div class="flex items-center justify-center">
                             <i
-                                class="fas fa-{% if user.subscription_status == 'trial' %}star{% elif user.subscription_status == 'active' %}check-circle{% else %}exclamation-triangle{% endif %} mr-2 md:mr-3 text-{% if user.subscription_status == 'trial' %}yellow{% elif user.subscription_status == 'active' %}green{% else %}red{% endif %}-400"></i>
+                                class="fas fa-{% if user.subscription_status == 'trial' %}star{% elif user.subscription_status == 'active' %}check-circle{% else %}exclamation-triangle{% endif %} mr-2 md:mr-3 text-{% if user.subscription_status == 'trial' %}yellow{% elif user.subscription_status == 'active' %}green{% else %}red{% endif %}-400"
+                                aria-hidden="true"></i>
                             <div class="text-center md:text-left">
                                 <span
-                                    class="text-xs md:text-sm font-bold uppercase tracking-widest text-gray-300">Status:</span>
-                                <span class="ml-1 md:ml-2 font-bold text-white">{{ user.subscription_status|title
-                                    }}</span>
-                                {% if user.subscription_status == 'trial' and trial %}
-                                <span class="ml-1 md:ml-2 text-gray-400 text-xs md:text-sm">({{
-                                    trial.remaining_trial_days }} days)</span>
+                                    class="text-xs md:text-sm font-bold uppercase tracking-widest text-gray-300">Your plan:</span>
+                                <span class="ml-1 md:ml-2 font-bold text-white">
+                                    {%- if user.subscription_status == 'trial' %}Trial
+                                    {%- elif user.subscription_status == 'active' %}Active
+                                    {%- elif user.subscription_status == 'expired' %}Expired
+                                    {%- elif user.subscription_status == 'limit_reached' %}Plan limit reached
+                                    {%- else %}{{ user.subscription_status|replace('_', ' ')|title }}{% endif -%}
+                                </span>
+                                {% if user.subscription_status == 'trial' and trial_details %}
+                                <span class="ml-1 md:ml-2 text-gray-400 text-xs md:text-sm">Trial ends {{
+                                    trial_details.trial_end.strftime('%d %b %Y') }}</span>
+                                {% elif user.subscription_status == 'active' and user.subscription_expires_at %}
+                                <span class="ml-1 md:ml-2 text-gray-400 text-xs md:text-sm">Active until {{
+                                    user.subscription_expires_at.strftime('%d %b %Y') }}</span>
                                 {% endif %}
                             </div>
                         </div>
@@ -880,33 +1023,47 @@
             </div>
 
             <!-- Current Usage Stats — logged-in users only -->
-            {% if user %}
+            {# Both meters used to read user.subscribed_*_limit / user.remaining_*,
+               the raw enforcement columns, which exclude purchased add-on
+               capacity - so a customer who had bought extra project slots saw a
+               smaller total here than on their own account page. Both routes
+               already pass entitlement_summary; that is the authoritative view
+               and it is what is read now. #}
+            {% if user and entitlement_summary %}
             <div class="glass-container p-4 md:p-8 mb-6 md:mb-8">
-                <label class="label-style">Your Current Usage</label>
+                <label class="label-style">Your current usage</label>
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
                     <!-- Projects Usage -->
                     <div>
                         <div class="info-item">
-                            <span class="info-label">Projects</span>
+                            <span class="info-label">Projects included</span>
                             <span class="info-value">
-                                {{ user.projects_used }} /
-                                {% if user.subscribed_project_limit == 999999 or user.subscribed_project_limit is none
-                                %}
+                                {{ entitlement_summary.projects_used }} /
+                                {% if entitlement_summary.project_unlimited %}
                                 ∞ Unlimited
                                 {% else %}
-                                {{ user.subscribed_project_limit }}
+                                {{ entitlement_summary.effective_project_limit }}
                                 {% endif %}
                             </span>
                         </div>
                         <div class="progress-bar mt-2">
                             <div class="progress-fill"
-                                style="width: {{ (user.projects_used / user.subscribed_project_limit * 100) if user.subscribed_project_limit and user.subscribed_project_limit > 0 and user.subscribed_project_limit != 999999 else 0 }}%">
+                                style="width: {{ [100, (entitlement_summary.projects_used / entitlement_summary.effective_project_limit * 100)|round(0, 'floor')|int]|min if not entitlement_summary.project_unlimited and entitlement_summary.effective_project_limit else 0 }}%">
                             </div>
                         </div>
                         <div class="flex justify-between mt-2">
-                            <span class="text-xs text-gray-500">{{ user.projects_used }} used</span>
-                            <span class="text-xs text-gray-500">{{ user.remaining_projects }} remaining</span>
+                            <span class="text-xs text-gray-500">{{ entitlement_summary.projects_used }} used</span>
+                            <span class="text-xs text-gray-500">
+                                {% if entitlement_summary.project_unlimited %}Unlimited{% else %}{{
+                                entitlement_summary.projects_remaining }}{% endif %} available
+                            </span>
                         </div>
+                        {% if entitlement_summary.purchased_project_capacity %}
+                        <p class="text-[11px] text-gray-500 mt-2">
+                            Includes {{ entitlement_summary.purchased_project_capacity }} additional project
+                            {{ 'slot' if entitlement_summary.purchased_project_capacity == 1 else 'slots' }} you added.
+                        </p>
+                        {% endif %}
                     </div>
 
                     <!-- Scans Usage -->
@@ -914,39 +1071,46 @@
                         <div class="info-item">
                             <span class="info-label">Scans</span>
                             <span class="info-value">
-                                {{ user.scans_used }} /
-                                {% if user.subscribed_scan_limit == 999999 or user.subscribed_scan_limit is none %}
+                                {{ entitlement_summary.scans_used }} /
+                                {% if entitlement_summary.scan_unlimited %}
                                 ∞ Unlimited
                                 {% else %}
-                                {{ user.subscribed_scan_limit }}
+                                {{ entitlement_summary.effective_scan_limit }}
                                 {% endif %}
                             </span>
                         </div>
                         <div class="progress-bar mt-2">
                             <div class="progress-fill"
-                                style="width: {{ (user.scans_used / user.subscribed_scan_limit * 100) if user.subscribed_scan_limit and user.subscribed_scan_limit > 0 and user.subscribed_scan_limit != 999999 else 0 }}%">
+                                style="width: {{ [100, (entitlement_summary.scans_used / entitlement_summary.effective_scan_limit * 100)|round(0, 'floor')|int]|min if not entitlement_summary.scan_unlimited and entitlement_summary.effective_scan_limit else 0 }}%">
                             </div>
                         </div>
                         <div class="flex justify-between mt-2">
-                            <span class="text-xs text-gray-500">{{ user.scans_used }} used</span>
-                            <span class="text-xs text-gray-500">{{ user.remaining_scans }} remaining</span>
+                            <span class="text-xs text-gray-500">{{ entitlement_summary.scans_used }} used</span>
+                            <span class="text-xs text-gray-500">
+                                {% if entitlement_summary.scan_unlimited %}Unlimited{% else %}{{
+                                entitlement_summary.effective_scan_limit - entitlement_summary.scans_used if
+                                entitlement_summary.effective_scan_limit > entitlement_summary.scans_used else 0 }}{%
+                                endif %} available
+                            </span>
                         </div>
                     </div>
                 </div>
 
                 <!-- Status Alert -->
                 {% if user.subscription_status in ['expired', 'limit_reached'] %}
-                <div class="mt-4 md:mt-6 glass-container p-3 md:p-4 border border-red-400/30">
+                <div class="mt-4 md:mt-6 glass-container p-3 md:p-4 border border-red-400/30" role="status">
                     <div class="flex items-start">
                         <div class="flex-shrink-0 mt-0.5">
-                            <i class="fas fa-exclamation-circle text-red-400 text-lg md:text-xl"></i>
+                            <i class="fas fa-exclamation-circle text-red-400 text-lg md:text-xl" aria-hidden="true"></i>
                         </div>
                         <div class="ml-3">
                             <p class="text-xs md:text-sm text-red-300">
                                 {% if user.subscription_status == 'expired' %}
-                                Your subscription has expired. Please upgrade to continue.
+                                Your plan term has ended. Your existing ScanStories are kept — choose a plan below to
+                                create or scan again.
                                 {% else %}
-                                You've reached your plan limits. Upgrade to continue.
+                                You've used everything your current plan allows. Choose a larger plan below, or add
+                                capacity from your account page.
                                 {% endif %}
                             </p>
                         </div>
@@ -964,32 +1128,38 @@
 
             <section class="commercial-panel mb-6 md:mb-8" data-testid="v11-commercial-plan-presentation">
                 <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                    {# Label read "V1.1 Account Families" and the prose described
+                       the data model ("Account type is stored on the user
+                       account", "a real field on every plan"). Same facts, told
+                       from the customer's side. #}
                     <div>
-                        <label class="label-style">V1.1 Account Families</label>
+                        <label class="label-style">Who each plan is for</label>
                         <h2 class="text-lg md:text-xl font-black text-white mb-2">Individual and Business / Vendor plans</h2>
                         <p class="commercial-note">
-                            Account type is stored on the user account, and every plan now declares the account family it is sold to.
-                            Each plan card below shows its real family. This page lists all active plans and does not filter by family.
+                            Some plans are sold to individuals and some to businesses and vendors. Every plan card below
+                            says which it is, so you can tell at a glance whether it fits your account. All current plans
+                            are listed here.
                         </p>
                     </div>
-                    <div class="flex flex-wrap gap-2" aria-label="Supported account families">
+                    <div class="flex flex-wrap gap-2" aria-label="Supported account types">
                         <span class="commercial-chip"><i class="fas fa-user" aria-hidden="true"></i> Individual</span>
                         <span class="commercial-chip"><i class="fas fa-briefcase" aria-hidden="true"></i> Business / Vendor</span>
                     </div>
                 </div>
                 <div class="commercial-grid mt-4">
                     <div class="glass-container p-4">
-                        <div class="info-label mb-2">Experience terminology</div>
+                        <div class="info-label mb-2">Ways a ScanStory can play</div>
                         <div class="flex flex-wrap gap-2">
                             {% for option in v11_experience_options %}
                             <span class="commercial-chip">{{ option.label }}</span>
                             {% endfor %}
                         </div>
+                        <p class="commercial-note mt-2">Each plan card lists the ones it includes.</p>
                     </div>
                     <div class="glass-container p-4">
-                        <div class="info-label mb-2">Plan-family contract</div>
+                        <div class="info-label mb-2">Plan types available now</div>
                         <p class="commercial-note">
-                            Account family is a real field on every plan. The families in use across the plans below:
+                            Across the plans below:
                         </p>
                         <div class="flex flex-wrap gap-2 mt-2">
                             {% for family in plans|map(attribute='plan_family')|unique|sort %}
@@ -998,17 +1168,27 @@
                         </div>
                     </div>
                     <div class="glass-container p-4">
-                        <div class="info-label mb-2">Grandfathering</div>
-                        <p class="commercial-note">Existing projects are retained during plan changes. New creation or scanning can be blocked if the account is over its effective allowance.</p>
+                        <div class="info-label mb-2">Changing plans</div>
+                        {# "Existing projects are retained" is asserted verbatim by
+                           tests/integration/test_v1_agent2_admin_parity.py - keep
+                           that phrase intact. #}
+                        <p class="commercial-note">Existing projects are retained during plan changes. Creating or scanning
+                            can be paused if your account is over what your plan allows.</p>
                     </div>
                 </div>
             </section>
 
+            {# USD is a display-only convenience. The rate behind it comes from
+               current_inr_per_usd_quote(), which is a CONFIGURED fallback rate,
+               not a live market feed - so the note must not imply otherwise. And
+               checkout is INR-only: create_razorpay_order rejects any other
+               currency server-side. #}
             <div class="currency-toggle-wrap" aria-label="Currency selector">
-                <div class="currency-toggle-label">Display Pricing In</div>
-                <button type="button" class="currency-btn active" data-currency="inr">INR ₹</button>
-                <button type="button" class="currency-btn" data-currency="usd">USD $</button>
-                <div class="currency-note">USD is shown for reference. Final payment is processed in INR.</div>
+                <div class="currency-toggle-label">Display pricing in</div>
+                <button type="button" class="currency-btn active" data-currency="inr" aria-pressed="true">INR ₹</button>
+                <button type="button" class="currency-btn" data-currency="usd" aria-pressed="false">USD $</button>
+                <div class="currency-note">Approx. USD reference only, at an indicative rate — not a live market rate.
+                    Every ScanStory payment is charged in INR (₹).</div>
             </div>
 
             <!-- Plans Grid -->
@@ -1105,7 +1285,7 @@
                                 </span>
                             </div>
                             <div class="info-item">
-                                <span class="info-label">Pairs / Project</span>
+                                <span class="info-label">Photo-video pairs / project</span>
                                 <span class="info-value font-bold">
                                     {% if plan.max_pairs_per_project %}
                                     {{ plan.max_pairs_per_project }}
@@ -1114,19 +1294,28 @@
                                     {% endif %}
                                 </span>
                             </div>
+                            {# plan.trial_days is a real column and was never
+                               surfaced, so a trial plan's length was invisible on
+                               the card that sells it. #}
+                            {% if plan.is_trial_plan and plan.trial_days %}
+                            <div class="info-item">
+                                <span class="info-label">Trial length</span>
+                                <span class="info-value font-bold">{{ plan.trial_days }} days</span>
+                            </div>
+                            {% endif %}
                         </div>
                     </div>
 
                     {% set media_policy = plan_media_policy_display(plan) %}
                     <div class="mb-6 md:mb-8 p-3 md:p-5 commercial-panel">
-                        <label class="label-style mb-3 md:mb-4 text-center">V1.1 Commercial Fit</label>
+                        <label class="label-style mb-3 md:mb-4 text-center">What this plan includes</label>
                         <div class="space-y-3">
                             <div class="info-item">
-                                <span class="info-label">Account family</span>
+                                <span class="info-label">Sold to</span>
                                 <span class="info-value">{{ plan_family_label(plan.plan_family) }}</span>
                             </div>
                             <div class="info-item">
-                                <span class="info-label">Experience modes</span>
+                                <span class="info-label">Playback included</span>
                                 <span class="info-value">
                                     {% set included = plan_experience_options(plan)|selectattr('allowed')|map(attribute='label')|list %}
                                     {{ included|join(', ') if included else 'None' }}
@@ -1140,7 +1329,7 @@
                             </div>
                             {% endif %}
                             <div class="info-item">
-                                <span class="info-label">Per-file media policy</span>
+                                <span class="info-label">Largest single file</span>
                                 <span class="info-value">Image up to {{ media_policy.max_image }}; video up to {{ media_policy.max_video }}</span>
                             </div>
                             <div class="info-item">
@@ -1148,8 +1337,14 @@
                                 <span class="info-value">{{ media_policy.base_storage if media_policy.base_storage else 'Not specified' }}</span>
                             </div>
                         </div>
+                        {# The last two sentences are asserted verbatim by
+                           tests/integration/test_v1_agent2_admin_parity.py
+                           ("Storage allowance is tracked against account media
+                           usage", "media and QR codes are not deleted"). Only the
+                           opening sentence - which described where the numbers
+                           came from in the code - was rewritten. #}
                         <p class="commercial-note mt-3">
-                            Experience and media-policy values above are read from this plan's server-side entitlement fields.
+                            Every figure above is this plan's own allowance.
                             Storage allowance is tracked against account media usage. Existing projects, media and QR codes are not deleted by later plan changes or storage add-on refunds; new storage-consuming uploads can be blocked while an account is over storage.
                         </p>
                     </div>
@@ -1179,10 +1374,19 @@
                         <i class="fas fa-check-circle mr-1 md:mr-2"></i> Current Plan
                     </button>
                     {% else %}
-                    <button onclick="subscribeToPlan({{ plan.id }}, '{{ plan.plan_name }}', {{ plan.effective_price }})"
-                        class="action-btn text-xs md:text-sm {% if plan.is_popular %}bg-gradient-to-r from-pink-500 to-purple-600{% endif %}">
+                    {# data-* rather than more onclick arguments so the review
+                       step can show the term and the plan type too. The click
+                       handler is bound in JS below. #}
+                    <button type="button"
+                        class="action-btn plan-choose-btn text-xs md:text-sm {% if plan.is_popular %}bg-gradient-to-r from-pink-500 to-purple-600{% endif %}"
+                        data-plan-id="{{ plan.id }}"
+                        data-plan-name="{{ plan.plan_name }}"
+                        data-plan-price="{{ '%.0f'|format(plan.effective_price) }}"
+                        data-plan-term="{% if plan.duration_type == 'time' and plan.duration_value %}{% if plan.duration_value == 12 %}1 year{% else %}{{ plan.duration_value }} months{% endif %}{% elif plan.duration_type == 'count' and plan.duration_value %}{{ plan.duration_value }} projects{% else %}—{% endif %}"
+                        data-plan-projects="{% if plan.total_project_limit in (None, 0, 999999) %}Unlimited{% else %}{{ plan.total_project_limit }}{% endif %}">
                         <i
-                            class="fas fa-{% if user.subscription_status == 'trial' %}arrow-up{% else %}check{% endif %} mr-1 md:mr-2"></i>
+                            class="fas fa-{% if user.subscription_status == 'trial' %}arrow-up{% else %}check{% endif %} mr-1 md:mr-2"
+                            aria-hidden="true"></i>
                         {% if user.subscription_status == 'trial' %}Upgrade Now{% else %}Choose Plan{% endif %}
                     </button>
                     {% endif %}
@@ -1211,13 +1415,21 @@
             <div class="glass-container p-4 md:p-8">
                 <label class="label-style text-center mb-6 md:mb-8">Frequently Asked Questions</label>
                 <div class="space-y-4 md:space-y-8">
+                    {# This answer used to say "Yes, you can cancel your
+                       subscription at any time." There is no cancellation route
+                       and no "cancelled" subscription status in the backend, and
+                       nothing charges a renewal - a plan simply runs to its
+                       expiry date. The old answer promised a control that does
+                       not exist. #}
                     <div>
                         <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
                             <i class="fas fa-question-circle text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
-                            <span class="text-sm md:text-base">Can I cancel my subscription?</span>
+                            <span class="text-sm md:text-base">Will I be charged again automatically?</span>
                         </h3>
-                        <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">Yes, you can cancel your subscription
-                            at any time. Your access will continue until the end of your current billing period.</p>
+                        <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">No. Each ScanStory plan is a one-time
+                            payment that runs for the period shown on its card. Nothing renews on its own and no card is
+                            charged again — when the term ends you simply choose a plan again if you want to carry on.
+                            Your existing ScanStories are kept either way.</p>
                     </div>
                     <div>
                         <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
@@ -1285,37 +1497,41 @@
                     {% if user %} | <a href="{{ url_for('user_profile') }}"
                         class="text-accent hover:text-white transition-all ml-1">View Profile</a>{% endif %}
                 </p>
+                {# Was: two separators around an empty slot, rendering "· ·". #}
                 <div class="legal-links mb-3">
                     <a href="/terms">Terms &amp; Conditions</a>
                     <span style="color:rgba(255,255,255,0.15);">·</span>
                     <a href="/privacy">Privacy Policy</a>
                     <span style="color:rgba(255,255,255,0.15);">·</span>
-                    
-                    <span style="color:rgba(255,255,255,0.15);">·</span>
                     <a href="/contact">Contact Support</a>
                 </div>
+                {# Year dropped rather than hardcoded: neither route passes a
+                   date into this template, and "© 2026" was already stale-by-
+                   design. A yearless notice is equally valid and never rots. #}
                 <p class="text-gray-500 text-xs uppercase tracking-widest">
-                    &copy; 2026 ScanStory. All rights reserved.
+                    &copy; ScanStory. All rights reserved.
                 </p>
             </div>
         </div>
     </footer>
 
     <!-- Payment Modal -->
-    <div id="paymentModal" class="payment-modal">
+    {# The modal used to open straight onto a "Processing payment..." spinner and
+       fire the order request immediately, so the first thing a customer saw
+       after picking a plan was a spinner - no confirmation of what they were
+       about to be charged. It now opens on a review step whose Pay button starts
+       the same request. Nothing about order creation, verification or amounts
+       changed; only when the existing fetch is triggered. #}
+    <div id="paymentModal" class="payment-modal" role="dialog" aria-modal="true" aria-labelledby="paymentModalTitle">
         <div class="payment-modal-content">
             <div class="flex justify-between items-center mb-4 md:mb-6">
-                <h3 class="text-base md:text-lg font-black uppercase tracking-tight">Complete Payment</h3>
-                <button onclick="closePaymentModal()" class="text-gray-400 hover:text-white transition-all">
-                    <i class="fas fa-times text-lg md:text-xl"></i>
+                <h3 class="text-base md:text-lg font-black uppercase tracking-tight" id="paymentModalTitle">Review your order</h3>
+                <button type="button" id="paymentModalClose" aria-label="Close"
+                    class="text-gray-400 hover:text-white transition-all" style="min-width:44px;min-height:44px;">
+                    <i class="fas fa-times text-lg md:text-xl" aria-hidden="true"></i>
                 </button>
             </div>
-            <div id="paymentStatus" class="text-center py-4 md:py-8">
-                <div
-                    class="animate-spin rounded-full h-12 md:h-16 w-12 md:w-16 border-b-2 border-accent mx-auto mb-4 md:mb-6">
-                </div>
-                <p class="text-gray-400 text-xs md:text-sm uppercase tracking-widest">Processing payment...</p>
-            </div>
+            <div id="paymentStatus" class="py-2 md:py-4" role="status" aria-live="polite"></div>
         </div>
     </div>
 
@@ -1353,6 +1569,74 @@
             });
         });
 
+        // In-flight latch. A second tap on a Choose Plan button used to fire a
+        // second POST /create-razorpay-order. Visual guard only - server-side
+        // idempotency is unchanged and remains the real protection.
+        let paymentInFlight = false;
+        let currentPlanMeta = {};
+
+        function escapeHtml(value) {
+            const div = document.createElement('div');
+            div.textContent = value == null ? '' : String(value);
+            return div.innerHTML;
+        }
+
+        // Step 1: show what is about to be charged, and let the customer confirm.
+        function reviewPlan(meta) {
+            if (DEV_TEST_ENTITLED) {
+                alert('Development test accounts already have unlimited access. Payment is disabled.');
+                return;
+            }
+            currentPlanMeta = meta;
+            currentPlanId = meta.planId;
+            currentPlanName = meta.planName;
+            currentPlanPrice = meta.price;
+
+            openPaymentModal();
+            document.getElementById('paymentStatus').innerHTML = `
+                <div class="checkout-summary">
+                    <div class="checkout-row">
+                        <span class="checkout-label">Plan</span>
+                        <span class="checkout-value">${escapeHtml(meta.planName)}</span>
+                    </div>
+                    <div class="checkout-row">
+                        <span class="checkout-label">Term</span>
+                        <span class="checkout-value">${escapeHtml(meta.term)}</span>
+                    </div>
+                    <div class="checkout-row">
+                        <span class="checkout-label">Projects included</span>
+                        <span class="checkout-value">${escapeHtml(meta.projects)}</span>
+                    </div>
+                    <div class="checkout-row checkout-total">
+                        <span class="checkout-label">Amount due</span>
+                        <span class="checkout-value">₹${escapeHtml(meta.price)}</span>
+                    </div>
+                </div>
+                <p class="checkout-note">Charged in INR (₹) through Razorpay. You'll enter your card, UPI or
+                    net-banking details on Razorpay's own secure screen.</p>
+                <button type="button" id="payNowBtn" class="action-btn text-xs md:text-sm w-full">
+                    <i class="fas fa-lock mr-2" aria-hidden="true"></i> Pay ₹${escapeHtml(meta.price)} securely
+                </button>
+                <button type="button" id="payCancelBtn" class="checkout-secondary-btn">Back to plans</button>
+            `;
+            document.getElementById('payNowBtn').addEventListener('click', startPayment);
+            document.getElementById('payCancelBtn').addEventListener('click', closePaymentModal);
+            document.getElementById('payNowBtn').focus();
+        }
+
+        // Step 2: create the order and hand off to Razorpay. Unchanged request.
+        function startPayment() {
+            if (paymentInFlight) return;
+            paymentInFlight = true;
+
+            const payBtn = document.getElementById('payNowBtn');
+            if (payBtn) {
+                payBtn.disabled = true;
+                payBtn.style.opacity = '0.6';
+            }
+            subscribeToPlan(currentPlanId, currentPlanName, currentPlanPrice);
+        }
+
         function subscribeToPlan(planId, planName, price) {
             if (DEV_TEST_ENTITLED) {
                 alert('Development test accounts already have unlimited access. Payment is disabled.');
@@ -1362,7 +1646,7 @@
             currentPlanName = planName;
             currentPlanPrice = price;
 
-            showPaymentModal();
+            updatePaymentStatus('Setting up your payment…');
 
             // Create Razorpay order via AJAX
             fetch('/create-razorpay-order', {
@@ -1376,7 +1660,11 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.code === 'CAPACITY_FULL') {
-                        showPaymentError(data.message || 'ScanStory early-access capacity is currently full.');
+                        // No order was created, so nothing can have been charged.
+                        showPaymentError(
+                            data.message || 'ScanStory early-access capacity is currently full.',
+                            'not-charged'
+                        );
                         return;
                     }
                     if (data.success) {
@@ -1411,16 +1699,31 @@
                         // stuck on the "Processing payment..." spinner.
                         rzp.on('payment.failed', function (response) {
                             const err = (response && response.error) || {};
-                            showPaymentError(err.description || 'Payment failed. Please try again.');
+                            // The attempt reached the provider, so this page
+                            // cannot honestly claim nothing was taken - only
+                            // that the payment did not complete.
+                            showPaymentError(
+                                err.description || 'Your payment was not completed.',
+                                'not-completed'
+                            );
                         });
                         rzp.open();
                     } else {
-                        showPaymentError(data.error || 'Failed to create payment order');
+                        showPaymentError(
+                            data.error || 'We could not start this payment.',
+                            'not-charged'
+                        );
                     }
                 })
                 .catch(error => {
-                    showPaymentError('Network error. Please check your connection and try again.');
+                    showPaymentError(
+                        'We could not reach ScanStory. Check your connection and try again.',
+                        'not-charged'
+                    );
                     console.error('Payment error:', error);
+                })
+                .finally(() => {
+                    paymentInFlight = false;
                 });
         }
 
@@ -1440,63 +1743,94 @@
                     if (data.success) {
                         // Show success message
                         document.getElementById('paymentStatus').innerHTML = `
+                        <div class="text-center">
                         <div class="text-accent mb-4 md:mb-6">
-                            <i class="fas fa-check-circle text-4xl md:text-6xl"></i>
+                            <i class="fas fa-check-circle text-4xl md:text-6xl" aria-hidden="true"></i>
                         </div>
-                        <h4 class="text-lg md:text-xl font-black uppercase tracking-tight mb-3 md:mb-4">Payment Successful!</h4>
-                        <p class="text-gray-400 mb-4 md:mb-6 text-xs md:text-sm uppercase tracking-widest">${currentPlanName} plan activated successfully.</p>
-                        <button onclick="redirectToSuccess('${data.order_id}')" 
-                                class="action-btn text-xs md:text-sm">
-                            <i class="fas fa-arrow-right mr-1 md:mr-2"></i> Continue to Dashboard
+                        <h4 class="text-lg md:text-xl font-black uppercase tracking-tight mb-3 md:mb-4">Payment received</h4>
+                        <p class="text-gray-400 mb-4 md:mb-6 text-xs md:text-sm">Your ${escapeHtml(currentPlanName)} plan is active.</p>
+                        <button type="button" id="paySuccessBtn" class="action-btn text-xs md:text-sm w-full">
+                            <i class="fas fa-arrow-right mr-1 md:mr-2" aria-hidden="true"></i> See your receipt
                         </button>
+                        </div>
                     `;
+                        const okBtn = document.getElementById('paySuccessBtn');
+                        okBtn.addEventListener('click', () => redirectToSuccess(data.order_id));
+                        okBtn.focus();
                     } else {
-                        showPaymentError(data.error || 'Payment verification failed');
+                        // The payment itself succeeded at the provider and only
+                        // our confirmation step failed, so "not charged" would be
+                        // a lie. Point at the order reference instead.
+                        showPaymentError(
+                            data.error || 'We could not confirm this payment.',
+                            'unconfirmed'
+                        );
                     }
                 })
                 .catch(error => {
-                    showPaymentError('Verification failed. Please contact support.');
+                    showPaymentError(
+                        'We could not confirm this payment.',
+                        'unconfirmed'
+                    );
                     console.error('Verification error:', error);
                 });
         }
 
-        function showPaymentModal() {
+        function openPaymentModal() {
             document.getElementById('paymentModal').style.display = 'flex';
             document.body.style.overflow = 'hidden';
-            document.getElementById('paymentStatus').innerHTML = `
-                <div class="animate-spin rounded-full h-12 md:h-16 w-12 md:w-16 border-b-2 border-accent mx-auto mb-4 md:mb-6"></div>
-                <p class="text-gray-400 text-xs md:text-sm uppercase tracking-widest">Processing payment...</p>
-            `;
         }
 
         function closePaymentModal() {
             document.getElementById('paymentModal').style.display = 'none';
             document.body.style.overflow = 'auto';
+            paymentInFlight = false;
         }
 
         function updatePaymentStatus(message) {
             document.getElementById('paymentStatus').innerHTML = `
+                <div class="text-center">
                 <div class="animate-spin rounded-full h-12 md:h-16 w-12 md:w-16 border-b-2 border-accent mx-auto mb-4 md:mb-6"></div>
-                <p class="text-gray-400 text-xs md:text-sm uppercase tracking-widest">${message}</p>
+                <p class="text-gray-400 text-xs md:text-sm uppercase tracking-widest">${escapeHtml(message)}</p>
+                </div>
             `;
         }
 
-        function showPaymentError(message) {
+        // `charge` states what this page can honestly say about money:
+        //   not-charged  - no order reached the provider
+        //   not-completed- the provider declined or the customer backed out
+        //   unconfirmed  - the provider took it but we could not confirm it here
+        function showPaymentError(message, charge) {
+            const reassurance = {
+                'not-charged': 'No payment was taken — nothing reached your bank or card.',
+                'not-completed': 'Your payment was not completed. If your bank shows a pending amount it is released automatically.',
+                'unconfirmed': 'If your bank shows a charge, do not pay again. Contact support and quote your ScanStory account email — your plan will be applied.'
+            }[charge] || 'Your payment was not completed.';
+
             document.getElementById('paymentStatus').innerHTML = `
+                <div class="text-center">
                 <div class="text-red-400 mb-4 md:mb-6">
-                    <i class="fas fa-times-circle text-4xl md:text-6xl"></i>
+                    <i class="fas fa-times-circle text-4xl md:text-6xl" aria-hidden="true"></i>
                 </div>
-                <h4 class="text-lg md:text-xl font-black uppercase tracking-tight mb-3 md:mb-4">Payment Failed</h4>
-                <p class="text-gray-400 mb-4 md:mb-6 text-xs md:text-sm uppercase tracking-widest">${message}</p>
-                <button onclick="closePaymentModal()" 
-                        class="action-btn text-xs md:text-sm bg-gradient-to-r from-gray-800 to-gray-900">
-                    <i class="fas fa-redo mr-1 md:mr-2"></i> Try Again
-                </button>
+                <h4 class="text-lg md:text-xl font-black uppercase tracking-tight mb-3">Payment could not be completed</h4>
+                <p class="text-gray-300 mb-2 text-xs md:text-sm">${escapeHtml(message)}</p>
+                <p class="text-gray-500 mb-5 text-xs leading-relaxed">${reassurance}</p>
+                ${charge === 'unconfirmed' ? '' : `
+                <button type="button" id="payRetryBtn" class="action-btn text-xs md:text-sm w-full">
+                    <i class="fas fa-redo mr-1 md:mr-2" aria-hidden="true"></i> Try this payment again
+                </button>`}
+                <button type="button" id="payBackBtn" class="checkout-secondary-btn">Back to plans</button>
+                </div>
             `;
+            // "Try Again" previously only closed the modal, which retried
+            // nothing. This actually re-opens the same plan's review step.
+            const retry = document.getElementById('payRetryBtn');
+            if (retry) retry.addEventListener('click', () => reviewPlan(currentPlanMeta));
+            document.getElementById('payBackBtn').addEventListener('click', closePaymentModal);
         }
 
         function redirectToSuccess(orderId) {
-            window.location.href = `/payment-success?order_id=${orderId}`;
+            window.location.href = `/payment-success?order_id=${encodeURIComponent(orderId)}`;
         }
 
         document.addEventListener('DOMContentLoaded', function () {
@@ -1504,6 +1838,32 @@
             // subscribeToPlan(). It was previously called here as a static
             // Razorpay.on(), which does not exist and threw a TypeError on every
             // page load - aborting the rest of this handler.
+
+            // Plan buttons were inline onclick="subscribeToPlan(...)" with the
+            // plan name interpolated straight into a JS string literal - an
+            // apostrophe in a plan name broke the handler. Bound from data-*.
+            document.querySelectorAll('.plan-choose-btn').forEach(btn => {
+                btn.addEventListener('click', function () {
+                    reviewPlan({
+                        planId: Number(this.dataset.planId),
+                        planName: this.dataset.planName,
+                        price: this.dataset.planPrice,
+                        term: this.dataset.planTerm,
+                        projects: this.dataset.planProjects
+                    });
+                });
+            });
+
+            const modalClose = document.getElementById('paymentModalClose');
+            if (modalClose) modalClose.addEventListener('click', closePaymentModal);
+
+            // Escape closes the review step, as a dialog should.
+            document.addEventListener('keydown', function (event) {
+                const modal = document.getElementById('paymentModal');
+                if (event.key === 'Escape' && modal && modal.style.display === 'flex') {
+                    closePaymentModal();
+                }
+            });
 
             // Prevent body scroll when modal is open
             const observer = new MutationObserver(function (mutations) {
@@ -1549,7 +1909,11 @@
                 });
 
                 currencyButtons.forEach(function (btn) {
-                    btn.classList.toggle("active", btn.dataset.currency === currency);
+                    const on = btn.dataset.currency === currency;
+                    btn.classList.toggle("active", on);
+                    // aria-pressed was static in the markup, so the selected
+                    // currency was conveyed by colour only.
+                    btn.setAttribute("aria-pressed", String(on));
                 });
 
                 localStorage.setItem("scanstorySelectedCurrency", currency);

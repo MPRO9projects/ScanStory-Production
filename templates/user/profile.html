@@ -4,16 +4,17 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
-    <title>ScanStory | Profile</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+    <title>Your account | ScanStory</title>
+    <meta name="robots" content="noindex, nofollow">
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
     <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" />
+    {# design-system.css + font + icons, AFTER tailwind and BEFORE this page's
+       <style> - the order design-system.css documents. It used to be linked
+       first, so Tailwind overrode every .ss-* token this page relies on. #}
+    {% include "user/_head_assets.html" %}
 
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
-
         :root {
             --primary: #ff007a;
             --secondary: #7000ff;
@@ -543,12 +544,16 @@
                 {% if entitlement_summary %}
                 <section class="ss-domain-panel mb-6 md:mb-8 mx-3 md:mx-0" id="entitlementSummary"
                          aria-labelledby="entitlementHeading" data-aos="fade-up" data-aos-delay="90">
+                    {# Heading and note used to read "Effective Entitlement" and
+                       "resolved server-side from your plan, usage and
+                       entitlement ledger" - internal vocabulary on a customer
+                       page. Same numbers, plain words. #}
                     <h2 class="ss-domain-panel-title" id="entitlementHeading">
-                        <i class="fa-solid fa-shield-halved" aria-hidden="true"></i> Effective Entitlement
+                        <i class="fa-solid fa-shield-halved" aria-hidden="true"></i> What your plan includes
                     </h2>
                     <p class="ss-domain-note" style="margin-top:0;">
-                        This read-only summary is resolved server-side from your plan, usage and entitlement ledger.
-                        Nothing on this page recalculates an allowance.
+                        Everything here comes from your current plan and what you have added to it. These are the
+                        allowances your account is actually held to.
                     </p>
                     <ul class="ss-slots" data-testid="effective-entitlement-summary" role="list">
                         <li>
@@ -725,96 +730,119 @@
 
                         <div class="space-y-3 md:space-y-4">
                             <!-- Current Plan -->
+                            {# The four states below are the WHOLE vocabulary the
+                               backend has for User.subscription_status: trial,
+                               active, expired, limit_reached (models.py). There is
+                               no "cancelled" and no "payment pending" state, so
+                               none is shown. "Limit Reached" was previously
+                               printed straight from the column. #}
                             <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4">
-                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">Current Plan</div>
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">Current plan</div>
                                 <div class="font-bold md:font-black mt-1 text-base md:text-lg">{{ user.current_plan_name or "Free Trial" }}</div>
                                 <div class="mt-1 md:mt-2">
-                                    <span class="status-badge text-xs md:text-sm" id="subscriptionStatusBadge">
-                                        {{ user.subscription_status|replace('_', ' ')|title }}
+                                    <span id="subscriptionStatusBadge"
+                                        class="status-badge text-xs md:text-sm {% if user.subscription_status == 'active' %}status-active{% elif user.subscription_status == 'trial' %}status-trial{% elif user.subscription_status == 'expired' %}status-expired{% elif user.subscription_status == 'limit_reached' %}status-limit{% endif %}">
+                                        {% if user.subscription_status == 'trial' %}Trial
+                                        {%- elif user.subscription_status == 'active' %}Active
+                                        {%- elif user.subscription_status == 'expired' %}Expired
+                                        {%- elif user.subscription_status == 'limit_reached' %}Plan limit reached
+                                        {%- else %}{{ user.subscription_status|replace('_', ' ')|title }}{% endif %}
                                     </span>
                                 </div>
+                                <p class="text-white/50 text-xs mt-2 leading-relaxed">
+                                    {% if user.subscription_status == 'trial' %}
+                                    You're on the free trial. Choose a plan before it ends to keep creating.
+                                    {% elif user.subscription_status == 'active' %}
+                                    Your plan is active. ScanStory plans do not auto-renew — pick a plan again when this
+                                    term ends.
+                                    {% elif user.subscription_status == 'expired' %}
+                                    Your plan term has ended. Your existing ScanStories are kept; choose a plan to create
+                                    or scan again.
+                                    {% elif user.subscription_status == 'limit_reached' %}
+                                    You've used everything this plan allows. Add capacity or move to a larger plan to
+                                    carry on.
+                                    {% endif %}
+                                </p>
                             </div>
 
                             <!-- Plan Duration -->
                             <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4">
-                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">Plan Duration</div>
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest">Plan term</div>
                                 <div class="font-bold md:font-black mt-1 text-sm md:text-base">{{ user.plan_duration or "7 Days Trial" }}</div>
                                 {% if user.subscription_status == 'active' and user.subscription_expires_at %}
                                 <div class="text-green-400 text-xs mt-1 md:mt-2">
-                                    <i class="far fa-calendar-alt mr-1"></i>
-                                    Expires: {{ user.subscription_expires_at.strftime('%d %b %Y') }}
+                                    <i class="far fa-calendar-alt mr-1" aria-hidden="true"></i>
+                                    Active until {{ user.subscription_expires_at.strftime('%d %b %Y') }}
                                 </div>
                                 {% elif user.subscription_status == 'trial' and trial %}
                                 <div class="text-yellow-400 text-xs mt-1 md:mt-2">
-                                    <i class="fas fa-clock mr-1"></i>
-                                    Trial ends: {{ trial.trial_end.strftime('%d %b %Y') }}
+                                    <i class="fas fa-clock mr-1" aria-hidden="true"></i>
+                                    Trial ends {{ trial.trial_end.strftime('%d %b %Y') }}
+                                </div>
+                                {% elif user.subscription_status == 'expired' and user.subscription_expires_at %}
+                                <div class="text-red-300 text-xs mt-1 md:mt-2">
+                                    <i class="far fa-calendar-xmark mr-1" aria-hidden="true"></i>
+                                    Ended {{ user.subscription_expires_at.strftime('%d %b %Y') }}
                                 </div>
                                 {% endif %}
                             </div>
 
                             <!-- Usage Statistics -->
+                            {# These two meters used to read user.subscribed_*_limit
+                               and user.remaining_* directly - the raw enforcement
+                               columns, which exclude purchased add-on capacity.
+                               That put a DIFFERENT project total on this card than
+                               the Project Slots panel higher up the same page.
+                               Both now read the one authoritative summary the
+                               route already passes in. #}
                             <div class="glass rounded-xl md:rounded-2xl p-3 md:p-4">
-                                <div class="text-white/60 text-xs uppercase font-black tracking-widest mb-2 md:mb-3">Usage Statistics</div>
-                                
+                                <div class="text-white/60 text-xs uppercase font-black tracking-widest mb-2 md:mb-3">Usage this plan term</div>
+
                                 <!-- Projects -->
                                 <div class="mb-3 md:mb-4">
                                     <div class="flex justify-between text-xs md:text-sm mb-1">
-                                        <span class="text-white/70">Story</span>
+                                        <span class="text-white/70">Stories</span>
                                         <span class="font-bold">
-                                            {{ user.projects_used }} /
-                                            {% if user.subscribed_project_limit == 999999 or user.subscribed_project_limit == 0 %}
-                                            ∞
-                                            {% else %}
-                                            {{ user.subscribed_project_limit }}
-                                            {% endif %}
+                                            {{ capacity.projects_used }} /
+                                            {% if capacity.unlimited %}∞{% else %}{{ capacity.effective_project_limit }}{% endif %}
                                         </span>
                                     </div>
                                     <div class="progress-bar">
-                                        <div class="progress-fill projects-progress" 
-                                             style="width: {{ (user.projects_used / user.subscribed_project_limit * 100) if user.subscribed_project_limit is not none and user.subscribed_project_limit > 0 and user.subscribed_project_limit != 999999 else 0 }}%"></div>
+                                        <div class="progress-fill projects-progress"
+                                             style="width: {{ [100, (capacity.projects_used / capacity.effective_project_limit * 100)|round(0, 'floor')|int]|min if not capacity.unlimited and capacity.effective_project_limit else 0 }}%"></div>
                                     </div>
                                     <div class="flex justify-between text-xs text-white/50 mt-1">
-                                        <span>{{ user.projects_used }} used</span>
+                                        <span>{{ capacity.projects_used }} used</span>
                                         <span>
-                                            {% if user.subscribed_project_limit == 999999 or user.subscribed_project_limit == 0 %}
-                                            Unlimited
-                                            {% else %}
-                                            {{ user.remaining_projects }}
-                                            {% endif %}
+                                            {% if capacity.unlimited %}Unlimited{% else %}{{ capacity.projects_remaining }}{% endif %}
                                             remaining
                                         </span>
                                     </div>
                                 </div>
-                                
+
                                 <!-- Scans -->
+                                {% if entitlement_summary %}
                                 <div>
                                     <div class="flex justify-between text-xs md:text-sm mb-1">
                                         <span class="text-white/70">Scans</span>
                                         <span class="font-bold">
-                                            {{ user.scans_used }} /
-                                            {% if user.subscribed_scan_limit == 999999 or user.subscribed_scan_limit == 0 %}
-                                            ∞
-                                            {% else %}
-                                            {{ user.subscribed_scan_limit }}
-                                            {% endif %}
+                                            {{ entitlement_summary.scans_used }} /
+                                            {% if entitlement_summary.scan_unlimited %}∞{% else %}{{ entitlement_summary.effective_scan_limit }}{% endif %}
                                         </span>
                                     </div>
                                     <div class="progress-bar">
-                                        <div class="progress-fill scans-progress" 
-                                             style="width: {{ (user.scans_used / user.subscribed_scan_limit * 100) if user.subscribed_scan_limit is not none and user.subscribed_scan_limit > 0 and user.subscribed_scan_limit != 999999 else 0 }}%"></div>
+                                        <div class="progress-fill scans-progress"
+                                             style="width: {{ [100, (entitlement_summary.scans_used / entitlement_summary.effective_scan_limit * 100)|round(0, 'floor')|int]|min if not entitlement_summary.scan_unlimited and entitlement_summary.effective_scan_limit else 0 }}%"></div>
                                     </div>
                                     <div class="flex justify-between text-xs text-white/50 mt-1">
-                                        <span>{{ user.scans_used }} used</span>
+                                        <span>{{ entitlement_summary.scans_used }} used</span>
                                         <span>
-                                            {% if user.subscribed_scan_limit == 999999 or user.subscribed_scan_limit == 0 %}
-                                            Unlimited
-                                            {% else %}
-                                            {{ user.remaining_scans }}
-                                            {% endif %}
+                                            {% if entitlement_summary.scan_unlimited %}Unlimited{% else %}{{ entitlement_summary.effective_scan_limit - entitlement_summary.scans_used if entitlement_summary.effective_scan_limit > entitlement_summary.scans_used else 0 }}{% endif %}
                                             remaining
                                         </span>
                                     </div>
                                 </div>
+                                {% endif %}
                             </div>
 
                             <!-- Action Buttons -->
@@ -898,27 +926,12 @@
             delay: 50
         });
         
-        // Update status badge colors based on subscription status
+        // The status-badge colour class used to be applied here, by interpolating
+        // the raw subscription_status enum into a JS string literal and running a
+        // four-way if-chain on DOMContentLoaded. It is now set directly on the
+        // span in the markup, which paints on first render instead of after the
+        // script, and keeps the raw enum out of the delivered document.
         document.addEventListener('DOMContentLoaded', function() {
-            const statusElement = document.getElementById('subscriptionStatusBadge');
-            if (statusElement) {
-                const status = '{{ user.subscription_status }}'.toLowerCase();
-                
-                // Remove any existing status classes
-                statusElement.classList.remove('status-active', 'status-trial', 'status-expired', 'status-limit');
-                
-                // Add appropriate class
-                if (status === 'active') {
-                    statusElement.classList.add('status-active');
-                } else if (status === 'trial') {
-                    statusElement.classList.add('status-trial');
-                } else if (status === 'expired') {
-                    statusElement.classList.add('status-expired');
-                } else if (status === 'limit_reached') {
-                    statusElement.classList.add('status-limit');
-                }
-            }
-            
             // Fix for mobile touch scrolling
             let touchStartY = 0;
             let touchEndY = 0;

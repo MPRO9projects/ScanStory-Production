@@ -3,16 +3,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ScanStory | Payment Successful</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
-    
+    <title>Payment received | ScanStory</title>
+    <meta name="robots" content="noindex, nofollow">
+
     <!-- External Libraries -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
     <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
-    
+    {# design-system.css + font + icons, AFTER tailwind and BEFORE this page's
+       <style> - the order design-system.css documents. #}
+    {% include "user/_head_assets.html" %}
+
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
 
         :root {
             --primary: #ff007a;
@@ -249,6 +250,26 @@
             padding: 6px 12px;
             border-radius: 10px;
             border: 1px solid rgba(0, 212, 255, 0.1);
+            /* Order ids and long emails must wrap inside the card at 320px
+               rather than widening the page into a horizontal scroll. */
+            display: inline-block;
+            max-width: 100%;
+            overflow-wrap: anywhere;
+        }
+
+        .ss-wrap-anywhere {
+            overflow-wrap: anywhere;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
         }
     </style>
 </head>
@@ -329,11 +350,15 @@
                 <div class="mb-6">
                     <i class="fas fa-check-circle text-6xl md:text-7xl text-white mb-4"></i>
                 </div>
+                {# The route only renders this page for an order whose status is
+                   already "success", i.e. after activate_payment() has run and
+                   the plan is genuinely applied - so stating it outright is
+                   accurate, not optimistic. #}
                 <h1 class="text-4xl md:text-6xl font-black uppercase italic mb-4">
-                    Payment <span class="animated-gradient-text">Success</span>
+                    Payment <span class="animated-gradient-text">received</span>
                 </h1>
                 <p class="text-xl text-white/80">
-                    Your <span class="font-bold text-yellow-300">{{ plan.plan_name }}</span> plan is now active
+                    Your <span class="font-bold text-yellow-300">{{ plan.plan_name }}</span> plan is active now
                 </p>
             </div>
         </div>
@@ -357,32 +382,64 @@
                         <span class="text-white font-bold text-lg">{{ plan.plan_name }}</span>
                     </div>
                     
+                    {# Float column: printed raw this read "₹1999.0". #}
                     <div class="flex items-center justify-between">
-                        <span class="text-white/70">Amount</span>
-                        <span class="text-white font-bold text-lg">₹{{ order.total_amount }}</span>
+                        <span class="text-white/70">Amount paid</span>
+                        <span class="text-white font-bold text-lg">₹{{ '%.2f'|format(order.total_amount or 0) }}</span>
                     </div>
-                    
+
+                    {# subscription_start / subscription_end / payment_at are all
+                       nullable columns and were dereferenced with .strftime()
+                       unguarded - a NULL on any of them turned this page into a
+                       500 for a customer who had just paid. #}
+                    {% if order.subscription_start and order.subscription_end %}
                     <div class="flex items-center justify-between">
-                        <span class="text-white/70">Validity</span>
+                        <span class="text-white/70">Active</span>
                         <span class="text-white font-bold">
                             {{ order.subscription_start.strftime('%d %b %Y') }} → {{ order.subscription_end.strftime('%d %b %Y') }}
                         </span>
                     </div>
-                    
+                    {% elif order.subscription_end %}
+                    <div class="flex items-center justify-between">
+                        <span class="text-white/70">Active until</span>
+                        <span class="text-white font-bold">{{ order.subscription_end.strftime('%d %b %Y') }}</span>
+                    </div>
+                    {% endif %}
+
                     <div class="flex items-center justify-between">
                         <span class="text-white/70">Status</span>
-                        <span class="status-success">{{ order.status|upper }}</span>
+                        <span class="status-success">Payment received</span>
                     </div>
                 </div>
             </div>
 
             <!-- Your New Limits -->
+            {#
+              Two defects fixed in this block.
+
+              1. `if plan.total_project_limit > 0` raises TypeError in Jinja when
+                 the column is NULL (an unlimited plan), which 500'd this page
+                 for exactly the customers who had bought the biggest plan.
+              2. 999999 is this codebase's "unlimited" sentinel (see
+                 _limit_display_value in app.py) and was printed literally, so an
+                 unlimited plan read "0 / 999999".
+
+              The route does not pass entitlement_summary here, so these are the
+              PLAN's own included figures - labelled as such - with usage read
+              off the user row. No allowance is derived on this page.
+            #}
+            {%- macro limit_display(value) -%}
+            {%- if value in (None, 0, 999999) -%}Unlimited{%- else -%}{{ value }}{%- endif -%}
+            {%- endmacro -%}
+            {%- macro meter_width(used, limit) -%}
+            {%- if limit in (None, 0, 999999) -%}0{%- else -%}{{ [100, (used / limit * 100)|round(0, 'floor')|int]|min }}{%- endif -%}
+            {%- endmacro -%}
             <div class="glass info-card card" data-aos="fade-up" data-aos-delay="150">
                 <div class="flex items-center justify-between mb-6">
                     <h2 class="text-xl font-black uppercase tracking-widest text-[12px] text-white/70">
-                        <i class="fas fa-tachometer-alt text-cyan-400 mr-2"></i> Your New Limits
+                        <i class="fas fa-tachometer-alt text-cyan-400 mr-2" aria-hidden="true"></i> What this plan includes
                     </h2>
-                    <i class="fa-solid fa-bolt text-yellow-400"></i>
+                    <i class="fa-solid fa-bolt text-yellow-400" aria-hidden="true"></i>
                 </div>
 
                 <div class="space-y-6">
@@ -390,41 +447,45 @@
                     <div>
                         <div class="flex items-center justify-between mb-2">
                             <div class="flex items-center gap-2">
-                                <i class="fas fa-cubes text-purple-400"></i>
-                                <span class="text-white/70">Projects</span>
+                                <i class="fas fa-cubes text-purple-400" aria-hidden="true"></i>
+                                <span class="text-white/70">Projects included</span>
                             </div>
-                            <span class="text-white font-bold">{{ user.projects_used }} / {{ plan.total_project_limit }}</span>
+                            <span class="text-white font-bold">{{ user.projects_used }} / {{ limit_display(plan.total_project_limit) }}</span>
                         </div>
-                        
+
                         <div class="progress-bar">
-                            <div class="progress-fill projects-progress" 
-                                 style="width: {{ (user.projects_used / plan.total_project_limit * 100) if plan.total_project_limit > 0 else 0 }}%"></div>
+                            <div class="progress-fill projects-progress"
+                                 style="width: {{ meter_width(user.projects_used, plan.total_project_limit) }}%"></div>
                         </div>
-                        
+
                         <div class="flex items-center justify-between mt-2">
                             <span class="text-white/70 text-xs">Used</span>
-                            <span class="text-white font-bold text-sm">{{ user.remaining_projects }} Remaining</span>
+                            <span class="text-white font-bold text-sm">
+                                {% if plan.total_project_limit in (None, 0, 999999) %}Unlimited available{% else %}{{ user.remaining_projects }} available{% endif %}
+                            </span>
                         </div>
                     </div>
-                    
+
                     <!-- Scans -->
                     <div>
                         <div class="flex items-center justify-between mb-2">
                             <div class="flex items-center gap-2">
-                                <i class="fas fa-qrcode text-cyan-400"></i>
-                                <span class="text-white/70">Scans</span>
+                                <i class="fas fa-qrcode text-cyan-400" aria-hidden="true"></i>
+                                <span class="text-white/70">Scans included</span>
                             </div>
-                            <span class="text-white font-bold">{{ user.scans_used }} / {{ plan.total_scan_limit }}</span>
+                            <span class="text-white font-bold">{{ user.scans_used }} / {{ limit_display(plan.total_scan_limit) }}</span>
                         </div>
-                        
+
                         <div class="progress-bar">
-                            <div class="progress-fill scans-progress" 
-                                 style="width: {{ (user.scans_used / plan.total_scan_limit * 100) if plan.total_scan_limit > 0 else 0 }}%"></div>
+                            <div class="progress-fill scans-progress"
+                                 style="width: {{ meter_width(user.scans_used, plan.total_scan_limit) }}%"></div>
                         </div>
-                        
+
                         <div class="flex items-center justify-between mt-2">
                             <span class="text-white/70 text-xs">Used</span>
-                            <span class="text-white font-bold text-sm">{{ user.remaining_scans }} Remaining</span>
+                            <span class="text-white font-bold text-sm">
+                                {% if plan.total_scan_limit in (None, 0, 999999) %}Unlimited available{% else %}{{ user.remaining_scans }} available{% endif %}
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -438,6 +499,11 @@
                     <i class="fas fa-receipt text-green-400 mr-2"></i> Payment Details
                 </h2>
                 
+                {# Order ID is the reference support actually looks an order up by,
+                   and it is the one a customer should quote. The Razorpay payment
+                   id was printed twice on this page (here and again in the
+                   footer) - it is provider-internal and once is more than
+                   enough. #}
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
                     <div class="space-y-4">
                         <div>
@@ -445,19 +511,21 @@
                             <span class="transaction-id">{{ order.order_id }}</span>
                         </div>
                         <div>
-                            <span class="text-white/50 text-xs uppercase tracking-widest block mb-2">Transaction ID</span>
-                            <span class="transaction-id">{{ order.razorpay_payment_id }}</span>
+                            <span class="text-white/50 text-xs uppercase tracking-widest block mb-2">Currency</span>
+                            <span class="text-white font-bold">INR (₹)</span>
                         </div>
                     </div>
-                    
+
                     <div class="space-y-4">
+                        {% if order.payment_at %}
                         <div>
-                            <span class="text-white/50 text-xs uppercase tracking-widest block mb-2">Payment Date</span>
+                            <span class="text-white/50 text-xs uppercase tracking-widest block mb-2">Payment date</span>
                             <span class="text-white font-bold">{{ order.payment_at.strftime('%d %b %Y, %I:%M %p') }}</span>
                         </div>
+                        {% endif %}
                         <div>
-                            <span class="text-white/50 text-xs uppercase tracking-widest block mb-2">Payment Method</span>
-                            <span class="text-white font-bold">{{ order.payment_method|default('Online Payment')|title }}</span>
+                            <span class="text-white/50 text-xs uppercase tracking-widest block mb-2">Paid using</span>
+                            <span class="text-white font-bold">{{ order.payment_method|default('Online payment', true)|title }}</span>
                         </div>
                     </div>
                 </div>
@@ -467,13 +535,14 @@
                     <div class="flex items-start">
                         <i class="fas fa-info-circle text-blue-400 text-xl mt-1 mr-4"></i>
                         <div>
-                            <h4 class="text-blue-300 font-bold mb-2">Receipt Sent</h4>
+                            <h4 class="text-blue-300 font-bold mb-2">Receipt on its way</h4>
                             <p class="text-white/70 text-sm">
-                                A detailed receipt has been sent to your email address: 
-                                <span class="font-bold text-white">{{ user.email }}</span>
+                                We're emailing your receipt to
+                                <span class="font-bold text-white ss-wrap-anywhere">{{ user.email }}</span>.
                             </p>
                             <p class="text-white/50 text-xs mt-2">
-                                Keep this information for your records. Contact support if you need assistance.
+                                Keep your Order ID above for your records — quote it if you ever need to ask us about
+                                this payment.
                             </p>
                         </div>
                     </div>
@@ -518,8 +587,10 @@
                 </p>
             </div>
             
+            {# Was a second copy of the Razorpay payment id. The Order ID above
+               is the reference support needs. #}
             <div class="transaction-id inline-block">
-                TXN: {{ order.razorpay_payment_id }}
+                Order {{ order.order_id }}
             </div>
         </div>
 
@@ -533,7 +604,7 @@
                     &copy; {{ order.payment_at.year if order.payment_at else '' }} ScanStory AR Platform
                 </p>
                 <p class="text-white/20 text-[10px] uppercase tracking-widest">
-                    Transaction Completed Successfully
+                    Payment received
                 </p>
             </div>
         </div>
