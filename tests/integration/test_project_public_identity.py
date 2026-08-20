@@ -1,7 +1,11 @@
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 from werkzeug.security import generate_password_hash
+
+
+TEMPLATES = Path("templates")
 
 
 def _make_user(app_module, db_session, email, *, limit=5, used=0):
@@ -108,6 +112,60 @@ def test_canonical_qr_url_contains_no_owner_identity(app_module, db_session, nor
     assert "user_name=" not in scanner_url
     assert "admin_id=" not in scanner_url
     assert "admin_name=" not in scanner_url
+
+
+def test_project_unavailable_page_uses_safe_public_recovery_copy(app_module, client, db_session, normal_user):
+    project = _make_live_project(app_module, db_session, normal_user)
+    project.is_active = False
+    db_session.commit()
+
+    response = client.get(f"/scanner/{project.id}")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 404
+    assert "This ScanStory is not available from this link right now" in html
+    assert 'href="/contact"' in html
+    assert "/dashboard" not in html
+    for leaked in ("project.id", "owner_user_id", "public_key", "database", "scanner_runtime"):
+        assert leaked not in html
+
+
+def test_public_error_pages_preserve_status_and_hide_internals(client):
+    response = client.get("/definitely-not-a-route")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 404
+    assert "We couldn&#39;t find that page." in html or "We couldn't find that page." in html
+    assert 'data-error-code="404"' in html
+    assert 'href="/contact"' in html
+    for leaked in ("Traceback", "Exception", "sqlite", "psycopg", "filesystem", "worker"):
+        assert leaked not in html
+
+
+def test_contact_template_preserves_backend_hooks_and_safe_status_copy():
+    html = (TEMPLATES / "user/contact.html").read_text(encoding="utf-8")
+
+    assert "fetch('/send-contact-email'" in html
+    assert 'name="csrf_token"' in html
+    assert 'name="g-recaptcha-response"' in html
+    assert 'id="contactFormStatus"' in html
+    assert "window.ssToast" in html
+    assert "what you were trying to do and what happened" in html
+    for leaked in ("SMTP", "Redis", "worker", "queue error"):
+        assert leaked not in html
+
+
+def test_legal_templates_keep_readable_accessibility_shell_without_aos_dependency():
+    privacy = (TEMPLATES / "user/privacy_policy.html").read_text(encoding="utf-8")
+    terms = (TEMPLATES / "user/terms.html").read_text(encoding="utf-8")
+
+    for html in (privacy, terms):
+        assert 'class="ss-user-scope"' in html
+        assert 'class="ss-skip-link"' in html
+        assert 'id="main-content"' in html
+        assert "<h1" in html
+        assert "<h2" in html
+    assert "unpkg.com/aos" not in privacy
 
 
 def _login(client, user):

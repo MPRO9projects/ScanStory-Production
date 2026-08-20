@@ -330,6 +330,54 @@ def test_claim_display_uses_review_wording_never_take_ownership(
     assert "PENDING_ADMIN_REVIEW" not in body
 
 
+def test_ownership_center_uses_shared_accessible_confirmations():
+    html = read_template("user/ownership.html")
+    assert "js/ss-ui.js" in html
+    assert 'data-ss-confirm-title="Accept this handover?"' in html
+    assert 'data-ss-confirm-title="Withdraw this handover?"' in html
+    assert "claimForm.setAttribute('data-ss-confirm-title', 'File ownership review request?');" in html
+    assert "window.confirm" not in html
+    assert "onsubmit=\"return confirm" not in html
+
+
+def test_ownership_center_preserves_all_real_post_actions():
+    html = read_template("user/ownership.html")
+    for marker in (
+        "/ownership/transfers/{{ transfer.id }}/retry",
+        "/ownership/transfers/{{ transfer.id }}/accept",
+        "reject_ownership_transfer_route",
+        "cancel_ownership_transfer_route",
+        "start_project_ownership_transfer",
+        "respond_ownership_claim_route",
+        "cancel_ownership_claim_route",
+        'name="retain_vendor_management"',
+        'name="recipient_email"',
+        'evidence.name = \'evidence_summary\';',
+        'name="csrf_token"',
+    ):
+        assert marker in html
+
+
+def test_ownership_center_copy_keeps_roles_distinct_and_public_terms_clean(client, login_user):
+    body = client.get("/ownership").get_data(as_text=True)
+    for label in (
+        "Handovers waiting for you",
+        "Handovers you started",
+        "Ownership review requests about your ScanStories",
+        "Your ownership review requests",
+    ):
+        assert label in body
+    for leaked in (
+        "owner_user_id",
+        "beneficiary_user_id",
+        "manager_vendor_user_id",
+        "pending_capacity",
+        "effective entitlement",
+        "database",
+    ):
+        assert leaked not in body.lower()
+
+
 def test_project_card_badges_use_labels_not_enums(app_module, client, db_session, login_user, project_with_pair):
     project, _pair = project_with_pair
     recipient = make_user(app_module, db_session, "recipient-card@example.com")

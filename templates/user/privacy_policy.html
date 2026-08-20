@@ -12,8 +12,6 @@
 
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
-
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -314,6 +312,7 @@
 </head>
 
 <body class="ss-user-scope">
+    <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     <div class="bg-gradient"></div>
     <div class="noise"></div>
 
@@ -327,7 +326,7 @@
         </a>
     </nav>
 
-    <main class="main-content">
+    <main class="main-content" id="main-content" tabindex="-1">
 
         <!-- Header -->
         <div class="terms-header" data-aos="fade-up" data-aos-duration="1000">
@@ -528,10 +527,5 @@
         </div>
 
     </main>
-
-    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
-    <script>
-        AOS.init({ duration: 800, easing: 'ease-out-cubic', once: true });
-    </script>
 </body>
 </html>

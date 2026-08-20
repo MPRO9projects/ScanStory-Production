@@ -9,25 +9,31 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>ScanStory Ownership</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+  {% include "user/_head_assets.html" %}
   <link rel="icon" type="image/png" href="{{ url_for('static', filename='assets/logos/logo.png') }}">
   <style>
     :root { color-scheme: dark; }
     * { box-sizing: border-box; }
-    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px;
-           background: radial-gradient(circle at top left, rgba(255,0,122,0.12), transparent 30%),
-                       radial-gradient(circle at top right, rgba(0,212,255,0.1), transparent 28%),
-                       #0b0b14; color: #f3f3f7; line-height: 1.55; }
+    body { font-family: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0; padding: 24px;
+           background: radial-gradient(circle at top left, rgba(255,0,122,0.10), transparent 30%),
+                       radial-gradient(circle at top right, rgba(0,212,255,0.08), transparent 28%),
+                       var(--ss-bg, #050505); color: #f3f3f7; line-height: 1.55; overflow-x: hidden; }
     main { max-width: 1080px; margin: 0 auto; }
     h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); margin: 0 0 4px; letter-spacing: 0; }
     h2 { font-size: 1.1rem; margin: 32px 0 8px; }
     p.lead { color: #a5a5b8; margin: 0 0 24px; }
-    section { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
-              border-radius: 12px; padding: 16px; margin-bottom: 16px; }
-    .row { border-top: 1px solid rgba(255,255,255,0.08); padding: 12px 0; }
+    .ownership-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 0 0 24px; }
+    .summary-card, section { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
+              border-radius: 12px; padding: 16px; margin-bottom: 16px; min-width: 0; }
+    .summary-card strong { display: block; font-size: clamp(1.5rem, 6vw, 2rem); line-height: 1; color: #fff; }
+    .summary-card span { color: #9a9ab0; font-size: 0.82rem; }
+    .section-heading { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 10px; margin-top: 30px; }
+    .section-heading h2 { margin: 0; }
+    .section-heading p { margin: 0; max-width: 56ch; }
+    .row { border-top: 1px solid rgba(255,255,255,0.08); padding: 14px 0; min-width: 0; }
     .row:first-of-type { border-top: 0; }
     .muted { color: #9a9ab0; font-size: 0.85rem; }
-    .status { display: inline-block; font-size: 0.75rem; padding: 2px 8px; border-radius: 999px;
+    .status { display: inline-flex; align-items: center; min-height: 26px; font-size: 0.75rem; padding: 2px 8px; border-radius: 999px;
               background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.16); }
     .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
     form { display: inline-block; margin: 8px 8px 0 0; }
@@ -53,15 +59,20 @@
     a { color: #00d4ff; }
     .top-links { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
     .top-links a { min-height: 40px; display: inline-flex; align-items: center; }
+    strong { overflow-wrap: anywhere; }
     @media (max-width: 620px) {
       body { padding: 14px; }
       section { padding: 14px; }
+      .ownership-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .handover-form { grid-template-columns: 1fr; }
       .actions, .actions form, button { width: 100%; }
     }
+    @media (max-width: 390px) {
+      .ownership-summary { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
-<body>
+<body class="ss-user-scope">
     <a class="ss-skip-link" href="#main-content">Skip to main content</a>
 <main id="main-content" tabindex="-1">
   <nav class="top-links" aria-label="Account">
@@ -76,13 +87,23 @@
     <a href="{{ url_for('projects_page') }}">Back to my ScanStories</a>
   </p>
 
+  <div class="ownership-summary" aria-label="Ownership workflow summary">
+    <div class="summary-card"><strong>{{ incoming|length }}</strong><span>Waiting for you</span></div>
+    <div class="summary-card"><strong>{{ outgoing|length }}</strong><span>Started by you</span></div>
+    <div class="summary-card"><strong>{{ incoming_claims|length }}</strong><span>Requests to answer</span></div>
+    <div class="summary-card"><strong>{{ my_claims|length }}</strong><span>Your review requests</span></div>
+  </div>
+
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% for category, message in messages %}
       <div class="flash {{ 'error' if category == 'error' else 'success' }}">{{ message }}</div>
     {% endfor %}
   {% endwith %}
 
-  <h2>Handovers waiting for you</h2>
+  <div class="section-heading">
+    <h2>Handovers waiting for you</h2>
+    <p class="muted">Accept only when this should become yours. Capacity is checked before ownership moves.</p>
+  </div>
   <section>
     {% if not incoming %}
       <p class="muted">Nothing is waiting for your acceptance.</p>
@@ -122,16 +143,16 @@
         {% endif %}
         <div class="actions">
         {% if transfer.status == 'PENDING_CAPACITY' %}
-        <form method="POST" action="/ownership/transfers/{{ transfer.id }}/retry" onsubmit="return confirm('Retry this handover after freeing capacity? Ownership only changes if the backend checks pass.');">
+        <form method="POST" action="/ownership/transfers/{{ transfer.id }}/retry" data-ss-confirm-title="Retry capacity check?" data-ss-confirm="Retry this handover after freeing capacity? Ownership only changes if the backend checks pass." data-ss-confirm-label="Retry check">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit">Retry capacity check</button>
         </form>
         {% elif transfer.status == 'PENDING_ACCEPTANCE' %}
-        <form method="POST" action="/ownership/transfers/{{ transfer.id }}/accept" onsubmit="return confirm('Accept this handover? Ownership moves only if account capacity checks pass.');">
+        <form method="POST" action="/ownership/transfers/{{ transfer.id }}/accept" data-ss-confirm-title="Accept this handover?" data-ss-confirm="Ownership moves only if project and storage capacity checks pass. The QR code, media and scanner link stay the same." data-ss-confirm-label="Accept handover">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit">Accept handover</button>
         </form>
-        <form method="POST" action="{{ url_for('reject_ownership_transfer_route', transfer_id=transfer.id) }}" onsubmit="return confirm('Decline this handover? Ownership will remain with the current owner.');">
+        <form method="POST" action="{{ url_for('reject_ownership_transfer_route', transfer_id=transfer.id) }}" data-ss-confirm-title="Decline this handover?" data-ss-confirm="Ownership will remain with the current owner. This does not delete media, QR codes or project history." data-ss-confirm-label="Decline handover">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="reason" value="Recipient declined from ownership center.">
           <button type="submit" class="secondary">Decline</button>
@@ -142,7 +163,10 @@
     {% endfor %}
   </section>
 
-  <h2>Handovers you started</h2>
+  <div class="section-heading">
+    <h2>Handovers you started</h2>
+    <p class="muted">You remain the owner until the recipient accepts and the backend capacity checks pass.</p>
+  </div>
   <section>
     {% if not outgoing %}
       <p class="muted">You have no handovers in progress.</p>
@@ -165,7 +189,7 @@
         {% endif %}
         {% if transfer.status in ['PENDING_ACCEPTANCE', 'PENDING_CAPACITY'] %}
         <div class="actions">
-        <form method="POST" action="{{ url_for('cancel_ownership_transfer_route', transfer_id=transfer.id) }}" onsubmit="return confirm('Withdraw this handover request? Ownership will remain unchanged.');">
+        <form method="POST" action="{{ url_for('cancel_ownership_transfer_route', transfer_id=transfer.id) }}" data-ss-confirm-title="Withdraw this handover?" data-ss-confirm="Ownership will remain unchanged. This only closes the pending request." data-ss-confirm-label="Withdraw" data-ss-confirm-destructive>
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="reason" value="Sender withdrew from ownership center.">
           <button type="submit" class="danger">Withdraw</button>
@@ -201,7 +225,10 @@
   </section>
   {% endif %}
 
-  <h2>Hand a ScanStory to someone else</h2>
+  <div class="section-heading">
+    <h2>Hand a ScanStory to someone else</h2>
+    <p class="muted">Send a request to another ScanStory account. The recipient must accept before anything moves.</p>
+  </div>
   <section>
     {% if not transferable %}
       <p class="muted">None of your ScanStories are available to hand over right now.</p>
@@ -211,7 +238,7 @@
       {% for project in transferable %}
       <div class="row">
         <strong>{{ project.name }}</strong>
-        <form method="POST" action="{{ url_for('start_project_ownership_transfer', project_id=project.id) }}" class="handover-form" onsubmit="return confirm('Send this handover request? The recipient must accept before anything moves.');">
+        <form method="POST" action="{{ url_for('start_project_ownership_transfer', project_id=project.id) }}" class="handover-form" data-ss-confirm-title="Send handover request?" data-ss-confirm="The recipient must accept before anything moves. Your ScanStory, media and QR code remain under the current owner until then." data-ss-confirm-label="Send request">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <label class="muted" for="recipient{{ project.id }}">Recipient account email
             <input type="email" id="recipient{{ project.id }}" name="recipient_email" required placeholder="owner@example.com" autocomplete="email">
@@ -250,12 +277,12 @@
         <label class="muted" for="claimNote{{ claim.id }}">Response note (recorded)</label>
         <textarea id="claimNote{{ claim.id }}" name="note" form="claimAccept{{ claim.id }}" maxlength="500" placeholder="Optional context for this response."></textarea>
         <div class="actions">
-        <form id="claimAccept{{ claim.id }}" method="POST" action="{{ url_for('respond_ownership_claim_route', claim_id=claim.id) }}" onsubmit="return confirm('Agree to open a handover for this claimant? Ownership is not final until they accept and capacity checks pass.');">
+        <form id="claimAccept{{ claim.id }}" method="POST" action="{{ url_for('respond_ownership_claim_route', claim_id=claim.id) }}" data-ss-confirm-title="Open a handover?" data-ss-confirm="Ownership is not final until the claimant accepts and capacity checks pass. Claims do not transfer ownership by themselves." data-ss-confirm-label="Open handover">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="decision" value="accept">
           <button type="submit">Agree to hand over</button>
         </form>
-        <form method="POST" action="{{ url_for('respond_ownership_claim_route', claim_id=claim.id) }}" onsubmit="return confirm('Send this request to the ScanStory team for review? Ownership will remain unchanged.');">
+        <form method="POST" action="{{ url_for('respond_ownership_claim_route', claim_id=claim.id) }}" data-ss-confirm-title="Send to ScanStory review?" data-ss-confirm="Ownership will remain unchanged while the ScanStory team reviews this request." data-ss-confirm-label="Send to review">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <input type="hidden" name="decision" value="refuse">
           <input type="hidden" name="note" value="Current owner disagreed from ownership center.">
@@ -284,7 +311,7 @@
     <form id="claimLookupForm" class="handover-form" novalidate>
       <label class="muted full" for="claimLookupReference">ScanStory link from the QR code
         <input type="text" id="claimLookupReference" name="reference" autocomplete="off"
-               placeholder="https://…/scanner/…" aria-describedby="claimLookupHelp">
+               placeholder="Paste the link from the QR code" aria-describedby="claimLookupHelp">
       </label>
       <p class="muted full" id="claimLookupHelp">
         Open the QR code with any phone camera and copy the link it goes to.
@@ -352,7 +379,7 @@
         {% endif %}
         {% if claim.status in ['OPEN', 'VENDOR_NOTIFIED', 'PENDING_ADMIN_REVIEW', 'APPROVED_BY_VENDOR'] %}
         <div class="actions">
-        <form method="POST" action="{{ url_for('cancel_ownership_claim_route', claim_id=claim.id) }}" onsubmit="return confirm('Withdraw this ownership review request?');">
+        <form method="POST" action="{{ url_for('cancel_ownership_claim_route', claim_id=claim.id) }}" data-ss-confirm-title="Withdraw this review request?" data-ss-confirm="This closes your request. Ownership remains unchanged." data-ss-confirm-label="Withdraw request" data-ss-confirm-destructive>
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit" class="danger">Withdraw request</button>
         </form>
@@ -368,6 +395,8 @@
     </p>
   </section>
 </main>
+
+<script src="{{ url_for('static', filename='js/ss-ui.js') }}"></script>
 
 <script>
   // Claimant discovery (P1-10). This script decides NOTHING: it extracts the
@@ -418,13 +447,12 @@
       const claimForm = document.createElement('form');
       claimForm.method = 'POST';
       claimForm.action = data.claim_url;
-      claimForm.addEventListener('submit', function (event) {
-        if (!window.confirm(
-          'File an ownership review request for this ScanStory?\n\n'
-          + 'This does not transfer it. A person reviews every request, and ownership only '
-          + 'changes through a handover the receiving account accepts.'
-        )) { event.preventDefault(); }
-      });
+      claimForm.setAttribute('data-ss-confirm-title', 'File ownership review request?');
+      claimForm.setAttribute(
+        'data-ss-confirm',
+        'This does not transfer the ScanStory. A person reviews every request, and ownership only changes through a handover the receiving account accepts.'
+      );
+      claimForm.setAttribute('data-ss-confirm-label', 'File request');
 
       const token = document.createElement('input');
       token.type = 'hidden';
@@ -453,6 +481,7 @@
 
       wrap.appendChild(claimForm);
       result.appendChild(wrap);
+      if (window.ssWireConfirmForms) window.ssWireConfirmForms(wrap);
       evidence.focus();
     }
 
@@ -493,22 +522,5 @@
   })();
 </script>
 
-<script>
-  // Every ownership control here is a POST + redirect. Without a busy state the
-  // button looks inert for the whole round trip and invites a second click on an
-  // ownership-affecting action. The confirm() in each form's onsubmit runs first,
-  // so a cancelled confirmation never reaches this handler.
-  document.querySelectorAll('.actions form').forEach(function (form) {
-    form.addEventListener('submit', function (event) {
-      if (form.dataset.submitted === '1') { event.preventDefault(); return; }
-      var button = form.querySelector('button[type="submit"]');
-      if (!button) return;
-      form.dataset.submitted = '1';
-      button.disabled = true;
-      button.setAttribute('aria-busy', 'true');
-      button.textContent = 'Working…';
-    });
-  });
-</script>
 </body>
 </html>

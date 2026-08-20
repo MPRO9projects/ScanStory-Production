@@ -496,12 +496,15 @@
                         <p class="text-slate-500 text-xs" id="formSubheading">Fill in the form and we will get back to you within 24 hours.</p>
                     </div>
 
-                    <form id="contactForm">
+                    <form id="contactForm" aria-describedby="contactHelp contactFormStatus">
                         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <!-- Hidden enquiry type -->
                         <input type="hidden" id="enquiryType" name="enquiry_type" value="support">
                         <!-- Google reCAPTCHA v3 Token -->
                         <input type="hidden" name="g-recaptcha-response" id="contactRecaptchaToken">
+                        <p id="contactHelp" class="text-slate-500 text-sm mb-5">
+                            Tell us what you were trying to do, what happened, and the best way to reach you. Please do not send passwords or payment card details.
+                        </p>
 
 
                         <!-- Enquiry type select (visible) -->
@@ -546,7 +549,7 @@
                         <div class="form-group">
                             <label class="form-label" for="message"><i class="fas fa-comment-dots" aria-hidden="true"></i> Your Message</label>
                             <textarea id="message" name="message" rows="5" class="form-input"
-                                placeholder="Describe your requirement, issue, or question in detail..." required></textarea>
+                                placeholder="Tell us what you were trying to do and what happened." required aria-describedby="contactHelp"></textarea>
                         </div>
 
                         <!-- Submit -->
@@ -558,6 +561,7 @@
                             <i class="fas fa-shield-alt text-pink-500"></i>
                             Your information is secure and will only be used to respond to your enquiry
                         </p>
+                        <p id="contactFormStatus" class="sr-only" role="status" aria-live="polite"></p>
                     </form>
                 </div>
             </div>
@@ -647,22 +651,20 @@
     </main>
 
     <!-- Scripts -->
+    <script src="{{ url_for('static', filename='js/ss-ui.js') }}"></script>
     <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
     <script>
         AOS.init({ duration: 900, once: true });
 
         // Toast
         function showToast(message, type) {
-            var container = document.getElementById('toastContainer');
-            var toast = document.createElement('div');
-            toast.className = 'toast-message toast-' + (type || 'success');
-            toast.innerHTML = '<div style="display:flex;align-items:center;gap:10px;"><i class="fas fa-' + (type === 'success' ? 'check-circle' : 'exclamation-circle') + '" style="font-size:18px;"></i><div><div style="font-weight:800;margin-bottom:3px;">' + (type === 'success' ? 'Sent!' : 'Error') + '</div><div style="font-size:13px;">' + message + '</div></div></div>';
-            container.appendChild(toast);
-            setTimeout(function () {
-                toast.style.opacity = '0';
-                toast.style.transition = 'opacity 0.3s';
-                setTimeout(function () { toast.remove(); }, 300);
-            }, 4500);
+            var status = document.getElementById('contactFormStatus');
+            if (status) status.textContent = message;
+            if (window.ssToast) {
+                window.ssToast(message, type === 'error' ? 'error' : 'success');
+                return;
+            }
+            window.alert(message);
         }
 
         // Intent chip → update form heading and select

@@ -56,6 +56,34 @@
       line-height: 1.5;
       margin: 0;
     }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: center;
+      margin-top: 24px;
+    }
+    .actions a,
+    .actions button {
+      min-height: 44px;
+      border-radius: 999px;
+      padding: 10px 16px;
+      border: 1px solid var(--ss-border-strong, rgba(255,255,255,0.16));
+      background: rgba(255,255,255,0.06);
+      color: var(--ss-text, rgba(255,255,255,0.92));
+      text-decoration: none;
+      font: inherit;
+      cursor: pointer;
+    }
+    .actions a.primary {
+      border-color: rgba(255,0,122,0.42);
+      background: rgba(255,0,122,0.16);
+      color: #ffd6e8;
+    }
+    @media (max-width: 420px) {
+      .card { padding: 30px 20px; }
+      .actions a, .actions button { width: 100%; }
+    }
   </style>
 </head>
 <body class="ss-user-scope">
@@ -64,7 +92,12 @@
       <div class="brand">SCANSTORY</div>
       <div class="icon" aria-hidden="true">&#9888;</div>
       <h1>This experience is unavailable</h1>
-      <p>The project you're looking for is currently suspended or unavailable. If you believe this is a mistake, please contact the person who shared this with you.</p>
+      <p>This ScanStory is not available from this link right now. It may be unpublished, paused, or no longer shared publicly.</p>
+      <div class="actions" aria-label="Recovery actions">
+        <button type="button" onclick="history.back()">Go back</button>
+        <a class="primary" href="{{ url_for('contact_page') }}">Contact support</a>
+        <a href="{{ url_for('landing') }}">ScanStory home</a>
+      </div>
     </div>
   </main>
 </body>

@@ -6,17 +6,47 @@
   <title>Experience Unavailable - ScanStory</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
   <style>
-    body{font-family:Arial,sans-serif;margin:0;color:#18212f;background:#f7f8fb}
-    main{max-width:720px;margin:0 auto;padding:20px}
-    .card{background:white;border:1px solid #d9dfeb;border-radius:8px;padding:14px}
+    body {
+      font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      color: var(--ss-text, rgba(255,255,255,0.92));
+      background: var(--ss-bg, #050505);
+    }
+    main { width: min(100%, 640px); }
+    .card {
+      background: var(--ss-surface-1, #0b0b0f);
+      border: 1px solid var(--ss-border, rgba(255,255,255,0.08));
+      border-radius: var(--ss-radius-lg, 18px);
+      padding: clamp(28px, 7vw, 42px);
+      text-align: center;
+    }
+    p { color: var(--ss-text-muted, rgba(255,255,255,0.6)); line-height: 1.55; }
+    a {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      margin-top: 18px;
+      padding: 10px 16px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,0,122,0.42);
+      background: rgba(255,0,122,0.16);
+      color: #ffd6e8;
+      text-decoration: none;
+      font-weight: 700;
+    }
   </style>
 </head>
-<body>
+<body class="ss-user-scope">
 <main data-page="public-experience-unavailable">
   <section class="card" role="status">
     <h1>Experience unavailable</h1>
     <p>{{ result.message }}</p>
-    <p>Code: {{ result.status }}</p>
+    <a href="{{ url_for('contact_page') }}">Contact support</a>
   </section>
 </main>
 </body>

@@ -18067,10 +18067,20 @@ def handle_error(error):
         }), error_code
 
     if error_code == 404:
-        return "<h1>404 Not Found</h1><p>The page you requested could not be found.</p>", 404
+        return render_template(
+            "user/error.html",
+            status_code=404,
+            title="We couldn't find that page.",
+            message="The link may be old, mistyped, or no longer public.",
+        ), 404
 
     # For regular routes, return a generic HTTP response - never the raw exception
-    return "<h1>Something went wrong</h1><p>An unexpected error occurred. Please try again later.</p>", error_code
+    return render_template(
+        "user/error.html",
+        status_code=error_code,
+        title="Something went wrong.",
+        message="Please try again in a moment. If this keeps happening, contact support.",
+    ), error_code
 # --------------------------------------------------------------------------------------------
 # SEO: sitemap.xml and robots.txt
 # --------------------------------------------------------------------------------------------
