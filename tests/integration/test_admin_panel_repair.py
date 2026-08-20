@@ -84,7 +84,12 @@ def test_suspended_project_blocks_and_restore_reenables_scanner_and_media(client
     )
 
     assert scanner.status_code == 404
-    assert b"suspended or unavailable" in scanner.data
+    # project_unavailable.html deliberately no longer names "suspended" to a
+    # public viewer (same non-enumeration principle used elsewhere in the
+    # product) - it renders one calm generic message for every unavailable
+    # reason. The reason itself is still verified precisely below, in the
+    # /detect_init JSON response the public page never exposes.
+    assert b"This experience is unavailable" in scanner.data
     assert detect.status_code == 404
     assert detect.get_json()["reason"] == "Project is suspended or unavailable"
 

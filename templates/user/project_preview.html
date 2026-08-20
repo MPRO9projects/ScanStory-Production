@@ -321,10 +321,10 @@
         </p>
         {% elif ownership.transfer.status == 'PENDING_CAPACITY' %}
         <p class="ss-domain-note">
-          The recipient accepted, but the backend says their account does not have enough project
+          The recipient accepted, but their account does not have enough project
           and/or storage capacity yet. Ownership has not changed: the current owner stays
           authoritative, this ScanStory stays live, the media and QR code remain intact, and
-          coverage remains recorded. The handover can complete only when the backend confirms the
+          coverage remains recorded. The handover can complete only when we confirm the
           recipient has enough capacity.
         </p>
         {% elif ownership.transfer.status == 'COMPLETED' %}
@@ -374,7 +374,7 @@
           </a>
           <p class="ss-domain-note" style="margin-top:10px;">
             Use the ownership center for handovers, accept/reject/cancel/retry actions and review responses.
-            The backend completes ownership changes only after the required people and capacity checks pass.
+            Ownership changes complete only after the required people and capacity checks pass.
           </p>
         </div>
       </div>

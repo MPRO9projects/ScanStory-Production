@@ -121,7 +121,6 @@
         {% if status and status.warnings %}
           <p role="alert">{{ status.warnings[0] }}</p>
         {% endif %}
-        <p class="meta">Recognition artifact version: current queued artifact</p>
         <p class="meta">Last processed: {{ trigger.updated_at }}</p>
         {% if trigger_management %}
           <div class="actions" aria-label="Trigger actions for {{ trigger.name }}">

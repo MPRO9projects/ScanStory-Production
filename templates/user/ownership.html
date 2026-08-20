@@ -135,15 +135,15 @@
           </div>
         {% endif %}
         {% if transfer.status == 'PENDING_ACCEPTANCE' %}
-          <p class="muted">Accepting starts the final backend check. Ownership moves only after project and storage capacity pass.</p>
+          <p class="muted">Accepting starts the final capacity check. Ownership moves only after project and storage capacity pass.</p>
         {% elif transfer.status == 'PENDING_CAPACITY' %}
-          <p class="muted">Retry uses this same handover. It does not create a new request or change ownership unless the backend checks pass.</p>
+          <p class="muted">Retry uses this same handover. It does not create a new request or change ownership unless the capacity checks pass.</p>
         {% elif transfer.status == 'DISPUTED' %}
           <p class="muted">This handover is under manual ScanStory review. Ownership has not changed and recipient actions are paused.</p>
         {% endif %}
         <div class="actions">
         {% if transfer.status == 'PENDING_CAPACITY' %}
-        <form method="POST" action="/ownership/transfers/{{ transfer.id }}/retry" data-ss-confirm-title="Retry capacity check?" data-ss-confirm="Retry this handover after freeing capacity? Ownership only changes if the backend checks pass." data-ss-confirm-label="Retry check">
+        <form method="POST" action="/ownership/transfers/{{ transfer.id }}/retry" data-ss-confirm-title="Retry capacity check?" data-ss-confirm="Retry this handover after freeing capacity? Ownership only changes if the capacity checks pass." data-ss-confirm-label="Retry check">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
           <button type="submit">Retry capacity check</button>
         </form>
@@ -165,7 +165,7 @@
 
   <div class="section-heading">
     <h2>Handovers you started</h2>
-    <p class="muted">You remain the owner until the recipient accepts and the backend capacity checks pass.</p>
+    <p class="muted">You remain the owner until the recipient accepts and the capacity checks pass.</p>
   </div>
   <section>
     {% if not outgoing %}
