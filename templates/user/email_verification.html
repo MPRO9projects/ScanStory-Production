@@ -1,65 +1,72 @@
 <!doctype html>
-<html>
+{#
+  One-time-code email. Rendered by BOTH send_email_verification_otp() and
+  send_reset_password_otp() in app.py, so the copy has to read correctly for
+  either - the subject line is what distinguishes them. Do not narrow it to
+  "verify your email".
+
+  Styling is INLINE on every element on purpose: Outlook (Word rendering
+  engine) drops a <head><style> block entirely, and the previous version put
+  the whole layout there. The <style> that remains only carries the
+  dark-mode/small-screen bits no inline attribute can express.
+
+  Year: the two call sites both pass `year`. The previous version read
+  `now.year`, and send_email_verification_otp() never passes `now` - so every
+  verification email shipped with a blank copyright line.
+#}
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <title>Your ScanStory code</title>
   <style>
-    body {
-      background:#0b1220;
-      font-family: Arial, Helvetica, sans-serif;
-      color:#e5e7eb;
-      padding:24px;
-    }
-    .card {
-      max-width:520px;
-      margin:auto;
-      background:#111827;
-      border:1px solid #374151;
-      border-radius:14px;
-      overflow:hidden;
-    }
-    .header {
-      padding:16px;
-      background:linear-gradient(90deg,#7c3aed,#9333ea);
-      color:#fff;
-      font-size:18px;
-      font-weight:700;
-    }
-    .content {
-      padding:20px;
-    }
-    .code {
-      margin:18px auto;
-      padding:14px 18px;
-      font-size:28px;
-      letter-spacing:8px;
-      font-weight:800;
-      color:#c4b5fd;
-      border:1px dashed #7c3aed;
-      width:fit-content;
-      max-width:100%;
-      word-break:break-word;
-    }
-    .footer {
-      padding:12px;
-      font-size:12px;
-      color:#9ca3af;
-      border-top:1px solid #374151;
+    @media (max-width: 480px) {
+      .ss-card { border-radius: 0 !important; }
+      .ss-pad { padding: 20px !important; }
+      .ss-code { font-size: 26px !important; letter-spacing: 6px !important; }
     }
   </style>
 </head>
-<body>
-  <div class="card">
-    <div class="header">SCANSTORY</div>
-    <div class="content">
-      <p>Hi {{ (user.first_name if user and user.first_name else 'there') }},</p>
-      <p>Your verification code is:</p>
-      <div class="code">{{ code }}</div>
-      <p>This code expires in {{ minutes }} minutes.</p>
-    </div>
-    <div class="footer">
-      © {{ now.year if now else '' }} ScanStory
-    </div>
-  </div>
+<body style="margin:0;padding:24px 12px;background:#050505;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,Helvetica,sans-serif;color:#e9e9ef;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+    <tr>
+      <td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="520" class="ss-card"
+               style="width:520px;max-width:100%;border-collapse:collapse;background:#0b0b0f;border:1px solid rgba(255,255,255,0.10);border-radius:18px;overflow:hidden;">
+          <tr>
+            <td style="padding:18px 24px;background:linear-gradient(90deg,#ff007a,#7000ff);">
+              <span style="font-size:19px;font-weight:800;font-style:italic;letter-spacing:-0.5px;color:#ffffff;">SCANSTORY</span>
+            </td>
+          </tr>
+          <tr>
+            <td class="ss-pad" style="padding:28px 24px;">
+              <p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#e9e9ef;">
+                Hi {{ (user.first_name if user and user.first_name else 'there') }},
+              </p>
+              <p style="margin:0 0 6px;font-size:15px;line-height:1.6;color:rgba(255,255,255,0.72);">
+                Here is your one-time ScanStory code:
+              </p>
+              <p class="ss-code" style="margin:18px 0;padding:14px 18px;font-size:30px;letter-spacing:9px;font-weight:800;color:#ffffff;background:rgba(255,0,122,0.10);border:1px dashed rgba(255,0,122,0.55);border-radius:12px;text-align:center;word-break:break-word;">
+                {{ code }}
+              </p>
+              <p style="margin:0 0 6px;font-size:14px;line-height:1.6;color:rgba(255,255,255,0.72);">
+                It expires in {{ minutes }} minute{{ '' if minutes == 1 else 's' }}. Enter it on the ScanStory page you
+                started from. If it has already expired, request a new code from that same page.
+              </p>
+              <p style="margin:14px 0 0;font-size:13px;line-height:1.6;color:rgba(255,255,255,0.45);">
+                If you did not ask for this code, you can ignore this email. Never share the code with anyone.
+              </p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:14px 24px;font-size:12px;color:rgba(255,255,255,0.40);border-top:1px solid rgba(255,255,255,0.08);">
+              &copy; {{ year if year else '' }} ScanStory
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>

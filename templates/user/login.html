@@ -4,18 +4,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login | ScanStory</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+    <title>Sign in | ScanStory</title>
     <meta name="robots" content="noindex, nofollow">
     <link rel="canonical" href="https://myscanstory.com/">
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
-    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    {# design-system.css + font + icons, in the order design-system.css needs:
+       AFTER tailwind, BEFORE this page's <style>. It used to be linked first,
+       so Tailwind's utilities silently overrode every .ss-* token. #}
+    {% include "user/_head_assets.html" %}
 
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
-
         :root {
             --primary: #ff007a;
             --secondary: #7000ff;
@@ -41,7 +40,10 @@
         .container-fluid {
             display: flex;
             height: 100vh;
-            width: 100vw;
+            /* dvh tracks the collapsing mobile URL bar; 100vh alone puts the
+               submit button under the browser chrome on iOS Safari. */
+            height: 100dvh;
+            width: 100%;
         }
 
         .left-panel {
@@ -147,6 +149,7 @@
             border-left: 1px solid rgba(255, 255, 255, 0.05);
             overflow-y: auto;
             max-height: 100vh;
+            max-height: 100dvh;
         }
 
         .right-panel::-webkit-scrollbar {
@@ -293,18 +296,27 @@
             display: flex;
             align-items: center;
             gap: 12px;
+        }
+
+        .remember-me label {
             color: rgba(255, 255, 255, 0.6);
             cursor: pointer;
             font-size: 11px;
             font-weight: 800;
             text-transform: uppercase;
             letter-spacing: 1px;
+            /* 44px row so the label itself is a comfortable touch target. */
+            display: flex;
+            align-items: center;
+            min-height: 44px;
         }
 
         .remember-me input[type="checkbox"] {
             accent-color: var(--primary);
-            width: 16px;
-            height: 16px;
+            width: 20px;
+            height: 20px;
+            flex: none;
+            cursor: pointer;
         }
 
         .forgot-link {
@@ -574,78 +586,25 @@
             }
         }
 
-        .flash-stack {
-            position: fixed;
-            top: 25px;
-            right: 25px;
-            width: min(420px, calc(100vw - 32px));
-            z-index: 99999;
-        }
+        /* Removed here: a byte-for-byte duplicate of the whole .flash-stack /
+           .flash-message / .flash-* / @keyframes slideIn block above, plus a
+           second copy of its 768px media query. Both copies were live, so
+           every flash rule was being parsed and applied twice. */
 
-        .flash-message {
-            padding: 14px 18px;
-            border-radius: 12px;
-            font-size: 11px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            animation: slideIn 0.4s ease;
-            border: 1.5px solid;
-            margin-bottom: 0;
-            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
-        }
+        @media (prefers-reduced-motion: reduce) {
 
-        .flash-message.fade-out {
-            opacity: 0;
-            transform: translateY(-10px);
-            transition: all 0.4s ease;
-        }
-
-        .flash-success {
-            background: rgba(34, 197, 94, 0.14);
-            border-color: rgba(34, 197, 94, 0.5);
-            color: #4ade80;
-        }
-
-        .flash-error {
-            background: rgba(239, 68, 68, 0.14);
-            border-color: rgba(239, 68, 68, 0.5);
-            color: #f87171;
-        }
-
-        .flash-warning {
-            background: rgba(245, 158, 11, 0.14);
-            border-color: rgba(245, 158, 11, 0.55);
-            color: #fbbf24;
-        }
-
-        .flash-info {
-            background: rgba(0, 212, 255, 0.12);
-            border-color: rgba(0, 212, 255, 0.5);
-            color: #67e8f9;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
             }
 
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        @media (max-width: 768px) {
-            .flash-stack {
-                top: 80px;
-                left: 16px;
-                right: 16px;
-                width: auto;
+            .input-gloss:focus,
+            .submit-btn:hover,
+            .back-btn:hover {
+                transform: none;
             }
         }
     </style>
@@ -656,9 +615,14 @@
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% set latest_category, latest_message = messages[-1] %}
+    {# role=alert for a failure the user must act on, role=status otherwise.
+       Anything stronger (a live region around the fields themselves) would
+       announce on every keystroke. #}
     <div class="flash-stack" id="flashStack">
-        <div class="flash-message {% if latest_category == 'success' %}flash-success{% elif latest_category == 'warning' %}flash-warning{% elif latest_category == 'info' %}flash-info{% else %}flash-error{% endif %}">
-            <i class="fas {% if latest_category == 'success' %}fa-check-circle{% elif latest_category == 'warning' %}fa-triangle-exclamation{% elif latest_category == 'info' %}fa-circle-info{% else %}fa-exclamation-circle{% endif %}"></i>
+        <div class="flash-message {% if latest_category == 'success' %}flash-success{% elif latest_category == 'warning' %}flash-warning{% elif latest_category == 'info' %}flash-info{% else %}flash-error{% endif %}"
+            role="{% if latest_category in ('success', 'info') %}status{% else %}alert{% endif %}">
+            <i class="fas {% if latest_category == 'success' %}fa-check-circle{% elif latest_category == 'warning' %}fa-triangle-exclamation{% elif latest_category == 'info' %}fa-circle-info{% else %}fa-exclamation-circle{% endif %}"
+                aria-hidden="true"></i>
             <span>{{ latest_message }}</span>
         </div>
     </div>
@@ -666,84 +630,77 @@
     {% endwith %}
 
     <div class="container-fluid" id="main-content" role="main" tabindex="-1">
-        <div class="left-panel">
-            <div class="typing-container" data-aos="fade-down" data-aos-duration="1000">
+        <div class="left-panel" aria-hidden="true">
+            <div class="typing-container">
                 <div class="typing-text">
                     <div class="typing-line" id="typingLine"></div>
                 </div>
             </div>
 
             <div class="image-overlay"></div>
-            <img src="/static/assets/logos/login.png" alt="AR Mockup" class="image-mockup" data-aos="zoom-in"
-                data-aos-duration="1200">
+            {# Decorative only (alt=""), and 785 KB. The whole .left-panel is
+               display:none below 1024px, but a hidden ancestor does not stop
+               the fetch - loading=lazy + low priority does, so phones no
+               longer pay for a panel they never see. #}
+            <img src="{{ url_for('static', filename='assets/logos/login.png') }}" alt="" class="image-mockup"
+                width="1200" height="1600" loading="lazy" decoding="async" fetchpriority="low">
         </div>
 
         <div class="right-panel">
-        <a href="{{ url_for('landing') }}" class="back-btn" data-aos="fade-right">
-            <i class="fas fa-arrow-left"></i> BACK TO HOME
+        <a href="{{ url_for('landing') }}" class="back-btn">
+            <i class="fas fa-arrow-left" aria-hidden="true"></i> BACK TO HOME
         </a>
 
-        <div class="form-section" data-aos="fade-up" data-aos-duration="1000">
+        <div class="form-section">
 
             <div class="logo-branding">
                 <div class="logo">SCAN<span>STORY</span></div>
-                <h1>Login</h1>
-                <p class="subtitle">USER CONTROL CENTER</p>
+                <h1>Sign in</h1>
+                <p class="subtitle">Your ScanStory account</p>
             </div>
 
-            <form method="POST" class="relative z-10">
+            <form method="POST" class="relative z-10" id="loginForm">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="input-group">
-                    <label class="label-style" for="loginEmail">IDENTITY (EMAIL)</label>
-                    <input type="email" id="loginEmail" name="email" placeholder="@gmail.com" class="input-gloss"
-                        autocomplete="username" inputmode="email" required>
+                    <label class="label-style" for="loginEmail">Email address</label>
+                    <input type="email" id="loginEmail" name="email" placeholder="you@example.com" class="input-gloss"
+                        autocomplete="username" inputmode="email" autocapitalize="none" spellcheck="false" required>
                 </div>
 
                 <div class="input-group">
-                    <label class="label-style" for="passwordInput">SECURE KEY (PASSWORD)</label>
+                    <label class="label-style" for="passwordInput">Password</label>
                     <div class="password-container">
-                        <input type="password" name="password" id="passwordInput" placeholder="Enter Your Password"
+                        <input type="password" name="password" id="passwordInput" placeholder="Enter your password"
                             class="input-gloss" autocomplete="current-password" required>
                         <button type="button" class="toggle-password" id="togglePassword"
-                            aria-label="Show password" aria-pressed="false">
+                            aria-label="Show password" aria-pressed="false" aria-controls="passwordInput">
                             <i class="fas fa-eye" aria-hidden="true"></i>
                         </button>
                     </div>
                 </div>
 
                 <div class="form-options">
-                    <label class="remember-me">
-                        <input type="checkbox" name="remember" class="accent-pink-500">
-                        <span>KEEP ME LOGGED IN</span>
-                    </label>
-                    <a href="{{ url_for('forgot_password') }}" class="forgot-link">FORGOT?</a>
+                    {# The checkbox is explicitly labelled via id/for rather than
+                       relying on the wrapping <label>, so the hit target and the
+                       accessible name are unambiguous. #}
+                    <div class="remember-me">
+                        <input type="checkbox" name="remember" id="rememberMe">
+                        <label for="rememberMe">Keep me signed in</label>
+                    </div>
+                    <a href="{{ url_for('forgot_password') }}" class="forgot-link">Forgot password?</a>
                 </div>
 
-                <button type="submit" class="submit-btn">LOGIN HERE</button>
+                <button type="submit" class="submit-btn" id="loginSubmit">Sign in</button>
             </form>
 
             <p class="register-footer">
-                NEW USER? <a href="{{ url_for('register') }}">CREATE ACCOUNT</a>
+                New to ScanStory? <a href="{{ url_for('register') }}">Create an account</a>
             </p>
         </div>
     </div>
     </div>
 
-    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
-
     <script>
-        AOS.init({
-            once: true,
-            offset: 20,
-            duration: 800
-        });
-
-        if (window.innerWidth < 768) {
-            document.querySelectorAll('[data-aos]').forEach(el => {
-                el.removeAttribute('data-aos');
-            });
-        }
-
         document.addEventListener('DOMContentLoaded', function () {
             const togglePassword = document.getElementById('togglePassword');
             const passwordInput = document.getElementById('passwordInput');
@@ -751,24 +708,23 @@
             if (togglePassword && passwordInput) {
                 togglePassword.addEventListener('click', function () {
                     const eyeIcon = this.querySelector('i');
+                    const revealing = passwordInput.type === 'password';
 
-                    if (passwordInput.type === 'password') {
-                        passwordInput.type = 'text';
-                        eyeIcon.classList.remove('fa-eye');
-                        eyeIcon.classList.add('fa-eye-slash');
-                        eyeIcon.style.opacity = '1';
-                    } else {
-                        passwordInput.type = 'password';
-                        eyeIcon.classList.remove('fa-eye-slash');
-                        eyeIcon.classList.add('fa-eye');
-                        eyeIcon.style.opacity = '0.7';
-                    }
+                    passwordInput.type = revealing ? 'text' : 'password';
+                    eyeIcon.classList.toggle('fa-eye', !revealing);
+                    eyeIcon.classList.toggle('fa-eye-slash', revealing);
+                    eyeIcon.style.opacity = revealing ? '1' : '0.7';
+                    // aria-pressed / aria-label were previously never updated, so a
+                    // screen reader always heard "Show password, not pressed".
+                    this.setAttribute('aria-pressed', String(revealing));
+                    this.setAttribute('aria-label', revealing ? 'Hide password' : 'Show password');
 
                     passwordInput.focus();
                 });
             }
 
-            const form = document.querySelector('form');
+            const form = document.getElementById('loginForm');
+            const submitBtn = document.getElementById('loginSubmit');
             if (form) {
                 form.addEventListener('submit', function (e) {
                     const requiredFields = form.querySelectorAll('[required]');
@@ -777,7 +733,10 @@
                     requiredFields.forEach(field => {
                         if (!field.value.trim()) {
                             field.style.borderColor = '#ff4757';
+                            field.setAttribute('aria-invalid', 'true');
                             valid = false;
+                        } else {
+                            field.removeAttribute('aria-invalid');
                         }
                     });
 
@@ -789,6 +748,14 @@
                                 field.style.borderColor = 'rgba(0, 212, 255, 0.6)';
                             });
                         }, 2000);
+                        return;
+                    }
+
+                    // Visual double-submit guard only: the form still posts
+                    // normally, and nothing about the credential check changes.
+                    if (submitBtn) {
+                        submitBtn.disabled = true;
+                        submitBtn.textContent = 'Signing in…';
                     }
                 });
             }
@@ -802,7 +769,11 @@
             if (flashStack) {
                 const flashMessage = flashStack.querySelector('.flash-message');
 
-                if (flashMessage) {
+                // Only self-dismiss confirmations. An error ("Invalid email or
+                // password", "Account temporarily locked ... try again in 2h 14m")
+                // is the one thing on this page the user has to be able to
+                // re-read, and it used to vanish after five seconds.
+                if (flashMessage && flashMessage.getAttribute('role') === 'status') {
                     setTimeout(() => {
                         flashMessage.classList.add('fade-out');
 
@@ -817,17 +788,18 @@
                 }
             }
 
-            const leftPanelImage = document.querySelector('.image-mockup');
-            if (leftPanelImage) {
-                leftPanelImage.addEventListener('error', function () {
-                    console.log('Login image failed to load.');
-                });
-            }
-
+            // The typing headline lives in .left-panel, which is display:none
+            // below 1024px - so on every phone this was an infinite recursive
+            // setTimeout loop animating nothing. Also respects reduced motion.
+            const skipDecoration = window.matchMedia(
+                '(max-width: 1024px), (prefers-reduced-motion: reduce)'
+            ).matches;
             const typingLine = document.getElementById('typingLine');
-            if (typingLine) {
+            if (typingLine && !skipDecoration) {
                 const typingAnimation = new SimpleTypingAnimation();
                 typingAnimation.startAnimation();
+            } else if (typingLine) {
+                typingLine.textContent = 'Augmented Reality for Stories';
             }
         });
 

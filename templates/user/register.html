@@ -5,7 +5,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Start Free — Create AR Experiences with ScanStory | No Download Required</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
     <meta name="description" content="Create your free ScanStory account and start building web-based AR experiences. Upload photos and videos, generate QR scan codes, and launch interactive AR stories without app downloads.">
     <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://myscanstory.com/register">
@@ -41,11 +40,11 @@
     <!-- External Libraries -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
     <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    {# design-system.css + font + icons, in the order design-system.css needs:
+       AFTER tailwind, BEFORE this page's <style>. #}
+    {% include "user/_head_assets.html" %}
 
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
-
         :root {
             --primary: #ff007a;
             --secondary: #7000ff;
@@ -95,9 +94,12 @@
         /* RIGHT PANEL - Loading Animation */
         .right-panel {
             flex: 1;
+            /* Was url("../static/assets/logos/r1.png") - a document-relative URL
+               inside an inline <style>, so it resolved against /register vs
+               /register/ vs any future prefix. url_for is unambiguous. */
             background:
                 linear-gradient(rgba(5, 5, 5, 0.7), rgba(5, 5, 5, 0.7)),
-                url("../static/assets/logos/r1.png");
+                url("{{ url_for('static', filename='assets/logos/r1.png') }}");
             background-size: cover;
             background-position: center;
             display: flex;
@@ -400,10 +402,79 @@
             cursor: pointer;
         }
 
-        .glow-action:hover {
+        .glow-action:hover:not(:disabled) {
             transform: translateY(-3px);
             box-shadow: 0 15px 35px rgba(255, 0, 122, 0.3);
             filter: brightness(1.1);
+        }
+
+        .glow-action:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        /* Field grouping: a real fieldset/legend so the two halves of the form
+           are one landmark each to a screen reader, styled flat so the visual
+           weight stays on the inputs. */
+        .reg-fieldset {
+            border: 0;
+            padding: 0;
+            margin: 0 0 8px;
+        }
+
+        .reg-legend {
+            padding: 0;
+            margin-bottom: 16px;
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.2em;
+            color: rgba(255, 255, 255, 0.35);
+        }
+
+        .reg-help {
+            margin-top: 8px;
+            margin-left: 4px;
+            font-size: 11px;
+            line-height: 1.5;
+            color: rgba(255, 255, 255, 0.42);
+        }
+
+        .reg-optional {
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            color: rgba(255, 255, 255, 0.3);
+        }
+
+        .reg-note {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            margin-top: 18px;
+            padding: 12px 14px;
+            border: 1px solid rgba(0, 212, 255, 0.22);
+            background: rgba(0, 212, 255, 0.06);
+            border-radius: 14px;
+            font-size: 12px;
+            line-height: 1.6;
+            color: rgba(255, 255, 255, 0.62);
+        }
+
+        .reg-note i {
+            margin-top: 2px;
+            color: var(--accent);
+        }
+
+        .reg-note-plan {
+            margin-top: 0;
+            margin-bottom: 24px;
+            border-color: rgba(255, 0, 122, 0.28);
+            background: rgba(255, 0, 122, 0.07);
+        }
+
+        .reg-note-plan i {
+            color: var(--primary);
         }
 
         /* Terms Checkbox - REMOVED CONTAINER, SIMPLE STYLING */
@@ -416,14 +487,17 @@
         .terms-checkbox input[type="checkbox"] {
             margin-right: 12px;
             accent-color: var(--primary);
-            width: 16px;
-            height: 16px;
+            width: 20px;
+            height: 20px;
+            flex: none;
+            cursor: pointer;
         }
 
         .terms-checkbox label {
             font-size: 11px;
             color: rgba(255, 255, 255, 0.6);
             line-height: 1.5;
+            cursor: pointer;
         }
 
         .terms-checkbox a {
@@ -1094,9 +1168,15 @@
     {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
     {% set latest_category, latest_message = messages[-1] %}
+    {# Every server-side validation message on this route ("Passwords do not
+       match", "Email is already registered", "Please accept the Terms and
+       Privacy Policy", reCAPTCHA refusals) arrives through here, so it is
+       announced, and errors are not auto-dismissed. #}
     <div class="flash-stack" id="flashStack">
-        <div class="flash-message {% if latest_category == 'success' %}flash-success{% elif latest_category == 'warning' %}flash-warning{% elif latest_category == 'info' %}flash-info{% else %}flash-error{% endif %}">
-            <i class="fas {% if latest_category == 'success' %}fa-check-circle{% elif latest_category == 'warning' %}fa-triangle-exclamation{% elif latest_category == 'info' %}fa-circle-info{% else %}fa-exclamation-circle{% endif %}"></i>
+        <div class="flash-message {% if latest_category == 'success' %}flash-success{% elif latest_category == 'warning' %}flash-warning{% elif latest_category == 'info' %}flash-info{% else %}flash-error{% endif %}"
+            role="{% if latest_category in ('success', 'info') %}status{% else %}alert{% endif %}">
+            <i class="fas {% if latest_category == 'success' %}fa-check-circle{% elif latest_category == 'warning' %}fa-triangle-exclamation{% elif latest_category == 'info' %}fa-circle-info{% else %}fa-exclamation-circle{% endif %}"
+                aria-hidden="true"></i>
             <span>{{ latest_message }}</span>
         </div>
     </div>
@@ -1120,67 +1200,96 @@
                 <!-- Logo and Title -->
                 <div class="logo-branding">
                     <div class="logo">SCAN<span>STORY</span></div>
-                    <h1>Create Your Free Account</h1>
+                    <h1>Create your free account</h1>
                     <p class="subtitle">Start Building AR Experiences</p>
                 </div>
 
-               
+                {# selected_plan is passed by the register route on
+                   GET /register?plan_id=N and was never rendered, so a visitor
+                   arriving from a plan card lost all trace of which plan they
+                   picked. Read-only: choosing and paying still happens on the
+                   plans page after sign-in. #}
+                {% if selected_plan %}
+                <p class="reg-note reg-note-plan">
+                    <i class="fas fa-tag" aria-hidden="true"></i>
+                    You came from the <strong>{{ selected_plan.plan_name }}</strong> plan. Create your account first —
+                    you can choose that plan from your account once you are signed in.
+                </p>
+                {% endif %}
 
                 <!-- Form -->
                 <form method="POST" class="form-container" id="registerForm">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <!-- Email Field -->
-                    <div class="input-group">
-                        <label class="label-style" for="regEmail">IDENTITY (EMAIL)</label>
-                        <input type="email" id="regEmail" name="email" class="input-gloss" placeholder="@gmail.com"
-                            autocomplete="email" inputmode="email" required>
-                    </div>
 
-                    <!-- Name Fields -->
-                    <div class="name-grid">
+                    <fieldset class="reg-fieldset">
+                        <legend class="reg-legend">Your details</legend>
+
+                        <!-- Name Fields -->
+                        <div class="name-grid">
+                            <div class="input-group">
+                                <label class="label-style" for="regFirstName">First name</label>
+                                <input type="text" id="regFirstName" name="first_name" class="input-gloss" placeholder="First name"
+                                    autocomplete="given-name" required>
+                            </div>
+                            <div class="input-group">
+                                <label class="label-style" for="regLastName">Last name</label>
+                                <input type="text" id="regLastName" name="last_name" class="input-gloss" placeholder="Last name"
+                                    autocomplete="family-name" required>
+                            </div>
+                        </div>
+
+                        <!-- Email Field -->
                         <div class="input-group">
-                            <label class="label-style" for="regFirstName">FIRST NAME</label>
-                            <input type="text" id="regFirstName" name="first_name" class="input-gloss" placeholder="Enter Your First Name"
-                                autocomplete="given-name" required>
+                            <label class="label-style" for="regEmail">Email address</label>
+                            <input type="email" id="regEmail" name="email" class="input-gloss" placeholder="you@example.com"
+                                autocomplete="email" inputmode="email" autocapitalize="none" spellcheck="false"
+                                aria-describedby="regEmailHelp" required>
+                            <p class="reg-help" id="regEmailHelp">We send your sign-in code here, so use an address you can open now.</p>
                         </div>
+
+                        <!-- Phone Field -->
                         <div class="input-group">
-                            <label class="label-style" for="regLastName">LAST NAME</label>
-                            <input type="text" id="regLastName" name="last_name" class="input-gloss" placeholder="Enter Your Last Name"
-                                autocomplete="family-name" required>
+                            <label class="label-style" for="regPhone">Phone <span class="reg-optional">(optional)</span></label>
+                            <input type="tel" id="regPhone" name="phone" class="input-gloss" placeholder="+91" autocomplete="tel">
                         </div>
-                    </div>
+                    </fieldset>
 
-                    <!-- Password Field -->
-                    <div class="input-group">
-                        <label class="label-style" for="password1">SECURE KEY (PASSWORD)</label>
-                        <div class="password-wrapper">
-                            <input type="password" name="password1" id="password1" class="input-gloss"
-                                placeholder="Enter Your Password" autocomplete="new-password" required>
-                            <button type="button" class="toggle-password" aria-label="Show password" aria-pressed="false"
-                                onclick="togglePasswordVisibility('password1', 'eye1')">
-                                <i id="eye1" class="fas fa-eye" aria-hidden="true"></i>
-                            </button>
+                    <fieldset class="reg-fieldset">
+                        <legend class="reg-legend">Choose a password</legend>
+
+                        <!-- Password Field -->
+                        <div class="input-group">
+                            <label class="label-style" for="password1">Password</label>
+                            <div class="password-wrapper">
+                                <input type="password" name="password1" id="password1" class="input-gloss"
+                                    placeholder="Enter your password" autocomplete="new-password" minlength="6"
+                                    aria-describedby="passwordRule" required>
+                                <button type="button" class="toggle-password" aria-label="Show password" aria-pressed="false"
+                                    aria-controls="password1"
+                                    onclick="togglePasswordVisibility('password1', 'eye1')">
+                                    <i id="eye1" class="fas fa-eye" aria-hidden="true"></i>
+                                </button>
+                            </div>
+                            {# The only rule the server actually enforces is
+                               len(password1) >= 6 (app.py register()). No
+                               strength meter, because no strength rule exists. #}
+                            <p class="reg-help" id="passwordRule">At least 6 characters.</p>
                         </div>
-                    </div>
 
-                    <!-- Confirm Password Field -->
-                    <div class="input-group">
-                        <label class="label-style" for="password2">CONFIRM PASSWORD</label>
-                        <div class="password-wrapper">
-                            <input type="password" name="password2" id="password2" class="input-gloss"
-                                placeholder="Confirm Password" autocomplete="new-password" required>
-                            <button type="button" class="toggle-password" aria-label="Show password" aria-pressed="false"
-                                onclick="togglePasswordVisibility('password2', 'eye2')">
-                                <i id="eye2" class="fas fa-eye" aria-hidden="true"></i>
-                            </button>
+                        <!-- Confirm Password Field -->
+                        <div class="input-group">
+                            <label class="label-style" for="password2">Confirm password</label>
+                            <div class="password-wrapper">
+                                <input type="password" name="password2" id="password2" class="input-gloss"
+                                    placeholder="Re-enter your password" autocomplete="new-password" minlength="6" required>
+                                <button type="button" class="toggle-password" aria-label="Show password" aria-pressed="false"
+                                    aria-controls="password2"
+                                    onclick="togglePasswordVisibility('password2', 'eye2')">
+                                    <i id="eye2" class="fas fa-eye" aria-hidden="true"></i>
+                                </button>
+                            </div>
                         </div>
-                    </div>
-
-                    <!-- Phone Field -->
-                    <div class="input-group">
-                        <label class="label-style" for="regPhone">PHONE</label>
-                        <input type="tel" id="regPhone" name="phone" class="input-gloss" placeholder="+91" autocomplete="tel">
-                    </div>
+                    </fieldset>
 
                     <!-- Terms Checkbox - SIMPLE STYLE WITHOUT CONTAINER -->
                     <div class="terms-checkbox">
@@ -1195,11 +1304,16 @@
                     <input type="hidden" name="g-recaptcha-response" id="registerRecaptchaToken">
 
                     <!-- Submit Button -->
-                    <button type="submit" class="glow-action">REGISTER ACCOUNT</button>
+                    <button type="submit" class="glow-action" id="registerSubmit">Create account</button>
+
+                    <p class="reg-note">
+                        <i class="fas fa-envelope-open-text" aria-hidden="true"></i>
+                        Next step: we email you a short code to confirm this address. Enter it and your account is ready.
+                    </p>
 
                     <!-- Login Link -->
                     <p class="footer-text">
-                        EXISTING USER? <a href="{{ url_for('login') }}">LOGIN HERE</a>
+                        Already have an account? <a href="{{ url_for('login') }}">Sign in</a>
                     </p>
                 </form>
 
@@ -1240,18 +1354,20 @@
             const passwordField = document.getElementById(passwordFieldId);
             const eyeIcon = document.getElementById(eyeIconId);
 
-            if (passwordField.type === 'password') {
-                passwordField.type = 'text';
-                eyeIcon.classList.remove('fa-eye');
-                eyeIcon.classList.add('fa-eye-slash');
-                eyeIcon.style.color = 'var(--primary)';
-                eyeIcon.style.opacity = '1';
-            } else {
-                passwordField.type = 'password';
-                eyeIcon.classList.remove('fa-eye-slash');
-                eyeIcon.classList.add('fa-eye');
-                eyeIcon.style.color = 'var(--primary)';
-                eyeIcon.style.opacity = '0.7';
+            const revealing = passwordField.type === 'password';
+
+            passwordField.type = revealing ? 'text' : 'password';
+            eyeIcon.classList.toggle('fa-eye', !revealing);
+            eyeIcon.classList.toggle('fa-eye-slash', revealing);
+            eyeIcon.style.color = 'var(--primary)';
+            eyeIcon.style.opacity = revealing ? '1' : '0.7';
+
+            // aria-pressed / aria-label were never updated, so both toggles
+            // permanently announced "Show password, not pressed".
+            const btn = eyeIcon.closest('.toggle-password');
+            if (btn) {
+                btn.setAttribute('aria-pressed', String(revealing));
+                btn.setAttribute('aria-label', revealing ? 'Hide password' : 'Show password');
             }
 
             passwordField.focus();
@@ -1515,11 +1631,24 @@
                         return;
                     }
 
-                    {% if RECAPTCHA_SITE_KEY %}
-                    e.preventDefault();
-
                     const submitBtn = registerForm.querySelector('button[type="submit"]');
                     const originalText = submitBtn ? submitBtn.innerHTML : '';
+
+                    {% if not RECAPTCHA_SITE_KEY %}
+                    // Visual double-submit guard for the no-reCAPTCHA build. The
+                    // reCAPTCHA branch below already disables the button; without
+                    // this, that build had no guard at all and a double tap sent
+                    // two POST /register requests. Purely cosmetic - the form
+                    // still submits normally and nothing server-side changes.
+                    if (submitBtn) {
+                        submitBtn.disabled = true;
+                        submitBtn.textContent = 'Creating account…';
+                    }
+                    return;
+                    {% endif %}
+
+                    {% if RECAPTCHA_SITE_KEY %}
+                    e.preventDefault();
 
                     if (submitBtn) {
                         submitBtn.disabled = true;

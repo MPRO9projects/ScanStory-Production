@@ -4,16 +4,17 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SCANSTORY | Security Verification</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+    <title>Confirm your email | ScanStory</title>
+    <meta name="robots" content="noindex, nofollow">
 
     <!-- External Libraries -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
-    <link href="https://unpkg.com/aos@2.3.1/dist/aos.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    {# design-system.css + font + icons, AFTER tailwind and BEFORE this page's
+       <style> - the order design-system.css documents. AOS is gone: it existed
+       for one fade on one card. #}
+    {% include "user/_head_assets.html" %}
 
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;600;800&display=swap');
 
         :root {
             --primary: #ff007a;
@@ -215,6 +216,70 @@
             text-shadow: 0 0 10px var(--accent);
         }
 
+        .resend-link {
+            /* 44px tap target, and it was a bare inline button before. */
+            min-height: 44px;
+            padding: 0 14px;
+        }
+
+        .resend-link:disabled {
+            cursor: not-allowed;
+        }
+
+        .back-link {
+            font-size: 10px;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.16em;
+            color: rgba(255, 255, 255, 0.35);
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            min-height: 44px;
+        }
+
+        .back-link:hover {
+            color: var(--accent);
+        }
+
+        .verify-callout {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            text-align: left;
+            padding: 12px 14px;
+            border-radius: 14px;
+            border: 1px solid rgba(0, 212, 255, 0.25);
+            background: rgba(0, 212, 255, 0.07);
+            font-size: 12px;
+            line-height: 1.6;
+            color: rgba(255, 255, 255, 0.72);
+        }
+
+        .verify-callout i {
+            margin-top: 2px;
+            color: var(--accent);
+            flex: none;
+        }
+
+        /* Long addresses must wrap inside a 440px card, not widen it. */
+        .ss-truncate-safe {
+            display: inline-block;
+            max-width: 100%;
+            overflow-wrap: anywhere;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+
+            *,
+            *::before,
+            *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+            }
+        }
+
         @media (max-width: 480px) {
             h1 {
                 font-size: 2.1rem;
@@ -328,8 +393,10 @@
     {% if messages %}
     {% set latest_category, latest_message = messages[-1] %}
     <div class="flash-stack" id="flashStack">
-        <div class="flash-message {% if latest_category == 'success' %}flash-success{% elif latest_category == 'warning' %}flash-warning{% elif latest_category == 'info' %}flash-info{% else %}flash-error{% endif %}">
-            <i class="fas {% if latest_category == 'success' %}fa-check-circle{% elif latest_category == 'warning' %}fa-triangle-exclamation{% elif latest_category == 'info' %}fa-circle-info{% else %}fa-exclamation-circle{% endif %}"></i>
+        <div class="flash-message {% if latest_category == 'success' %}flash-success{% elif latest_category == 'warning' %}flash-warning{% elif latest_category == 'info' %}flash-info{% else %}flash-error{% endif %}"
+            role="{% if latest_category in ('success', 'info') %}status{% else %}alert{% endif %}">
+            <i class="fas {% if latest_category == 'success' %}fa-check-circle{% elif latest_category == 'warning' %}fa-triangle-exclamation{% elif latest_category == 'info' %}fa-circle-info{% else %}fa-exclamation-circle{% endif %}"
+                aria-hidden="true"></i>
             <span>{{ latest_message }}</span>
         </div>
     </div>
@@ -337,106 +404,115 @@
     {% endwith %}
 
     <!-- Blobs -->
-    <div id="blob1" class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]"></div>
-    <div id="blob2" class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]"></div>
+    <div id="blob1" class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]" aria-hidden="true"></div>
+    <div id="blob2" class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]" aria-hidden="true"></div>
 
     <div class="verify-container" id="main-content" role="main" tabindex="-1">
-        <div class="verify-card" data-aos="fade-up">
+        <div class="verify-card">
 
             <div class="mb-8">
-                <div class="status-badge">Identity Verification</div>
+                <div class="status-badge">Step 2 of 2</div>
                 <h1 class="text-3xl font-black uppercase italic tracking-tighter mb-4">
-                    Check <span class="animated-gradient-text">Email</span>
+                    Confirm your <span class="animated-gradient-text">email</span>
                 </h1>
                 <p class="text-slate-400 text-sm leading-relaxed">
-                    We've sent a 6-digit code to:<br>
-                    <span class="text-white font-bold">{{ email }}</span>
+                    We sent a 6-digit code to<br>
+                    <span class="text-white font-bold ss-truncate-safe">{{ email }}</span>
                 </p>
-                {% if not has_challenge %}
-                <p class="text-slate-300 text-xs leading-relaxed mt-4">
-                    This browser needs its own verification challenge. Request a new verification code on this device before entering an OTP.
+                {% if has_challenge %}
+                <p class="text-slate-500 text-xs leading-relaxed mt-4">
+                    Enter it below to finish setting up your account. Codes are short-lived — if yours has stopped
+                    working, request a new one and use the newest code.
+                </p>
+                {% else %}
+                {# has_challenge is False whenever this browser holds no OTP
+                   challenge of its own: a fresh device, a cleared session, or a
+                   send that failed. The route refuses an OTP in that state, so
+                   the page says so instead of inviting a doomed attempt. #}
+                <p class="verify-callout mt-4" role="status">
+                    <i class="fas fa-circle-info" aria-hidden="true"></i>
+                    <span>This browser does not have a code of its own yet. Request a new verification code on this device,
+                        then enter the code from that newest email.</span>
                 </p>
                 {% endif %}
             </div>
 
-            <!-- Flash Messages -->
-
-
             <form method="POST">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <label for="verifyOtp" class="ss-visually-hidden">Verification code</label>
+                <label for="verifyOtp" class="ss-visually-hidden">6-digit verification code</label>
                 <input id="verifyOtp" type="text" name="otp" class="otp-input glass" placeholder="000000" maxlength="6" required
-                    inputmode="numeric" autocomplete="one-time-code">
+                    inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code"
+                    aria-describedby="otpHint" {% if has_challenge %}autofocus{% endif %}>
 
                 <div class="mb-8">
-                    <p class="text-[10px] text-slate-500 uppercase font-black tracking-widest">
-                        Code Expires in: <span id="otpTimer" class="text-white">10:00</span>
+                    {# There was a hardcoded 10:00 countdown here. The server
+                       issues these codes with minutes=2 (_create_otp in
+                       app.py), and the route passes no expiry to this template -
+                       so the timer was telling every user something false for
+                       eight of its ten minutes. Honest, data-free copy instead. #}
+                    <p class="text-[10px] text-slate-500 uppercase font-black tracking-widest" id="otpHint">
+                        Codes expire a few minutes after they are sent
                     </p>
                 </div>
 
-                <button type="submit" class="ss-btn ss-btn-primary ss-btn-block" style="min-height:52px;font-size:0.95rem;">
-                    <i class="fas fa-shield-check" aria-hidden="true"></i> Confirm Identity
+                <button type="submit" class="ss-btn ss-btn-primary ss-btn-block" id="verifySubmit"
+                    style="min-height:52px;font-size:0.95rem;">
+                    <i class="fas fa-circle-check" aria-hidden="true"></i> Confirm email
                 </button>
             </form>
 
             <div class="mt-10 pt-6 border-t border-white/5">
                 <p class="text-slate-500 text-[10px] uppercase font-bold tracking-widest mb-3">Didn't get the code?</p>
+                {# POST-only on purpose: GET /resend-otp/ returns 405, and the
+                   route is rate limited per network. Keep this a form. #}
                 <form method="POST" action="{{ url_for('resend_otp') }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" class="resend-link">
-                        <i class="fas fa-redo mr-2"></i> Request New OTP
+                    <button type="submit" class="resend-link" id="resendSubmit">
+                        <i class="fas fa-redo mr-2" aria-hidden="true"></i> Send a new code
                     </button>
                 </form>
+                <p class="text-slate-600 text-[11px] leading-relaxed mt-3">
+                    Check your spam folder first. Too many requests in a row are turned down for a while — wait a
+                    moment before asking again.
+                </p>
+            </div>
+
+            <div class="mt-8 pt-5 border-t border-white/5">
+                <a href="{{ url_for('register') }}" class="back-link">Used the wrong address? Start again</a>
             </div>
         </div>
     </div>
 
-    <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
     <script>
-        AOS.init({
-            once: true,
-            duration: 1000,
-            disable: 'mobile'
-        });
-
-        // Blob movement
-        window.addEventListener('scroll', () => {
-            const scroll = window.pageYOffset;
-            const b1 = document.getElementById('blob1');
-            const b2 = document.getElementById('blob2');
-            if (b1) b1.style.transform = `translate(${scroll * 0.05}px, ${scroll * 0.1}px)`;
-            if (b2) b2.style.transform = `translate(${scroll * -0.05}px, ${scroll * -0.1}px)`;
-        });
-
-        // Countdown timer
-        let countdown = 600; // 10 minutes in seconds
-        const timerElement = document.getElementById('otpTimer');
-
-        function updateTimer() {
-            if (!timerElement) return;
-
-            const minutes = Math.floor(countdown / 60);
-            const seconds = countdown % 60;
-            timerElement.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-
-            if (countdown <= 0) {
-                clearInterval(timerInterval);
-                timerElement.textContent = "Expired!";
-                timerElement.classList.add('text-red-400');
-            } else {
-                countdown--;
-            }
-        }
-
-        const timerInterval = setInterval(updateTimer, 1000);
-        updateTimer(); // Initial call
-
-        // Auto-hide flash messages after 5 seconds
         document.addEventListener('DOMContentLoaded', function () {
+            // Decorative parallax, skipped entirely under reduced motion. The
+            // handler is also passive now - it only writes a transform.
+            if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                const b1 = document.getElementById('blob1');
+                const b2 = document.getElementById('blob2');
+                window.addEventListener('scroll', () => {
+                    const scroll = window.pageYOffset;
+                    if (b1) b1.style.transform = `translate(${scroll * 0.05}px, ${scroll * 0.1}px)`;
+                    if (b2) b2.style.transform = `translate(${scroll * -0.05}px, ${scroll * -0.1}px)`;
+                }, { passive: true });
+            }
+
+            // Visual double-submit guards. Both forms still post normally.
+            document.querySelectorAll('form').forEach(form => {
+                form.addEventListener('submit', function () {
+                    const btn = form.querySelector('button[type="submit"]');
+                    if (btn) {
+                        btn.disabled = true;
+                        btn.style.opacity = '0.55';
+                    }
+                });
+            });
+
+            // Confirmations self-dismiss; an error the user must act on stays.
             const flashStack = document.getElementById('flashStack');
             const flashMessage = flashStack ? flashStack.querySelector('.flash-message') : null;
 
-            if (flashMessage) {
+            if (flashMessage && flashMessage.getAttribute('role') === 'status') {
                 setTimeout(() => {
                     flashMessage.classList.add('fade-out');
 
