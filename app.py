@@ -2845,7 +2845,7 @@ def send_contact_email():
         
         # Send email using your existing SMTP function
         send_email_smtp(
-            to_email="contact@myscanstory.com",
+            to_email="connect@myscanstory.com",
             subject=subject,
             html_body=html_body
         )
