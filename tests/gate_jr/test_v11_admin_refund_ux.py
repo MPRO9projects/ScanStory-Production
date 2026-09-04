@@ -256,7 +256,10 @@ def test_renewal_refund_ineligibility_is_taken_from_the_backend(
     assert eligibility["reason_text"] == "This renewal period has already started and requires manual review."
 
     login_admin(client, admin)
-    body = client.get("/admin/operations").get_data(as_text=True)
+    # Money-moving refund actions were relocated from Operations to
+    # Payments/Refunds (World-Class Admin Restructure, 2026-09-02) - this
+    # test's own route/template followed that IA move.
+    body = client.get("/admin/payments/refunds").get_data(as_text=True)
     assert f"Refund not available: {eligibility['reason_text']}" in body
     assert f'data-refund-url="/admin/api/addon-purchases/{purchase.id}/refund"' not in body
 
@@ -269,7 +272,7 @@ def test_eligible_addon_purchase_offers_the_action_with_a_required_reason(
     assert app_module.refund_eligibility_for_addon_purchase(purchase)["eligible"] is True
 
     login_admin(client, admin)
-    body = client.get("/admin/operations").get_data(as_text=True)
+    body = client.get("/admin/payments/refunds").get_data(as_text=True)
     assert f'data-refund-url="/admin/api/addon-purchases/{purchase.id}/refund"' in body
     assert f'id="addonRefundReason{purchase.id}"' in body
     assert "required" in body.split(f'id="addonRefundReason{purchase.id}"')[0][-300:]
@@ -365,7 +368,7 @@ def test_confirmation_copy_states_full_refund_only_and_is_used_verbatim():
     assert "may not be instant" in REFUND_CONFIRMATION_NOTICE
     assert "never deleted automatically" in REFUND_CONFIRMATION_NOTICE
     assert "manual entitlement reconciliation" in REFUND_CONFIRMATION_NOTICE
-    for template in ("admin/view_payment.html", "admin/operations.html"):
+    for template in ("admin/view_payment.html", "admin/payments_refunds.html"):
         html = read_template(template)
         assert "window.confirm(NOTICE" in html
 
@@ -380,7 +383,7 @@ def test_the_notice_is_visible_before_submission_not_only_in_the_dialog(
 
 
 def test_no_partial_refund_input_exists_in_any_refund_surface():
-    for template in ("admin/view_payment.html", "admin/operations.html"):
+    for template in ("admin/view_payment.html", "admin/payments_refunds.html"):
         html = read_template(template).lower()
         block = html.split("refund", 1)[1]
         for offender in ("partial refund", 'name="amount"', 'id="refundamount"', "refund amount input", 'type="number"'):
@@ -404,9 +407,12 @@ def test_capacity_refund_copy_is_shown_on_an_eligible_capacity_purchase(
     item = make_catalog(app_module, db_session, "CAP_COPY", "PROJECT_CAPACITY", project_delta=2)
     make_fulfilled_purchase(app_module, db_session, normal_user, item, suffix="copy", payment_id="pay_ui_capcopy")
     login_admin(client, admin)
-    body = client.get("/admin/operations").get_data(as_text=True)
+    body = client.get("/admin/payments/refunds").get_data(as_text=True)
     assert "Existing ScanStorys, media and QR codes are kept and keep working." in body
-    addon_section = body.split("Recent Add-on Purchases", 1)[1].split("Recent Entitlement Ledger", 1)[0].lower()
+    # payments_refunds.html has no "Recent Entitlement Ledger" section after
+    # this one (that stayed on Operations as a read-only diagnostic table) -
+    # this card is the last one on the page, so slice to the script block.
+    addon_section = body.split("Recent Add-on Purchases", 1)[1].split("<script>", 1)[0].lower()
     # "never deleted automatically" is the only permitted use of the word.
     assert addon_section.count("deleted") == addon_section.count("never deleted automatically")
     for forbidden in ("will be deleted", "removed project", "projects removed", "erase"):
@@ -417,7 +423,7 @@ def test_capacity_refund_copy_is_shown_on_an_eligible_capacity_purchase(
 # F. Post-action behaviour and the user-facing boundary
 # ===========================================================================
 def test_refund_submission_requires_a_reason_before_it_can_be_sent():
-    for template in ("admin/view_payment.html", "admin/operations.html"):
+    for template in ("admin/view_payment.html", "admin/payments_refunds.html"):
         html = read_template(template)
         assert "A refund reason is required." in html
         guard = html.split("A refund reason is required.")[0]
@@ -427,7 +433,7 @@ def test_refund_submission_requires_a_reason_before_it_can_be_sent():
 
 
 def test_the_page_refetches_authoritative_state_instead_of_trusting_the_response():
-    for template in ("admin/view_payment.html", "admin/operations.html"):
+    for template in ("admin/view_payment.html", "admin/payments_refunds.html"):
         html = read_template(template)
         after = html.split("btn.dataset.refundUrl", 1)[1]
         assert "window.location.reload()" in after

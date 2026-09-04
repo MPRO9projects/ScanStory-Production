@@ -145,30 +145,6 @@
             }
         }
 
-        .topbar {
-            height: 64px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 1rem;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            width: 100%;
-        }
-
-        @media (max-width: 640px) {
-            .topbar {
-                height: 60px;
-                padding: 0 0.75rem;
-            }
-            
-            .topbar .btn-neo {
-                padding: 0.5rem 0.75rem;
-                font-size: 10px;
-            }
-        }
-        
         /* Progress bars */
         .progress-bar {
             width: 100%;
@@ -407,35 +383,8 @@
             {% endif %}
         {% endwith %}
 
-        <header class="topbar glass">
-            <a class="btn-neo" href="{{ url_for('dashboard') }}">
-                <i class="fa-solid fa-chevron-left text-xs"></i> 
-                <span class="hidden sm:inline">Back to Dashboard</span>
-                <span class="sm:hidden">Dashboard</span>
-            </a>
-
-            <div class="font-black italic tracking-tight text-lg md:text-xl">
-                SCAN<span class="text-pink-500">STORY</span>
-            </div>
-
-            <div class="flex gap-2">
-                <a class="ss-btn ss-btn-secondary ss-btn-sm hidden sm:flex" href="{{ url_for('ownership_center') }}">
-                    <i class="fas fa-right-left" aria-hidden="true"></i> <span class="hidden md:inline">Ownership</span>
-                </a>
-                <a class="ss-btn ss-btn-secondary ss-btn-sm sm:hidden" href="{{ url_for('ownership_center') }}" aria-label="Ownership Center">
-                    <i class="fas fa-right-left" aria-hidden="true"></i>
-                </a>
-                <a class="ss-btn ss-btn-secondary ss-btn-sm hidden sm:flex" href="{{ url_for('subscribe_page') }}">
-                    <i class="fas fa-crown" aria-hidden="true"></i> <span class="hidden md:inline">Upgrade</span>
-                </a>
-                <a class="ss-btn ss-btn-secondary ss-btn-sm sm:hidden" href="{{ url_for('subscribe_page') }}" aria-label="Upgrade">
-                    <i class="fas fa-crown" aria-hidden="true"></i>
-                </a>
-                <a class="ss-btn ss-btn-tertiary ss-btn-sm" href="{{ url_for('logout') }}">
-                    <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> <span class="hidden sm:inline">Logout</span>
-                </a>
-            </div>
-        </header>
+        {% set nav_active = 'profile' %}
+        {% include "user/_creator_nav.html" %}
 
         <main class="content-wrapper" id="main-content" tabindex="-1">
             <div class="main-container">
@@ -863,6 +812,38 @@
 
                 <div class="divider-line"></div>
 
+                <!-- Account Security -->
+                <div class="glass rounded-[20px] md:rounded-[28px] p-4 md:p-6 mx-3 md:mx-0" data-aos="fade-up" data-aos-delay="140">
+                    <div class="flex items-center justify-between mb-4 md:mb-6">
+                        <h2 class="text-[11px] md:text-[12px] font-black uppercase tracking-widest text-white/70">Account Security</h2>
+                        <i class="fa-solid fa-key text-pink-400 text-lg md:text-xl"></i>
+                    </div>
+                    <form method="POST" action="{{ url_for('user_change_password') }}" class="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4"
+                          onsubmit="var b=this.querySelector('button[type=submit]'); b.disabled=true; b.textContent='Updating...'; return true;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <div>
+                            <label class="text-white/60 text-xs uppercase font-black tracking-widest">Current Password</label>
+                            <input type="password" name="current_password" required autocomplete="current-password"
+                                   class="mt-1 w-full glass rounded-xl px-3 py-2 text-sm bg-transparent border border-white/10">
+                        </div>
+                        <div>
+                            <label class="text-white/60 text-xs uppercase font-black tracking-widest">New Password</label>
+                            <input type="password" name="new_password" required minlength="6" autocomplete="new-password"
+                                   class="mt-1 w-full glass rounded-xl px-3 py-2 text-sm bg-transparent border border-white/10">
+                        </div>
+                        <div>
+                            <label class="text-white/60 text-xs uppercase font-black tracking-widest">Confirm New Password</label>
+                            <input type="password" name="confirm_password" required minlength="6" autocomplete="new-password"
+                                   class="mt-1 w-full glass rounded-xl px-3 py-2 text-sm bg-transparent border border-white/10">
+                        </div>
+                        <div class="md:col-span-3">
+                            <button type="submit" class="btn-neo bg-pink-500/20 border-pink-400/30 text-pink-300 hover:bg-pink-500/30 hover:border-pink-400/50 text-xs md:text-sm">
+                                Update Password
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
                 <!-- Trial Information (if applicable) -->
                 {% if user.subscription_status == 'trial' and trial %}
                 <div class="glass rounded-xl md:rounded-2xl p-4 md:p-8 border border-yellow-500/30 bg-gradient-to-r from-yellow-500/5 to-pink-500/5 mt-4 md:mt-6 mx-3 md:mx-0" 
@@ -917,6 +898,7 @@
     </div>
 
     <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
+    <script src="{{ url_for('static', filename='js/nav.js') }}"></script>
     <script>
         // Initialize AOS animations
         AOS.init({ 

@@ -68,6 +68,13 @@
                                     <input class="form-control" style="width:70px" name="extension_months" type="number" min="1" value="1">
                                     <button class="btn btn-primary btn-sm" type="submit">Extend</button>
                                 </form>
+                                <form method="POST" action="{{ url_for('admin_increase_subscription_limits', order_id=sub.id) }}" onsubmit="if(!confirm('Increase limits for this subscription?')){return false;} var b=this.querySelector('button[type=submit]'); b.disabled=true; b.textContent='Applying...'; return true;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <input class="form-control" style="width:60px" name="additional_projects" type="number" min="0" value="0" title="Additional projects" placeholder="+proj">
+                                    <input class="form-control" style="width:60px" name="additional_scans" type="number" min="0" value="0" title="Additional scans" placeholder="+scans">
+                                    <input class="form-control" style="width:140px" name="reason" type="text" required title="Reason (required)" placeholder="Reason (required)">
+                                    <button class="btn btn-secondary btn-sm" type="submit">Increase Limits</button>
+                                </form>
                                 <form method="POST" action="{{ url_for('admin_deactivate_subscription', order_id=sub.id) }}" onsubmit="return confirm('Deactivate this subscription?');">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <button class="btn btn-danger btn-sm" type="submit">Deactivate</button>

@@ -211,6 +211,91 @@ def test_motion_blur_is_rejected(client, app_module, login_user, feature_artifac
     assert response.get_json()["detected"] is False
 
 
+# --- Scanner resilience pass: frame-quality diagnostics (item 25 test matrix) --------------
+# Same false-positive-safety contract as every rejection test above: a frame-quality signal
+# is diagnostic-only and must NEVER become a matching shortcut - `detected` stays False for
+# all of these (no real marker is registered), only `scanner_guidance` is asserted further.
+
+def test_overexposed_frame_is_classified_and_never_a_false_accept(client, app_module, login_user, feature_artifact, project_with_pair, bright_overexposed_image_bytes):
+    project, _pair = project_with_pair
+    response = client.post(
+        "/detect_init",
+        data={"project_id": str(project.id), "test_image": (BytesIO(bright_overexposed_image_bytes), "frame.jpg")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["detected"] is False
+    guidance = body.get("scanner_guidance") or {}
+    assert guidance.get("likely_overexposed") is True
+    assert guidance.get("likely_localized_glare") is not True  # global, not a hotspot
+
+
+def test_underexposed_frame_is_classified_and_never_a_false_accept(client, app_module, login_user, feature_artifact, project_with_pair, dark_underexposed_image_bytes):
+    project, _pair = project_with_pair
+    response = client.post(
+        "/detect_init",
+        data={"project_id": str(project.id), "test_image": (BytesIO(dark_underexposed_image_bytes), "frame.jpg")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["detected"] is False
+    guidance = body.get("scanner_guidance") or {}
+    assert guidance.get("likely_underexposed") is True
+
+
+def test_localized_glare_is_distinguished_from_global_overexposure(client, app_module, login_user, feature_artifact, project_with_pair, localized_glare_image_bytes):
+    """A small hotspot must not read as the whole frame being blown out - that's exactly
+    the distinction item 14 of the resilience brief requires."""
+    project, _pair = project_with_pair
+    response = client.post(
+        "/detect_init",
+        data={"project_id": str(project.id), "test_image": (BytesIO(localized_glare_image_bytes), "frame.jpg")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["detected"] is False
+    guidance = body.get("scanner_guidance") or {}
+    assert guidance.get("likely_localized_glare") is True
+    assert guidance.get("likely_overexposed") is not True  # a hotspot alone must not read as global
+
+
+def test_low_contrast_frame_is_classified_and_never_a_false_accept(client, app_module, login_user, feature_artifact, project_with_pair, low_contrast_image_bytes):
+    project, _pair = project_with_pair
+    response = client.post(
+        "/detect_init",
+        data={"project_id": str(project.id), "test_image": (BytesIO(low_contrast_image_bytes), "frame.jpg")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["detected"] is False
+    guidance = body.get("scanner_guidance") or {}
+    assert guidance.get("likely_low_contrast") is True
+    assert guidance.get("likely_overexposed") is not True
+    assert guidance.get("likely_underexposed") is not True
+
+
+def test_normal_frame_is_not_misclassified_as_any_quality_problem(client, app_module, login_user, feature_artifact, project_with_pair, high_noise_image_bytes):
+    """A busy, well-lit, well-contrasted frame (the existing high_noise fixture already
+    used for the 'no false accept' tests above) must not spuriously trip any of the new
+    quality flags - the new signals must not be so sensitive they fire on normal content."""
+    project, _pair = project_with_pair
+    response = client.post(
+        "/detect_init",
+        data={"project_id": str(project.id), "test_image": (BytesIO(high_noise_image_bytes), "frame.jpg")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 200
+    guidance = response.get_json().get("scanner_guidance") or {}
+    assert guidance.get("likely_overexposed") is not True
+    assert guidance.get("likely_underexposed") is not True
+    assert guidance.get("likely_localized_glare") is not True
+    assert guidance.get("likely_low_contrast") is not True
+
+
 def test_wrong_marker_http_response_never_reports_detected_true(client, app_module, login_user, feature_artifact, project_with_pair, high_noise_image_bytes):
     """Same request twice — a second, unrelated 'wrong marker' frame must never flip
     detected to True just because a prior request succeeded/failed."""

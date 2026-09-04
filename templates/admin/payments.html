@@ -318,6 +318,14 @@
 {% endblock %}
 
 {% block content %}
+        <nav aria-label="Breadcrumb" style="margin-bottom: 10px; color: rgba(255,255,255,0.6); font-size: 13px;">
+            Commercial &rsaquo; <span style="color: rgba(255,255,255,0.85);">Payments</span>
+        </nav>
+        <div style="display:flex; gap:10px; margin-bottom: 16px;">
+            <a href="{{ url_for('admin_payments') }}" class="btn btn-secondary btn-sm" aria-current="page">Orders</a>
+            <a href="{{ url_for('admin_payments_refunds') }}" class="btn btn-secondary btn-sm" style="opacity:0.8;">Refunds</a>
+            <a href="{{ url_for('admin_webhook_events') }}" class="btn btn-secondary btn-sm" style="opacity:0.8;">Webhook Events</a>
+        </div>
         <div class="page-header">
             <h1 class="page-title">Payment Management</h1>
             <div style="display: flex; gap: 15px; align-items: center;">
@@ -424,7 +432,7 @@
                             </td>
                             <td>
                                 <strong>{{ payment.plan.plan_name if payment.plan else 'N/A' }}</strong><br>
-                                <div>₹{{ "%.2f"|format(payment.total_amount) }}</div>
+                                <div>{% if (payment.currency or 'INR') == 'INR' %}₹{{ "%.2f"|format(payment.total_amount) }}{% else %}{{ "%.2f"|format(payment.total_amount) }} {{ payment.currency }}{% endif %}</div>
                                 {% if payment.offer_amount and payment.offer_amount < payment.amount %}
                                 <small style="color: #10b981; font-size: 12px;">
                                     Save ₹{{ "%.2f"|format(payment.amount - payment.offer_amount) }}
@@ -565,24 +573,7 @@
 
 {% block extra_js %}
 <script>
-function toggleDropdown() {
-            const dropdown = document.getElementById('userDropdown');
-            dropdown.classList.toggle('show');
-        }
-        
-        // Close dropdown when clicking outside
-        window.onclick = function(event) {
-            if (!event.target.matches('.user-menu span')) {
-                const dropdowns = document.querySelectorAll('.dropdown-menu');
-                dropdowns.forEach(dropdown => {
-                    if (dropdown.classList.contains('show')) {
-                        dropdown.classList.remove('show');
-                    }
-                });
-            }
-        };
-        
-        // Copy payment ID to clipboard
+// Copy payment ID to clipboard
         function copyToClipboard(text) {
             navigator.clipboard.writeText(text).then(() => {
                 alert('Payment ID copied to clipboard!');

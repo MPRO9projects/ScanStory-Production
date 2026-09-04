@@ -13,6 +13,7 @@
   <!-- Shared Creator UI helpers (ssToast): the same accessible toast the other
        Creator pages use. Presentation only - no replacement behaviour depends on it. -->
   <script defer src="{{ url_for('static', filename='js/ss-ui.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/nav.js') }}"></script>
 
   <style>
     :root {
@@ -54,6 +55,7 @@
     .topbar {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 14px;
       margin-bottom: 28px;
     }
@@ -211,6 +213,7 @@
 
     .file-zone {
       position: relative;
+      width: 100%;
       border: 1px dashed rgba(255,255,255,0.18);
       border-radius: var(--radius-md);
       padding: 22px 14px;
@@ -218,6 +221,24 @@
       cursor: pointer;
       background: rgba(255,255,255,0.02);
       transition: all 0.3s var(--ease);
+      /* The image slot's zone is now a <button> (opens the marker-preparation
+         flow instead of a raw file input) - the video slot's zone is still a
+         plain div wrapping its own <input type="file">. Same visual result
+         either way. */
+      font: inherit;
+      color: inherit;
+    }
+
+    .ss-visually-hidden-input {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
     }
 
     .file-zone:hover {
@@ -304,6 +325,15 @@
       font-size: 10px;
       color: var(--muted);
       margin-right: 4px;
+    }
+
+    .current-target-preview {
+      width: 40px;
+      height: 40px;
+      border-radius: 8px;
+      object-fit: cover;
+      border: 1px solid var(--border, rgba(255,255,255,0.14));
+      flex-shrink: 0;
     }
 
     .action-row {
@@ -511,6 +541,149 @@
         animation-duration: 0.01ms !important;
       }
     }
+
+    /* =====================================================================
+       MULTI-VIDEO EDITING (V1.1 completion). Compact cards, not full-size
+       simultaneous players - a target with several videos must not turn this
+       page into a heavy wall of large <video> elements.
+       ===================================================================== */
+    .media-manager { padding-top: 18px; }
+
+    .media-card {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+      padding: 14px;
+      border-radius: var(--radius-md);
+      background: rgba(255,255,255,0.02);
+      border: 1px solid rgba(255,255,255,0.07);
+      margin-bottom: 12px;
+    }
+
+    .media-card-preview {
+      flex: 0 0 140px;
+      width: 140px;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #000;
+    }
+
+    .media-card-video {
+      width: 100%;
+      height: 90px;
+      object-fit: cover;
+      display: block;
+    }
+
+    .media-card-body {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .media-card-title {
+      font-size: 13px;
+      font-weight: 800;
+      color: rgba(255,255,255,0.9);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .media-default-badge { font-size: 9px; }
+
+    .media-card-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .media-inline-form { display: contents; }
+
+    .media-action-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 9px 12px;
+      min-height: 40px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.82);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      cursor: pointer;
+      font-family: inherit;
+      white-space: nowrap;
+    }
+
+    .media-action-btn:hover {
+      border-color: rgba(0,212,255,0.4);
+      color: var(--accent);
+    }
+
+    .media-action-danger {
+      color: #ff8080;
+      border-color: rgba(255,60,60,0.25);
+    }
+
+    .media-action-danger:hover {
+      color: #ff6666;
+      border-color: rgba(255,60,60,0.5);
+    }
+
+    .media-file-btn { position: relative; overflow: hidden; }
+
+    .media-file-btn input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+    }
+
+    .media-add-form { margin-top: 4px; }
+
+    .media-add-btn {
+      border-color: rgba(0,212,255,0.3);
+      color: var(--accent);
+    }
+
+    .media-hint {
+      font-size: 11px;
+      color: rgba(255,255,255,0.45);
+      line-height: 1.5;
+    }
+
+    /* Add/replace-video progress feedback (sections 8-15): sits full-width under
+       the action row (the .media-inline-form wrapper is display:contents, so this
+       is a direct flex child of .media-card-actions) so a live "Uploading NN%"
+       label never collides with the buttons. Empty and unrendered when idle. */
+    .media-upload-status {
+      display: none;
+      flex-basis: 100%;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 2px 0;
+    }
+    .media-upload-status.is-visible { display: flex; }
+    .media-upload-status-progress { color: var(--accent); }
+    .media-upload-status-error { color: #ff8080; }
+    .media-file-btn.is-busy { opacity: 0.6; pointer-events: none; }
+
+    @media (max-width: 640px) {
+      .media-card { flex-direction: column; }
+      .media-card-preview { width: 100%; flex: none; }
+      .media-card-video { height: 140px; }
+      .media-action-btn { flex: 1 1 auto; justify-content: center; }
+    }
   </style>
 </head>
 
@@ -529,18 +702,43 @@
     {% endwith %}
   </div>
 
+  {# Admin CRUD parity pass (2026-09-02): _creator_nav.html is entirely
+     User-session routes (dashboard/my_stories/ownership/plans/profile/
+     logout via the USER auth session) - rendering it for an admin session
+     would be broken (e.g. "Logout" would hit the user logout route while
+     the admin session stays authenticated). Matches the same precedent
+     admin_create_project_page already set by not including this partial at
+     all for admin. #}
+  {% if not is_admin %}
+  {% set nav_active = 'my_stories' %}
+  {% include "user/_creator_nav.html" %}
+  {% endif %}
+
   <div class="page" id="main-content" role="main" tabindex="-1">
     <div class="topbar">
+      {% if is_admin %}
+      <a href="{{ url_for('admin_project_preview', project_id=project.id) }}" class="nav-back">
+        <i class="fas fa-chevron-left"></i> Back to Project Preview
+      </a>
+      {% else %}
       <a href="{{ url_for('projects_page') }}" class="nav-back">
         <i class="fas fa-chevron-left"></i> Back to My Stories
       </a>
+      {% endif %}
     </div>
 
+    {% if is_admin %}
+    <div style="display:inline-flex; align-items:center; gap:10px; margin-bottom:14px; padding:8px 16px; border-radius:999px; background:rgba(0,212,255,0.08); border:1px solid rgba(0,212,255,0.25);">
+      <span style="font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--accent, #00d4ff);">Admin Workspace Project</span>
+      <span style="font-size:12px; color:rgba(255,255,255,0.6);">Owner: You</span>
+    </div>
+    {% endif %}
     <div class="page-header">
       <h1>Manage media</h1>
       <p>{{ project.name }} &mdash; replace only the files you want to update. Any slot you leave empty keeps the media it already has.</p>
     </div>
 
+  {% if project.experience_type != 'direct_qr' %}
   {# TRUTHFUL consequences. The previous copy said "uploading a new image or
      video will reprocess only that story pair", which is not what the backend
      does: in user_edit_project (app.py) only `kind == "images"` flips
@@ -582,19 +780,43 @@
           {% endif %}
         </h2>
 
+        {# Admin CRUD parity pass (2026-09-02): whole-target removal - this
+           did not exist before this pass. Same "at least one target" guard
+           the server enforces (user_remove_project_pair). A plain button,
+           not a nested <form> - this whole block sits inside the page's
+           main "Save replacements" <form> (see above), and nested <form>
+           elements are invalid HTML with unpredictable submit behavior. #}
+        {% if pairs|length > 1 %}
+        <button type="button" class="media-action-btn media-action-danger"
+                onclick="removeProjectPair({{ project.id }}, {{ pair.pair_index }})">
+          <i class="fa-solid fa-trash" aria-hidden="true"></i> Remove this target
+        </button>
+        {% endif %}
+
         {# These used to print pair.image_filename / pair.video_filename, i.e.
            the internal storage names, which are literally "{project id}_{index}"
            - a raw database id shown to the creator as if it were a file they had
            named. What matters here is only whether each slot is filled. #}
+        {# Issue 6 (physical QA): a creator replacing media needs to see what's
+           CURRENTLY attached before they overwrite it - the status tags alone
+           ("Target image" / "Video") never actually showed the image itself.
+           Cache-busted via pair.updated_at (bumped on every replace, see the
+           matching detect_init comment) so a just-replaced image doesn't keep
+           showing pre-replace bytes from a browser/shared cache. #}
         <div class="current-files">
           <span class="cf-label">Currently in place</span>
           {% if pair.image_filename %}
+          <img class="current-target-preview"
+               src="{{ url_for('serve_admin_image' if project.owner_admin_id else 'serve_image', project_id=project.id, image_id=pair.pair_index, v=pair.updated_at.timestamp()|int if pair.updated_at else 0) }}"
+               alt="Current target image for content set {{ pair.pair_index + 1 }}" loading="lazy">
           <span class="status-tag status-ok"><i class="fas fa-image" aria-hidden="true"></i> Target image</span>
           {% else %}
           <span class="status-tag status-pending"><i class="fas fa-image" aria-hidden="true"></i> No target image</span>
           {% endif %}
           {% if pair.video_filename %}
-          <span class="status-tag status-ok"><i class="fas fa-film" aria-hidden="true"></i> Video</span>
+          <span class="status-tag status-ok"><i class="fas fa-film" aria-hidden="true"></i>
+            {% if pair.media_items and pair.media_items|length > 1 %}{{ pair.media_items|length }} videos{% else %}Video{% endif %}
+          </span>
           {% else %}
           <span class="status-tag status-pending"><i class="fas fa-film" aria-hidden="true"></i> No video</span>
           {% endif %}
@@ -603,19 +825,44 @@
         <div class="upload-row">
           <div class="upload-slot">
             <label for="image_{{ pair.pair_index }}">Replace target image</label>
-            <div class="file-zone" id="img-zone-{{ pair.pair_index }}">
-              <input type="file" id="image_{{ pair.pair_index }}" name="image_{{ pair.pair_index }}" accept="image/*"
-                     aria-describedby="img-help-{{ pair.pair_index }}"
-                     onchange="onFileChosen(this, 'img-zone-{{ pair.pair_index }}', 'img-sel-{{ pair.pair_index }}')">
+            {# Master stabilization pass (section 1/2): the real upload input the
+               form submits stays exactly as it was (still name="image_{index}",
+               still what user_edit_project reads) - only HIDDEN now, since its
+               file is set programmatically once a marker is prepared. Clicking
+               this zone opens the SAME marker-preparation flow creation uses
+               (static/js/marker-editor.js): explicit Take a photo / Choose from
+               device -> shared crop/rotate/reset/full-image editor -> "Use this
+               marker" writes the final cropped File onto this input via
+               DataTransfer. Nothing about the server route changes - it still
+               receives one ordinary image file in image_{{ pair.pair_index }}. #}
+            <input type="file" id="image_{{ pair.pair_index }}" name="image_{{ pair.pair_index }}" accept="image/*"
+                   class="ss-visually-hidden-input"
+                   aria-describedby="img-help-{{ pair.pair_index }}"
+                   onchange="onFileChosen(this, 'img-zone-{{ pair.pair_index }}', 'img-sel-{{ pair.pair_index }}')">
+            <button type="button" class="file-zone" id="img-zone-{{ pair.pair_index }}"
+                    onclick="openImageSourceChooser({{ pair.pair_index }})">
               <i class="fas fa-image" aria-hidden="true"></i>
-              <div class="fz-title">Upload a new image</div>
+              <div class="fz-title">Replace target</div>
               <div class="fz-sub" id="img-help-{{ pair.pair_index }}">
-                JPG or PNG. Goes back to Processing while we analyse it. Leave empty to keep the current image.
+                Take a photo or choose one from your device, then crop the marker area. Goes back to
+                Processing while we analyse it. Leave empty to keep the current image.
               </div>
               <div class="fz-selected" id="img-sel-{{ pair.pair_index }}"></div>
-            </div>
+            </button>
           </div>
 
+          {# Physical QA fix (duplicate Replace UI): the "Videos (N)" section
+             below already renders a REAL, working Replace button for any
+             pair with at least one PairMedia row (see its per-media loop) -
+             the old `or pair.media_items|length <= 1` here meant a pair with
+             exactly one real PairMedia row got BOTH this slot and that
+             button, two different controls hitting two different routes for
+             the same file. This slot is now the fallback for the one case
+             the section below can't handle itself: a fully legacy pair with
+             ZERO PairMedia rows (nothing for its per-media loop to render a
+             control against yet - see that section's own "Use 'Replace
+             video' above" hint for this exact case). #}
+          {% if not pair.media_items %}
           <div class="upload-slot">
             <label for="video_{{ pair.pair_index }}">Replace video</label>
             <div class="file-zone" id="vid-zone-{{ pair.pair_index }}">
@@ -630,6 +877,7 @@
               <div class="fz-selected" id="vid-sel-{{ pair.pair_index }}"></div>
             </div>
           </div>
+          {% endif %}
         </div>
       </div>
       {% endfor %}
@@ -638,14 +886,512 @@
         <button type="submit" class="btn-save">
           <i class="fas fa-floppy-disk" aria-hidden="true"></i> Save replacements
         </button>
-        <a href="{{ url_for('projects_page') }}" class="btn-cancel">
+        <a href="{{ is_admin and url_for('admin_project_preview', project_id=project.id) or url_for('projects_page') }}" class="btn-cancel">
           <i class="fas fa-xmark" aria-hidden="true"></i> Cancel
         </a>
       </div>
     </form>
+  {% else %}
+  {# =====================================================================
+     DIRECT QR EDIT - VIDEO ONLY (video duplicate + Direct QR Edit parity
+     pass, 2026-08-31). Direct QR has no target image at all - every video in
+     the story is its own ProjectPair under the hood, but that is never
+     surfaced here: no ROI, no crop, no marker editor, no target-hash/
+     duplicate-target concepts, no "Add Target"/"Add Pair" language. Just an
+     ordered list of videos with Replace/Remove, and one "+ Add Video" form. #}
+  <div class="info-banner">
+    <i class="fas fa-circle-info" aria-hidden="true"></i>
+      <span>Replacing or adding a video takes effect straight away &mdash; nothing is re-analysed.
+        Your QR code and share link never change.</span>
   </div>
 
+  <div class="panel pair-block" id="directQrVideosPanel">
+    <h2 class="pair-label">
+      <span class="pair-num"><i class="fas fa-film" aria-hidden="true"></i></span>
+      Videos
+    </h2>
+    {% for pair in pairs %}
+    {% set media = pair.default_media %}
+    <div class="media-card">
+      <div class="media-card-preview">
+        {% if media %}
+        <video src="{{ url_for('serve_admin_pair_media_video' if project.owner_admin_id else 'serve_pair_media_video', project_id=project.id, image_id=pair.pair_index, media_id=media.id, v=media.video_size or 0) }}"
+               class="media-card-video" preload="metadata" controls playsinline></video>
+        {% elif pair.video_filename %}
+        <video src="{{ url_for('serve_admin_video' if project.owner_admin_id else 'serve_video', project_id=project.id, image_id=pair.pair_index, v=pair.updated_at.timestamp()|int if pair.updated_at else 0) }}"
+               class="media-card-video" preload="metadata" controls playsinline></video>
+        {% endif %}
+      </div>
+      <div class="media-card-body">
+        <div class="media-card-title">Video {{ loop.index }}</div>
+        <div class="media-card-actions">
+          {% if media %}
+          <form method="POST" action="{{ url_for('user_replace_pair_media', project_id=project.id, pair_index=pair.pair_index, media_id=media.id) }}" enctype="multipart/form-data" class="media-inline-form media-replace-form" data-video-label="Video {{ loop.index }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="media-action-btn media-file-btn">
+              <input type="file" name="replacement_video" accept="video/*" aria-label="Replace video {{ loop.index }}" onchange="handleEditVideoFileChosen(this)">
+              <span><i class="fas fa-arrow-rotate-right" aria-hidden="true"></i> Replace</span>
+            </label>
+            <div class="media-upload-status" role="status" aria-live="polite"></div>
+          </form>
+          {% endif %}
+          {% if pairs|length > 1 %}
+          <form method="POST" action="{{ url_for('user_remove_direct_qr_video', project_id=project.id, pair_index=pair.pair_index) }}" class="media-inline-form" onsubmit="return confirm('Remove this video? This cannot be undone.');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="media-action-btn media-action-danger"><i class="fas fa-trash" aria-hidden="true"></i> Remove</button>
+          </form>
+          {% else %}
+          <span class="media-hint">A ScanStory must keep at least one video.</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+
+    {% if can_add_direct_qr_video %}
+    <form method="POST" action="{{ url_for('user_add_direct_qr_video', project_id=project.id) }}" enctype="multipart/form-data" class="media-inline-form media-add-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <label class="media-action-btn media-file-btn media-add-btn">
+        <input type="file" name="new_video" accept="video/*" aria-label="Add another video" onchange="handleEditVideoFileChosen(this)">
+        <span><i class="fas fa-plus" aria-hidden="true"></i> Add Video{% if max_pairs_per_project %} ({{ pairs|length }} / {{ max_pairs_per_project }}){% endif %}</span>
+      </label>
+      <div class="media-upload-status" role="status" aria-live="polite"></div>
+    </form>
+    {% elif max_pairs_per_project %}
+    <p class="fz-sub" style="margin:16px 0 0;">
+      Your current plan allows a maximum of {{ max_pairs_per_project }} videos per ScanStory. Upgrade your plan to add more.
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+    {# =====================================================================
+       ADD ANOTHER TARGET (Creator Identity / Edit Flow remediation pass,
+       2026-08-29). A separate <form>, not nested in the one above - HTML
+       forbids nested forms, and this posts to a different route
+       (user_add_project_pair) with its own contract (always creates exactly
+       one new content set, never touches existing pairs). image_video only;
+       hidden entirely for Direct QR, which has no per-target image concept.
+       Never called "pair" in this user-facing copy. #}
+    {% if project.experience_type == 'image_video' %}
+    <div class="panel pair-block" id="addTargetPanel">
+      <h2 class="pair-label">
+        <span class="pair-num"><i class="fas fa-plus" aria-hidden="true"></i></span>
+        Add another target
+      </h2>
+      {% if can_add_target %}
+      <p class="fz-sub" style="margin:0 0 16px;">
+        Add a brand new target image and its first video. This becomes a new content set -
+        your existing content sets are never changed.
+      </p>
+      <form method="POST" enctype="multipart/form-data"
+            action="{{ url_for('user_add_project_pair', project_id=project.id) }}"
+            id="addTargetForm">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="upload-row">
+          <div class="upload-slot">
+            <label for="new_pair_image">Target image</label>
+            <input type="file" id="new_pair_image" name="new_pair_image" accept="image/*"
+                   class="ss-visually-hidden-input"
+                   onchange="onFileChosen(this, 'new-pair-img-zone', 'new-pair-img-sel')">
+            {# Shared ROI pipeline (target-identity remediation pass, 2026-08-29): this
+               used to open the raw file picker directly, so a new target's recognition
+               region was whatever the camera framed - the whole photo, background and
+               all, never cropped, never rotated, EXIF and all. It now opens the exact
+               same marker-preparation flow (openImageSourceChooser/markerFlowModal) that
+               Replace Target already uses, just targeting this form's own hidden input
+               instead of image_{{ pair.pair_index }} - see confirmReplacementMarker(). #}
+            <button type="button" class="file-zone" id="new-pair-img-zone"
+                    onclick="openImageSourceChooser('new')">
+              <i class="fas fa-image" aria-hidden="true"></i>
+              <div class="fz-title">Choose target image</div>
+              <div class="fz-sub">Take a photo or choose one from your device, then crop the marker area.</div>
+              <div class="fz-selected" id="new-pair-img-sel"></div>
+            </button>
+          </div>
+          <div class="upload-slot">
+            <label for="new_pair_video">First video</label>
+            <div class="file-zone" id="new-pair-vid-zone">
+              <input type="file" id="new_pair_video" name="new_pair_video" accept="video/*"
+                     onchange="onFileChosen(this, 'new-pair-vid-zone', 'new-pair-vid-sel')">
+              <i class="fas fa-film" aria-hidden="true"></i>
+              <div class="fz-title">Choose video</div>
+              <div class="fz-sub">MP4. Plays when this new target is scanned.</div>
+              <div class="fz-selected" id="new-pair-vid-sel"></div>
+            </div>
+          </div>
+        </div>
+        <div class="action-row">
+          <button type="submit" class="btn-save" id="addTargetSubmitBtn">
+            <i class="fas fa-plus" aria-hidden="true"></i> Add another target
+          </button>
+        </div>
+      </form>
+      {% else %}
+      <p class="fz-sub" style="margin:0;">
+        {% if max_pairs_per_project %}
+        Your current plan allows a maximum of {{ max_pairs_per_project }} content sets per story.
+        Upgrade your plan to add more.
+        {% else %}
+        Adding a new target isn't available for this story right now.
+        {% endif %}
+      </p>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {# =====================================================================
+       MULTI-VIDEO EDITING (V1.1 completion). A SEPARATE section, not nested
+       inside the form above - HTML forbids nested <form> elements, and each
+       add/replace/remove/reorder/set-default action here is its own small,
+       independently-submitted form pointing at its own route. Direct QR
+       targets never get more than one video by product contract (see the
+       upload pipeline), so this section is skipped entirely for them. #}
+    {% if project.experience_type != 'direct_qr' %}
+    {% set media_pair_video_route = 'serve_admin_pair_media_video' if project.owner_admin_id else 'serve_pair_media_video' %}
+    {% set legacy_video_route = 'serve_admin_video' if project.owner_admin_id else 'serve_video' %}
+    {% for pair in pairs %}
+    {% set items = pair.media_items %}
+    {% set current_count = items|length if items else 1 %}
+    <div class="panel pair-block media-manager">
+      <h2 class="pair-label">
+        <span class="pair-num">{{ pair.pair_index + 1 }}</span>
+        Videos ({{ current_count }})
+      </h2>
+
+      {% if items %}
+      {% for media in items %}
+      <div class="media-card">
+        <div class="media-card-preview">
+          <video src="{{ url_for(media_pair_video_route, project_id=project.id, image_id=pair.pair_index, media_id=media.id, v=media.video_size or 0) }}"
+                 class="media-card-video" preload="metadata" controls playsinline></video>
+        </div>
+        <div class="media-card-body">
+          <div class="media-card-title">
+            Video {{ loop.index }}
+            {% if media.is_default %}<span class="status-tag status-ok media-default-badge">Default</span>{% endif %}
+          </div>
+          <div class="media-card-actions">
+            <form method="POST" action="{{ url_for('user_replace_pair_media', project_id=project.id, pair_index=pair.pair_index, media_id=media.id) }}" enctype="multipart/form-data" class="media-inline-form media-replace-form" data-video-label="Video {{ loop.index }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <label class="media-action-btn media-file-btn">
+                <input type="file" name="replacement_video" accept="video/*" aria-label="Replace video {{ loop.index }}" onchange="handleEditVideoFileChosen(this)">
+                <span><i class="fas fa-arrow-rotate-right" aria-hidden="true"></i> Replace</span>
+              </label>
+              <div class="media-upload-status" role="status" aria-live="polite"></div>
+            </form>
+            {% if items|length > 1 %}
+              {% if not loop.first %}
+              <form method="POST" action="{{ url_for('user_move_pair_media', project_id=project.id, pair_index=pair.pair_index, media_id=media.id) }}" class="media-inline-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="direction" value="up">
+                <button type="submit" class="media-action-btn"><i class="fas fa-arrow-up" aria-hidden="true"></i> Move up</button>
+              </form>
+              {% endif %}
+              {% if not loop.last %}
+              <form method="POST" action="{{ url_for('user_move_pair_media', project_id=project.id, pair_index=pair.pair_index, media_id=media.id) }}" class="media-inline-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="direction" value="down">
+                <button type="submit" class="media-action-btn"><i class="fas fa-arrow-down" aria-hidden="true"></i> Move down</button>
+              </form>
+              {% endif %}
+              {% if not media.is_default %}
+              <form method="POST" action="{{ url_for('user_set_default_pair_media', project_id=project.id, pair_index=pair.pair_index, media_id=media.id) }}" class="media-inline-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="media-action-btn"><i class="fas fa-star" aria-hidden="true"></i> Set as default</button>
+              </form>
+              <form method="POST" action="{{ url_for('user_remove_pair_media', project_id=project.id, pair_index=pair.pair_index, media_id=media.id) }}" class="media-inline-form" onsubmit="return confirm('Remove this video? This cannot be undone.');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="media-action-btn media-action-danger"><i class="fas fa-trash" aria-hidden="true"></i> Remove</button>
+              </form>
+              {% else %}
+              <span class="media-hint">Set another video as default to remove this one.</span>
+              {% endif %}
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+      {% elif pair.video_filename %}
+      <div class="media-card">
+        <div class="media-card-preview">
+          <video src="{{ url_for(legacy_video_route, project_id=project.id, image_id=pair.pair_index, v=pair.updated_at.timestamp()|int if pair.updated_at else 0) }}"
+                 class="media-card-video" preload="metadata" controls playsinline></video>
+        </div>
+        <div class="media-card-body">
+          <div class="media-card-title">
+            Video 1
+            <span class="status-tag status-ok media-default-badge">Default</span>
+          </div>
+          <span class="media-hint">Use &ldquo;Replace video&rdquo; above to update this one.</span>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if allow_multi_video_per_target and (effective_max_videos_per_target is none or current_count < effective_max_videos_per_target) %}
+      <form method="POST" action="{{ url_for('user_add_pair_media', project_id=project.id, pair_index=pair.pair_index) }}" enctype="multipart/form-data" class="media-inline-form media-add-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <label class="media-action-btn media-file-btn media-add-btn">
+          <input type="file" name="new_video" accept="video/*" aria-label="Add another video to target {{ pair.pair_index + 1 }}" onchange="handleEditVideoFileChosen(this)">
+          <span><i class="fas fa-plus" aria-hidden="true"></i> Add video{% if effective_max_videos_per_target %} ({{ current_count }} / {{ effective_max_videos_per_target }}){% endif %}</span>
+        </label>
+        <div class="media-upload-status" role="status" aria-live="polite"></div>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+    {% endif %}
+  </div>
+
+  {# Master stabilization pass (sections 1/2): explicit image-source choice +
+     shared marker preparation, reused unmodified from the Creator wizard via
+     static/js/marker-editor.js. One instance for the whole page - only one
+     pair can be replaced at a time anyway (see openImageSourceChooser).
+     image_video only (video duplicate + Direct QR Edit parity pass): Direct QR
+     has no target image/ROI/crop concept at all, so this whole marker-editor
+     modal shell must not even be present in the DOM for it, not merely unused -
+     nothing in the direct_qr branch ever calls openImageSourceChooser(), so
+     omitting the shell entirely changes no behavior, only what's rendered. #}
+  {% if project.experience_type == 'image_video' %}
+  <div id="markerFlowModal" class="marker-flow-modal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="markerFlowTitle">
+    <div class="marker-flow-dialog">
+      <button type="button" class="marker-flow-close" onclick="closeMarkerFlow()" aria-label="Cancel">
+        <i class="fas fa-xmark" aria-hidden="true"></i>
+      </button>
+
+      <div id="markerFlowStepSource" class="marker-flow-step">
+        <h2 id="markerFlowTitle">Replace target image</h2>
+        <p class="marker-flow-hint">Choose a new photo for this target.</p>
+        <div class="marker-flow-source-actions">
+          <button type="button" class="ss-btn ss-btn-primary" onclick="startCameraCapture()">
+            <i class="fas fa-camera" aria-hidden="true"></i> Take a photo
+          </button>
+          <button type="button" class="ss-btn ss-btn-secondary" onclick="chooseFromDevice()">
+            <i class="fas fa-folder-open" aria-hidden="true"></i> Choose from device
+          </button>
+        </div>
+        <p id="markerFlowCameraError" class="marker-flow-camera-error" hidden></p>
+        <input type="file" id="markerSourceFilePicker" accept="image/*" class="ss-visually-hidden-input"
+               onchange="onSourceFileChosen(this)">
+      </div>
+
+      <div id="markerFlowStepCamera" class="marker-flow-step" hidden>
+        <h2>Take a photo</h2>
+        <video id="markerCameraPreview" class="marker-camera-preview" autoplay playsinline muted></video>
+        <div class="marker-flow-actions">
+          <button type="button" class="ss-btn ss-btn-secondary" onclick="cancelCameraCapture()">Cancel</button>
+          <button type="button" class="ss-btn ss-btn-primary" onclick="capturePhoto()">
+            <i class="fas fa-camera" aria-hidden="true"></i> Capture
+          </button>
+        </div>
+      </div>
+
+      <div id="markerFlowStepCrop" class="marker-flow-step" hidden>
+        <h2>Prepare marker</h2>
+        <p class="marker-flow-hint">Crop to the exact area a camera should recognise, or use the whole photo.</p>
+        <div class="marker-crop-wrap">
+          <canvas id="markerCropCanvas" tabindex="0" aria-label="Marker crop area"></canvas>
+        </div>
+        <div class="marker-flow-actions marker-crop-tools">
+          <button type="button" class="ss-btn ss-btn-tertiary ss-btn-sm" onclick="replacementResetCrop()">Reset</button>
+          <button type="button" class="ss-btn ss-btn-tertiary ss-btn-sm" onclick="replacementRotateCrop()">Rotate 90 degrees</button>
+          <button type="button" class="ss-btn ss-btn-tertiary ss-btn-sm" onclick="replacementFullImage()">Use full image as marker</button>
+        </div>
+        <div class="marker-flow-actions">
+          <button type="button" class="ss-btn ss-btn-secondary" onclick="closeMarkerFlow()">Cancel</button>
+          <button type="button" class="ss-btn ss-btn-primary" onclick="confirmReplacementMarker()">Use this marker</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {# Shared warning/notice modal (video duplicate + Direct QR Edit parity pass) -
+     one instance for the whole page, content swapped in by JS per notice. See
+     activateNoticeModalsIn() below for how a flash message becomes one of these. #}
+  <div id="ssNoticeModal" class="ss-notice-modal" aria-hidden="true" role="alertdialog" aria-modal="true" aria-labelledby="ssNoticeTitle">
+    <div class="ss-notice-dialog">
+      <div class="ss-notice-icon" aria-hidden="true"><i id="ssNoticeIcon" class="fas fa-triangle-exclamation"></i></div>
+      <h2 class="ss-notice-title" id="ssNoticeTitle"></h2>
+      <p class="ss-notice-body" id="ssNoticeBody"></p>
+      <div class="ss-notice-actions">
+        <button type="button" class="ss-btn ss-btn-primary" id="ssNoticeOkBtn">Got it</button>
+      </div>
+    </div>
+  </div>
+
+  <style>
+    .marker-flow-modal { display: none; position: fixed; inset: 0; z-index: 200; background: rgba(3,3,6,0.82); align-items: center; justify-content: center; padding: 20px; }
+    .marker-flow-modal.is-open { display: flex; }
+    .marker-flow-dialog { position: relative; width: min(560px, 100%); max-height: 90vh; overflow-y: auto; background: #0a0a10; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 28px 24px; }
+    .marker-flow-close { position: absolute; top: 14px; right: 14px; background: rgba(255,255,255,0.06); border: none; color: #fff; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; }
+    .marker-flow-step h2 { font-size: 18px; margin-bottom: 6px; }
+    .marker-flow-hint { color: rgba(255,255,255,0.6); font-size: 13px; margin-bottom: 18px; }
+    .marker-flow-source-actions { display: flex; flex-direction: column; gap: 10px; }
+    .marker-flow-camera-error { margin-top: 14px; padding: 10px 12px; border-radius: 10px; background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.35); color: #fca5a5; font-size: 13px; }
+    .marker-camera-preview { width: 100%; max-height: 60vh; border-radius: 12px; background: #000; }
+    .marker-crop-wrap { position: relative; width: 100%; height: min(60vh, 420px); border-radius: 12px; overflow: hidden; background: #000; }
+    #markerCropCanvas { width: 100%; height: 100%; display: block; touch-action: none; }
+    .marker-flow-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; flex-wrap: wrap; }
+    .marker-crop-tools { justify-content: flex-start; }
+
+    /* ===================== Shared warning/notice modal =====================
+       Video duplicate + Direct QR Edit parity pass (2026-08-31). ONE reusable
+       component for every duplicate/validation notice this page can raise
+       (duplicate target, same-current-target, duplicate video, same-current-
+       video, last-video-removal-block, other Creator validation warnings) -
+       replaces plain flash text for those specific cases only. Deliberately
+       styled to match the existing .marker-flow-modal glassmorphic dialog
+       rather than introducing a second visual language. */
+    .ss-notice-modal { display: none; position: fixed; inset: 0; z-index: 300; background: rgba(3,3,6,0.82); align-items: center; justify-content: center; padding: 20px; }
+    .ss-notice-modal.is-open { display: flex; }
+    .ss-notice-dialog { position: relative; width: min(440px, 100%); background: #0a0a10; border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 28px 24px 24px; box-shadow: 0 24px 64px rgba(0,0,0,0.5); text-align: center; }
+    .ss-notice-icon { width: 52px; height: 52px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; font-size: 20px; }
+    .ss-notice-modal[data-tone="error"] .ss-notice-icon { background: rgba(239,68,68,0.14); color: #f87171; }
+    .ss-notice-modal[data-tone="info"] .ss-notice-icon { background: rgba(56,189,248,0.14); color: #38bdf8; }
+    .ss-notice-title { font-size: 18px; font-weight: 700; margin: 0 0 8px; color: #fff; }
+    .ss-notice-body { font-size: 14px; line-height: 1.55; color: rgba(255,255,255,0.68); margin: 0 0 22px; }
+    .ss-notice-actions { display: flex; flex-direction: column; gap: 10px; }
+    .ss-notice-actions .ss-btn { width: 100%; min-height: 44px; }
+  </style>
+
+  {% if project.experience_type == 'image_video' %}
+  <script src="{{ url_for('static', filename='js/marker-editor.js') }}"></script>
+  {% endif %}
   <script>
+    // Narrow duplicate-handling fix (2026-09-01): Edit had no frontend
+    // duplicate pre-check at all for target image or video - every duplicate
+    // was only ever caught after a real form submission (audit-proven). These
+    // helpers call the two new read/validation-only backend endpoints
+    // (user_validate_target_candidate / user_validate_video_candidate,
+    // app.py) that wrap the EXACT same authoritative helpers Edit's real
+    // submit routes already use - no new duplicate-detection semantics.
+    function editCsrfToken() {
+      const el = document.querySelector('input[name="csrf_token"]');
+      return el ? el.value : '';
+    }
+
+    function editProjectId() {
+      const match = window.location.pathname.match(/\/projects\/(\d+)\//);
+      return match ? match[1] : null;
+    }
+
+    // Admin CRUD parity pass: whole-target removal button is a plain
+    // <button>, not a <form> (see its own comment - avoids nesting inside
+    // the page's main "Save replacements" form). Submits via fetch with the
+    // same CSRF header convention this page already uses elsewhere, then
+    // navigates to the server's own redirect target so the flash message
+    // renders exactly like every native form submit on this page.
+    async function removeProjectPair(projectId, pairIndex) {
+      if (!confirm('Remove this target? This deletes its target image and every video attached to it - this cannot be undone.')) return;
+      try {
+        const resp = await fetch(`/projects/${projectId}/pair/${pairIndex}/remove`, {
+          method: 'POST',
+          headers: { 'X-CSRFToken': editCsrfToken() },
+        });
+        window.location.href = resp.url || window.location.href;
+      } catch (_err) {
+        if (window.ssToast) window.ssToast('Could not remove this target. Please try again.', 'error');
+      }
+    }
+
+    async function sha256OfFileEdit(file) {
+      try {
+        const buf = await file.arrayBuffer();
+        const digest = await crypto.subtle.digest('SHA-256', buf);
+        return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    // Fail-open on any network/parsing error: a broken pre-check must never
+    // block a legitimate save - the backend's own check remains authoritative
+    // regardless of what this returns.
+    async function validateTargetCandidateOnServer(blob, pairIndexOrNew) {
+      const projectId = editProjectId();
+      if (!projectId) return { verdict: 'UNIQUE' };
+      try {
+        const fd = new FormData();
+        fd.append('candidate_image', blob, 'candidate.jpg');
+        if (pairIndexOrNew !== 'new') fd.append('pair_index', String(pairIndexOrNew));
+        const resp = await fetch(`/projects/${projectId}/pair/validate-target`, {
+          method: 'POST',
+          headers: { 'X-CSRFToken': editCsrfToken() },
+          body: fd
+        });
+        if (!resp.ok) return { verdict: 'UNIQUE' };
+        return await resp.json();
+      } catch (_err) {
+        return { verdict: 'UNIQUE' };
+      }
+    }
+
+    async function validateVideoCandidateOnServer(videoHash, pairIndexOrNew, currentMediaId) {
+      const projectId = editProjectId();
+      if (!projectId || !videoHash) return { verdict: 'UNIQUE' };
+      try {
+        const resp = await fetch(`/projects/${projectId}/media/validate-video`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': editCsrfToken() },
+          body: JSON.stringify({
+            video_hash: videoHash,
+            pair_index: (pairIndexOrNew === 'new' || pairIndexOrNew === undefined) ? null : pairIndexOrNew,
+            current_media_id: currentMediaId ?? null
+          })
+        });
+        if (!resp.ok) return { verdict: 'UNIQUE' };
+        return await resp.json();
+      } catch (_err) {
+        return { verdict: 'UNIQUE' };
+      }
+    }
+
+    // pair_index/current_media_id are already embedded in each media form's
+    // own action URL (user_add_pair_media / user_replace_pair_media /
+    // user_add_direct_qr_video) - reading them back out avoids adding new
+    // data attributes just to duplicate what routing already encodes.
+    function parseVideoFormRouteMeta(form) {
+      const action = (form && form.getAttribute('action')) || '';
+      const pairMatch = action.match(/\/pair\/(\d+)\/media/);
+      const mediaMatch = action.match(/\/media\/(\d+)\/replace/);
+      return {
+        pairIndex: pairMatch ? pairMatch[1] : null,
+        currentMediaId: mediaMatch ? mediaMatch[1] : null
+      };
+    }
+
+    // Narrow duplicate-handling fix: these inputs used to auto-submit their
+    // form the instant a file was chosen (onchange="this.form.requestSubmit()"),
+    // meaning a prohibited duplicate video was only ever caught by the
+    // backend AFTER a real request. Now validates first; the form only ever
+    // submits for a non-duplicate candidate. SAME_CURRENT_MEDIA (replacing a
+    // slot with its own current video) is a deliberate no-op, not a
+    // rejection - preserved exactly as-is by only intercepting
+    // DUPLICATE_EXISTING_MEDIA.
+    async function handleEditVideoFileChosen(input) {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const form = input.form;
+      if (!form) return;
+      const { pairIndex, currentMediaId } = parseVideoFormRouteMeta(form);
+      const hash = await sha256OfFileEdit(file);
+      const validation = await validateVideoCandidateOnServer(hash, pairIndex, currentMediaId);
+      if (validation.verdict === 'DUPLICATE_EXISTING_MEDIA') {
+        input.value = '';
+        const isDirectQr = !pairIndex;
+        showNoticeModal(
+          'error',
+          'Duplicate video',
+          isDirectQr
+            ? 'This video is already part of this ScanStory. Choose another video to continue.'
+            : 'This video is already part of this target. Choose another video to continue.'
+        );
+        return;
+      }
+      form.requestSubmit();
+    }
+
     function onFileChosen(input, zoneId, selId) {
       const zone = document.getElementById(zoneId);
       const sel = document.getElementById(selId);
@@ -666,6 +1412,312 @@
       if (window.ssToast) window.ssToast('Selected ' + name + '. It is saved when you press Save replacements.', 'success');
     }
 
+    {% if project.experience_type == 'image_video' %}
+    /* ===================== Replacement marker preparation =====================
+       Master stabilization pass, sections 1/2. Reuses static/js/marker-editor.js -
+       the SAME crop/rotate/reset/full-image/export engine the Creator wizard uses -
+       via MarkerEditor.createController() for the interactive part, so this is not
+       a second, diverging ROI implementation. One editor instance for the whole
+       page: only one target can be mid-replacement at a time.
+
+       image_video only (video duplicate + Direct QR Edit parity pass): the
+       marker-editor.js script tag itself is also gated the same way just
+       above, so window.ScanStoryMarkerEditor would be undefined here for
+       Direct QR - this whole block must never execute on that branch. */
+    const MarkerEditor = window.ScanStoryMarkerEditor;
+    let replacementPairIndex = null;
+    let replacementImage = null;
+    let replacementState = { crop: MarkerEditor.defaultCrop(), rotation: 0, markerMode: 'crop', image: null };
+    let replacementController = null;
+    let cameraStream = null;
+
+    function markerFlowModal() { return document.getElementById('markerFlowModal'); }
+
+    function showMarkerFlowStep(stepId) {
+      ['markerFlowStepSource', 'markerFlowStepCamera', 'markerFlowStepCrop'].forEach((id) => {
+        document.getElementById(id).hidden = (id !== stepId);
+      });
+    }
+
+    function openImageSourceChooser(pairIndex) {
+      replacementPairIndex = pairIndex;
+      document.getElementById('markerFlowCameraError').hidden = true;
+      // 'new' (Add another target) vs a numeric pair index (Replace Target) - same
+      // flow, same crop engine, just a different final destination input (see
+      // confirmReplacementMarker()). Title reflects which one this run is for.
+      document.getElementById('markerFlowTitle').textContent =
+        pairIndex === 'new' ? 'Add target image' : 'Replace target image';
+      showMarkerFlowStep('markerFlowStepSource');
+      markerFlowModal().classList.add('is-open');
+      markerFlowModal().setAttribute('aria-hidden', 'false');
+    }
+
+    function closeMarkerFlow() {
+      stopCameraStream();
+      if (replacementController) { replacementController.destroy(); replacementController = null; }
+      if (replacementImage && replacementImage.src && replacementImage.src.startsWith('blob:')) {
+        URL.revokeObjectURL(replacementImage.src);
+      }
+      replacementImage = null;
+      // Cancel/rollback fix (local Creator Integrity pass): these two were
+      // never reset here, so Cancel-ing this flow (at any step) left a stale
+      // replacementPairIndex and a stale crop/rotation/markerMode from the
+      // abandoned attempt sitting in module state. Opening the flow again -
+      // for the SAME or a DIFFERENT pair - then silently reused that leftover
+      // state instead of starting clean.
+      replacementPairIndex = null;
+      replacementState = { crop: MarkerEditor.defaultCrop(), rotation: 0, markerMode: 'crop', image: null };
+      markerFlowModal().classList.remove('is-open');
+      markerFlowModal().setAttribute('aria-hidden', 'true');
+    }
+
+    // Camera stream is released the instant it's no longer needed - capture,
+    // cancel, or the whole flow closing all go through this. Never left
+    // running in the background (section 1A / 2's explicit requirement).
+    function stopCameraStream() {
+      MarkerEditor.stopCameraStream(cameraStream);
+      cameraStream = null;
+      const video = document.getElementById('markerCameraPreview');
+      if (video) video.srcObject = null;
+    }
+
+    async function startCameraCapture() {
+      const errorEl = document.getElementById('markerFlowCameraError');
+      errorEl.hidden = true;
+      try {
+        cameraStream = await MarkerEditor.requestCameraStream();
+      } catch (err) {
+        errorEl.textContent = 'Camera is unavailable. Choose a photo from your device instead.';
+        errorEl.hidden = false;
+        return;
+      }
+      const video = document.getElementById('markerCameraPreview');
+      video.srcObject = cameraStream;
+      showMarkerFlowStep('markerFlowStepCamera');
+    }
+
+    function cancelCameraCapture() {
+      stopCameraStream();
+      showMarkerFlowStep('markerFlowStepSource');
+    }
+
+    async function capturePhoto() {
+      const video = document.getElementById('markerCameraPreview');
+      const blob = await MarkerEditor.captureFrameAsBlob(video, 0.92);
+      stopCameraStream();
+      await loadReplacementImageFromBlob(blob);
+    }
+
+    function chooseFromDevice() {
+      document.getElementById('markerSourceFilePicker').click();
+    }
+
+    async function onSourceFileChosen(input) {
+      const file = input.files && input.files[0];
+      input.value = '';
+      if (!file) return;
+      await loadReplacementImageFromBlob(file);
+    }
+
+    async function loadReplacementImageFromBlob(blob) {
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.decoding = 'async';
+      img.src = url;
+      await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+      replacementImage = img;
+      replacementState = {
+        crop: MarkerEditor.defaultCrop(), rotation: 0, markerMode: 'crop', image: img
+      };
+      openReplacementCropModal();
+    }
+
+    function openReplacementCropModal() {
+      showMarkerFlowStep('markerFlowStepCrop');
+      const canvas = document.getElementById('markerCropCanvas');
+      const wrap = canvas.parentElement;
+      const dpr = window.devicePixelRatio || 1;
+      const rect = wrap.getBoundingClientRect();
+      canvas.width = Math.max(320, Math.floor(rect.width * dpr));
+      canvas.height = Math.max(320, Math.floor(rect.height * dpr));
+
+      if (replacementController) replacementController.destroy();
+      replacementController = MarkerEditor.createController({
+        canvas: canvas,
+        getState: () => replacementState,
+        setState: (partial) => { Object.assign(replacementState, partial); },
+        onChange: redrawReplacementCrop,
+        isActive: () => !markerFlowModal().hidden && markerFlowModal().classList.contains('is-open')
+      });
+      redrawReplacementCrop();
+      canvas.focus({ preventScroll: true });
+    }
+
+    function redrawReplacementCrop() {
+      const canvas = document.getElementById('markerCropCanvas');
+      const ctx = canvas.getContext('2d');
+      if (!replacementImage) return;
+      MarkerEditor.drawCanvas(ctx, canvas, replacementImage, replacementState.crop, replacementState.rotation);
+    }
+
+    function replacementResetCrop() {
+      replacementState.crop = MarkerEditor.defaultCrop();
+      replacementState.rotation = 0;
+      redrawReplacementCrop();
+    }
+
+    function replacementRotateCrop() {
+      replacementState.rotation = (replacementState.rotation + 90) % 360;
+      redrawReplacementCrop();
+    }
+
+    function replacementFullImage() {
+      replacementState.markerMode = 'full_image';
+      replacementState.crop = { x: 0, y: 0, width: 1, height: 1 };
+      redrawReplacementCrop();
+    }
+
+    async function confirmReplacementMarker() {
+      if (!replacementImage || replacementPairIndex === null) return;
+      const isNewTarget = replacementPairIndex === 'new';
+      const { file } = await MarkerEditor.exportBlob(
+        replacementImage, replacementState.crop, replacementState.rotation, replacementState.markerMode,
+        1400, 0.86, isNewTarget ? 'new-target-marker.jpg' : `replacement-marker-${replacementPairIndex}.jpg`
+      );
+
+      // Narrow duplicate-handling fix: validate against the SAME authoritative
+      // resolve_target_identity_conflict() the real Add/Replace Target submit
+      // routes use, BEFORE the candidate ever reaches the form's hidden input.
+      // SAME_CURRENT_PAIR (Replace with the target's own current image) is a
+      // deliberate no-op, not a rejection - preserved exactly as-is.
+      const validation = await validateTargetCandidateOnServer(file, replacementPairIndex);
+      if (validation.verdict === 'CONFLICT_OTHER_PAIR') {
+        const conflictLabel = validation.conflict_pair_number ? `content set ${validation.conflict_pair_number}` : 'another content set';
+        showNoticeModal(
+          'error',
+          'Target already used',
+          `This target is already part of this ScanStory (${conflictLabel}). Add your new video to the existing target instead, or choose a different image.`
+        );
+        closeMarkerFlow();
+        return;
+      }
+
+      // Same exported, already-cropped/rotated blob either way - only which hidden
+      // <input> it lands on differs, matching the two forms' own field names
+      // (new_pair_image for Add Target, image_<index> for Replace Target).
+      const inputId = isNewTarget ? 'new_pair_image' : 'image_' + replacementPairIndex;
+      const zoneId = isNewTarget ? 'new-pair-img-zone' : 'img-zone-' + replacementPairIndex;
+      const selId = isNewTarget ? 'new-pair-img-sel' : 'img-sel-' + replacementPairIndex;
+      const input = document.getElementById(inputId);
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(file);
+      input.files = dataTransfer.files;
+      onFileChosen(input, zoneId, selId);
+      closeMarkerFlow();
+    }
+    {% endif %}
+
+    // Double/rapid-click hardening (local Creator Integrity pass): the
+    // "Save replacements" form is a plain native POST, not XHR - a disabled
+    // submit button does not abort a POST already dispatched, so the correct
+    // guard is simply "let the first submit go through as a real navigation,
+    // ignore every submit event after it." No preventDefault() on the first
+    // click, so request #1 is never cancelled.
+    (function wireReplacementFormSubmitGuard() {
+      const form = document.querySelector('form[action*="/edit"]');
+      if (!form) return;
+      form.addEventListener('submit', function (event) {
+        if (form.dataset.submitting === '1') { event.preventDefault(); return; }
+        form.dataset.submitting = '1';
+        const btn = form.querySelector('.btn-save');
+        if (btn) {
+          btn.disabled = true;
+          btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
+        }
+      });
+    })();
+
+    // Same guard, same reasoning, for the separate "Add another target" form
+    // (Creator Identity / Edit Flow remediation pass) - a plain native POST,
+    // first submit goes through untouched, every later one is suppressed.
+    (function wireAddTargetFormSubmitGuard() {
+      const form = document.getElementById('addTargetForm');
+      if (!form) return;
+      form.addEventListener('submit', function (event) {
+        if (form.dataset.submitting === '1') { event.preventDefault(); return; }
+        form.dataset.submitting = '1';
+        const btn = document.getElementById('addTargetSubmitBtn');
+        if (btn) {
+          btn.disabled = true;
+          btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Adding…';
+        }
+      });
+    })();
+
+    {% if project.experience_type == 'image_video' %}
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && markerFlowModal().classList.contains('is-open')) closeMarkerFlow();
+    });
+    window.addEventListener('resize', () => {
+      if (markerFlowModal().classList.contains('is-open') && !document.getElementById('markerFlowStepCrop').hidden) {
+        openReplacementCropModal();
+      }
+    });
+    {% endif %}
+
+    /* ===================== Shared warning/notice modal =====================
+       Video duplicate + Direct QR Edit parity pass. The server keeps flashing a
+       plain category+message exactly as before (native POST+redirect, no XHR
+       contract change) - the ONLY new convention is that a handful of specific
+       messages now flash under category "error-modal" or "info-modal" instead
+       of "error"/"info", formatted as "Title||Body". This turns that one flash
+       into the shared polished modal below instead of a plain flash card;
+       every other flash category is completely untouched. Works for BOTH the
+       server-rendered flashes present at page load AND the ones the existing
+       XHR add/replace-video flow (below) carries forward and appends later -
+       both paths call this same function. */
+    function noticeModalEl() { return document.getElementById('ssNoticeModal'); }
+
+    function showNoticeModal(tone, title, body) {
+      const modal = noticeModalEl();
+      modal.dataset.tone = tone;
+      document.getElementById('ssNoticeIcon').className =
+        'fas ' + (tone === 'info' ? 'fa-circle-info' : 'fa-triangle-exclamation');
+      document.getElementById('ssNoticeTitle').textContent = title;
+      document.getElementById('ssNoticeBody').textContent = body;
+      modal.classList.add('is-open');
+      modal.setAttribute('aria-hidden', 'false');
+      document.getElementById('ssNoticeOkBtn').focus({ preventScroll: true });
+    }
+
+    function closeNoticeModal() {
+      const modal = noticeModalEl();
+      modal.classList.remove('is-open');
+      modal.setAttribute('aria-hidden', 'true');
+    }
+
+    document.getElementById('ssNoticeOkBtn').addEventListener('click', closeNoticeModal);
+    noticeModalEl().addEventListener('click', (event) => {
+      if (event.target === noticeModalEl()) closeNoticeModal();
+    });
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && noticeModalEl().classList.contains('is-open')) closeNoticeModal();
+    });
+
+    function activateNoticeModalsIn(root) {
+      root.querySelectorAll('.flash-message.flash-error-modal, .flash-message.flash-info-modal').forEach((el) => {
+        const tone = el.classList.contains('flash-info-modal') ? 'info' : 'error';
+        const raw = el.textContent || '';
+        const sepIndex = raw.indexOf('||');
+        const title = sepIndex === -1 ? (tone === 'info' ? 'Heads up' : 'Notice') : raw.slice(0, sepIndex).trim();
+        const body = sepIndex === -1 ? raw.trim() : raw.slice(sepIndex + 2).trim();
+        el.remove(); // this specific flash renders ONLY as the modal, never also as a plain card
+        showNoticeModal(tone, title, body);
+      });
+    }
+
+    activateNoticeModalsIn(document);
+
     setTimeout(() => {
       document.querySelectorAll('.flash-message').forEach((el) => {
         el.style.transition = 'opacity 0.5s';
@@ -673,6 +1725,143 @@
         setTimeout(() => el.remove(), 500);
       });
     }, 5000);
+
+    /* ===================== Add/replace-video progress feedback =====================
+       Sections 8-15 of the Creator UI pass. The upload/validation/commit contract
+       itself is untouched (same route, same multipart body, same server-side
+       decisions) - this only changes HOW the browser sends it, from a native form
+       POST+redirect (no visibility into progress) to an XHR with upload progress
+       events, so the media card can show real "Uploading NN%" / "Preparing..."
+       state instead of a silent wait. On completion (success OR a server-side
+       rejection like duplicate video / too large / plan limit) it navigates to
+       xhr.responseURL - the exact page the server already redirected to, flash
+       message and all - so no success/error text is ever invented client-side and
+       "success" can only ever appear once that page (reflecting the committed
+       PairMedia state) has actually loaded. Network-level failures (no response
+       ever arrived) get a message here because there is no server flash for those. */
+    function wireMediaUploadForm(form, opts) {
+      const statusEl = form.querySelector('.media-upload-status');
+      const fileInput = form.querySelector('input[type="file"]');
+      const labelEl = form.querySelector('label.media-file-btn');
+      if (!statusEl || !fileInput || !labelEl) return;
+      let inFlight = false;
+
+      function setStatus(text, tone) {
+        statusEl.textContent = text;
+        statusEl.className = 'media-upload-status' + (text ? ' is-visible' : '') + (tone ? ' media-upload-status-' + tone : '');
+      }
+
+      function reset() {
+        inFlight = false;
+        labelEl.classList.remove('is-busy');
+        fileInput.disabled = false;
+      }
+
+      form.addEventListener('submit', function (event) {
+        event.preventDefault();
+        // Prevents a second tap/change while one is already in flight - the file
+        // input is disabled for the same reason, but this also guards a
+        // programmatic requestSubmit() firing twice in quick succession.
+        if (inFlight) return;
+        if (!fileInput.files || !fileInput.files.length) return;
+
+        // Snapshot the form BEFORE disabling anything - a disabled form control is
+        // excluded from FormData/serialization per the HTML spec, so building this
+        // after fileInput.disabled = true would silently drop the file itself and
+        // the server would see no upload at all.
+        const formData = new FormData(form);
+
+        inFlight = true;
+        labelEl.classList.add('is-busy');
+        fileInput.disabled = true;
+        setStatus(opts.uploadingLabel, 'progress');
+
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', form.action, true);
+        xhr.timeout = 180000; // generous ceiling for a real video upload on a slow connection
+        xhr.upload.addEventListener('progress', function (e) {
+          if (e.lengthComputable) {
+            const pct = Math.round((e.loaded / e.total) * 100);
+            setStatus(opts.uploadingLabel + ' ' + pct + '%', 'progress');
+          }
+        });
+        xhr.addEventListener('load', function () {
+          // The browser already transparently followed the server's redirect to
+          // fetch xhr.response, which means Flask's (single-read) flash was
+          // consumed by THAT internal request - a plain navigation to
+          // xhr.responseURL would hit the server a second time and find no flash
+          // left to show. Real navigation is still required (a DOM built via
+          // document.write shares this document's JS scope and throws the moment
+          // a top-level const/let - e.g. this page's own `const MarkerEditor` -
+          // gets redeclared), so instead the already-flashed message is carried
+          // forward as a one-time query param and rendered client-side after the
+          // real reload (see the ui_status handling below).
+          setStatus(opts.preparingLabel, 'progress');
+          var url = xhr.responseURL || form.action;
+          // [\w-] (not just \w) so category names with a hyphen - error-modal,
+          // info-modal (the shared notice-modal categories) - still match whole.
+          var match = /flash-message flash-([\w-]+)">\s*([^<]+)/.exec(xhr.response || '');
+          if (match) {
+            var sep = url.indexOf('?') === -1 ? '?' : '&';
+            url += sep + 'ui_status=' + encodeURIComponent(match[2].trim()) + '&ui_tone=' + encodeURIComponent(match[1]);
+          }
+          window.location.href = url;
+        });
+        xhr.addEventListener('error', function () {
+          reset();
+          setStatus('Network connection lost. Check your connection and try again.', 'error');
+        });
+        xhr.addEventListener('timeout', function () {
+          reset();
+          setStatus('Upload timed out. Please try again.', 'error');
+        });
+        xhr.addEventListener('abort', function () {
+          reset();
+          setStatus('', null);
+        });
+
+        xhr.send(formData);
+      });
+    }
+
+    document.querySelectorAll('form.media-add-form').forEach(function (form) {
+      wireMediaUploadForm(form, { uploadingLabel: 'Uploading video…', preparingLabel: 'Preparing video…' });
+    });
+    document.querySelectorAll('form.media-replace-form').forEach(function (form) {
+      const label = form.dataset.videoLabel || 'video';
+      wireMediaUploadForm(form, {
+        uploadingLabel: 'Replacing ' + label + '…',
+        preparingLabel: 'Preparing replacement…',
+      });
+    });
+
+    // Renders the message an add/replace XHR carried forward as ?ui_status= (see
+    // wireMediaUploadForm above) into the same .flash-messages container a real
+    // server-rendered flash uses, so it is visually identical to one - then
+    // strips the query param so a refresh/bookmark never re-shows it.
+    (function renderCarriedForwardStatus() {
+      const params = new URLSearchParams(window.location.search);
+      const message = params.get('ui_status');
+      if (!message) return;
+      const tone = params.get('ui_tone') || 'success';
+      const container = document.querySelector('.flash-messages');
+      if (container) {
+        const el = document.createElement('div');
+        el.className = 'flash-message flash-' + tone;
+        el.textContent = message;
+        container.appendChild(el);
+        activateNoticeModalsIn(container); // same shared modal for error-modal/info-modal, carried-forward or not
+        setTimeout(() => {
+          el.style.transition = 'opacity 0.5s';
+          el.style.opacity = '0';
+          setTimeout(() => el.remove(), 500);
+        }, 5000);
+      }
+      params.delete('ui_status');
+      params.delete('ui_tone');
+      const cleanQuery = params.toString();
+      history.replaceState(null, '', window.location.pathname + (cleanQuery ? '?' + cleanQuery : ''));
+    })();
   </script>
 </body>
 </html>

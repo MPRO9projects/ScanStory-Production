@@ -52,6 +52,7 @@
            for itself. Both shells now render admin/_sidebar_links.html; these
            rules give that partial the same look the standalone pages give it. */
         .sidebar {
+            position: relative;
             background-color: var(--ss-surface-1, #0b0b0f);
             border-right: 1px solid var(--ss-border, rgba(255,255,255,0.08));
             min-height: 100vh;
@@ -66,6 +67,28 @@
             overflow-y: auto;
             overscroll-behavior: contain;
             padding: 1rem 0 2rem;
+        }
+
+        /* Real screenshot QA (1366x768) found several lower nav items sitting
+           below the sidebar's own scroll fold with no visual cue that more
+           navigation exists - only a taller viewport (1920x1080) showed
+           everything. This fade hints "more below"; JS
+           toggles .at-bottom on #adminSidebar once actually scrolled to the
+           end, so it never lingers as decoration once there's nothing left. */
+        .sidebar-fade {
+            position: absolute;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            height: 36px;
+            background: linear-gradient(to bottom, rgba(11, 11, 15, 0), var(--ss-surface-1, #0b0b0f));
+            pointer-events: none;
+            opacity: 1;
+            transition: opacity 150ms ease;
+        }
+
+        .sidebar.at-bottom .sidebar-fade {
+            opacity: 0;
         }
 
         .sidebar-title {
@@ -384,6 +407,8 @@
                             <ul class="dropdown-menu dropdown-menu-end">
                                 <li><span class="dropdown-item-text"><strong>Role:</strong> {{ admin.role|title }}</span></li>
                                 <li><hr class="dropdown-divider"></li>
+                                <li><a class="dropdown-item" href="{{ url_for('admin_change_password_page') }}"><i class="fas fa-key me-2" aria-hidden="true"></i>Change Password</a></li>
+                                <li><hr class="dropdown-divider"></li>
                                 <li><a class="dropdown-item" href="{{ url_for('admin_logout_route') }}"><i class="fas fa-sign-out-alt me-2" aria-hidden="true"></i>Logout</a></li>
                             </ul>
                         </li>
@@ -398,9 +423,10 @@
             <!-- Sidebar -->
             {% if admin %}
                                 <div class="col-lg-2 col-md-3 sidebar" id="adminSidebar">
-                    <nav class="sidebar-scroll" aria-label="Admin sections">
+                    <nav class="sidebar-scroll" id="sidebarScroll" aria-label="Admin sections">
                         {% include "admin/_sidebar_links.html" %}
                     </nav>
+                    <div class="sidebar-fade" aria-hidden="true"></div>
                 </div>
                 <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
             {% endif %}
@@ -457,6 +483,23 @@
             document.addEventListener('keydown', function (event) {
                 if (event.key === 'Escape' && sidebar.classList.contains('is-open')) setOpen(false);
             });
+        })();
+
+        // Sidebar "more below" fade: hides itself once actually scrolled to
+        // the bottom (or if everything already fits, e.g. a tall viewport),
+        // so it never lingers as decoration with nothing left to reveal.
+        (function () {
+            var sidebar = document.getElementById('adminSidebar');
+            var scroller = document.getElementById('sidebarScroll');
+            if (!sidebar || !scroller) return;
+
+            function updateFade() {
+                var atBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 4;
+                sidebar.classList.toggle('at-bottom', atBottom);
+            }
+            scroller.addEventListener('scroll', updateFade, { passive: true });
+            window.addEventListener('resize', updateFade);
+            updateFade();
         })();
 
         // Confirm delete actions

@@ -70,19 +70,32 @@
 <body class="min-h-screen p-4 md:p-6 ss-user-scope">
     <a class="ss-skip-link" href="#main-content">Skip to main content</a>
     
-    <!-- Simple Header -->
-    <div class="flex items-center justify-between mb-6">
-        <a href="{{ url_for('dashboard') }}" class="ss-btn ss-btn-tertiary ss-btn-sm inline-flex items-center gap-2">
+    {# Canonical app shell (section 2): skipped for admin_view (support
+       impersonation of another user's project) - the owner's own account nav has
+       no meaning in that context. "My Stories" is the active parent section for
+       this project-child route. #}
+    {% if not admin_view %}
+    {% set nav_active = 'my_stories' %}
+    {% include "user/_creator_nav.html" %}
+    {% endif %}
+
+    <!-- Page header: breadcrumb back-link + project title -->
+    <div class="flex items-center justify-between flex-wrap gap-3 mb-6 mt-6">
+        {# Physical QA fix (issue 10): this went to Dashboard, skipping past the
+           Projects list - the logical parent of a single project's detail page. #}
+        <a href="{{ url_for('projects_page') }}" class="ss-btn ss-btn-tertiary ss-btn-sm inline-flex items-center gap-2">
             <i class="fas fa-arrow-left text-xs" aria-hidden="true"></i>
-            <span class="text-xs font-bold uppercase tracking-wider">Dashboard</span>
+            <span class="text-xs font-bold uppercase tracking-wider">My Stories</span>
         </a>
         {# The project TITLE is the identity of a ScanStory. The two lines that
            used to sit here - "Viewing ScanStory {{ project.display_number }}" and
            a "Project #" readout - printed an attribute this route never assigns,
            so both rendered blank ("Viewing ScanStory" and a bare "#"). Removed
            rather than backfilled: a raw sequence number is not a name, and the
-           title below already is one. #}
-        <div class="text-right min-w-0">
+           title below already is one. A long unbroken project name (no spaces)
+           overflowed a narrow viewport instead of wrapping - min-w-0 alone isn't
+           enough without the parent row also being allowed to wrap. #}
+        <div class="text-right min-w-0 flex-1">
             <div class="text-xs text-white/50">Viewing ScanStory</div>
             <h1 class="font-bold text-lg md:text-2xl leading-tight break-words">{{ project.name }}</h1>
         </div>
@@ -136,10 +149,18 @@
         <h2 class="ss-h2" id="shareHeading" style="font-size:0.9375rem;">
             <i class="fas fa-link text-cyan-400" aria-hidden="true"></i> Share this ScanStory
         </h2>
-        <p class="text-xs text-white/50 leading-relaxed mt-2 mb-4">
-            Anyone with this link opens your ScanStory in a phone browser &mdash; no app, no sign-in. The same
-            address is what the QR code points at, and it does not change when you replace the media inside.
-        </p>
+        {# Physical QA fix (information density): this was a permanently-visible
+           explanation of how the link/QR relate to each other - secondary detail,
+           not the primary action (that's the URL + Copy link/QR code below, which
+           stay visible). Same collapsed-by-default <details class="ss-disclosure">
+           pattern used throughout this page/the Creator wizard. #}
+        <details class="ss-disclosure" style="margin:2px 0 12px;">
+          <summary>How sharing works</summary>
+          <p class="text-xs text-white/50 leading-relaxed mt-2">
+              Anyone with this link opens your ScanStory in a phone browser &mdash; no app, no sign-in. The same
+              address is what the QR code points at, and it does not change when you replace the media inside.
+          </p>
+        </details>
         <div class="ss-share-row">
             <code class="ss-share-url" id="shareUrl">{{ share_url }}</code>
             <div class="ss-share-actions">
@@ -236,11 +257,18 @@
           <i class="fas fa-rotate" aria-hidden="true"></i> Extend ScanStory Coverage
         </h3>
         {% if coverage.renewal_eligible %}
-        <p class="ss-domain-note" style="margin-top:0;">
-          Keeps this ScanStory live on its own. New coverage starts on
-          {{ coverage.renewal_starts_at|friendly_date }}, right after what is already paid for,
-          so no time is lost or doubled up. This does not change your account plan or its renewal date.
-        </p>
+        {# Physical QA fix (issue 12): secondary "how this works" explanation,
+           not itself a status readout (the chip/dl above already carry the
+           live status) - collapsed by default to cut default text density,
+           same <details> disclosure pattern used elsewhere in this app. #}
+        <details class="ss-disclosure" style="margin:0 0 12px;">
+          <summary>How renewal works</summary>
+          <p class="ss-domain-note">
+            Keeps this ScanStory live on its own. New coverage starts on
+            {{ coverage.renewal_starts_at|friendly_date }}, right after what is already paid for,
+            so no time is lost or doubled up. This does not change your account plan or its renewal date.
+          </p>
+        </details>
         <div class="ss-addon-list" data-ss-addon-list role="list">
           <p class="ss-addon-note">Loading options&hellip;</p>
         </div>
@@ -408,6 +436,16 @@
         Shown to a scanner viewer ONLY when marker recognition fails or camera access is denied - it is never played as a general preview. Mark one pair below as this project's fallback.
     </div>
 
+    {# Admin-owned projects keep their media in ADMIN_IMAGES_DIR/ADMIN_VIDEOS_DIR, which
+       serve_image/serve_video never read - they only look in the user-side directories.
+       This page is reachable for an admin-owned project via ?admin_view=true, and
+       hardcoding the user-side endpoints there produced a guaranteed 404 (broken
+       thumbnail, dead video). Same owner-aware selection admin/view_project.html and the
+       resumable-upload finalize path already use. #}
+    {% set media_image_route = 'serve_admin_image' if project.owner_admin_id else 'serve_image' %}
+    {% set media_video_route = 'serve_admin_video' if project.owner_admin_id else 'serve_video' %}
+    {% set media_pair_video_route = 'serve_admin_pair_media_video' if project.owner_admin_id else 'serve_pair_media_video' %}
+
     <!-- Media Pairs Grid -->
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {% for pair in pairs %}
@@ -431,13 +469,14 @@
             <div class="p-4">
                 <div class="aspect-video bg-black/50 rounded-xl overflow-hidden mb-3 relative group">
                     {% if pair.image_filename %}
-                    <img src="{{ url_for('serve_image', project_id=project.id, image_id=pair.pair_index) }}" 
+                    {% set _img_v = pair.updated_at.timestamp()|int if pair.updated_at else 0 %}
+                    <img src="{{ url_for(media_image_route, project_id=project.id, image_id=pair.pair_index, v=_img_v) }}"
                          class="w-full h-full object-cover"
                          loading="lazy"
                          decoding="async"
                          onerror="this.style.display='none'">
                     <div class="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition flex items-center justify-center gap-3">
-                        <a href="{{ url_for('serve_image', project_id=project.id, image_id=pair.pair_index) }}" download
+                        <a href="{{ url_for(media_image_route, project_id=project.id, image_id=pair.pair_index, v=_img_v) }}" download
                            class="download-btn inline-flex items-center gap-2">
                             <i class="fas fa-download"></i> Download Image
                         </a>
@@ -450,14 +489,47 @@
                 </div>
                 
                 <!-- Video Preview -->
+                {% if pair.media_items and pair.media_items|length > 1 %}
+                <div class="space-y-2" data-multi-video-strip>
+                    <div class="text-[10px] uppercase tracking-wider text-white/40 font-bold px-0.5">
+                        Videos ({{ pair.media_items|length }})
+                    </div>
+                    {% for media in pair.media_items %}
+                    {% set _vid_v = media.video_size or 0 %}
+                    <div class="aspect-video bg-black/50 rounded-xl overflow-hidden relative group">
+                        <video src="{{ url_for(media_pair_video_route, project_id=project.id, image_id=pair.pair_index, media_id=media.id, v=_vid_v) }}"
+                               class="w-full h-full object-cover"
+                               preload="metadata"
+                               controls></video>
+                        <div class="absolute top-2 left-2 flex items-center gap-1 pointer-events-none">
+                            <span class="text-[10px] font-bold uppercase tracking-wide bg-black/70 text-white px-2 py-0.5 rounded-full">
+                                Video {{ loop.index }}
+                            </span>
+                            {% if media.is_default %}
+                            <span class="text-[10px] font-bold uppercase tracking-wide bg-cyan-500/80 text-black px-2 py-0.5 rounded-full">
+                                Default
+                            </span>
+                            {% endif %}
+                        </div>
+                        <div class="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition">
+                            <a href="{{ url_for(media_pair_video_route, project_id=project.id, image_id=pair.pair_index, media_id=media.id, v=_vid_v) }}" download
+                               class="download-btn inline-flex items-center gap-2 bg-black/50">
+                                <i class="fas fa-download"></i> Download
+                            </a>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
                 <div class="aspect-video bg-black/50 rounded-xl overflow-hidden relative group">
                     {% if pair.video_filename %}
-                    <video src="{{ url_for('serve_video', project_id=project.id, image_id=pair.pair_index) }}" 
+                    {% set _leg_vid_v = pair.updated_at.timestamp()|int if pair.updated_at else 0 %}
+                    <video src="{{ url_for(media_video_route, project_id=project.id, image_id=pair.pair_index, v=_leg_vid_v) }}"
                            class="w-full h-full object-cover"
                            preload="metadata"
                            controls></video>
                     <div class="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition">
-                        <a href="{{ url_for('serve_video', project_id=project.id, image_id=pair.pair_index) }}" download
+                        <a href="{{ url_for(media_video_route, project_id=project.id, image_id=pair.pair_index, v=_leg_vid_v) }}" download
                            class="download-btn inline-flex items-center gap-2 bg-black/50">
                             <i class="fas fa-download"></i> Download Video
                         </a>
@@ -468,6 +540,7 @@
                     </div>
                     {% endif %}
                 </div>
+                {% endif %}
 
                 <!-- V1 Wave 6: project fallback controls -->
                 <div class="mt-3 pt-3 border-t border-white/10" data-pair-card data-pair-index="{{ pair.pair_index }}">
@@ -530,6 +603,7 @@
     {% endif %}
 
     <script src="{{ url_for('static', filename='js/ss-ui.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/nav.js') }}"></script>
     <script>
         // Copy the canonical share link. ssCopy reports success/failure in a
         // toast and falls back to a selection copy where the async clipboard

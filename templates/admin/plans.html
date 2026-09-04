@@ -522,7 +522,7 @@
                     </div>
                     <div class="policy-row">
                         <span>Lifecycle/revision</span>
-                        <span class="policy-value">{{ plan.lifecycle_status }} / rev {{ plan.plan_revision }}</span>
+                        <span class="policy-value">{{ PLAN_LIFECYCLE_LABELS.get(plan.lifecycle_status, plan.lifecycle_status) }} / rev {{ plan.plan_revision }}</span>
                     </div>
                 </div>
                 <div class="plan-actions">
@@ -540,7 +540,7 @@
                         <label class="visually-hidden" for="lifecycle-{{ plan.id }}">Lifecycle status for {{ plan.plan_name }}</label>
                         <select name="lifecycle_status" id="lifecycle-{{ plan.id }}" class="btn btn-secondary btn-sm" style="padding:4px 8px;">
                             {% for status in ['DRAFT', 'ACTIVE', 'CLOSED_FOR_NEW_PURCHASE', 'ARCHIVED'] %}
-                            <option value="{{ status }}" {% if plan.lifecycle_status==status %}selected{% endif %}>{{ status }}</option>
+                            <option value="{{ status }}" {% if plan.lifecycle_status==status %}selected{% endif %}>{{ PLAN_LIFECYCLE_LABELS.get(status, status) }}</option>
                             {% endfor %}
                         </select>
                         <button type="submit" class="btn btn-secondary btn-sm" onclick="return confirm('Change this plan lifecycle status? Only new purchases are affected. Existing subscribers keep their term, projects, media and QR codes.');">Set</button>
@@ -586,24 +586,7 @@
 
 {% block extra_js %}
 <script>
-function toggleDropdown() {
-            const dropdown = document.getElementById('userDropdown');
-            dropdown.classList.toggle('show');
-        }
-        
-        // Close dropdown when clicking outside
-        window.onclick = function(event) {
-            if (!event.target.matches('.user-menu span')) {
-                const dropdowns = document.querySelectorAll('.dropdown-menu');
-                dropdowns.forEach(dropdown => {
-                    if (dropdown.classList.contains('show')) {
-                        dropdown.classList.remove('show');
-                    }
-                });
-            }
-        };
-        
-        // Auto remove alerts after 5 seconds
+// Auto remove alerts after 5 seconds
         document.addEventListener('DOMContentLoaded', function() {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {

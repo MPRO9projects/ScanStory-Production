@@ -59,7 +59,12 @@ def _upload_data(name="Marker Project", modes=("crop",), widths=(640,)):
     videos = []
     for index, mode in enumerate(modes):
         width = widths[index] if index < len(widths) else widths[-1]
-        images.append((_jpeg_bytes(width, 480), f"marker-{index}.jpg"))
+        # Distinct color per pair index (local Creator Integrity pass): two
+        # pairs in the SAME project with byte-identical target images now
+        # correctly trips the new duplicate-target guard
+        # (uq_project_pair_image_hash) - a real product rule this fixture
+        # was accidentally violating for every multi-pair upload it built.
+        images.append((_jpeg_bytes(width, 480, color=(20 + index * 40, 60 + index * 30, 90 + index * 20)), f"marker-{index}.jpg"))
         videos.append((_mp4_bytes(), f"clip-{index}.mp4"))
         data[f"marker_{index}_mode"] = mode
         data[f"marker_{index}_crop_x"] = "0.1" if mode == "crop" else "0"
@@ -248,7 +253,10 @@ def test_success_redirect_happens_once():
     assert "if (!uploadRedirected)" in success_block
     assert "uploadRedirected = true" in success_block
     assert "UPLOAD CLIENT REDIRECT" in success_block
-    assert "window.location.href = xhr.responseURL || '/dashboard'" in success_block
+    # Admin Create completion-flow fix (2026-09-03): '/dashboard' was
+    # User-only and wrong for an Admin session - now routes through the
+    # IS_ADMIN-aware postUploadFallbackUrl() helper instead.
+    assert "window.location.href = xhr.responseURL || postUploadFallbackUrl()" in success_block
 
 
 def test_production_does_not_emit_upload_client_diagnostics():
@@ -461,7 +469,10 @@ def test_resumable_upload_refresh_recovery_uses_authoritative_session_status():
     block = html[start:html.index("if (!sessionPayload)", start)]
     assert "getUploadSessionStatus(stored.sessionId, controller.signal)" in block
     assert "sessionPayload.session?.status === 'completed' && sessionPayload.session.project_id" in block
-    assert "window.location.href = `/success/${sessionPayload.session.project_id}`" in block
+    # Admin Create completion-flow fix (2026-09-03): routes through the
+    # IS_ADMIN-aware successUrlFor() helper instead of a hardcoded
+    # User-only /success/<id>.
+    assert "window.location.href = successUrlFor(sessionPayload.session.project_id)" in block
     assert "sessionPayload.session?.status === 'assembled'" in block
     assert "sessionPayload.session?.status === 'active'" in block
     # Terminality comes from the server's own is_terminal flag (see _upload_session_payload
@@ -537,13 +548,16 @@ def test_replacing_image_resets_invalid_prior_crop_and_dimensions():
 
 
 def test_minimum_crop_dimensions_are_enforced_client_side():
-    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
-    assert "const MIN_MARKER_CROP_FRACTION = 0.08" in html
-    assert "const minWidth = Math.min(0.5, Math.max(MIN_MARKER_CROP_FRACTION, 1 / naturalWidth))" in html
-    assert "const minHeight = Math.min(0.5, Math.max(MIN_MARKER_CROP_FRACTION, 1 / naturalHeight))" in html
-    assert "width < minWidth || height < minHeight" in html
-    assert "width = Math.min(1, Math.max(minWidth, width))" in html
-    assert "height = Math.min(1, Math.max(minHeight, height))" in html
+    # Crop math moved into the shared marker-preparation engine (marker-editor.js) in the
+    # master stabilization pass so creation and replacement use identical logic; only the
+    # engine itself carries these literals now, not the page's inline script.
+    js = Path("static/js/marker-editor.js").read_text(encoding="utf-8", errors="ignore")
+    assert "var MIN_CROP_FRACTION = 0.08" in js
+    assert "var minWidth = Math.min(0.5, Math.max(MIN_CROP_FRACTION, 1 / naturalWidth))" in js
+    assert "var minHeight = Math.min(0.5, Math.max(MIN_CROP_FRACTION, 1 / naturalHeight))" in js
+    assert "width < minWidth || height < minHeight" in js
+    assert "width = Math.min(1, Math.max(minWidth, width))" in js
+    assert "height = Math.min(1, Math.max(minHeight, height))" in js
 
 
 def test_rotation_keeps_crop_valid():
@@ -555,50 +569,56 @@ def test_rotation_keeps_crop_valid():
 
 
 def test_zero_size_canvas_or_image_layout_does_not_persist_invalid_crop():
+    # The dimension/scale guard now lives in the shared engine's computeDrawRect (used by
+    # both creation and replacement); the page keeps its own bounding-rect and drag-point
+    # guards around the pointer math that stayed page-owned.
+    js = Path("static/js/marker-editor.js").read_text(encoding="utf-8", errors="ignore")
+    assert "if (!naturalWidth || !naturalHeight || !canvasWidth || !canvasHeight) return null" in js
+    assert "if (!Number.isFinite(scale) || scale <= 0) return null" in js
     html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
-    assert "if (!image.naturalWidth || !image.naturalHeight || !canvas.width || !canvas.height)" in html
-    assert "reason: 'missing image or canvas dimensions'" in html
-    assert "if (!Number.isFinite(scale) || scale <= 0)" in html
-    assert "reason: 'invalid display scale'" in html
     assert "if (!rect.width || !rect.height)" in html
     assert "reason: 'zero canvas bounding rect'" in html
-    assert "if (!point) return" in html
+    assert "!pair || !r || !cropDrag || !point || !r.imageW || !r.imageH" in html
 
 
 def test_mobile_touch_interaction_cannot_collapse_crop_to_point():
     html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
     assert "addEventListener('pointerdown'" in html
     assert "addEventListener('pointermove'" in html
-    assert "const minSize = MIN_MARKER_CROP_FRACTION" in html
-    assert "x2 = Math.max(x1 + minSize, Math.min(x2, 1))" in html
-    assert "y2 = Math.max(y1 + minSize, Math.min(y2, 1))" in html
     assert "sanitizeCrop(pair, activeCropImage)" in html
+    # Minimum-size clamp is now the shared engine's applyDragDelta, called by the page's
+    # updateCropFromDrag for every pointer/touch drag update.
+    js = Path("static/js/marker-editor.js").read_text(encoding="utf-8", errors="ignore")
+    assert "var minSize = MIN_CROP_FRACTION" in js
+    assert "x2 = Math.max(x1 + minSize, Math.min(x2, 1))" in js
+    assert "y2 = Math.max(y1 + minSize, Math.min(y2, 1))" in js
 
 
 def test_desktop_move_drag_changes_crop_xy():
-    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
-    start = html.index("if (cropDrag.mode === 'move')")
-    block = html[start:html.index("} else {", start)]
-    assert "cropDrag.start.x + dx" in block
-    assert "cropDrag.start.y + dy" in block
+    # Drag-mode branching (move/resize) now lives in the shared engine's applyDragDelta.
+    js = Path("static/js/marker-editor.js").read_text(encoding="utf-8", errors="ignore")
+    start = js.index("if (mode === 'move')")
+    block = js[start:js.index("} else {", start)]
+    assert "startCrop.x + dx" in block
+    assert "startCrop.y + dy" in block
     assert "x2 = x1 + width" in block
     assert "y2 = y1 + height" in block
 
 
 def test_desktop_corner_resize_changes_width_and_height():
-    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
-    assert "{ name: 'nw', x: r.x, y: r.y }" in html
-    assert "{ name: 'se', x: r.x + r.w, y: r.y + r.h }" in html
-    assert "if (cropDrag.mode.includes('w')) x1 += dx" in html
-    assert "if (cropDrag.mode.includes('s')) y2 += dy" in html
+    js = Path("static/js/marker-editor.js").read_text(encoding="utf-8", errors="ignore")
+    assert "{ name: 'nw', x: r.x, y: r.y }" in js
+    assert "{ name: 'se', x: r.x + r.w, y: r.y + r.h }" in js
+    assert "if (mode.indexOf('w') !== -1) x1 += dx" in js
+    assert "if (mode.indexOf('s') !== -1) y2 += dy" in js
 
 
 def test_desktop_edge_resize_changes_one_axis():
-    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
-    assert "{ name: 'e', x: r.x + r.w, y: r.y + r.h / 2 }" in html
-    assert "{ name: 'n', x: r.x + r.w / 2, y: r.y }" in html
-    assert "if (cropDrag.mode.includes('e')) x2 += dx" in html
-    assert "if (cropDrag.mode.includes('n')) y1 += dy" in html
+    js = Path("static/js/marker-editor.js").read_text(encoding="utf-8", errors="ignore")
+    assert "{ name: 'e', x: r.x + r.w, y: r.y + r.h / 2 }" in js
+    assert "{ name: 'n', x: r.x + r.w / 2, y: r.y }" in js
+    assert "if (mode.indexOf('e') !== -1) x2 += dx" in js
+    assert "if (mode.indexOf('n') !== -1) y1 += dy" in js
 
 
 def test_mobile_pointer_drag_uses_unified_pointer_events():
@@ -632,33 +652,40 @@ def test_pointercancel_cleans_crop_drag_state():
 
 
 def test_sanitization_preserves_valid_drag_updates():
+    # updateCropFromDrag now delegates the whole drag computation (including sanitization,
+    # which applyDragDelta performs internally via sanitizeCrop) to the shared engine, so
+    # the page passes the drag-start crop through rather than assembling x1/y1/width/height
+    # itself.
     html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
     update_start = html.index("function updateCropFromDrag(point)")
     update_block = html[update_start:html.index("async function updateCropPreview()", update_start)]
-    assert "pair.crop = { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }" in update_block
-    assert "sanitizeCrop(pair, activeCropImage)" in update_block
+    assert "pair.crop = MarkerEditor.applyDragDelta(cropDrag.start, cropDrag.mode, dx, dy, activeCropImage.naturalWidth, activeCropImage.naturalHeight)" in update_block
     assert "forceDefault" not in update_block
-    assert "cropDrag.start.width" in update_block
-    assert "cropDrag.start.height" in update_block
-    assert not re.search(r"cropDrag\.start\.w(?!idth)", update_block)
-    assert not re.search(r"cropDrag\.start\.h(?!eight)", update_block)
+    assert "cropDrag.start" in update_block
+    assert not re.search(r"cropDrag\.start\.w(?!idth)\b", update_block)
+    assert not re.search(r"cropDrag\.start\.h(?!eight)\b", update_block)
+
+    js = Path("static/js/marker-editor.js").read_text(encoding="utf-8", errors="ignore")
+    apply_start = js.index("function applyDragDelta(")
+    apply_block = js[apply_start:js.index("\n  }\n", apply_start)]
+    assert "return sanitizeCrop(" in apply_block
 
 
 def test_crop_drag_stays_within_bounds():
-    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
-    assert "x1 = Math.max(0, Math.min(x1, 1 - minSize))" in html
-    assert "y1 = Math.max(0, Math.min(y1, 1 - minSize))" in html
-    assert "x2 = Math.max(x1 + minSize, Math.min(x2, 1))" in html
-    assert "y2 = Math.max(y1 + minSize, Math.min(y2, 1))" in html
+    js = Path("static/js/marker-editor.js").read_text(encoding="utf-8", errors="ignore")
+    assert "x1 = Math.max(0, Math.min(x1, 1 - minSize))" in js
+    assert "y1 = Math.max(0, Math.min(y1, 1 - minSize))" in js
+    assert "x2 = Math.max(x1 + minSize, Math.min(x2, 1))" in js
+    assert "y2 = Math.max(y1 + minSize, Math.min(y2, 1))" in js
 
 
 def test_minimum_size_remains_enforced_during_drag():
-    html = Path("templates/user/user_create_project.html").read_text(encoding="utf-8", errors="ignore")
-    assert "const minSize = MIN_MARKER_CROP_FRACTION" in html
-    assert "if (cropDrag.mode.includes('w') && x2 - x1 < minSize) x1 = x2 - minSize" in html
-    assert "if (cropDrag.mode.includes('e') && x2 - x1 < minSize) x2 = x1 + minSize" in html
-    assert "if (cropDrag.mode.includes('n') && y2 - y1 < minSize) y1 = y2 - minSize" in html
-    assert "if (cropDrag.mode.includes('s') && y2 - y1 < minSize) y2 = y1 + minSize" in html
+    js = Path("static/js/marker-editor.js").read_text(encoding="utf-8", errors="ignore")
+    assert "var minSize = MIN_CROP_FRACTION" in js
+    assert "if (mode.indexOf('w') !== -1 && x2 - x1 < minSize) x1 = x2 - minSize" in js
+    assert "if (mode.indexOf('e') !== -1 && x2 - x1 < minSize) x2 = x1 + minSize" in js
+    assert "if (mode.indexOf('n') !== -1 && y2 - y1 < minSize) y1 = y2 - minSize" in js
+    assert "if (mode.indexOf('s') !== -1 && y2 - y1 < minSize) y2 = y1 + minSize" in js
 
 
 def test_crop_debug_diagnostics_are_development_only_and_visible():

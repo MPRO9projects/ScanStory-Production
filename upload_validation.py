@@ -21,13 +21,18 @@ class UploadValidationError(Exception):
 
     `safe_message` is the only thing ever shown to a client. `detail` is
     for server-side logging only and may contain decoder/library detail
-    that must never reach a response body.
+    that must never reach a response body. `code` is an optional stable,
+    machine-readable identifier (e.g. "VIDEO_LIMIT_REACHED") for admin-facing
+    diagnostics/logging - never itself shown to a client either, since a raw
+    code plus safe_message is still more than some callers need; existing
+    callers that omit it are unaffected (defaults to None).
     """
 
-    def __init__(self, safe_message, detail=None):
+    def __init__(self, safe_message, detail=None, code=None):
         super().__init__(safe_message)
         self.safe_message = safe_message
         self.detail = detail or safe_message
+        self.code = code
 
 
 IMAGE_SIGNATURES = {

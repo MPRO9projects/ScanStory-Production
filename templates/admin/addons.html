@@ -4,7 +4,6 @@
 
 {% block extra_css %}
 <style>
-    .addon-admin-wrap { max-width: 1200px; }
     .lede { color: #9a9aa5; font-size: 14px; margin-bottom: 24px; max-width: 70ch; line-height: 1.5; }
     .card h2 { font-size: 16px; margin-bottom: 16px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 14px; }
@@ -13,7 +12,8 @@
     .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 11px; border: 1px solid #26262e; }
     .on { color: #4ade80; border-color: #1e5233; }
     .off { color: #f87171; border-color: #5a2626; }
-    details summary { cursor: pointer; color: #9a9aa5; font-size: 13px; min-height: 44px; display: inline-flex; align-items: center; }
+    details summary { cursor: pointer; list-style: none; }
+    details summary::-webkit-details-marker { display: none; }
     .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
     .muted { color: #9aa1ac; font-size: 12px; }
     .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -22,7 +22,7 @@
 {% endblock %}
 
 {% block content %}
-    <div class="addon-admin-wrap">
+    <div>
         <h1>Add-on Catalogue</h1>
         <p class="lede">
             Items listed here are what <code>/api/addons/catalog</code> offers to customers.
@@ -48,7 +48,7 @@
                     <tr>
                         <td><code>{{ item.code }}</code></td>
                         <td>{{ item.name }}</td>
-                        <td>{{ item.addon_type }}</td>
+                        <td>{{ ADDON_TYPE_LABELS.get(item.addon_type, item.addon_type) }}</td>
                         <td>{{ item.currency }} {{ '%.2f'|format(item.unit_amount) }}</td>
                         <td class="muted">
                             {% if item.scan_delta %}scans +{{ item.scan_delta }}<br>{% endif %}
@@ -64,16 +64,16 @@
                                 <form method="POST" action="{{ url_for('admin_toggle_addon', catalog_id=item.id) }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="field" value="is_active">
-                                    <button class="btn btn-sm" type="submit">{{ 'Deactivate' if item.is_active else 'Activate' }}</button>
+                                    <button class="btn btn-sm {{ 'btn-warning' if item.is_active else 'btn-success' }}" type="submit" onclick="return confirm('{{ 'Deactivate' if item.is_active else 'Activate' }} this add-on? {{ 'Customers can no longer purchase it, but existing purchases are unaffected.' if item.is_active else 'It becomes purchasable again.' }}');">{{ 'Deactivate' if item.is_active else 'Activate' }}</button>
                                 </form>
                                 <form method="POST" action="{{ url_for('admin_toggle_addon', catalog_id=item.id) }}">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="field" value="is_commercially_available">
-                                    <button class="btn btn-sm" type="submit">{{ 'Unlist' if item.is_commercially_available else 'List' }}</button>
+                                    <button class="btn btn-sm {{ 'btn-warning' if item.is_commercially_available else 'btn-success' }}" type="submit" onclick="return confirm('{{ 'Unlist' if item.is_commercially_available else 'List' }} this add-on? {{ 'It is hidden from the customer catalogue immediately.' if item.is_commercially_available else 'It becomes visible in the customer catalogue.' }}');">{{ 'Unlist' if item.is_commercially_available else 'List' }}</button>
                                 </form>
                             </div>
                             <details style="margin-top:8px;">
-                                <summary>Edit</summary>
+                                <summary class="btn btn-sm btn-warning">Edit</summary>
                                 <form method="POST" action="{{ url_for('admin_edit_addon', catalog_id=item.id) }}" style="margin-top:12px;">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <div class="grid">
@@ -83,7 +83,7 @@
                                             <label>Type</label>
                                             <select name="addon_type" aria-label="Add-on type">
                                                 {% for t in addon_types %}
-                                                <option value="{{ t }}" {% if t == item.addon_type %}selected{% endif %}>{{ t }}</option>
+                                                <option value="{{ t }}" {% if t == item.addon_type %}selected{% endif %}>{{ ADDON_TYPE_LABELS.get(t, t) }}</option>
                                                 {% endfor %}
                                             </select>
                                         </div>
@@ -125,7 +125,7 @@
                     <div>
                         <label>Type</label>
                         <select name="addon_type" aria-label="Add-on type">
-                            {% for t in addon_types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
+                            {% for t in addon_types %}<option value="{{ t }}">{{ ADDON_TYPE_LABELS.get(t, t) }}</option>{% endfor %}
                         </select>
                     </div>
                     <div><label>Unit amount</label><input type="number" step="0.01" min="0" name="unit_amount" aria-label="Unit amount" required></div>

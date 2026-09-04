@@ -183,7 +183,10 @@ def test_media_cache_headers_preserve_range_and_suspension_blocks_access(
     db_session.commit()
     suspended = client.get(f"/video/{project.id}/{pair.pair_index}")
     assert suspended.status_code == 404
-    assert b"suspended or unavailable" in suspended.data
+    # Copy is deliberately generic (never says "suspended" specifically) so an
+    # unavailable response can't be used to enumerate WHY a project is down -
+    # see _project_unavailable_response()'s own comment.
+    assert b"This experience is unavailable" in suspended.data
 
 
 def test_admin_media_uses_private_cache_not_public(client, app_module, db_session, admin):

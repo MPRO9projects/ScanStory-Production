@@ -307,19 +307,27 @@ def test_scanner_page_for_suspended_project_returns_styled_404(client, app_modul
     response = client.get(f"/scanner/{project.id}")
     assert response.status_code == 404
     body = response.data.decode()
-    assert "suspended or unavailable" in body
+    # Copy is deliberately generic (never says "suspended" specifically) so an
+    # unavailable response can't be used to enumerate WHY a project is down -
+    # see _project_unavailable_response()'s own comment.
+    assert "This experience is unavailable" in body
     assert "SCANSTORY" in body
     assert "<html" in body.lower()  # styled page, not the old bare-text tuple body
 
 
 def test_standalone_admin_sidebar_exposes_current_navigation_for_superadmin(client, login_admin):
+    # World-Class Admin Restructure (2026-09-02): "Users" -> "Customers",
+    # generic "Projects" split into My Projects/All Admin Projects/Customer
+    # Projects, "Capacity" -> "Signup Capacity" - see
+    # SCANSTORY_ADMIN_IA_AUDIT_2026-09-02.md for why.
     response = client.get("/admin/payments")
     assert response.status_code == 200
     body = response.data.decode()
     for label in (
-        "Dashboard", "Users", "Projects", "Content Reports", "Scans",
-        "Plans", "Subscriptions", "Payments", "Admin Management",
-        "Capacity", "Operations", "Settings", "Activity Logs",
+        "Dashboard", "Customers", "My Projects", "All Admin Projects",
+        "Customer Projects", "Content Reports", "Scans",
+        "Plans", "Add-ons", "Subscriptions", "Payments", "Admin Management",
+        "Signup Capacity", "Operations", "Settings", "Activity Logs",
     ):
         assert f"<span>{label}</span>" in body
 
@@ -327,7 +335,7 @@ def test_standalone_admin_sidebar_exposes_current_navigation_for_superadmin(clie
 def test_admin_json_fetch_sites_use_resilient_non_json_helper():
     for path in (
         "templates/admin/moderation.html",
-        "templates/admin/operations.html",
+        "templates/admin/payments_refunds.html",
         "templates/admin/view_payment.html",
     ):
         html = open(path, encoding="utf-8").read()
@@ -474,7 +482,10 @@ def test_admin_plan_pages_expose_policy_contract_without_unbacked_inputs(client,
     listing = client.get("/admin/plans").data.decode()
     assert "Individual" in listing
     assert "Live (editable on add/edit)" in listing
-    assert "ACTIVE / rev 1" in listing
+    # Final Product Completeness Pass, Lane H: raw lifecycle_status enum
+    # values were leaking into Admin-facing copy - now rendered through
+    # PLAN_LIFECYCLE_LABELS ("Active", not "ACTIVE").
+    assert "Active / rev 1" in listing
     assert "Image 50 MB; video 1 GB" in listing
 
 

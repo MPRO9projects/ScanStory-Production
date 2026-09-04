@@ -421,7 +421,10 @@
                         {% if user.is_blocked %}
                         <span class="badge badge-danger">Blocked</span>
                         {% elif not user.is_verified %}
-                        <span class="badge badge-warning">Unverified</span>
+                        {# Track B (2026-08-31): same wording clarification as users.html -
+                           "Unverified" alone was read as an email-send/delivery status,
+                           when is_verified means the USER's own email is confirmed. #}
+                        <span class="badge badge-warning">Email unverified</span>
                         {% elif user.subscription_status == 'active' %}
                         <span class="badge badge-success">Active</span>
                         {% elif user.subscription_status == 'trial' %}
@@ -445,9 +448,12 @@
             
             <!-- Quick Actions -->
             <div class="action-buttons">
+                <span class="action-group action-group-primary">
                 <a href="{{ url_for('admin_view_user_dashboard', user_id=user.id) }}" class="btn btn-primary" title="View selected user's dashboard context without impersonating">
                     View User Dashboard
                 </a>
+                </span>
+                <span class="action-group action-group-state">
                 {% if user.is_blocked %}
                 <form action="/admin/users/{{ user.id }}/toggle-block" method="POST" style="display: inline;">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -459,16 +465,17 @@
                     <button type="submit" class="btn btn-danger" onclick="return confirm('Block this user? Login and scanning are blocked; projects, payments, and audit history are not deleted.')">Block User</button>
                 </form>
                 {% endif %}
-                
+                </span>
+                <span class="action-group action-group-secondary">
                 <button class="btn btn-warning" onclick="openModal('resetPasswordModal')">Reset Password</button>
-                
                 {% if trial %}
                 <button class="btn btn-primary" onclick="openModal('extendTrialModal')">Extend Trial</button>
                 {% endif %}
-                
                 <button class="btn btn-primary" onclick="openModal('addScansModal')">Add Scans</button>
-                
+                </span>
+                <span class="action-group action-group-utility">
                 <a href="mailto:{{ user.email }}" class="btn btn-secondary">Send Email</a>
+                </span>
             </div>
         </div>
         
@@ -485,9 +492,9 @@
                     {% if user.is_blocked %}
                     Blocked
                     {% elif not user.is_verified %}
-                    Unverified
+                    Email unverified
                     {% else %}
-                    Verified
+                    Email verified
                     {% endif %}
                 </div>
             </div>
@@ -719,6 +726,27 @@
             </div>
         </div>
 
+        <!-- Scan Activity. admin_view_user() has always computed scan_history
+             (last 50 ScanLog rows) but this card never rendered it - a
+             genuine backend/UI gap the IA audit flagged (2026-09-02). Kept
+             deliberately minimal (count + link to the existing full
+             per-user Scans page) rather than duplicating that page's table
+             here. -->
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h3 class="card-title">Scan Activity ({{ scan_history|length }} recent)</h3>
+                <a href="{{ url_for('admin_user_scans', user_id=user.id) }}" class="btn btn-primary btn-sm">View Scan Activity</a>
+            </div>
+            <div class="card-body">
+                {% if scan_history %}
+                <p class="text-muted mb-0">Last scan: {{ scan_history[0].created_at.strftime('%d %b %Y, %I:%M %p') if scan_history[0].created_at else '-' }}
+                    &middot; {{ scan_history|selectattr('is_successful')|list|length }} successful of {{ scan_history|length }} shown.</p>
+                {% else %}
+                <p class="text-muted mb-0">No scans recorded for this customer yet.</p>
+                {% endif %}
+            </div>
+        </div>
+
         <!-- Payment History -->
         <div class="card">
             <div class="card-header">
@@ -819,12 +847,16 @@
                 <h3 class="modal-title">Add Scans</h3>
                 <button class="modal-close" onclick="closeModal('addScansModal')">&times;</button>
             </div>
-            <form action="/admin/users/{{ user.id }}/add-scans" method="POST">
+            <form action="/admin/users/{{ user.id }}/add-scans" method="POST" onsubmit="var b=this.querySelector('button[type=submit]'); b.disabled=true; b.textContent='Applying...'; return true;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <div class="form-group">
                     <label for="additional_scans">Additional Scans</label>
                     <input type="number" id="additional_scans" name="additional_scans" class="form-control" placeholder="Enter number of scans to add" min="1" max="10000" value="100" required>
                     <small style="color: rgba(255,255,255,0.6);">Current limit: {{ user.subscribed_scan_limit }} scans</small>
+                </div>
+                <div class="form-group">
+                    <label for="add_scans_reason">Reason</label>
+                    <input type="text" id="add_scans_reason" name="reason" class="form-control" placeholder="Why is this being added?" required>
                 </div>
                 <button type="submit" class="btn btn-primary">Add Scans</button>
                 <button type="button" class="btn btn-secondary" onclick="closeModal('addScansModal')">Cancel</button>
@@ -835,24 +867,7 @@
 
 {% block extra_js %}
 <script>
-function toggleDropdown() {
-            const dropdown = document.getElementById('userDropdown');
-            dropdown.classList.toggle('show');
-        }
-        
-        // Close dropdown when clicking outside
-        window.onclick = function(event) {
-            if (!event.target.matches('.user-menu span')) {
-                const dropdowns = document.querySelectorAll('.dropdown-menu');
-                dropdowns.forEach(dropdown => {
-                    if (dropdown.classList.contains('show')) {
-                        dropdown.classList.remove('show');
-                    }
-                });
-            }
-        };
-        
-        // Modal functions
+// Modal functions
         let lastModalTrigger = null;
 
         function openModal(modalId) {

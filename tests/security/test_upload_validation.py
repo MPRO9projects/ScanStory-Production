@@ -55,9 +55,9 @@ def no_background_processing(app_module, monkeypatch):
 # Fixture-generation helpers - no committed binaries, everything built here.
 # ---------------------------------------------------------------------------
 
-def _jpeg_bytes(width=640, height=480):
+def _jpeg_bytes(width=640, height=480, color=(120, 80, 40)):
     out = BytesIO()
-    Image.new("RGB", (width, height), (120, 80, 40)).save(out, format="JPEG")
+    Image.new("RGB", (width, height), color).save(out, format="JPEG")
     return out.getvalue()
 
 
@@ -194,7 +194,13 @@ def test_direct_qr_experience_type_persists_without_target_image(client, app_mod
     assert pair.video_filename.endswith(".mp4")
     assert pair.processing_status == "completed"
     assert pair.feature_extraction_status == "not_required"
-    assert app_module.ProcessingJob.query.count() == 0
+    # Direct QR has no marker image, so it must never trigger recognition/feature-extraction
+    # processing (process_project_pairs) - but every PairMedia legitimately gets its own
+    # optimize_pair_media job (Fast Video auto-enqueue, unconditional and orthogonal to
+    # recognition; see the comment at its enqueue site in app.py).
+    job_types = {j.job_type for j in app_module.ProcessingJob.query.all()}
+    assert "process_project_pairs" not in job_types
+    assert job_types <= {"optimize_pair_media"}
 
 
 def test_invalid_experience_type_rejected(client, app_module, login_user):
@@ -413,7 +419,9 @@ def test_valid_existing_project_upload_behavior_remains_working(client, app_modu
 
     data = {"name": "Multi Pair Project", "upload_id": "uv-multi", "images": [], "videos": []}
     for index in range(2):
-        data["images"].append((BytesIO(_jpeg_bytes()), f"marker-{index}.jpg"))
+        # Distinct color per target - two identical images in the same project
+        # trip the real, pre-existing uq_project_pair_image_hash constraint.
+        data["images"].append((BytesIO(_jpeg_bytes(color=(120 + index * 40, 80, 40))), f"marker-{index}.jpg"))
         data["videos"].append((BytesIO(_mp4_bytes()), f"clip-{index}.mp4"))
         for key, value in {
             "mode": "crop", "crop_x": "0.1", "crop_y": "0.1", "crop_width": "0.6", "crop_height": "0.6",

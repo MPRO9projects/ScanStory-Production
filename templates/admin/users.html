@@ -397,7 +397,12 @@
                                 {% if user.is_blocked %}
                                 <span class="badge badge-danger">Blocked</span>
                                 {% elif not user.is_verified %}
-                                <span class="badge badge-warning">Unverified</span>
+                                {# Track B (2026-08-31): "Unverified"/"Verified" alone was
+                                   ambiguous - QA read it as "email is done/not done"
+                                   (implying an admin-sent email), when is_verified actually
+                                   means the USER's own email address has been confirmed by
+                                   them. Traced to the model field before wording this. #}
+                                <span class="badge badge-warning">Email unverified</span>
                                 {% elif user.subscription_status == 'active' %}
                                 <span class="badge badge-success">Active</span>
                                 {% elif user.subscription_status == 'trial' %}
@@ -470,7 +475,7 @@
                 </div>
                 <div style="text-align: center;">
                     <div style="font-size: 32px; font-weight: bold; color: #10b981;">{{ users|selectattr('is_verified', 'equalto', true)|list|length }}</div>
-                    <div style="color: rgba(255,255,255,0.6);">Verified</div>
+                    <div style="color: rgba(255,255,255,0.6);">Email verified</div>
                 </div>
                 <div style="text-align: center;">
                     <div style="font-size: 32px; font-weight: bold; color: #ef4444;">{{ users|selectattr('is_blocked', 'equalto', true)|list|length }}</div>
@@ -486,24 +491,7 @@
 
 {% block extra_js %}
 <script>
-function toggleDropdown() {
-            const dropdown = document.getElementById('userDropdown');
-            dropdown.classList.toggle('show');
-        }
-
-        // Close dropdown when clicking outside
-        window.onclick = function(event) {
-            if (!event.target.matches('.user-menu span')) {
-                const dropdowns = document.querySelectorAll('.dropdown-menu');
-                dropdowns.forEach(dropdown => {
-                    if (dropdown.classList.contains('show')) {
-                        dropdown.classList.remove('show');
-                    }
-                });
-            }
-        };
-
-        // Auto remove alerts after 5 seconds
+// Auto remove alerts after 5 seconds
         document.addEventListener('DOMContentLoaded', function() {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {

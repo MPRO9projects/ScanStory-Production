@@ -435,6 +435,20 @@
 {% endblock %}
 
 {% block content %}
+        {# Project context badge (World-Class Admin Restructure, 2026-09-02):
+           ownership must never be inferred from a table row alone. #}
+        <div class="card" style="margin-bottom: 16px; padding: 12px 20px; display: flex; align-items: center; gap: 12px;">
+            {% if owner.type not in ('User', 'Admin') %}
+            <span class="badge badge-danger">{{ owner.type }}</span>
+            <span style="color: rgba(255,255,255,0.7); font-size: 13px;">{{ owner.email }}</span>
+            {% elif owner.type == 'Admin' %}
+            <span class="badge badge-info">{{ 'Admin Workspace Project' if owner.id == admin.id else 'Admin-Owned Project' }}</span>
+            <span style="color: rgba(255,255,255,0.7); font-size: 13px;">Owner: {{ 'You' if owner.id == admin.id else owner.name ~ ' (' ~ owner.email ~ ')' }}</span>
+            {% else %}
+            <span class="badge badge-secondary">Customer Project</span>
+            <span style="color: rgba(255,255,255,0.7); font-size: 13px;">Owner: {{ owner.name }} ({{ owner.email }})</span>
+            {% endif %}
+        </div>
         <div class="page-header">
             <h1 class="page-title">Project Details</h1>
             <div>
@@ -467,16 +481,25 @@
             </div>
 
             <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;">
+                {# Suspend/Restore is platform-wide moderation, not Creator project
+                   management - Super Admin only (Final Product Completeness Pass,
+                   Lane B). A regular Admin keeps Preview/Edit/Delete/etc on their
+                   own projects via the separate ownership-scoped routes below;
+                   this control is gated server-side too (superadmin.projects.suspend). #}
+                {% if admin_can('superadmin.projects.suspend') %}
                 {% if project.is_active %}
-                <form method="POST" action="{{ url_for('admin_suspend_project', project_id=project.id) }}" style="display:inline;" onsubmit="return confirm('Suspend this project? Scanner and media access will be blocked. Media, QR code, project data, and payments are not deleted or refunded.');">
+                <form method="POST" action="{{ url_for('admin_suspend_project', project_id=project.id) }}" style="display:flex; gap:8px; align-items:center;" onsubmit="if(!confirm('Suspend this project? Scanner and media access will be blocked. Media, QR code, project data, and payments are not deleted or refunded.')){return false;} var b=this.querySelector('button[type=submit]'); b.disabled=true; b.textContent='Suspending...'; return true;">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="text" name="reason" class="form-control" style="width:220px;" placeholder="Reason (required)" required>
                     <button type="submit" class="btn btn-warning">Suspend Project</button>
                 </form>
                 {% else %}
-                <form method="POST" action="{{ url_for('admin_restore_project', project_id=project.id) }}" style="display:inline;" onsubmit="return confirm('Restore this project? Scanner and media access will be available again; ownership and payment history are unchanged.');">
+                <form method="POST" action="{{ url_for('admin_restore_project', project_id=project.id) }}" style="display:flex; gap:8px; align-items:center;" onsubmit="if(!confirm('Restore this project? Scanner and media access will be available again; ownership and payment history are unchanged.')){return false;} var b=this.querySelector('button[type=submit]'); b.disabled=true; b.textContent='Restoring...'; return true;">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="text" name="reason" class="form-control" style="width:220px;" placeholder="Reason (required)" required>
                     <button type="submit" class="btn btn-success">Restore Project</button>
                 </form>
+                {% endif %}
                 {% endif %}
                 {# admin_scanner_test_entry aborts 404 unless the project is
                    owned by THIS admin, so on a creator's project this button
@@ -685,6 +708,7 @@
                  moderation creates. See _admin_media_investigation_allowed. -->
             {% set evidence_image_route = 'serve_admin_image' if project.owner_admin_id else 'serve_image' %}
             {% set evidence_video_route = 'serve_admin_video' if project.owner_admin_id else 'serve_video' %}
+            {% set evidence_pair_media_video_route = 'serve_admin_pair_media_video' if project.owner_admin_id else 'serve_pair_media_video' %}
             {% if pair_count > pairs|length %}<p style="color: rgba(255,255,255,0.6); margin-bottom: 15px;">Showing first {{ pairs|length }} pairs of {{ pair_count }} total.</p>{% endif %}
             <div class="table-container">
                 <table class="table">
@@ -702,15 +726,37 @@
                                 {% endif %}
                             </td>
                             <td>
+                                {# Admin PairMedia display fix (Creator Identity / Edit
+                                   Flow remediation pass, 2026-08-29). Confirmed gap: this
+                                   only ever showed pair.video_filename (video 1), silently
+                                   dropping videos 2+ for a multi-video target - every
+                                   creator-facing surface (Edit/Preview/Scanner) already
+                                   loops pair.media_items; admin never did. Legacy fallback
+                                   (pair.video_filename only, no media_items) preserved
+                                   for pairs that predate PairMedia rows. #}
+                                {% if pair.media_items %}
+                                {{ pair.media_items|length }} video{{ 's' if pair.media_items|length != 1 else '' }}
+                                {% for media in pair.media_items %}
+                                <div style="margin-top:8px;">
+                                    <small style="color: rgba(255,255,255,0.6);">
+                                        V{{ loop.index }}{{ ' (default)' if media.is_default else '' }} &mdash; {{ media.video_filename }}
+                                    </small><br>
+                                    <video src="{{ url_for(evidence_pair_media_video_route, project_id=project.id, image_id=pair.pair_index, media_id=media.id) }}"
+                                           controls preload="metadata"
+                                           style="margin-top:4px;max-width:200px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);"></video>
+                                </div>
+                                {% endfor %}
+                                {% elif pair.video_filename %}
                                 {{ pair.safe_video_filename }}
-                                {% if pair.video_filename %}
                                 <br><video src="{{ url_for(evidence_video_route, project_id=project.id, image_id=pair.pair_index) }}"
                                            controls preload="metadata"
                                            style="margin-top:8px;max-width:200px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);"></video>
+                                {% else %}
+                                {{ pair.safe_video_filename }}
                                 {% endif %}
                             </td>
                             <td>Image: {{ pair.image_size if pair.image_size is not none else '-' }} bytes<br><small style="color: rgba(255,255,255,0.6);">Video: {{ pair.video_size if pair.video_size is not none else '-' }} bytes</small></td>
-                            <td>{{ pair.processing_status or '-' }}<br><small style="color: rgba(255,255,255,0.6);">Video: {{ pair.video_processing_status or '-' }} &bull; Features: {{ pair.feature_extraction_status or '-' }}</small></td>
+                            <td>{{ pair.processing_status|humanize_snake if pair.processing_status else '-' }}<br><small style="color: rgba(255,255,255,0.6);">Video: {{ pair.video_processing_status|humanize_snake if pair.video_processing_status else '-' }} &bull; Features: {{ pair.feature_extraction_status|humanize_snake if pair.feature_extraction_status else '-' }}</small></td>
                             <td>{{ pair.created_at.strftime('%d %b %Y, %I:%M %p') if pair.created_at else '-' }}</td>
                             <td><span class="badge {{ 'badge-success' if pair.recognition_ready else 'badge-warning' }}">{{ 'Ready' if pair.recognition_ready else 'Not ready' }}</span></td>
                         </tr>
@@ -749,9 +795,7 @@
 
 {% block extra_js %}
 <script>
-function toggleDropdown() { const dropdown = document.getElementById('userDropdown'); dropdown.classList.toggle('show'); }
-        window.onclick = function(event) { if (!event.target.matches('.user-menu span')) { const dropdowns = document.querySelectorAll('.dropdown-menu'); dropdowns.forEach(dropdown => { if (dropdown.classList.contains('show')) { dropdown.classList.remove('show'); } }); } };
-        document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function() {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => { setTimeout(() => { alert.style.transition = 'opacity 0.5s'; alert.style.opacity = '0'; setTimeout(() => alert.remove(), 500); }, 5000); });
 

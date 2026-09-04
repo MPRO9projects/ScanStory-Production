@@ -258,7 +258,23 @@ def test_sequential_chunks_assemble_correctly(client, app_module, login_user, mo
     assert final_session["processing_job"]["status"] == "queued"
     pair = app_module.ProjectPair.query.first()
     assert pair is not None
-    assert pair.image_size == len(image_bytes)
+    # Canonical target identity remediation pass: image_size now reflects the
+    # FINAL (post-standardize) file, not the raw upload - standardize_uploaded_image
+    # re-encodes as JPEG quality=92, which can legitimately shift the byte count
+    # by a little even with no resize. Compare against that same real
+    # transform's output, not the pre-standardize input length.
+    import tempfile as _tempfile
+    import os as _os
+    _fd, _tmp_path = _tempfile.mkstemp(suffix=".jpg")
+    _os.close(_fd)
+    try:
+        with open(_tmp_path, "wb") as _f:
+            _f.write(image_bytes)
+        app_module.standardize_uploaded_image(_tmp_path, target_size=1200)
+        expected_image_size = _os.path.getsize(_tmp_path)
+    finally:
+        _os.remove(_tmp_path)
+    assert pair.image_size == expected_image_size
     assert pair.video_size == len(video_bytes)
 
 
@@ -547,7 +563,24 @@ def test_lost_finalize_success_recovered_from_authoritative_status(
     assert app_module.UploadSession.query.count() == 1
     assert app_module.Project.query.count() == 1
     assert app_module.ProjectPair.query.count() == 1
-    assert app_module.ProcessingJob.query.filter_by(project_id=project_id).count() == 1
+
+    # Fast Video Phase 2 adds one optimize_pair_media job per PairMedia,
+    # additive to the one process_project_pairs feature-extraction job -
+    # both must stay singular across the finalize replay above (first
+    # succeeds, retry gets 409 ALREADY_FINALIZED), a raw combined count no
+    # longer distinguishes "recovered cleanly" from "duplicated a job".
+    assert app_module.ProcessingJob.query.filter_by(
+        project_id=project_id, job_type="process_project_pairs"
+    ).count() == 1
+
+    media_count = app_module.PairMedia.query.join(app_module.ProjectPair).filter(
+        app_module.ProjectPair.project_id == project_id
+    ).count()
+    optimization_jobs = app_module.ProcessingJob.query.filter_by(
+        project_id=project_id, job_type="optimize_pair_media"
+    ).all()
+    assert len(optimization_jobs) == media_count
+    assert len({j.pair_media_id for j in optimization_jobs}) == len(optimization_jobs)
     app_module.db.session.refresh(normal_user)
     assert (normal_user.projects_used or 0) == 1
     finalize_timings = [
@@ -716,6 +749,35 @@ def test_admin_owned_session_never_consumes_quota(client, app_module, login_admi
     project = app_module.Project.query.first()
     assert project.owner_admin_id is not None
     assert project.owner_user_id is None
+
+
+def test_admin_can_finalize_direct_qr_session_end_to_end(client, app_module, login_admin, monkeypatch):
+    """Admin Direct QR creation goes through this same shared resumable-upload
+    path as User (no second, image_video-only admin pipeline for this
+    contract) - proven live against a real admin session/CSRF/API sequence
+    this pass (project id 507), reproduced here as a durable regression test.
+    """
+    _patch_qr(app_module, monkeypatch)
+    session_id = _create_and_upload(
+        client,
+        image_bytes=b"",
+        experience_type="direct_qr",
+        playback_mode="direct",
+        original_image_name=None,
+        image_content_type=None,
+    )
+
+    resp = _finalize(client, session_id)
+
+    assert resp.status_code == 200, resp.get_json()
+    project = app_module.Project.query.one()
+    pair = app_module.ProjectPair.query.one()
+    assert project.experience_type == "direct_qr"
+    assert project.owner_admin_id is not None
+    assert project.owner_user_id is None
+    assert pair.image_filename is None
+    assert pair.is_processed is True
+    assert pair.feature_extraction_status == "not_required"
 
 
 # ---------------------------------------------------------------------

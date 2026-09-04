@@ -180,7 +180,7 @@ def test_attention_worklist_lists_every_unsettled_axis_and_excludes_settled(
     assert rows["s"].id not in attention_ids
 
     _login_admin(client, admin)
-    html = client.get("/admin/operations").get_data(as_text=True)
+    html = client.get("/admin/payments/refunds").get_data(as_text=True)
 
     assert 'data-testid="refund-attention-worklist"' in html
     for suffix in ("f", "p", "r", "m"):
@@ -201,7 +201,7 @@ def test_worklist_renders_both_status_axes_separately(app_module, db_session, cl
     )
 
     _login_admin(client, admin)
-    html = client.get("/admin/operations").get_data(as_text=True)
+    html = client.get("/admin/payments/refunds").get_data(as_text=True)
 
     # Provider outcome and local reconciliation are never merged into one verdict.
     assert 'data-refund-status="REFUNDED"' in html
@@ -228,7 +228,7 @@ def test_manual_review_row_offers_no_retry_and_says_a_human_must_decide(
     )
 
     _login_admin(client, admin)
-    html = client.get("/admin/operations").get_data(as_text=True)
+    html = client.get("/admin/payments/refunds").get_data(as_text=True)
 
     manual_row = html.split(f'data-refund-id="{manual.id}"')[1].split("</tr>")[0]
     retry_row = html.split(f'data-refund-id="{retryable.id}"')[1].split("</tr>")[0]
@@ -261,7 +261,7 @@ def test_recovery_action_hidden_without_the_refund_permission(
         lambda a, permission: permission in {"superadmin.operations.view", "admin.payments.view"},
     )
     _login_admin(client, plain_admin)
-    html = client.get("/admin/operations").get_data(as_text=True)
+    html = client.get("/admin/payments/refunds").get_data(as_text=True)
 
     assert 'data-testid="refund-attention-worklist"' in html
     assert "refund-recover-btn" not in html
@@ -299,7 +299,7 @@ def test_worklist_leaks_no_provider_fingerprint_or_payment_id(app_module, db_ses
     _webhook_event(app_module, db_session, purchase=purchase, key="ui-oob-leak")
 
     _login_admin(client, admin)
-    html = client.get("/admin/operations").get_data(as_text=True)
+    html = client.get("/admin/payments/refunds").get_data(as_text=True)
 
     # The safe operator message is shown...
     assert "The payment provider rejected the refund request." in html
@@ -319,7 +319,7 @@ def test_out_of_band_block_shows_correlated_purchase_and_manual_review_state(
     _webhook_event(app_module, db_session, purchase=purchase, key="ui-oob-visible")
 
     _login_admin(client, admin)
-    html = client.get("/admin/operations").get_data(as_text=True)
+    html = client.get("/admin/payments/refunds").get_data(as_text=True)
 
     assert 'data-testid="refund-out-of-band-row"' in html
     assert f"Add-on purchase #{purchase.id}" in html

@@ -38,7 +38,7 @@
         "name": "ScanStory",
         "url": "https://myscanstory.com/",
         "logo": "https://myscanstory.com/static/assets/logos/logo1.png",
-        "email": "contact@myscanstory.com",
+        "email": "connect@myscanstory.com",
         "telephone": "+91 73385 44142",
         "description": "ScanStory is a WebAR experience platform for creating image-to-video augmented reality content using QR scan codes."
       },
@@ -890,17 +890,21 @@
             </p>
         </div>
 
+        {# Physical/public QA fix (F9): these were <a href="/blog"> - every pill linked back
+           to the page it's already on, i.e. fake navigation with no real topic filter behind
+           it. No archive/filter route exists, so these are now the same non-link chip idiom
+           .blog-chip already uses a few sections up on this same page. #}
         <div class="topic-cloud" data-aos="fade-up" data-aos-delay="100">
-            <a href="/blog" class="topic-pill">AR Marketing</a>
-            <a href="/blog" class="topic-pill">QR Code Experiences</a>
-            <a href="/blog" class="topic-pill">Smart Packaging</a>
-            <a href="/blog" class="topic-pill">Education and Training</a>
-            <a href="/blog" class="topic-pill">AI + AR Future</a>
-            <a href="/blog" class="topic-pill">WebAR Without App</a>
-            <a href="/blog" class="topic-pill">No-Code AR</a>
-            <a href="/blog" class="topic-pill">Interactive Print</a>
-            <a href="/blog" class="topic-pill">AR Business Cards</a>
-            <a href="/blog" class="topic-pill">AR Product Packaging</a>
+            <span class="topic-pill">AR Marketing</span>
+            <span class="topic-pill">QR Code Experiences</span>
+            <span class="topic-pill">Smart Packaging</span>
+            <span class="topic-pill">Education and Training</span>
+            <span class="topic-pill">AI + AR Future</span>
+            <span class="topic-pill">WebAR Without App</span>
+            <span class="topic-pill">No-Code AR</span>
+            <span class="topic-pill">Interactive Print</span>
+            <span class="topic-pill">AR Business Cards</span>
+            <span class="topic-pill">AR Product Packaging</span>
         </div>
     </section>
 
@@ -1040,7 +1044,7 @@
                     <li><a href="/contact" class="footer-link block">Contact Support</a></li>
                     <li><a href="/terms" class="footer-link block">Terms of Service</a></li>
                     <li><a href="/privacy" class="footer-link block">Privacy Policy</a></li>
-                    <li><a href="/cancellation-refund" class="footer-link block">Cancellation & Refund</a></li>
+                    <li><a href="/terms#cancellation-refund" class="footer-link block">Cancellation & Refund</a></li>
                 </ul>
             </div>
         </div>

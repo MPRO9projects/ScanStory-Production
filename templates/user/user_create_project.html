@@ -694,8 +694,19 @@
       border-radius: 10px;
     }
 
+    /* Physical QA fix (pink vertical rail): this scrollbar-thumb IS intentional
+       brand styling (the same --primary/--secondary gradient every scrollable
+       panel in the app uses - see blog.html/landing.html's page-level
+       ::-webkit-scrollbar and login.html's .right-panel), not a stray element
+       or a leaked CSS variable. On a real mobile browser the opaque two-stop
+       gradient reads as a solid hot-pink bar because the thumb is short and
+       this list is narrow, so it dominates the small content-set card area
+       far more than the same gradient does on a full-height page scrollbar.
+       Toned down to a translucent single-tone pink (matching login.html's
+       .right-panel::-webkit-scrollbar-thumb precedent) so it still reads as
+       the app's pink scroll affordance without looking like a rendering glitch. */
     .preview-list::-webkit-scrollbar-thumb {
-      background: linear-gradient(var(--primary), var(--secondary));
+      background: rgba(255, 0, 122, 0.35);
       border-radius: 10px;
     }
 
@@ -797,6 +808,40 @@
       }
     }
 
+    .preview-video-count {
+      margin-top: 8px;
+      font-size: 12px;
+      color: rgba(255, 255, 255, .55);
+    }
+
+    /* Final multi-video preview fix (2026-09-01): playlist pills below the
+       main preview player, matching this panel's existing rounded/pill
+       design language rather than introducing a new visual style. */
+    .preview-video-playlist {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .preview-video-pill {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .02em;
+      padding: 5px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      background: rgba(255, 255, 255, 0.05);
+      color: rgba(255, 255, 255, 0.75);
+      cursor: pointer;
+    }
+
+    .preview-video-pill.active {
+      border-color: var(--accent);
+      background: rgba(0, 212, 255, 0.16);
+      color: #fff;
+    }
+
     .preview-media-item {
       border-radius: var(--radius-md);
       overflow: hidden;
@@ -837,6 +882,10 @@
     }
 
     /* ====== QR Preview ====== */
+    .qr-preview-section > summary {
+      justify-content: center;
+    }
+
     .qr-preview-section {
       text-align: center;
       padding: 22px;
@@ -979,6 +1028,44 @@
       background: rgba(96, 165, 250, 0.12);
     }
 
+    /* The marker controls are the densest optional block on the page - two
+       description cards, a live preview and a quality readout, roughly 200px per
+       content set, all of it labelled "optional adjustment" and all of it shown
+       whether or not the creator intends to touch it. Collapsed by default it
+       costs one line per content set instead. The default marker mode is
+       unchanged (crop, see createEmptyPairState) - this hides the CONTROLS, it
+       does not change what gets submitted. */
+    .marker-disclosure {
+      margin-top: 14px;
+    }
+
+    .marker-disclosure > summary {
+      cursor: pointer;
+      list-style: none;
+      min-height: 44px;
+      margin-bottom: 0;
+    }
+
+    .marker-disclosure > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .marker-disclosure > summary::after {
+      content: "\25be";
+      margin-left: 6px;
+      font-size: 11px;
+    }
+
+    .marker-disclosure[open] > summary::after {
+      content: "\25b4";
+    }
+
+    .marker-disclosure > summary:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+      border-radius: 6px;
+    }
+
     .marker-tools {
       margin-top: 14px;
       padding: 14px;
@@ -1042,6 +1129,132 @@
       width: 100%;
       height: 120px;
       object-fit: contain;
+    }
+
+    .pair-video-default-tag {
+      font-weight: 400;
+      opacity: .55;
+      font-size: .85em;
+    }
+
+    .pair-extra-videos {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid rgba(255, 255, 255, .10);
+    }
+
+    .pair-extra-videos-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .pair-extra-videos-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      color: rgba(255, 255, 255, .78);
+    }
+
+    .pair-extra-videos-usage {
+      font-size: 12px;
+      color: rgba(255, 255, 255, .55);
+    }
+
+    .pair-extra-videos-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .pair-extra-video-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, .12);
+      background: rgba(0, 0, 0, .18);
+    }
+
+    .pair-extra-video-picker {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .pair-extra-video-label {
+      font-size: 12px;
+      color: rgba(255, 255, 255, .78);
+      white-space: nowrap;
+      cursor: pointer;
+    }
+
+    .pair-extra-video-input {
+      max-width: 100%;
+      min-width: 0;
+      flex: 1;
+      font-size: 12px;
+      color: rgba(255, 255, 255, .7);
+    }
+
+    .pair-extra-video-filename {
+      font-size: 12px;
+      color: rgba(255, 255, 255, .55);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 160px;
+    }
+
+    .pair-extra-video-remove {
+      flex: none;
+    }
+
+    .pair-extra-videos-add {
+      margin-top: 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border-radius: 999px;
+      border: 1px dashed rgba(255, 255, 255, .3);
+      background: transparent;
+      color: rgba(255, 255, 255, .78);
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .pair-extra-videos-add.is-disabled {
+      opacity: .4;
+      cursor: not-allowed;
+    }
+
+    .pair-extra-videos-limit {
+      margin-top: 8px;
+      font-size: 12px;
+      color: rgba(251, 191, 36, .85);
+    }
+
+    @media (max-width: 640px) {
+      .pair-extra-video-row {
+        flex-wrap: wrap;
+      }
+
+      .pair-extra-video-picker {
+        width: 100%;
+      }
+
+      .pair-extra-video-filename {
+        max-width: 100%;
+      }
     }
 
     .video-metadata {
@@ -1279,10 +1492,14 @@
     }
 
     /* Content requirements, stated before the file pickers. */
+    /* Now a <details>, collapsed by default like its siblings (.ss-explainer,
+       "Learn about playback modes") - it used to be an always-expanded <ul>,
+       permanently costing vertical space on a step that already has a photo/
+       video picker below it. Box styling (padding/border/background) stays
+       on .ss-content-reqs itself, now the <details>; .ss-content-reqs-list
+       is the inner grid list, matching the .ss-explainer / .ss-explainer-steps
+       split used by the sibling disclosure box. */
     .ss-content-reqs {
-      list-style: none;
-      display: grid;
-      gap: 9px;
       margin: 0 0 20px;
       padding: 14px 16px;
       border-radius: 14px;
@@ -1290,7 +1507,15 @@
       border: 1px solid rgba(255, 255, 255, 0.08);
     }
 
-    .ss-content-reqs li {
+    .ss-content-reqs-list {
+      list-style: none;
+      display: grid;
+      gap: 9px;
+      margin: 12px 0 0;
+      padding: 0;
+    }
+
+    .ss-content-reqs-list li {
       display: grid;
       grid-template-columns: 18px 1fr;
       gap: 10px;
@@ -1300,14 +1525,24 @@
       color: rgba(255, 255, 255, 0.68);
     }
 
-    .ss-content-reqs i {
+    /* Fixed-size flex box instead of bare text-align:center: different Font
+       Awesome glyphs (fa-image/fa-video/fa-clock) have different internal
+       bearing/width within their character box, so text-align alone centers
+       inconsistently between them - most visible on fa-clock (the third
+       item). A fixed inline-flex box centers the actual rendered glyph the
+       same way regardless of which icon it is. */
+    .ss-content-reqs-list i {
       color: var(--accent);
       font-size: 13px;
-      margin-top: 2px;
-      text-align: center;
+      width: 18px;
+      height: 18px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
     }
 
-    .ss-content-reqs strong { color: rgba(255, 255, 255, 0.92); }
+    .ss-content-reqs-list strong { color: rgba(255, 255, 255, 0.92); }
 
     /* Story Name is the one field every creator must fill, so it reads as the
        headline of the Details step rather than one input among several. */
@@ -1422,10 +1657,13 @@
     /* Direct QR Video has no camera step at all, so the marker/target controls are
        removed from the form rather than just visually dimmed. */
     body[data-experience-type="direct_qr"] .pair-image-block,
+    body[data-experience-type="direct_qr"] .marker-disclosure,
     body[data-experience-type="direct_qr"] .marker-tools,
     body[data-experience-type="direct_qr"] .marker-substep,
     body[data-experience-type="direct_qr"] #playbackModeGroup,
-    body[data-experience-type="direct_qr"] .recap-target {
+    body[data-experience-type="direct_qr"] .recap-target,
+    body[data-experience-type="direct_qr"] .pair-extra-videos,
+    body[data-experience-type="direct_qr"] .pair-video-default-tag {
       display: none !important;
     }
 
@@ -1534,6 +1772,7 @@
          single very long scrolling form. */
       .pair-item.is-collapsed .upload-grid,
       .pair-item.is-collapsed .video-metadata,
+      .pair-item.is-collapsed .marker-disclosure,
       .pair-item.is-collapsed .marker-tools,
       .pair-item.is-collapsed .pair-substep,
       .pair-item.is-collapsed .pair-header {
@@ -1654,8 +1893,93 @@
       position: fixed;
       inset: 0;
       z-index: 3000;
-      background: rgba(0, 0, 0, .88);
+      /* Fully opaque, not translucent - the audit traced the reported
+         "guidance/crop overlaps ADD YOUR VIDEO" symptom in part to this
+         being 12% see-through, letting the wizard content underneath bleed
+         through at any layout seam (e.g. iOS Safari's dynamic viewport
+         settling after open). No visual reason for it to be translucent -
+         this is a full-screen modal, nothing above it should ever compete
+         for attention with what's below. */
+      background: #050505;
       padding: 18px;
+    }
+
+    .camera-capture-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 3100;
+      background: rgba(0, 0, 0, .88);
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+    }
+
+    .camera-capture-shell {
+      width: min(560px, 100%);
+      background: #0a0a10;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 24px;
+      color: #fff;
+    }
+
+    .camera-capture-preview {
+      width: 100%;
+      max-height: 60vh;
+      border-radius: 12px;
+      background: #000;
+      margin-top: 10px;
+    }
+
+    .camera-capture-error {
+      margin-top: 14px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      color: #fca5a5;
+      font-size: 13px;
+    }
+
+    .camera-capture-actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 16px;
+    }
+
+    /* The photo column's "Take a photo" button has no equivalent on the
+       video column, so the two .upload-area boxes started at different
+       vertical offsets within the same upload-grid row even though they are
+       meant to line up as a matched pair (Final Pre-Freeze Closure Pass,
+       Lane C - reproduced live on both the Admin and Creator Create Project
+       pages, which share this exact template). Both columns now reserve the
+       same slot height here - real button on one side, an empty spacer with
+       the same class on the other - instead of a per-card pixel offset. */
+    .pair-upload-action-slot {
+      display: flex;
+      align-items: center;
+      min-height: 42px;
+      margin-bottom: 8px;
+    }
+
+    .image-source-camera-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 212, 255, 0.35);
+      background: rgba(0, 212, 255, 0.08);
+      color: var(--accent, #00d4ff);
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .image-source-camera-btn:hover {
+      background: rgba(0, 212, 255, 0.16);
     }
 
     .crop-shell {
@@ -1799,6 +2123,29 @@
         overflow: auto;
         padding: 12px;
       }
+      /* Mobile crop overlap fix (Creator Identity remediation pass,
+         2026-08-29). Root cause (see the audit doc, section 20): this never
+         shrank on mobile, so on a ~667px-tall phone it alone claimed 320px
+         of the ~500-550px left after the sticky toolbar/actions bars,
+         squeezing .crop-side's guidance text into the remainder of the same
+         scrollable box - and #cropCanvas's required touch-action:none (for
+         accurate drag-to-crop) means a touch starting on the canvas can't
+         scroll past it to reach that remainder anyway. Shrinking the canvas
+         here means the guidance is usually visible without any scroll being
+         needed at all, rather than depending on a scroll gesture the canvas
+         itself blocks.
+         Also opaque (unlike the modal background further down) - the
+         audit's traced cause of "ADD YOUR VIDEO" bleeding through was a
+         layout seam at exactly this element's edge. */
+      .crop-canvas-wrap {
+        min-height: 0;
+        max-height: 42vh;
+        aspect-ratio: 4 / 3;
+        background: #050505;
+      }
+      .crop-side {
+        margin-top: 12px;
+      }
       .crop-actions {
         padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
         background: rgba(0, 0, 0, .88);
@@ -1806,6 +2153,15 @@
       }
       .crop-actions > .crop-btn.primary {
         display: none;
+      }
+    }
+
+    /* Short viewports (landscape phones, small-screen laptops in a split
+       view): 42vh of a genuinely short window can still be cramped even
+       after the above fix - cap by absolute height too. */
+    @media (max-width: 780px) and (max-height: 560px) {
+      .crop-canvas-wrap {
+        max-height: 34vh;
       }
     }
 
@@ -2135,14 +2491,44 @@
     /* The target -> scan -> video chain, stated once, in the creator's own
        vocabulary. Both variants are in the markup; which one applies is
        decided by body[data-experience-type], so no JS keeps them in step. */
+    /* A <details>, so `display: grid` would make the <summary> a grid item and
+       fight the disclosure. The rows keep their own grid on an inner wrapper. */
     .recognition-flow {
-      display: grid;
-      gap: 8px;
+      display: block;
       margin: 0 0 18px;
       padding: 14px 16px;
       border-radius: 14px;
       background: rgba(0, 212, 255, 0.05);
       border: 1px solid rgba(0, 212, 255, 0.18);
+    }
+
+    .recognition-flow > summary,
+    .ss-explainer > summary,
+    .ss-disclosure > summary {
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 900;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--accent);
+      /* Comfortable touch target for the one interactive element in the box. */
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+    }
+
+    .recognition-flow > summary:focus-visible,
+    .ss-disclosure > summary:focus-visible,
+    .ss-explainer > summary:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+      border-radius: 6px;
+    }
+
+    .recognition-flow-rows {
+      display: grid;
+      gap: 8px;
+      margin-top: 10px;
     }
 
     .recognition-flow-row {
@@ -2190,12 +2576,21 @@
       border: 1px solid rgba(255, 255, 255, 0.09);
     }
 
-    .recap-next h3 {
+    /* Physical QA fix (issue: help box too tall): was a plain <h3>/<div>, always
+       expanded, permanently costing ~4 list items of vertical space on mobile.
+       Now the same <details class="ss-disclosure"> collapsible used by
+       .qr-preview-section above - .ss-disclosure > summary in design-system.css
+       supplies the 44px touch target/cursor/flex layout; this just keeps the
+       heading's existing look. */
+    .recap-next > summary {
       font-size: 10px;
       font-weight: 800;
       letter-spacing: 0.2em;
       text-transform: uppercase;
       color: rgba(255, 255, 255, 0.5);
+    }
+
+    .recap-next[open] > summary {
       margin-bottom: 10px;
     }
 
@@ -2215,6 +2610,23 @@
       font-size: 12px;
       line-height: 1.5;
       color: rgba(255, 255, 255, 0.72);
+    }
+
+    /* Physical QA fix (letter-wrap bug): `.recap-next li` is `display:grid` so it
+       can lay a circular counter badge (the ::before below) beside the item's
+       running text. CSS Grid blockifies every DIRECT ELEMENT CHILD of a grid
+       container into its own grid item - so the <strong> tags inside some of
+       these <li>s (e.g. "shows <strong>Processing</strong>, then
+       <strong>Ready</strong>.") were each becoming a THIRD/FOURTH grid item in
+       their own right, auto-placed by the browser into the 20px counter-badge
+       column instead of flowing inline with the surrounding text. Squeezed to
+       ~20px and combined with the inherited `overflow-wrap: break-word` from
+       .ss-user-scope on <body>, every letter got its own line ("Pr/oc/es/si/ng").
+       `display: contents` removes <strong>'s own box so its text rejoins the
+       single anonymous text item the grid was designed around, while the bold
+       weight (inherited, not box-dependent) is untouched. No HTML change needed. */
+    .recap-next li strong {
+      display: contents;
     }
 
     .recap-next li::before {
@@ -2471,9 +2883,12 @@
 
   <main class="main-container" id="main-content" tabindex="-1">
 
-    <!-- Top bar: fixes merged "Back to Dashboard" -->
+    <!-- Physical QA fix (issue 10): label said "Back to Your Stories" but the
+         href still pointed at Dashboard - a leftover from an older merge (see
+         the historical comment this replaced). Now genuinely goes to the
+         Projects list the label promises. -->
     <div class="topbar">
-      <a href="{% if is_admin %}{{ url_for('admin_dashboard') }}{% else %}{{ url_for('dashboard') }}{% endif %}"
+      <a href="{% if is_admin %}{{ url_for('admin_dashboard') }}{% else %}{{ url_for('projects_page') }}{% endif %}"
         class="nav-back">
         <i class="fas fa-chevron-left"></i> Back to Your Stories
       </a>
@@ -2561,10 +2976,16 @@
           <div data-wizard-pane="1">
             <h2 class="panel-title"><span class="step-chip">1</span> Story details</h2>
 
-            <!-- First-run explainer. <details> is used on purpose: it opens by default for
-                 a first-time creator, collapses with no JavaScript, and stays keyboard and
-                 screen-reader accessible. -->
-            <details class="ss-explainer" id="scanStoryExplainer" open>
+            <!-- First-run explainer. <details> is used on purpose: it collapses with no
+                 JavaScript, and stays keyboard and screen-reader accessible for free
+                 (native disclosure semantics, native focusable summary, native
+                 aria-expanded). It is COLLAPSED by default on every viewport: opened, its
+                 lede plus six steps cost roughly a third of a 900px desktop viewport
+                 before the creator has typed anything, and a returning creator who
+                 already knows what a ScanStory is paid that on every single visit.
+                 Nothing in the wizard opens or closes it, so changing step cannot force
+                 it back open. -->
+            <details class="ss-explainer ss-disclosure" id="scanStoryExplainer">
               <summary>How ScanStory works</summary>
               <p class="ss-explainer-lede">
                 ScanStory connects real-world images to digital video experiences through QR and visual recognition.
@@ -2616,7 +3037,13 @@
                  rendered; body[data-experience-type] decides which one is visible, so no
                  JavaScript has to keep this in step with the choice above. Nothing here
                  performs or predicts recognition - it is an explanation, not a measurement. -->
-            <div class="recognition-flow" id="recognitionFlow">
+            <!-- Collapsed by default: the two experience-type buttons above already carry
+                 a one-line description each, so this end-to-end walkthrough is the second
+                 explanation of the same choice. It stays one keystroke away for a creator
+                 who wants it and costs nothing for one who does not. -->
+            <details class="recognition-flow ss-disclosure" id="recognitionFlow">
+              <summary>What&rsquo;s the difference?</summary>
+              <div class="recognition-flow-rows">
               <div class="recognition-flow-row flow-image-video">
                 <i class="fas fa-image" aria-hidden="true"></i>
                 <span>Your <strong>target image</strong> is the real-world thing people point a camera at.</span>
@@ -2637,7 +3064,8 @@
                 <i class="fas fa-play" aria-hidden="true"></i>
                 <span>Your <strong>video</strong> plays straight away on their screen.</span>
               </div>
-            </div>
+              </div>
+            </details>
 
             <!-- Playback Style only exists for Image -> Video: Direct QR has exactly one way
                  to play, so the group is hidden AND its radios disabled for that type. A
@@ -2664,9 +3092,16 @@
                   <span>Recognize your photo once, then the video plays uninterrupted even if the camera looks away.</span>
                 </label>
               </div>
-              <p class="help-text" style="margin:-12px 0 18px;">Not sure? <strong>Tracked Overlay</strong> is the
-                default and the more cinematic of the two. Pick <strong>Detect Once</strong> when your viewers are
-                likely to lower the phone once the video starts.</p>
+              <!-- Collapsed by default: each option above already states what it does, so
+                   this is the "which should I pick" tiebreaker, not information needed to
+                   make the choice. Tracked Overlay is pre-checked, so a creator who skips
+                   this still gets the recommended mode. -->
+              <details class="ss-disclosure">
+                <summary>Learn about playback modes</summary>
+                <p class="help-text" style="margin:6px 0 4px;">Not sure? <strong>Tracked Overlay</strong> is the
+                  default and the more cinematic of the two. Pick <strong>Detect Once</strong> when your viewers are
+                  likely to lower the phone once the video starts.</p>
+              </details>
             </div>
 
             {% if viewer_is_business_vendor %}
@@ -2709,12 +3144,19 @@
             </p>
 
             <!-- What "good content" means, stated BEFORE the file pickers rather than
-                 discovered through a rejected upload. -->
-            <ul class="ss-content-reqs">
-              <li><i class="fas fa-image" aria-hidden="true"></i><span><strong>Photo:</strong> JPG or PNG. Detailed and high-contrast works best &mdash; a poster, label, artwork or printed card. Avoid blank, blurry or heavily reflective surfaces.</span></li>
-              <li><i class="fas fa-video" aria-hidden="true"></i><span><strong>Video:</strong> MP4 or MOV. Keep it short and in the same shape as your photo so it sits neatly on top.</span></li>
-              <li><i class="fas fa-clock" aria-hidden="true"></i><span><strong>After you create:</strong> background processing prepares your photo for recognition. Your QR code is ready immediately and never changes.</span></li>
-            </ul>
+                 discovered through a rejected upload. Collapsed by default, same as the
+                 other explainer boxes on this page - expand for the detail, or skip
+                 straight to the pickers below. -->
+            <details class="ss-content-reqs ss-disclosure">
+              <summary>What makes good content</summary>
+              <ul class="ss-content-reqs-list">
+                <li><i class="fas fa-image" aria-hidden="true"></i><span><strong>Photo:</strong> JPG or PNG. Detailed and high-contrast works best &mdash; a poster, label, artwork or printed card. Avoid blank, blurry or heavily reflective surfaces.</span></li>
+                <li><i class="fas fa-video" aria-hidden="true"></i><span><strong>Video:</strong> MP4 or MOV. Keep it short and in the same shape as your photo so it sits neatly on top.</span></li>
+                <li><i class="fas fa-clock" aria-hidden="true"></i><span><strong>After you create:</strong> background processing prepares your photo for recognition. Your QR code is ready immediately and never changes.</span></li>
+              </ul>
+            </details>
+
+          <div class="wizard-name-error" id="contentStepError" role="alert"></div>
 
           <div id="pairsContainer"></div>
           <div class="help-text" id="pairLimitMessage" style="margin-bottom:16px;" aria-live="polite">
@@ -2785,8 +3227,12 @@
                body[data-experience-type] picks one, so a Direct QR ScanStory never
                claims an image-recognition step it does not have. The wording is the
                product's own state vocabulary and nothing else. -->
-          <div class="recap-next" id="recapNextSteps">
-            <h3>After you press Create</h3>
+          {# Physical QA fix (issue: help box too tall): this permanently showed all
+             4 "after you press Create" steps, taking real vertical space on mobile.
+             Same collapsed-by-default <details class="ss-disclosure"> pattern as
+             .qr-preview-section below (no [open] attribute = starts collapsed). #}
+          <details class="recap-next ss-disclosure" id="recapNextSteps">
+            <summary>After you press Create</summary>
             <ol class="next-image-video">
               <li>Your photo and video upload. You can watch the progress here.</li>
               <li>We prepare your ScanStory so a camera can recognise your photo.</li>
@@ -2799,7 +3245,7 @@
                 <strong>Ready</strong> as soon as it is saved.</li>
               <li>Your QR code works immediately and never changes.</li>
             </ol>
-          </div>
+          </details>
 
           <div class="preview-list" id="previewList">
             <div class="preview-card empty-state">
@@ -2810,8 +3256,14 @@
             </div>
           </div>
 
-          <div class="qr-preview-section">
-            <h3><i class="fas fa-qrcode"></i> Your QR code</h3>
+          <!-- The QR code is an OUTPUT of creation, not a control for it: the real one is
+               generated on Create and can only be used from the success page. Kept as a
+               collapsed disclosure rather than a permanently-open block so it stops
+               occupying summary height during creation while remaining one tap away for a
+               creator who wants to sanity-check it. The canvas stays in the DOM either
+               way, so updateQRPreview() keeps drawing to it unchanged. -->
+          <details class="qr-preview-section ss-disclosure">
+            <summary><i class="fas fa-qrcode" aria-hidden="true"></i>&nbsp;Preview your QR code</summary>
             <div id="qrPreviewContainer">
               <canvas id="qrPreviewCanvas"></canvas>
             </div>
@@ -2819,7 +3271,7 @@
               Share or print this so people can open your ScanStory. This is a live preview &mdash;
               the real QR code is generated when you press Create, and it never changes afterwards.
             </p>
-          </div>
+          </details>
 
           <div class="upload-progress" id="uploadProgress" aria-live="polite" aria-atomic="true">
             <div class="upload-progress-phase" id="uploadProgressText">Preparing upload...</div>
@@ -2866,6 +3318,25 @@
       </div>
     </form>
   </main>
+
+  {# Master stabilization pass (section 2): explicit camera capture for
+     creation, sharing the camera-stream lifecycle (static/js/marker-editor.js)
+     with the replacement flow (templates/user/edit_project.html) - a captured
+     frame feeds into the SAME crop modal below via the SAME handleFileSelect()
+     path every other image source already uses. #}
+  <div class="camera-capture-modal" id="wizardCameraModal" aria-hidden="true" role="dialog" aria-modal="true" aria-labelledby="wizardCameraTitle">
+    <div class="camera-capture-shell">
+      <h2 id="wizardCameraTitle">Take a photo</h2>
+      <video id="wizardCameraPreview" class="camera-capture-preview" autoplay playsinline muted></video>
+      <p id="wizardCameraError" class="camera-capture-error" hidden></p>
+      <div class="camera-capture-actions">
+        <button type="button" class="crop-btn" onclick="cancelWizardCameraCapture()">Cancel</button>
+        <button type="button" class="crop-btn primary" onclick="confirmWizardCameraCapture()">
+          <i class="fa-solid fa-camera" aria-hidden="true"></i> Capture
+        </button>
+      </div>
+    </div>
+  </div>
 
   <div class="crop-modal" id="cropModal" aria-hidden="true" role="dialog" aria-modal="true"
     aria-labelledby="cropModalTitle" aria-describedby="cropModalDesc">
@@ -2916,12 +3387,32 @@
     </div>
   </div>
 
+  <script src="{{ url_for('static', filename='js/marker-editor.js') }}"></script>
   <script>
+    const MarkerEditor = window.ScanStoryMarkerEditor;
     let pairCounter = 0;
     let currentFiles = {};
     const IS_ADMIN = {{ 'true' if is_admin else 'false' }};
     const IS_DEV_TEST = {{ 'true' if dev_test_entitled else 'false' }};
+    // Admin Create completion-flow fix (2026-09-03): the resumable-upload
+    // JS below hardcoded /success/<id> and /dashboard everywhere, both
+    // User-only routes. An Admin session finishing the exact same upload
+    // flow landed on the User dashboard (usually a redirect-away back to
+    // /admin/dashboard from there) instead of the Admin success/QR page.
+    // Same completed project either way - only the destination differs.
+    function successUrlFor(projectId) {
+      return IS_ADMIN ? `/admin/success/${projectId}` : `/success/${projectId}`;
+    }
+    function postUploadFallbackUrl() {
+      return IS_ADMIN ? '/admin/my-projects' : '/dashboard';
+    }
     const MAX_PAIRS_PER_PROJECT = (IS_ADMIN || IS_DEV_TEST) ? Infinity : Number({{ max_pairs_per_project or 0 }});
+    // Issue 3E-D: the smallest safe entitlement values for the multi-video
+    // UI. Backend upload/finalize enforcement is authoritative regardless -
+    // these only decide whether "+ Add another video" renders at all.
+    const ALLOW_MULTI_VIDEO_PER_TARGET = (IS_ADMIN || IS_DEV_TEST) ? true : {{ 'true' if allow_multi_video_per_target else 'false' }};
+    const MAX_VIDEOS_PER_TARGET = (IS_ADMIN || IS_DEV_TEST) ? Infinity : Number({{ effective_max_videos_per_target or 1 }});
+    let additionalVideoCounter = 0;
     const MARKER_LONG_EDGE = 1400;
     const MARKER_JPEG_QUALITY = 0.86;
     const VIDEO_WARNING_CONFIG = {{ video_upload_warnings | tojson }};
@@ -2957,8 +3448,12 @@
       return Promise.resolve(window.confirm(options.body || options.title));
     }
 
+    // Master stabilization pass: delegates to the shared marker-preparation
+    // engine (static/js/marker-editor.js) so creation and target replacement
+    // use the exact same crop/rotate/reset/full-image/export math - see that
+    // file's header comment for the full architecture note.
     function defaultMarkerCrop() {
-      return { ...DEFAULT_MARKER_CROP };
+      return MarkerEditor.defaultCrop();
     }
 
     function plainRect(rect) {
@@ -3037,7 +3532,12 @@
         processedWidth: 0,
         processedHeight: 0,
         videoMeta: null,
-        quality: { status: 'Preparing marker', guidance: ['Select an image to choose the marker area.'] }
+        quality: { status: 'Preparing marker', guidance: ['Select an image to choose the marker area.'] },
+        // Issue 3E-D: extra videos for this SAME target, in UI order - the
+        // first/default video stays the fields above, unchanged, so a
+        // single-video content set is byte-for-byte the same state shape it
+        // always was. { id, file, url, sessionId } per entry.
+        additionalVideos: []
       };
     }
 
@@ -3058,11 +3558,46 @@
     }
 
     function validateWizardStep(step) {
-      if (step !== 1) return true;
-      const nameField = document.getElementById('projectName');
-      if (nameField.value.trim()) return true;
-      showStoryNameError();
-      return false;
+      if (step === 1) {
+        const nameField = document.getElementById('projectName');
+        if (nameField.value.trim()) return true;
+        showStoryNameError();
+        return false;
+      }
+      if (step === 2) {
+        // Release-blocker fix: Next used to advance from step 2 unconditionally -
+        // only the Create button's disabled state actually stopped a bare project
+        // name from reaching Review with no media attached. Reuses
+        // pairIsComplete()/the same completeness rule the Create button and the
+        // server both already enforce (Direct QR needs only a video; Image ->
+        // Video needs both), so this can never diverge into a stricter or looser
+        // rule than what submission already allows.
+        if (Object.values(currentFiles).some(pairIsComplete)) {
+          clearContentStepError();
+          return true;
+        }
+        showContentStepError();
+        return false;
+      }
+      return true;
+    }
+
+    function showContentStepError() {
+      const error = document.getElementById('contentStepError');
+      if (!error) return;
+      error.textContent = experienceType() === 'direct_qr'
+        ? 'Add a video to continue.'
+        : 'Add a target photo and a video to continue.';
+      error.classList.add('is-visible');
+      error.setAttribute('role', 'alert');
+      error.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const firstPicker = document.querySelector('#pairsContainer input[type="file"]');
+      if (firstPicker) firstPicker.focus({ preventScroll: true });
+    }
+
+    function clearContentStepError() {
+      const error = document.getElementById('contentStepError');
+      if (error) error.classList.remove('is-visible');
     }
 
     function showStoryNameError() {
@@ -3289,7 +3824,13 @@
     function pairIsComplete(pairData) {
       if (!pairData) return false;
       if (experienceType() === 'direct_qr') return !!pairData.video;
-      return !!(pairData.image && pairData.video);
+      // Narrow duplicate-handling fix (secondary defense - the primary fix is
+      // clearRejectedTargetCandidate() clearing pair.image itself the moment a
+      // duplicate is rejected). Requiring markerConfirmed here means even if a
+      // future code path leaves a candidate image sitting in state without
+      // going through the confirm-or-clear contract, it still can never reach
+      // readyPairs/final submission un-confirmed.
+      return !!(pairData.image && pairData.video && pairData.markerConfirmed);
     }
 
     function updatePairSummary(pairId) {
@@ -3302,6 +3843,7 @@
       const expanded = item.dataset.expanded === '1';
       item.classList.toggle('is-collapsed', complete && !expanded);
       if (!complete) return;
+      clearContentStepError();
 
       const thumb = pairData.processedPreviewUrl || pairData.imageUrl;
       const files = [pairData.image?.name, pairData.video?.name].filter(Boolean).map(escapeHtml).join(' · ');
@@ -3402,6 +3944,17 @@
             <!-- Image Upload -->
             <div class="pair-image-block">
             <div class="pair-substep"><span class="step-chip">1</span> Photo to scan</div>
+            {# Master stabilization pass (section 2): explicit source choice above
+               the tile rather than relying on the native picker to sometimes offer
+               a camera. "Choose from device" is the existing tile below, unchanged -
+               "Take a photo" captures via getUserMedia and feeds the SAME tile's
+               input through the SAME handleFileSelect() path (via DataTransfer),
+               so nothing about validation/marker-preparation forks for this source. #}
+            <div class="pair-upload-action-slot">
+              <button type="button" class="image-source-camera-btn" onclick="startWizardCameraCapture(${pairId})">
+                <i class="fa-solid fa-camera" aria-hidden="true"></i> Take a photo
+              </button>
+            </div>
             <div class="upload-area" id="image-area-${pairId}">
               <input type="file"
                      id="image-input-${pairId}"
@@ -3413,7 +3966,7 @@
                      required />
               <div class="ua-inner">
                 <div class="ua-icon"><i class="fa-solid fa-image"></i></div>
-                <div class="ua-title">Add your photo</div>
+                <div class="ua-title">Choose from device</div>
                 <div class="ua-sub">This is the photo people will point their camera at</div>
               </div>
 
@@ -3431,6 +3984,7 @@
             <!-- Video Upload -->
             <div>
             <div class="pair-substep"><span class="step-chip">2</span> Video to play</div>
+            <div class="pair-upload-action-slot" aria-hidden="true"></div>
             <div class="upload-area" id="video-area-${pairId}">
               <input type="file"
                      id="video-input-${pairId}"
@@ -3442,7 +3996,7 @@
                      required />
               <div class="ua-inner">
                 <div class="ua-icon"><i class="fa-solid fa-video"></i></div>
-                <div class="ua-title">Add your video</div>
+                <div class="ua-title">Add your video${ALLOW_MULTI_VIDEO_PER_TARGET ? ' <span class="pair-video-default-tag">· Default</span>' : ''}</div>
                 <div class="ua-sub">This is the video that plays on the photo</div>
               </div>
 
@@ -3457,11 +4011,26 @@
             </div>
             </div>
           </div>
+          ${ALLOW_MULTI_VIDEO_PER_TARGET ? `
+          <div class="pair-extra-videos" id="extra-videos-${pairId}">
+            <div class="pair-extra-videos-head">
+              <span class="pair-extra-videos-title">Videos</span>
+              <span class="pair-extra-videos-usage" id="extra-videos-usage-${pairId}">1 of ${MAX_VIDEOS_PER_TARGET === Infinity ? '∞' : MAX_VIDEOS_PER_TARGET} video${MAX_VIDEOS_PER_TARGET === 1 ? '' : 's'} used</span>
+            </div>
+            <div class="pair-extra-videos-list" id="extra-videos-list-${pairId}"></div>
+            <button type="button" class="pair-extra-videos-add" id="extra-videos-add-${pairId}"
+                    onclick="addAdditionalVideo(${pairId})" aria-label="Add another video to Content set ${pairId}">
+              <i class="fa-solid fa-plus" aria-hidden="true"></i> Add another video
+            </button>
+            <div class="pair-extra-videos-limit" id="extra-videos-limit-${pairId}" hidden>Video limit reached for your plan.</div>
+          </div>
+          ` : ``}
           <div class="video-metadata" id="video-meta-${pairId}">
             <strong>Video status</strong>
             <span>Select a video to inspect upload details.</span>
           </div>
-          <div class="pair-substep marker-substep"><span class="step-chip">3</span> Marker area (optional adjustment)</div>
+          <details class="marker-disclosure" id="marker-disclosure-${pairId}">
+          <summary class="pair-substep marker-substep"><span class="step-chip">3</span> Marker area (optional adjustment)</summary>
           <div class="marker-tools" id="marker-tools-${pairId}">
             <div class="marker-options">
               <button type="button" class="marker-option active" id="marker-crop-${pairId}" onclick="setCropMode(${pairId})">
@@ -3476,12 +4045,14 @@
             <div class="marker-preview" id="marker-preview-${pairId}">This area will become the marker</div>
             <div class="marker-status" id="marker-quality-${pairId}"><strong>Preparing marker</strong><span>Select an image to choose the marker area.</span></div>
           </div>
+          </details>
         </div>
       `;
 
       document.getElementById('pairsContainer').insertAdjacentHTML('beforeend', pairHTML);
 
       currentFiles[pairId] = createEmptyPairState();
+      updateAdditionalVideoUsage(pairId);
 
       updateFormFields();
       updatePreview();
@@ -3566,6 +4137,37 @@
         const videoPreview = pair.querySelector('#video-preview-' + oldId) || pair.querySelector('[id^="video-preview-"]');
         if (imagePreview) imagePreview.id = `image-preview-${newId}`;
         if (videoPreview) videoPreview.id = `video-preview-${newId}`;
+
+        // update extra-videos (multi-video) ids, if this account has that section
+        const extraVideos = pair.querySelector('[id^="extra-videos-"]');
+        if (extraVideos) {
+          extraVideos.id = `extra-videos-${newId}`;
+          const usage = pair.querySelector('[id^="extra-videos-usage-"]');
+          if (usage) usage.id = `extra-videos-usage-${newId}`;
+          const list = pair.querySelector('[id^="extra-videos-list-"]');
+          if (list) {
+            list.id = `extra-videos-list-${newId}`;
+            list.querySelectorAll('[id^="extra-video-input-"]').forEach(input => {
+              const videoId = input.id.split('-').pop();
+              input.id = `extra-video-input-${newId}-${videoId}`;
+              input.setAttribute('onchange', `handleAdditionalVideoSelect(this, ${newId}, ${videoId})`);
+            });
+            list.querySelectorAll('[data-extra-video-remove]').forEach(btn => {
+              const videoId = btn.getAttribute('data-extra-video-remove');
+              btn.setAttribute('onclick', `removeAdditionalVideo(${newId}, ${videoId})`);
+              const videoLabel = btn.closest('.pair-extra-video-row')?.querySelector('.pair-extra-video-label')?.textContent.trim() || 'video';
+              btn.setAttribute('aria-label', `Remove ${videoLabel} from Content set ${newId}`);
+            });
+          }
+          const addBtn = pair.querySelector('[id^="extra-videos-add-"]');
+          if (addBtn) {
+            addBtn.id = `extra-videos-add-${newId}`;
+            addBtn.setAttribute('onclick', `addAdditionalVideo(${newId})`);
+            addBtn.setAttribute('aria-label', `Add another video to Content set ${newId}`);
+          }
+          const limitMsg = pair.querySelector('[id^="extra-videos-limit-"]');
+          if (limitMsg) limitMsg.id = `extra-videos-limit-${newId}`;
+        }
 
         // update delete button (remove for first, add for others if missing)
         let deleteBtn = pair.querySelector('.icon-btn.danger');
@@ -3675,35 +4277,11 @@
     function sanitizeCrop(pair, image = null, forceDefault = false) {
       if (!pair) return defaultMarkerCrop();
       const naturalWidth = Number(image?.naturalWidth || pair.originalWidth || 0);
-      const naturalHeight = Number(image?.naturalHeight || pair.originalHeight || 0);
-      if (!naturalWidth || !naturalHeight) {
-        pair.crop = defaultMarkerCrop();
-        return pair.crop;
-      }
-
-      if (pair.markerMode === 'full_image') {
-        pair.crop = { x: 0, y: 0, width: 1, height: 1 };
-        return pair.crop;
-      }
-
-      const crop = forceDefault ? defaultMarkerCrop() : (pair.crop || defaultMarkerCrop());
-      let x = finiteNumber(crop.x);
-      let y = finiteNumber(crop.y);
-      let width = finiteNumber(crop.width);
-      let height = finiteNumber(crop.height);
-      const minWidth = Math.min(0.5, Math.max(MIN_MARKER_CROP_FRACTION, 1 / naturalWidth));
-      const minHeight = Math.min(0.5, Math.max(MIN_MARKER_CROP_FRACTION, 1 / naturalHeight));
-
-      if (x === null || y === null || width === null || height === null || width < minWidth || height < minHeight) {
-        pair.crop = defaultMarkerCrop();
-        return pair.crop;
-      }
-
-      width = Math.min(1, Math.max(minWidth, width));
-      height = Math.min(1, Math.max(minHeight, height));
-      x = Math.min(Math.max(0, x), 1 - width);
-      y = Math.min(Math.max(0, y), 1 - height);
-      pair.crop = { x, y, width, height };
+      const source = forceDefault ? defaultMarkerCrop() : pair.crop;
+      pair.crop = MarkerEditor.sanitizeCrop(
+        source, pair.markerMode,
+        naturalWidth, Number(image?.naturalHeight || pair.originalHeight || 0)
+      );
       return pair.crop;
     }
 
@@ -3721,6 +4299,31 @@
       if (!pair || !pair.image) return;
       pair.markerMode = 'full_image';
       pair.crop = { x: 0, y: 0, width: 1, height: 1 };
+      // Admin stabilization pass (Part A): same canonical server-side check
+      // as useCurrentMarker() now - this path used to skip validation
+      // entirely (audit-proven).
+      pair.quality = { status: 'Checking target...', guidance: ['Making sure this is not already used by another content set.'] };
+      updateMarkerControls(pairId);
+      const candidateBlob = await renderMarkerBlob(pairId, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
+      const validation = await validateTargetCandidateAgainstSiblings(candidateBlob, pairId);
+
+      if (validation === null) {
+        notify('Could not check this photo for duplicates. Please try again.', 'error');
+        pair.quality = { status: 'Preparing marker', guidance: ['Could not verify this photo - try confirming again.'] };
+        updateMarkerControls(pairId);
+        return;
+      }
+      if (validation.duplicate) {
+        const label = validation.conflictLabel;
+        const conflictText = label ? `content set ${label}` : 'another content set';
+        notify(`This is the same photo already used for ${conflictText}. Choose a different photo, or add this video to that content set instead.`, 'error');
+        clearRejectedTargetCandidate(pairId);
+        updateMarkerControls(pairId);
+        if (activeCropPairId === pairId) closeCropModal();
+        updateFormFields();
+        return;
+      }
+      pair.markerConfirmed = true;
       pair.quality = { status: 'Usable marker', guidance: ['The scanner will use the whole image, including its background.'] };
       await prepareMarkerPreview(pairId);
       updateMarkerControls(pairId);
@@ -3762,6 +4365,15 @@
       });
       drawCropCanvas();
       updateCropPreview();
+      // Mobile crop overlap fix (remediation pass): the synchronous
+      // resize/draw above can run before iOS Safari finishes collapsing its
+      // chrome on open, so the first paint can measure a taller-than-final
+      // viewport. One extra pass after layout settles, not a loop - this
+      // fires once per open, guarded by activeCropPairId exactly like the
+      // existing window resize listener below.
+      requestAnimationFrame(() => {
+        if (activeCropPairId) { resizeCropCanvas(); drawCropCanvas(); }
+      });
       // The canvas is the primary control and is where the arrow keys act.
       cropCanvas()?.focus({ preventScroll: true });
     }
@@ -3777,6 +4389,60 @@
       // Back to whatever opened it, so a keyboard user is not dropped at the top.
       if (cropReturnFocus && cropReturnFocus.focus) cropReturnFocus.focus({ preventScroll: true });
       cropReturnFocus = null;
+    }
+
+    /* ===================== Explicit camera capture (section 2) =====================
+       Shares the camera-stream lifecycle with the replacement flow via
+       static/js/marker-editor.js (requestCameraStream/stopCameraStream/
+       captureFrameAsBlob) - only the modal chrome and the "feed the captured
+       photo into the existing per-pair file input" glue are wizard-specific. */
+    let wizardCameraStream = null;
+    let wizardCameraPairId = null;
+
+    async function startWizardCameraCapture(pairId) {
+      wizardCameraPairId = pairId;
+      const errorEl = document.getElementById('wizardCameraError');
+      errorEl.hidden = true;
+      try {
+        wizardCameraStream = await MarkerEditor.requestCameraStream();
+      } catch (err) {
+        errorEl.textContent = 'Camera is unavailable. Choose a photo from your device instead.';
+        errorEl.hidden = false;
+      }
+      const modal = document.getElementById('wizardCameraModal');
+      modal.style.display = 'flex';
+      modal.setAttribute('aria-hidden', 'false');
+      if (wizardCameraStream) {
+        document.getElementById('wizardCameraPreview').srcObject = wizardCameraStream;
+      }
+    }
+
+    function stopWizardCameraStream() {
+      MarkerEditor.stopCameraStream(wizardCameraStream);
+      wizardCameraStream = null;
+      const video = document.getElementById('wizardCameraPreview');
+      if (video) video.srcObject = null;
+    }
+
+    function cancelWizardCameraCapture() {
+      stopWizardCameraStream();
+      const modal = document.getElementById('wizardCameraModal');
+      modal.style.display = 'none';
+      modal.setAttribute('aria-hidden', 'true');
+    }
+
+    async function confirmWizardCameraCapture() {
+      if (!wizardCameraStream) return;
+      const video = document.getElementById('wizardCameraPreview');
+      const blob = await MarkerEditor.captureFrameAsBlob(video, 0.92);
+      const pairId = wizardCameraPairId;
+      cancelWizardCameraCapture();
+      const input = document.getElementById(`image-input-${pairId}`);
+      if (!input) return;
+      const dataTransfer = new DataTransfer();
+      dataTransfer.items.add(new File([blob], `photo-${pairId}.jpg`, { type: 'image/jpeg' }));
+      input.files = dataTransfer.files;
+      handleFileSelect(input, pairId, 'image');
     }
 
     function lockBackgroundScroll() {
@@ -3826,25 +4492,12 @@
         return null;
       }
       sanitizeCrop(pair, image);
-      const scale = Math.min(canvas.width / image.naturalWidth, canvas.height / image.naturalHeight);
-      if (!Number.isFinite(scale) || scale <= 0) {
+      const r = MarkerEditor.computeDrawRect(pair.crop, image.naturalWidth, image.naturalHeight, canvas.width, canvas.height);
+      if (!r) {
         cropDebug('[CROP BLOCKED]', { event: 'cropDrawRect', reason: 'invalid display scale' });
         return null;
       }
-      const drawW = image.naturalWidth * scale;
-      const drawH = image.naturalHeight * scale;
-      const offsetX = (canvas.width - drawW) / 2;
-      const offsetY = (canvas.height - drawH) / 2;
-      return {
-        imageX: offsetX,
-        imageY: offsetY,
-        imageW: drawW,
-        imageH: drawH,
-        x: offsetX + pair.crop.x * drawW,
-        y: offsetY + pair.crop.y * drawH,
-        w: pair.crop.width * drawW,
-        h: pair.crop.height * drawH
-      };
+      return r;
     }
 
     function resizeCropCanvas() {
@@ -3864,44 +4517,17 @@
         cropDebug('[CROP BLOCKED]', { event: 'drawCropCanvas', reason: 'missing pair or active image' });
         return;
       }
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const r = cropDrawRect();
+      sanitizeCrop(pair, activeCropImage);
+      const r = MarkerEditor.drawCanvas(ctx, canvas, activeCropImage, pair.crop, pair.rotation);
       if (!r) {
         cropDebug('[CROP BLOCKED]', { event: 'drawCropCanvas', reason: 'missing crop draw rect' });
         return;
       }
-      ctx.save();
-      ctx.translate(r.imageX + r.imageW / 2, r.imageY + r.imageH / 2);
-      ctx.rotate((pair.rotation * Math.PI) / 180);
-      ctx.drawImage(activeCropImage, -r.imageW / 2, -r.imageH / 2, r.imageW, r.imageH);
-      ctx.restore();
-      ctx.fillStyle = 'rgba(0,0,0,.58)';
-      ctx.fillRect(r.imageX, r.imageY, r.imageW, r.imageH);
-      ctx.clearRect(r.x, r.y, r.w, r.h);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(r.x, r.y, r.w, r.h);
-      ctx.clip();
-      ctx.translate(r.imageX + r.imageW / 2, r.imageY + r.imageH / 2);
-      ctx.rotate((pair.rotation * Math.PI) / 180);
-      ctx.drawImage(activeCropImage, -r.imageW / 2, -r.imageH / 2, r.imageW, r.imageH);
-      ctx.restore();
-      ctx.strokeStyle = '#00d4ff';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(r.x, r.y, r.w, r.h);
-      ctx.fillStyle = '#fff';
-      const handles = cropHandles(r);
-      handles.forEach(h => ctx.fillRect(h.x - 6, h.y - 6, 12, 12));
       cropDebug('[CROP UPDATE]', { event: 'canvas-redraw' });
     }
 
     function cropHandles(r) {
-      return [
-        { name: 'nw', x: r.x, y: r.y }, { name: 'n', x: r.x + r.w / 2, y: r.y },
-        { name: 'ne', x: r.x + r.w, y: r.y }, { name: 'e', x: r.x + r.w, y: r.y + r.h / 2 },
-        { name: 'se', x: r.x + r.w, y: r.y + r.h }, { name: 's', x: r.x + r.w / 2, y: r.y + r.h },
-        { name: 'sw', x: r.x, y: r.y + r.h }, { name: 'w', x: r.x, y: r.y + r.h / 2 }
-      ];
+      return MarkerEditor.cropHandles(r);
     }
 
     function cropPointer(event) {
@@ -3928,11 +4554,7 @@
     }
 
     function cropDragMode(point, r) {
-      const tolerance = cropHitTolerance();
-      const handle = cropHandles(r).find(h => Math.abs(point.x - h.x) <= tolerance && Math.abs(point.y - h.y) <= tolerance);
-      if (handle) return handle.name;
-      const insideCrop = point.x >= r.x && point.x <= r.x + r.w && point.y >= r.y && point.y <= r.y + r.h;
-      return insideCrop ? 'move' : null;
+      return MarkerEditor.hitTestDragMode(point, r, cropHitTolerance());
     }
 
     function stopCropDrag(event = null) {
@@ -3950,41 +4572,10 @@
         cropDebug('[CROP BLOCKED]', { event: 'updateCropFromDrag', reason: 'missing drag prerequisites', pointer: point });
         return;
       }
-      const minSize = MIN_MARKER_CROP_FRACTION;
       const beforeCrop = { ...pair.crop };
-      let x1 = cropDrag.start.x;
-      let y1 = cropDrag.start.y;
-      let x2 = cropDrag.start.x + cropDrag.start.width;
-      let y2 = cropDrag.start.y + cropDrag.start.height;
       const dx = (point.x - cropDrag.point.x) / r.imageW;
       const dy = (point.y - cropDrag.point.y) / r.imageH;
-      if (cropDrag.mode === 'move') {
-        const width = Math.max(minSize, cropDrag.start.width);
-        const height = Math.max(minSize, cropDrag.start.height);
-        x1 = Math.max(0, Math.min(cropDrag.start.x + dx, 1 - width));
-        y1 = Math.max(0, Math.min(cropDrag.start.y + dy, 1 - height));
-        x2 = x1 + width;
-        y2 = y1 + height;
-      } else {
-        if (cropDrag.mode.includes('w')) x1 += dx;
-        if (cropDrag.mode.includes('e')) x2 += dx;
-        if (cropDrag.mode.includes('n')) y1 += dy;
-        if (cropDrag.mode.includes('s')) y2 += dy;
-        if (cropDrag.mode.includes('w') && x2 - x1 < minSize) x1 = x2 - minSize;
-        if (cropDrag.mode.includes('e') && x2 - x1 < minSize) x2 = x1 + minSize;
-        if (cropDrag.mode.includes('n') && y2 - y1 < minSize) y1 = y2 - minSize;
-        if (cropDrag.mode.includes('s') && y2 - y1 < minSize) y2 = y1 + minSize;
-        if (x1 < 0) { x2 -= x1; x1 = 0; }
-        if (y1 < 0) { y2 -= y1; y1 = 0; }
-        if (x2 > 1) { x1 -= x2 - 1; x2 = 1; }
-        if (y2 > 1) { y1 -= y2 - 1; y2 = 1; }
-      }
-      x1 = Math.max(0, Math.min(x1, 1 - minSize));
-      y1 = Math.max(0, Math.min(y1, 1 - minSize));
-      x2 = Math.max(x1 + minSize, Math.min(x2, 1));
-      y2 = Math.max(y1 + minSize, Math.min(y2, 1));
-      pair.crop = { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
-      sanitizeCrop(pair, activeCropImage);
+      pair.crop = MarkerEditor.applyDragDelta(cropDrag.start, cropDrag.mode, dx, dy, activeCropImage.naturalWidth, activeCropImage.naturalHeight);
       cropDebug('[CROP UPDATE]', { event: 'crop-after-update', pointer: point, before_crop: beforeCrop, after_crop: { ...pair.crop } });
       drawCropCanvas();
       updateCropPreview();
@@ -4067,36 +4658,223 @@
       updateCropPreview();
     }
 
+    async function markerContentHash(pair, img) {
+      // Cheap client-side proxy for "would this be a duplicate target" - a
+      // small (360px), low-quality export of the SAME crop/rotation/mode
+      // that will become the real upload, hashed. Deterministic for
+      // identical crop parameters (verified: canvas.toBlob on identical
+      // input produces byte-identical output), so it reliably flags "this
+      // is the exact same prepared marker as another pair" without needing
+      // the full 1400px export. This is a PRE-check only, purely for fast
+      // UX feedback - the server's own hash of the actual uploaded bytes
+      // (final canonical marker) remains the authoritative decision.
+      const { file } = await MarkerEditor.exportBlob(img, pair.crop, pair.rotation || 0, pair.markerMode, 360, 0.7, 'probe.jpg');
+      const buf = await file.arrayBuffer();
+      const digest = await crypto.subtle.digest('SHA-256', buf);
+      return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    // Blocker audit (2026-08-27), section 3A: client pre-check for exact-
+    // duplicate target images across pairs in THIS creation batch, run at
+    // "Use this marker" confirmation time (the canonical finalized marker
+    // state per section 3B - not the raw pre-crop upload). Purely advisory:
+    // the server's own hash check on the actual uploaded bytes is the
+    // authoritative guard (see the DUPLICATE_TARGET_IMAGE guard in
+    // _finalize_assemble_and_validate) and still runs regardless of this.
+    // Narrow duplicate-handling fix: exact-SHA-256 file hash, used for the
+    // client-side video duplicate pre-check below. Deterministic, matches
+    // exactly what the backend hashes from the same uploaded bytes (video is
+    // never re-encoded client-side before upload, unlike the target image).
+    // Best-effort: crypto.subtle requires a secure context, which every real
+    // deployment (HTTPS) and localhost dev both satisfy; on failure this
+    // returns null and the pre-check silently no-ops, leaving the backend's
+    // own authoritative check as the only guard - never blocks a legitimate
+    // upload just because hashing failed.
+    async function sha256OfFile(file) {
+      try {
+        const buf = await file.arrayBuffer();
+        const digest = await crypto.subtle.digest('SHA-256', buf);
+        return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+      } catch (_err) {
+        return null;
+      }
+    }
+
+    // Mirrors the backend's own video-duplicate scope exactly (app.py,
+    // _finalize_assemble_and_validate): one target's own video set for
+    // image_video (primary + its additional videos), the whole playlist for
+    // direct_qr (every video is its own target there, no additionalVideos
+    // concept). excludeSlot skips the slot the candidate is replacing so a
+    // same-current-video re-select never flags itself.
+    async function findDuplicateVideoInScope(candidateHash, pairId, excludeSlot) {
+      if (!candidateHash) return null;
+      const directQr = experienceType() === 'direct_qr';
+      const scopePairIds = directQr ? Object.keys(currentFiles).map(Number) : [pairId];
+      for (const otherPairId of scopePairIds) {
+        const other = currentFiles[otherPairId];
+        if (!other) continue;
+        const isPrimarySlotExcluded = otherPairId === pairId && excludeSlot === 'primary';
+        if (!isPrimarySlotExcluded && other.videoHash && other.videoHash === candidateHash) {
+          return { pairId: otherPairId, slot: 'primary' };
+        }
+        if (!directQr) {
+          for (const extra of (other.additionalVideos || [])) {
+            if (otherPairId === pairId && excludeSlot === `extra:${extra.id}`) continue;
+            if (extra.hash && extra.hash === candidateHash) {
+              return { pairId: otherPairId, slot: `extra:${extra.id}` };
+            }
+          }
+        }
+      }
+      return null;
+    }
+
+    async function checkForDuplicateTargetAmongPairs(pairId) {
+      const pair = currentFiles[pairId];
+      if (!pair || !pair.image) return null;
+      // Narrow fix (duplicate-handling pass): activeCropImage only belongs to
+      // pairId when the crop modal is actually open for THIS pair - the "Use
+      // full image" button on a pair's own card (not the crop modal) can call
+      // this for a DIFFERENT pairId than whichever one the modal last opened,
+      // and reusing a stale activeCropImage there would hash the wrong photo.
+      const img = (activeCropPairId === pairId && activeCropImage) ? activeCropImage : await loadImageForPair(pairId);
+      if (!img) return null;
+      const ownHash = await markerContentHash(pair, img);
+      for (const otherIdRaw of Object.keys(currentFiles)) {
+        const otherId = Number(otherIdRaw);
+        if (otherId === pairId) continue;
+        const other = currentFiles[otherId];
+        // markerConfirmed (not processedFile - that stays null until actual
+        // form submission, long after crop confirmation) is the real signal
+        // that this OTHER pair has a finalized crop/rotation/mode to compare
+        // against; comparing against an unconfirmed pair mid-setup would
+        // compare against a stale/default crop nobody chose.
+        if (!other || !other.image || !other.markerConfirmed) continue;
+        try {
+          const otherImg = await loadImageForPair(otherId);
+          const otherHash = await markerContentHash(other, otherImg);
+          if (otherHash === ownHash) return otherId;
+        } catch (_err) { /* best-effort - server remains authoritative */ }
+      }
+      return null;
+    }
+
+    // Narrow duplicate-handling fix: the rejected candidate must never remain
+    // valid pair state (audit-proven bug - pairIsComplete() only checked
+    // image+video presence, never markerConfirmed, so a duplicate-rejected
+    // photo still shipped at submit time). Resets everything the audit listed
+    // for the REJECTED candidate only - the pair's own video, if already
+    // selected, is untouched. Returns the pair card to its empty
+    // target-selection state so the user can immediately choose another photo.
+    function clearRejectedTargetCandidate(pairId) {
+      const pair = currentFiles[pairId];
+      if (!pair) return;
+      if (pair.imageUrl) URL.revokeObjectURL(pair.imageUrl);
+      if (pair.processedPreviewUrl) URL.revokeObjectURL(pair.processedPreviewUrl);
+      pair.image = null;
+      pair.imageUrl = null;
+      pair.processedFile = null;
+      pair.processedWidth = 0;
+      pair.processedHeight = 0;
+      pair.originalWidth = 0;
+      pair.originalHeight = 0;
+      pair.markerConfirmed = false;
+      pair.markerMode = 'crop';
+      pair.crop = defaultMarkerCrop();
+      pair.rotation = 0;
+      pair.quality = { status: 'Preparing marker', guidance: ['Choose a different photo to use as the target.'] };
+
+      const input = document.getElementById(`image-input-${pairId}`);
+      if (input) input.value = '';
+      const area = document.getElementById(`image-area-${pairId}`);
+      const preview = document.getElementById(`image-preview-${pairId}`);
+      if (area) area.classList.remove('has-file');
+      if (preview) preview.innerHTML = '';
+    }
+
+    // Admin stabilization pass (Part A, 2026-09-02): the client-only exact-
+    // hash pre-check (checkForDuplicateTargetAmongPairs) let a slightly
+    // different ROI on the same underlying photo through - identity was
+    // never validated by the SAME canonical (exact + ORB/homography) rule
+    // Edit already uses. Runs the candidate's real marker export against
+    // every OTHER already-confirmed pair in this session via the new
+    // /create/validate-target endpoint (canonical_target_identity_check on
+    // the server) - the same authoritative check, just called before any
+    // full project upload begins instead of only at finalize time.
+    // Returns { duplicate, conflictLabel } normally, or null on any network/
+    // server failure - callers must never treat null as "unique" (no silent
+    // fail-open).
+    async function validateTargetCandidateAgainstSiblings(candidateBlob, pairId) {
+      try {
+        const fd = new FormData();
+        fd.append('experience_type', experienceType());
+        fd.append('candidate_image', candidateBlob, 'candidate.jpg');
+        for (const otherIdRaw of Object.keys(currentFiles)) {
+          const otherId = Number(otherIdRaw);
+          if (otherId === pairId) continue;
+          const other = currentFiles[otherId];
+          if (!other || !other.markerConfirmed) continue;
+          const siblingBlob = await renderMarkerBlob(otherId, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
+          fd.append('sibling_candidates', siblingBlob, `sibling-${otherId}.jpg`);
+        }
+        const resp = await fetch('/create/validate-target', {
+          method: 'POST',
+          headers: { 'X-CSRFToken': csrfHeader() },
+          body: fd,
+        });
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        if (data.error) return null;
+        return {
+          duplicate: data.verdict === 'CONFLICT_SIBLING_CANDIDATE' || data.verdict === 'CONFLICT_OTHER_PAIR',
+          conflictLabel: data.conflict_label,
+        };
+      } catch (_err) {
+        return null;
+      }
+    }
+
     async function useCurrentMarker() {
       if (!activeCropPairId) return;
-      const pair = currentFiles[activeCropPairId];
+      const rejectedPairId = activeCropPairId;
+      const pair = currentFiles[rejectedPairId];
       pair.markerMode = 'crop';
       sanitizeCrop(pair, activeCropImage);
-      await prepareMarkerPreview(activeCropPairId);
-      updateMarkerControls(activeCropPairId);
+
+      pair.quality = { status: 'Checking target...', guidance: ['Making sure this is not already used by another content set.'] };
+      updateMarkerControls(rejectedPairId);
+      const candidateBlob = await renderMarkerBlob(rejectedPairId, MARKER_LONG_EDGE, MARKER_JPEG_QUALITY);
+      const validation = await validateTargetCandidateAgainstSiblings(candidateBlob, rejectedPairId);
+
+      if (validation === null) {
+        // Validation failure (network/server error): never silently accept
+        // the candidate as valid - the crop modal stays open so the user can
+        // retry, and the pair is not marked confirmed.
+        notify('Could not check this photo for duplicates. Please try again.', 'error');
+        pair.quality = { status: 'Preparing marker', guidance: ['Could not verify this photo - try confirming again.'] };
+        updateMarkerControls(rejectedPairId);
+        return;
+      }
+      if (validation.duplicate) {
+        const label = validation.conflictLabel;
+        const conflictText = label ? `content set ${label}` : 'another content set';
+        notify(`This is the same photo already used for ${conflictText}. Choose a different photo, or add this video to that content set instead.`, 'error');
+        clearRejectedTargetCandidate(rejectedPairId);
+        updateMarkerControls(rejectedPairId);
+        closeCropModal();
+        updateFormFields();
+        return;
+      }
+      pair.markerConfirmed = true;
+      await prepareMarkerPreview(rejectedPairId);
+      updateMarkerControls(rejectedPairId);
       closeCropModal();
       updateFormFields();
     }
 
     function drawCroppedMarkerToCanvas(canvas, img, pair, longEdge) {
       sanitizeCrop(pair, img);
-      const crop = pair.markerMode === 'full_image' ? { x: 0, y: 0, width: 1, height: 1 } : pair.crop;
-      const sx = Math.round(crop.x * img.naturalWidth);
-      const sy = Math.round(crop.y * img.naturalHeight);
-      const sw = Math.max(1, Math.round(crop.width * img.naturalWidth));
-      const sh = Math.max(1, Math.round(crop.height * img.naturalHeight));
-      const scale = Math.min(1, longEdge / Math.max(sw, sh));
-      const outW = Math.max(1, Math.round(sw * scale));
-      const outH = Math.max(1, Math.round(sh * scale));
-      const rotated = (pair.rotation || 0) % 180 !== 0;
-      canvas.width = rotated ? outH : outW;
-      canvas.height = rotated ? outW : outH;
-      const ctx = canvas.getContext('2d');
-      ctx.save();
-      ctx.translate(canvas.width / 2, canvas.height / 2);
-      ctx.rotate(((pair.rotation || 0) * Math.PI) / 180);
-      ctx.drawImage(img, sx, sy, sw, sh, -outW / 2, -outH / 2, outW, outH);
-      ctx.restore();
+      MarkerEditor.drawCroppedToOutputCanvas(canvas, img, pair.crop, pair.rotation || 0, pair.markerMode, longEdge);
     }
 
     async function renderMarkerDataUrl(pair, longEdge, quality) {
@@ -4221,7 +4999,7 @@
       card.innerHTML = `
         <strong>${status.label}</strong>
         <span>${status.message}</span>
-        <details class="video-meta-details"${keepOpen ? ' open' : ''}>
+        <details class="video-meta-details ss-disclosure"${keepOpen ? ' open' : ''}>
           <summary>File details</summary>
           <span>${pair.video.name || 'video'} - ${formatBytes(pair.video.size)} - ${pair.video.type || 'unknown type'}</span>
           <span>${meta?.width || '?'} x ${meta?.height || '?'} - ${meta?.resolutionClass || 'unknown resolution'} - ${meta?.orientation || 'unknown orientation'} - ${formatDuration(meta?.duration)}</span>
@@ -4270,17 +5048,7 @@
     }
 
     function evaluateMarkerQuality(pair) {
-      const crop = pair.markerMode === 'full_image' ? { width: 1, height: 1 } : pair.crop;
-      const markerW = Math.round((pair.originalWidth || 0) * crop.width);
-      const markerH = Math.round((pair.originalHeight || 0) * crop.height);
-      const guidance = [];
-      let score = 2;
-      if (markerW < 360 || markerH < 360) { score--; guidance.push('Marker is too small.'); }
-      if (crop.width * crop.height > 0.82 && pair.markerMode === 'crop') guidance.push('Crop closer to the intended marker.');
-      const aspect = Math.max(markerW, markerH) / Math.max(Math.min(markerW, markerH), 1);
-      if (aspect > 4) { score--; guidance.push('Large blank or narrow areas may cause unstable tracking.'); }
-      if (!guidance.length) guidance.push(pair.markerMode === 'full_image' ? 'The scanner will use the whole image, including its background.' : 'Marker has enough size for local testing.');
-      return { status: score >= 2 ? 'Good marker' : (score >= 1 ? 'Usable marker' : 'Weak marker'), guidance };
+      return MarkerEditor.evaluateQuality(pair.crop, pair.rotation || 0, pair.markerMode, pair.originalWidth, pair.originalHeight);
     }
 
     function attachCropPointerListeners() {
@@ -4373,33 +5141,57 @@
 
     attachCropPointerListeners();
     window.addEventListener('resize', () => { if (activeCropPairId) { resizeCropCanvas(); drawCropCanvas(); } });
+    // iOS Safari's address-bar collapse/keyboard-open fires visualViewport's
+    // own resize event more reliably than window's for this specific case -
+    // same guard, same idempotent redraw, no separate polling loop.
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', () => {
+        if (activeCropPairId) { resizeCropCanvas(); drawCropCanvas(); }
+      });
+    }
+
+    const VIDEO_MAX_SIZE_BYTES = 1024 * 1024 * 1024;
+    const VALID_VIDEO_TYPES = ['video/mp4', 'video/mpeg', 'video/quicktime'];
+
+    /* Shared with the primary video picker - an additional video (Issue
+       3E-D) is held to the exact same frontend policy, never a looser one.
+       Returns an error message string, or null when the file is valid. */
+    function validateVideoFile(file) {
+      if (file.size > VIDEO_MAX_SIZE_BYTES) {
+        return `This video is larger than the ${Math.round(VIDEO_MAX_SIZE_BYTES / (1024 * 1024))} MB limit. Please choose a smaller file.`;
+      }
+      if (!VALID_VIDEO_TYPES.includes(file.type)) {
+        return 'That video format is not supported. Please choose an MP4.';
+      }
+      return null;
+    }
 
     async function handleFileSelect(input, pairId, type) {
       const file = input.files[0];
       if (!file) return;
 
       // Validate size
-      const maxSize = type === 'image' ? 50 * 1024 * 1024 : 1024 * 1024 * 1024;
-      if (file.size > maxSize) {
-        notify(`This ${type === 'image' ? 'photo' : 'video'} is larger than the ${Math.round(maxSize / (1024 * 1024))} MB limit. Please choose a smaller file.`, 'error');
+      const maxSize = type === 'image' ? 50 * 1024 * 1024 : VIDEO_MAX_SIZE_BYTES;
+      if (type === 'video') {
+        const problem = validateVideoFile(file);
+        if (problem) {
+          notify(problem, 'error');
+          input.value = '';
+          return;
+        }
+      } else if (file.size > maxSize) {
+        notify(`This photo is larger than the ${Math.round(maxSize / (1024 * 1024))} MB limit. Please choose a smaller file.`, 'error');
         input.value = '';
         return;
       }
 
       // Validate type
       const validImageTypes = ['image/jpeg', 'image/png', 'image/jpg'];
-      const validVideoTypes = ['video/mp4', 'video/mpeg', 'video/quicktime'];
       if (type === 'image' && !validImageTypes.includes(file.type)) {
         notify('That photo format is not supported. Please choose a JPG or PNG.', 'error');
         input.value = '';
         return;
       }
-      if (type === 'video' && !validVideoTypes.includes(file.type)) {
-        notify('That video format is not supported. Please choose an MP4.', 'error');
-        input.value = '';
-        return;
-      }
-
       const fileUrl = URL.createObjectURL(file);
       if (!currentFiles[pairId]) currentFiles[pairId] = createEmptyPairState();
 
@@ -4418,6 +5210,7 @@
         currentFiles[pairId].processedFile = null;
         currentFiles[pairId].processedWidth = 0;
         currentFiles[pairId].processedHeight = 0;
+        currentFiles[pairId].markerConfirmed = false;
         if (currentFiles[pairId].processedPreviewUrl) {
           URL.revokeObjectURL(currentFiles[pairId].processedPreviewUrl);
           currentFiles[pairId].processedPreviewUrl = null;
@@ -4439,8 +5232,25 @@
           updateMarkerControls(pairId);
         }
       } else {
+        // Narrow duplicate-handling fix: exact-SHA-256 pre-check against every
+        // other video already selected in this scope (mirrors the backend's
+        // own exact-bytes rule and scope exactly - same pair for image_video,
+        // whole playlist for direct_qr). Runs BEFORE the candidate is
+        // committed to currentFiles, so a rejected duplicate never enters
+        // state at all - nothing to clear afterward, unlike the target-image
+        // path above.
+        const candidateVideoHash = await sha256OfFile(file);
+        const videoDuplicate = await findDuplicateVideoInScope(candidateVideoHash, pairId, 'primary');
+        if (videoDuplicate !== null) {
+          URL.revokeObjectURL(fileUrl);
+          input.value = '';
+          notify('This video is already added to this target. Choose a different video.', 'error');
+          return;
+        }
+
         currentFiles[pairId].video = file;
         currentFiles[pairId].videoUrl = fileUrl;
+        currentFiles[pairId].videoHash = candidateVideoHash;
 
         const area = document.getElementById(`video-area-${pairId}`);
         const preview = document.getElementById(`video-preview-${pairId}`);
@@ -4458,6 +5268,167 @@
       updateQRPreview();
       updateFormFields();
     }
+
+    /* ===================== Issue 3E-D: additional videos per target =====================
+       Kept deliberately simple - no thumbnail/preview tile, just a filename
+       once selected, matching the "extension of the media section, not a
+       new feature panel" brief. Never rendered at all when
+       ALLOW_MULTI_VIDEO_PER_TARGET is false (see addPair()'s template),
+       so a disabled account's page is byte-for-byte what it always was. */
+    function additionalVideoRowId(pairId, videoId) {
+      return `extra-video-${pairId}-${videoId}`;
+    }
+
+    function additionalVideoUsedCount(pairId) {
+      const state = currentFiles[pairId];
+      return 1 + (state ? state.additionalVideos.length : 0);
+    }
+
+    function addAdditionalVideo(pairId) {
+      if (!ALLOW_MULTI_VIDEO_PER_TARGET) return;
+      const state = currentFiles[pairId];
+      if (!state) return;
+      if (MAX_VIDEOS_PER_TARGET !== Infinity && additionalVideoUsedCount(pairId) >= MAX_VIDEOS_PER_TARGET) return;
+
+      additionalVideoCounter++;
+      const videoId = additionalVideoCounter;
+      state.additionalVideos.push({ id: videoId, file: null, url: null, sessionId: null });
+
+      const slotNumber = additionalVideoUsedCount(pairId);
+      const rowId = additionalVideoRowId(pairId, videoId);
+      const rowHTML = `
+        <div class="pair-extra-video-row" id="${rowId}">
+          <div class="pair-extra-video-picker">
+            <label class="pair-extra-video-label" for="extra-video-input-${pairId}-${videoId}">Video ${slotNumber}</label>
+            <input type="file"
+                   id="extra-video-input-${pairId}-${videoId}"
+                   accept="video/*"
+                   class="pair-extra-video-input"
+                   aria-label="Video ${slotNumber} for Content set ${pairId}"
+                   onchange="handleAdditionalVideoSelect(this, ${pairId}, ${videoId})" />
+            <span class="pair-extra-video-filename" id="extra-video-filename-${pairId}-${videoId}">No file selected</span>
+          </div>
+          <button type="button" class="icon-btn danger pair-extra-video-remove"
+                  data-extra-video-remove="${videoId}"
+                  onclick="removeAdditionalVideo(${pairId}, ${videoId})"
+                  aria-label="Remove Video ${slotNumber} from Content set ${pairId}"
+                  title="Remove this video">
+            <i class="fa-solid fa-trash" aria-hidden="true"></i>
+          </button>
+        </div>
+      `;
+      const list = document.getElementById(`extra-videos-list-${pairId}`);
+      if (list) list.insertAdjacentHTML('beforeend', rowHTML);
+      updateAdditionalVideoUsage(pairId);
+    }
+
+    async function handleAdditionalVideoSelect(input, pairId, videoId) {
+      const state = currentFiles[pairId];
+      if (!state) return;
+      const entry = state.additionalVideos.find(v => v.id === videoId);
+      if (!entry) return;
+      const file = input.files && input.files[0];
+      if (!file) return;
+
+      const problem = validateVideoFile(file);
+      if (problem) {
+        notify(problem, 'error');
+        input.value = '';
+        return;
+      }
+
+      // Narrow duplicate-handling fix: same exact-hash pre-check as the
+      // primary video input, excluding this entry's own current slot so
+      // re-selecting the same file into the same slot is not a false positive.
+      const candidateVideoHash = await sha256OfFile(file);
+      const videoDuplicate = await findDuplicateVideoInScope(candidateVideoHash, pairId, `extra:${videoId}`);
+      if (videoDuplicate !== null) {
+        input.value = '';
+        notify('This video is already added to this target. Choose a different video.', 'error');
+        return;
+      }
+
+      if (entry.url) URL.revokeObjectURL(entry.url);
+      entry.file = file;
+      entry.url = URL.createObjectURL(file);
+      entry.hash = candidateVideoHash;
+
+      const filenameEl = document.getElementById(`extra-video-filename-${pairId}-${videoId}`);
+      if (filenameEl) filenameEl.textContent = file.name;
+
+      updateFormFields();
+      updatePreview();
+    }
+
+    function removeAdditionalVideo(pairId, videoId) {
+      const state = currentFiles[pairId];
+      if (!state) return;
+      const index = state.additionalVideos.findIndex(v => v.id === videoId);
+      if (index === -1) return;
+
+      const [removed] = state.additionalVideos.splice(index, 1);
+      if (removed.url) URL.revokeObjectURL(removed.url);
+      // If this video already obtained a resumable session during THIS page
+      // attempt (an upload was in progress when removed), cancel it rather
+      // than leaving it running unattended - the same cleanup
+      // cancelActiveUpload() already does for the primary session. Removal
+      // before/after an upload attempt (the normal case) never has a
+      // sessionId here, so this is a no-op then.
+      if (removed.sessionId) {
+        cancelResumableSession(removed.sessionId).catch(() => {});
+      }
+
+      const rowEl = document.getElementById(additionalVideoRowId(pairId, videoId));
+      if (rowEl) rowEl.remove();
+
+      renumberAdditionalVideos(pairId);
+      updateAdditionalVideoUsage(pairId);
+      updateFormFields();
+      updatePreview();
+    }
+
+    function renumberAdditionalVideos(pairId) {
+      const state = currentFiles[pairId];
+      if (!state) return;
+      state.additionalVideos.forEach((entry, i) => {
+        const slotNumber = i + 2; // Video 2, Video 3, ... (Video 1 is the default)
+        const rowEl = document.getElementById(additionalVideoRowId(pairId, entry.id));
+        if (!rowEl) return;
+        const label = rowEl.querySelector('.pair-extra-video-label');
+        if (label) label.textContent = `Video ${slotNumber}`;
+        const input = rowEl.querySelector('.pair-extra-video-input');
+        if (input) input.setAttribute('aria-label', `Video ${slotNumber} for Content set ${pairId}`);
+        const removeBtn = rowEl.querySelector('.pair-extra-video-remove');
+        if (removeBtn) removeBtn.setAttribute('aria-label', `Remove Video ${slotNumber} from Content set ${pairId}`);
+      });
+    }
+
+    function updateAdditionalVideoUsage(pairId) {
+      if (!ALLOW_MULTI_VIDEO_PER_TARGET) return;
+      const usageEl = document.getElementById(`extra-videos-usage-${pairId}`);
+      const addBtn = document.getElementById(`extra-videos-add-${pairId}`);
+      const limitEl = document.getElementById(`extra-videos-limit-${pairId}`);
+      if (!usageEl && !addBtn) return;
+
+      const used = additionalVideoUsedCount(pairId);
+      const maxLabel = MAX_VIDEOS_PER_TARGET === Infinity ? '∞' : MAX_VIDEOS_PER_TARGET;
+      if (usageEl) usageEl.textContent = `${used} of ${maxLabel} video${maxLabel === 1 ? '' : 's'} used`;
+
+      const atMax = MAX_VIDEOS_PER_TARGET !== Infinity && used >= MAX_VIDEOS_PER_TARGET;
+      // aria-disabled, not the native `disabled` attribute: setting `disabled`
+      // on a focused control blurs it immediately (moves focus to <body>) -
+      // this button reaches max EXACTLY when the user's own click/keypress on
+      // it just landed the last video, so a keyboard user would lose focus
+      // the moment they hit the limit. addAdditionalVideo() already no-ops
+      // at max regardless of this attribute, so nothing but the visual/AT
+      // state changes here.
+      if (addBtn) {
+        addBtn.setAttribute('aria-disabled', atMax ? 'true' : 'false');
+        addBtn.classList.toggle('is-disabled', atMax);
+      }
+      if (limitEl) limitEl.hidden = !atMax;
+    }
+    /* ==== end of additional-videos-per-target UI ==== */
 
     function updateFormFields() {
       const submitBtn = document.getElementById('submitBtn');
@@ -4562,16 +5533,60 @@
 
               <div class="preview-media-item">
                 ${pairData.videoUrl
-            ? `<video src="${pairData.videoUrl}" controls></video>`
+            ? `<video id="preview-video-${pairId}" src="${pairData.videoUrl}" controls></video>`
             : `<div class="media-placeholder"><i class="fas fa-video"></i><div>No video yet</div></div>`
           }
               </div>
             </div>
+            ${ALLOW_MULTI_VIDEO_PER_TARGET ? (() => {
+            // Final multi-video preview fix (2026-09-01): this block used to
+            // be a bare "${n} videos" text label - the main <video> above
+            // only ever showed pairData.videoUrl (video 1), and every extra
+            // video the user attached via "Add another video" was never
+            // rendered anywhere in this review-step preview at all, not even
+            // as a hidden node or a download link. The human-reported defect
+            // ("indicates multiple videos exist, but only one is usable") was
+            // this exact panel, not the server-rendered post-creation
+            // preview pages (which already loop every PairMedia row
+            // correctly). Fix: one stable main player + a clickable
+            // Video 1/Video 2/... pill list that swaps the main player's
+            // src - matches the "one main player, playlist below" pattern
+            // already established elsewhere in the product, not N stacked
+            // giant players.
+            const extras = (pairData.additionalVideos || []).filter(v => v.file && v.url);
+            if (extras.length === 0) return '';
+            const allVideos = [{ url: pairData.videoUrl, label: 'Video 1' }]
+              .concat(extras.map((v, i) => ({ url: v.url, label: `Video ${i + 2}` })));
+            const pillsHTML = allVideos.map((v, i) => `
+              <button type="button" class="preview-video-pill${i === 0 ? ' active' : ''}"
+                      data-pair-id="${pairId}" data-video-url="${v.url}"
+                      onclick="switchPreviewVideo(${pairId}, '${v.url}', this)">
+                ${v.label}
+              </button>
+            `).join('');
+            return `
+              <div class="preview-video-count">${allVideos.length} videos in this pair</div>
+              <div class="preview-video-playlist">${pillsHTML}</div>
+            `;
+          })() : ``}
           </div>
         `;
 
         previewList.insertAdjacentHTML('beforeend', previewHTML);
       });
+    }
+
+    function switchPreviewVideo(pairId, url, btnEl) {
+      const player = document.getElementById(`preview-video-${pairId}`);
+      if (player && player.src !== url) {
+        player.src = url;
+        player.play().catch(() => {});
+      }
+      const playlist = btnEl.closest('.preview-video-playlist');
+      if (playlist) {
+        playlist.querySelectorAll('.preview-video-pill').forEach(p => p.classList.remove('active'));
+      }
+      btnEl.classList.add('active');
     }
 
     function replaceFile(pairId, type) {
@@ -5042,7 +6057,8 @@
       'INVALID_CHECKSUM', 'CHECKSUM_MISMATCH', 'INVALID_OFFSET', 'EMPTY_CHUNK',
       'CHUNK_EXCEEDS_EXPECTED_SIZE', 'INVALID_EXPERIENCE_PLAYBACK',
       'IMAGE_VALIDATION_FAILED', 'VIDEO_VALIDATION_FAILED',
-      'SESSION_EXPIRED', 'SESSION_CANCELLED', 'SESSION_FAILED', 'STORAGE_INCONSISTENT'
+      'SESSION_EXPIRED', 'SESSION_CANCELLED', 'SESSION_FAILED', 'STORAGE_INCONSISTENT',
+      'DUPLICATE_TARGET_IMAGE', 'DUPLICATE_TARGET_VIDEO'
     ]);
 
     // Retry-After is either delta-seconds or an HTTP-date. Both are honoured;
@@ -5160,7 +6176,20 @@
         OFFSET_MISMATCH: 'The server and browser upload offsets differed. Resynchronizing.',
         CHUNK_TOO_LARGE: 'Sending a smaller piece of the upload and continuing.',
         UPLOAD_PAUSED_NETWORK: 'Upload paused. Resume when you’re ready — everything already uploaded is safe.',
-        STORAGE_INCONSISTENT: 'Upload storage became inconsistent. Please cancel and try again.'
+        UPLOAD_CHUNK_STALLED: 'Connection stalled. Retrying…',
+        STORAGE_INCONSISTENT: 'Upload storage became inconsistent. Please cancel and try again.',
+        // Issue 3E-D: multi-video finalize rejections. Backend remains
+        // authoritative - these are shown only if a request somehow reaches
+        // the server despite the Creator's own Add-video/counter guard.
+        MULTI_VIDEO_NOT_ENTITLED: 'Multiple videos per target aren’t included in your current plan.',
+        VIDEO_LIMIT_REACHED: 'You’ve reached your plan’s video limit for this target.',
+        SESSION_INCOMPLETE: 'One of the additional videos has not finished uploading yet.',
+        INVALID_PURPOSE: 'One of the selected videos could not be attached to this target.',
+        CONTENT_SET_MISMATCH: 'One of the additional videos does not match this target.',
+        INVALID_SESSION_IDS: 'One of the additional videos could not be identified. Please re-select it.',
+        DUPLICATE_SESSION_IDS: 'The same video was selected twice for this target.',
+        DUPLICATE_TARGET_IMAGE: 'This target is already part of this story. Add the new video to the existing target instead.',
+        DUPLICATE_TARGET_VIDEO: 'This video is already added to this target.'
       };
       return messages[code] || 'Upload failed. Please try again.';
     }
@@ -5279,26 +6308,62 @@
       ], { type: 'application/octet-stream' });
     }
 
+    /* stallTimeoutMs (physical QA fix): a dead connection never lets fetch()
+       settle at all - no rejection, no timeout, nothing for the existing
+       retry/backoff/pause machinery below to catch. This wraps the fetch
+       with its OWN AbortController (never the caller's session-level
+       controller) so a stall aborts only this one stuck request, converts
+       that abort into a plain retryable UploadApiError (never a bare
+       AbortError, which the caller already reserves for real user-cancel),
+       and lets everything downstream treat it exactly like any other
+       transport failure. A genuine caller-initiated abort (Cancel button,
+       `options.signal`) still propagates as a real AbortError, unchanged. */
     async function fetchUploadJson(url, options = {}) {
-      const response = await fetch(url, {
-        credentials: 'same-origin',
-        cache: 'no-store',
-        ...options,
-        headers: {
-          ...(options.headers || {}),
-          'X-CSRFToken': csrfHeader()
-        }
-      });
-      let payload = null;
-      try {
-        payload = await response.json();
-      } catch (_err) {}
-      if (!response.ok || payload?.success === false) {
-        const err = new UploadApiError(payload?.code, safeUploadErrorMessage(payload?.code), response.status, payload);
-        err.retryAfterMs = parseRetryAfterMs(response.headers.get('Retry-After'));
-        throw err;
+      const { signal: callerSignal, stallTimeoutMs, ...rest } = options;
+      const localController = new AbortController();
+      let stalled = false;
+      let stallTimer = null;
+      const onCallerAbort = () => localController.abort(callerSignal?.reason);
+      if (callerSignal) {
+        if (callerSignal.aborted) localController.abort(callerSignal.reason);
+        else callerSignal.addEventListener('abort', onCallerAbort);
       }
-      return payload || {};
+      if (stallTimeoutMs) {
+        stallTimer = setTimeout(() => { stalled = true; localController.abort(); }, stallTimeoutMs);
+      }
+      try {
+        let response;
+        try {
+          response = await fetch(url, {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            ...rest,
+            signal: localController.signal,
+            headers: {
+              ...(rest.headers || {}),
+              'X-CSRFToken': csrfHeader()
+            }
+          });
+        } catch (fetchErr) {
+          if (stalled && fetchErr.name === 'AbortError') {
+            throw new UploadApiError('UPLOAD_CHUNK_STALLED', 'Connection stalled — retrying', 0);
+          }
+          throw fetchErr;
+        }
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (_err) {}
+        if (!response.ok || payload?.success === false) {
+          const err = new UploadApiError(payload?.code, safeUploadErrorMessage(payload?.code), response.status, payload);
+          err.retryAfterMs = parseRetryAfterMs(response.headers.get('Retry-After'));
+          throw err;
+        }
+        return payload || {};
+      } finally {
+        if (stallTimer) clearTimeout(stallTimer);
+        if (callerSignal) callerSignal.removeEventListener('abort', onCallerAbort);
+      }
     }
 
     async function createResumableSession(markerFile, videoFile, projectName, experiencePayload, signal, purpose) {
@@ -5325,6 +6390,75 @@
       });
     }
 
+    /* ===================== Issue 3E-D0/3E-D: multi-video resumable transport =====================
+       An additional video is a plain resumable session like any other,
+       purpose 'pair_video', image_size 0 - it reuses every existing
+       create/chunk/status/resume mechanism unmodified. Passing null as the
+       marker file already works today: createResumableSession's
+       `markerFile?.size || 0` and uploadResumableStream's
+       sequentialUploadSlice both already treat a null marker as zero bytes,
+       the same way a Direct QR video-only session already does. */
+    async function createPairVideoSession(videoFile, experienceType, projectName, signal) {
+      return createResumableSession(
+        null, videoFile, projectName, { experience_type: experienceType }, signal, 'pair_video'
+      );
+    }
+
+    async function uploadPairVideoSession(session, videoFile, uploadState) {
+      return uploadResumableStream(session, null, videoFile, uploadState);
+    }
+
+    /* targets: [{ primarySessionId, extraSessionIds: [...] }, ...] ->
+       { primarySessionId: [extraSessionId, ...] }, omitting any target with
+       no additional videos - the shape finalizeResumableProject expects. */
+    function buildExtraVideoSessionIdMap(targets) {
+      const map = {};
+      (targets || []).forEach(({ primarySessionId, extraSessionIds }) => {
+        if (extraSessionIds && extraSessionIds.length) {
+          map[String(primarySessionId)] = extraSessionIds;
+        }
+      });
+      return map;
+    }
+
+    /* Uploads every additional video for ONE target, in UI order, and
+       returns their session ids. Deliberately sequential (not parallel) -
+       the existing adaptive chunk-size/throughput estimator in
+       uploadResumableStream is per-call state, and racing several at once
+       would fight over the same connection with no real speed benefit on
+       the weak-network links this whole system already treats as the
+       normal case. Called from INSIDE the same try/catch a primary
+       session's upload already runs in, so a network pause/cancel during
+       an extra video's upload is caught by the exact same existing
+       handler (SESSION_CANCELLED / UPLOAD_PAUSED_NETWORK) - no new error
+       handling path.
+
+       Scope note: this reuses uploadResumableStream's per-session retry/
+       backoff/pause behaviour, but NOT the primary session's page-reload
+       recovery (localStorage fingerprint matching) - only the primary
+       session is restored after a reload. Losing an in-progress extra
+       video on reload still costs nothing already confirmed for the
+       primary or any OTHER already-uploaded extra video (each is its own
+       session), so the creator only re-picks the one file that was mid-
+       flight, never the whole target. */
+    async function uploadAdditionalVideosForPair(pairState, experiencePayload, projectName, uploadState, signal, progressBase, progressBudget) {
+      const extras = (pairState.additionalVideos || []).filter(entry => entry.file);
+      const sessionIds = [];
+      for (let i = 0; i < extras.length; i++) {
+        const entry = extras[i];
+        const label = extras.length > 1 ? `additional video ${i + 1} of ${extras.length}` : 'additional video';
+        uploadState.phase = `Uploading ${label}`;
+        const percent = progressBase + (progressBudget * (i / extras.length));
+        setUploadProgress(`Uploading ${label}`, Math.min(90, percent), 'Uploading an additional video for this target.', '', 'uploading');
+        const created = await createPairVideoSession(entry.file, experiencePayload.experience_type, projectName, signal);
+        entry.sessionId = created.session.id;
+        await uploadPairVideoSession(created.session, entry.file, uploadState);
+        sessionIds.push(entry.sessionId);
+      }
+      return sessionIds;
+    }
+    /* ==== end of multi-video resumable transport ==== */
+
     async function getUploadSessionStatus(sessionId, signal) {
       return fetchUploadJson(`/api/uploads/sessions/${sessionId}`, { method: 'GET', signal });
     }
@@ -5350,6 +6484,11 @@
       return fetchUploadJson(`/api/uploads/sessions/${sessionId}/chunk`, {
         method: 'POST',
         signal,
+        // A dead connection mid-chunk otherwise never rejects at all (see
+        // fetchUploadJson) - reuses the same "looks stalled" threshold the
+        // UI's own stall watch already uses, so the two agree on what
+        // "stuck" means.
+        stallTimeoutMs: UPLOAD_STALL_MS,
         headers: {
           'Content-Type': 'application/octet-stream',
           'X-Chunk-Offset': String(offset)
@@ -5358,8 +6497,20 @@
       });
     }
 
-    async function finalizeResumableSession(sessionId, signal) {
-      return fetchUploadJson(`/api/uploads/sessions/${sessionId}/finalize`, { method: 'POST', signal });
+    async function finalizeResumableSession(sessionId, signal, extraVideoSessionIds) {
+      // extraVideoSessionIds is an ordered list of additional-video session
+      // ids for THIS target (Issue 3E-D wires this in from
+      // submitResumableSinglePair). Omitted/empty sends the exact
+      // pre-3E-D0 request body, so legacy single-video targets are
+      // unaffected.
+      const body = (extraVideoSessionIds && extraVideoSessionIds.length)
+        ? JSON.stringify({ extra_video_session_ids: extraVideoSessionIds })
+        : undefined;
+      return fetchUploadJson(`/api/uploads/sessions/${sessionId}/finalize`, {
+        method: 'POST',
+        signal,
+        ...(body ? { headers: { 'Content-Type': 'application/json' }, body } : {})
+      });
     }
 
     async function cancelResumableSession(sessionId) {
@@ -5573,7 +6724,7 @@
       return offset;
     }
 
-    async function finalizeResumableWithBoundedRetry(sessionId, uploadState) {
+    async function finalizeResumableWithBoundedRetry(sessionId, uploadState, extraVideoSessionIds) {
       if (activeResumableUpload.finalizeStarted) {
         throw new UploadApiError('FINALIZE_IN_PROGRESS', 'Finalize already started', 409);
       }
@@ -5581,7 +6732,7 @@
       let delay = 1200;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          return await finalizeResumableSession(sessionId, activeResumableUpload.controller.signal);
+          return await finalizeResumableSession(sessionId, activeResumableUpload.controller.signal, extraVideoSessionIds);
         } catch (err) {
           if (err.code === 'ALREADY_FINALIZED') {
             const recovered = await reconcileUploadSessionFromServer(sessionId, activeResumableUpload.controller.signal);
@@ -5675,7 +6826,7 @@
               setUploadProgress('Project ready', 100, 'Recovered the completed upload. Opening your project page.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'ready');
               window.setTimeout(() => {
                 markResumableUploadCompleteForRedirect();
-                window.location.href = `/success/${sessionPayload.session.project_id}`;
+                window.location.href = successUrlFor(sessionPayload.session.project_id);
               }, 250);
               return;
             }
@@ -5746,14 +6897,23 @@
           setUploadProgress('Upload complete', 92, 'All bytes received. Confirming with the server before finalizing.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'uploaded');
         }
 
+        // Issue 3E-D: additional videos for this SAME target, each its own
+        // independently resumable session - uploaded AFTER the primary so a
+        // creator who never adds one pays nothing extra, and inside this
+        // same try block so a pause/cancel here is caught by the exact
+        // same handler below.
+        const extraSessionIds = await uploadAdditionalVideosForPair(
+          pair, experiencePayload, projectName, uploadState, controller.signal, 92, 2
+        );
+
         uploadState.phase = 'Finalizing';
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finalizing...';
         setUploadProgress('Finalizing upload', 94, 'Saving and validating your project.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'uploaded');
-        let finalized = await finalizeResumableWithBoundedRetry(session.id, uploadState);
+        let finalized = await finalizeResumableWithBoundedRetry(session.id, uploadState, extraSessionIds);
         if (finalized.session?.status === 'active') {
           await uploadResumableStream(finalized.session, resumableMarkerFile, pair.video, uploadState);
           activeResumableUpload.finalizeStarted = false;
-          finalized = await finalizeResumableWithBoundedRetry(session.id, uploadState);
+          finalized = await finalizeResumableWithBoundedRetry(session.id, uploadState, extraSessionIds);
         }
 
         const finalSession = finalized.session;
@@ -5770,7 +6930,7 @@
         setUploadProgress('Project ready', 100, 'Opening your project page.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'ready');
         window.setTimeout(() => {
           markResumableUploadCompleteForRedirect();
-          window.location.href = finalSession.project_id ? `/success/${finalSession.project_id}` : '/dashboard';
+          window.location.href = finalSession.project_id ? successUrlFor(finalSession.project_id) : postUploadFallbackUrl();
         }, 250);
       } catch (err) {
         if (err.code === 'SESSION_CANCELLED') {
@@ -5833,12 +6993,20 @@
         && typeof Blob.prototype.slice === 'function';
     }
 
-    async function finalizeResumableProject(sessionIds, signal) {
+    async function finalizeResumableProject(sessionIds, signal, extraVideoSessionIdMap) {
+      // extraVideoSessionIdMap: { primarySessionId: [extraVideoSessionId, ...] },
+      // built by buildExtraVideoSessionIdMap in submitResumableMultiPair.
+      // Omitted/empty sends the exact pre-3E-D0 request body, so legacy
+      // single-video multi-target projects are unaffected.
+      const body = { session_ids: sessionIds };
+      if (extraVideoSessionIdMap && Object.keys(extraVideoSessionIdMap).length) {
+        body.extra_video_session_ids = extraVideoSessionIdMap;
+      }
       return fetchUploadJson('/api/uploads/projects/finalize', {
         method: 'POST',
         signal,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_ids: sessionIds })
+        body: JSON.stringify(body)
       });
     }
 
@@ -5847,11 +7015,11 @@
        lost finalize, so ask the server what actually happened before deciding
        anything. Duplicate group finalizes are safe by contract - the server's
        all-N-or-none conditional UPDATE is what makes them safe, not this. */
-    async function finalizeResumableProjectWithBoundedRetry(sessionIds, signal, uploadState) {
+    async function finalizeResumableProjectWithBoundedRetry(sessionIds, signal, uploadState, extraVideoSessionIdMap) {
       let delay = 1200;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          return await finalizeResumableProject(sessionIds, signal);
+          return await finalizeResumableProject(sessionIds, signal, extraVideoSessionIdMap);
         } catch (err) {
           const transportLost = err.status === 0 || err.name === 'TypeError';
           if (transportLost || err.code === 'ALREADY_FINALIZED' || err.code === 'FINALIZE_IN_PROGRESS') {
@@ -5859,6 +7027,26 @@
             const completed = normalizedCompletedUploadPayload(recovered);
             if (completed) return completed;
             if (transportLost && recovered.session?.status === 'assembled') {
+              await new Promise(resolve => setTimeout(resolve, delay));
+              delay *= 2;
+              continue;
+            }
+            // Blocker audit (2026-08-27), TC-05/07 device-inconsistent duplicate-
+            // target messaging: a REAL rejection (e.g. DUPLICATE_TARGET_IMAGE) can
+            // still lose its response in transit on a flaky mobile connection -
+            // transportLost is then true even though the server's decision was
+            // already made and persisted (a revert back to 'active', by
+            // contract). The original `err` in that case carries no usable code
+            // (the response was never read), so re-throwing it surfaced a bare
+            // transport/generic error instead of the specific duplicate-target
+            // message the guard actually decided on. If the session is back to
+            // 'active' (not stuck mid-finalize), the finalize call is safe to
+            // retry by the SAME "duplicate group finalizes are safe by contract"
+            // guarantee this function already relies on - retrying lets a real
+            // rejection surface correctly once the network survives one round
+            // trip, rather than the user seeing a connection error for what is
+            // actually a deterministic server decision.
+            if (transportLost && attempt < 2 && recovered.session?.status === 'active') {
               await new Promise(resolve => setTimeout(resolve, delay));
               delay *= 2;
               continue;
@@ -5978,7 +7166,7 @@
         setUploadProgress('Project ready', 100, 'Opening your project page.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'ready');
         window.setTimeout(() => {
           markResumableUploadCompleteForRedirect();
-          window.location.href = projectId ? `/success/${projectId}` : '/dashboard';
+          window.location.href = projectId ? successUrlFor(projectId) : postUploadFallbackUrl();
         }, 250);
       };
 
@@ -6120,13 +7308,29 @@
           logClientStage('RESUMABLE CLIENT SET COMPLETE', { upload_id: uploadId, session_id: record.sessionId, set_index: index, set_count: setCount });
         }
 
+        // 3b. Issue 3E-D: additional videos for each target, each its own
+        // independently resumable session, uploaded AFTER every primary
+        // set so a project with no additional videos anywhere pays nothing
+        // extra. Built into the {primarySessionId: [extraId, ...]} shape
+        // finalizeResumableProject expects via buildExtraVideoSessionIdMap.
+        const extraTargets = [];
+        for (let index = 0; index < setCount; index++) {
+          const pair = readyPairs[index].pair;
+          if (!pair.additionalVideos || !pair.additionalVideos.some(v => v.file)) continue;
+          const extraIds = await uploadAdditionalVideosForPair(
+            pair, experiencePayload, projectName, uploadState, controller.signal, 92, 2
+          );
+          extraTargets.push({ primarySessionId: sessionIds[index], extraSessionIds: extraIds });
+        }
+        const extraVideoSessionIdMap = buildExtraVideoSessionIdMap(extraTargets);
+
         // 4. One atomic project finalize for the whole group.
         uploadState.phase = 'Finalizing';
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Finalizing...';
         setUploadProgress('Finalizing upload', 94, 'Saving and validating your project.', `${formatBytes(totalBytes)} of ${formatBytes(totalBytes)}`, 'uploaded');
         let finalized;
         try {
-          finalized = await finalizeResumableProjectWithBoundedRetry(sessionIds, controller.signal, uploadState);
+          finalized = await finalizeResumableProjectWithBoundedRetry(sessionIds, controller.signal, uploadState, extraVideoSessionIdMap);
         } catch (err) {
           if (err.code === 'INCOMPLETE_UPLOAD' && Array.isArray(err.payload?.sessions)) {
             // The server disagrees with us about at least one set. Its answer
@@ -6152,7 +7356,7 @@
               records[index].complete = true;
               saveResumableUploadState(activeResumableUpload);
             }
-            finalized = await finalizeResumableProjectWithBoundedRetry(sessionIds, controller.signal, uploadState);
+            finalized = await finalizeResumableProjectWithBoundedRetry(sessionIds, controller.signal, uploadState, extraVideoSessionIdMap);
           } else {
             throw err;
           }
@@ -6369,6 +7573,20 @@
             appendMarkerMeta(fd, index, pair);
           }
           fd.append('videos', pair.video, pair.video.name || `video-${index}.mp4`);
+          // Issue 3E-D: classic multipart fallback for the "additional
+          // videos" contract - every video (default and additional) gets a
+          // video_target_indexes entry naming which target (by position in
+          // images) it belongs to. Direct QR never reaches this branch with
+          // additional videos (the UI never offers Add-video for it), so
+          // this only ever runs for image_video targets in practice, but is
+          // harmless either way since video_target_indexes is purely
+          // positional.
+          fd.append('video_target_indexes', String(index));
+          (pair.additionalVideos || []).forEach((extra, extraIndex) => {
+            if (!extra.file) return;
+            fd.append('videos', extra.file, extra.file.name || `video-${index}-extra-${extraIndex}.mp4`);
+            fd.append('video_target_indexes', String(index));
+          });
         }
       } catch (err) {
         uploadClientLog('UPLOAD CLIENT FAILED', uploadState, { current_phase: uploadState.phase });
@@ -6513,7 +7731,7 @@
             window.setTimeout(() => {
               setUploadProgress('Project ready', 100, 'Redirecting to your project.', `${formatBytes(uploadState.totalBytes)} of ${formatBytes(uploadState.totalBytes)}`, 'ready');
               window.setTimeout(() => {
-                window.location.href = xhr.responseURL || '/dashboard';
+                window.location.href = xhr.responseURL || postUploadFallbackUrl();
               }, 180);
             }, 250);
           }

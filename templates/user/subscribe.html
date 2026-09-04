@@ -42,6 +42,7 @@
        the exact version drift _head_assets.html exists to end. It comes from the
        partial below now. #}
     <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+    <script src="{{ url_for('static', filename='js/nav.js') }}"></script>
     {# design-system.css + font + icons, AFTER tailwind and BEFORE this page's
        <style> - the order design-system.css documents. It used to be linked
        first, so Tailwind overrode every .ss-* token. The Razorpay script above
@@ -812,6 +813,26 @@
             font-size: 10px;
             margin-top: 2px;
         }
+
+        /* FAQ items: real <details>/<summary> disclosures (ss-disclosure gives the
+           chevron/focus/whole-row-click mechanics) with the question's existing
+           larger, non-uppercase typography restored - ss-disclosure's own summary
+           rule is sized for compact labels, not a question sentence. */
+        .ss-faq-item > summary {
+            font-size: inherit;
+            font-weight: 700;
+            letter-spacing: normal;
+            text-transform: none;
+            color: #fff;
+            justify-content: flex-start;
+        }
+        .ss-faq-item > summary::after {
+            margin-left: auto;
+            color: var(--ss-accent, #00d4ff);
+        }
+        .ss-faq-item > p {
+            margin-top: 8px;
+        }
 </style>
 </head>
 
@@ -822,6 +843,14 @@
     <div class="blob blob-2"></div>
 
     <!-- Navigation -->
+    {% if user %}
+    {# Authenticated visitor: this IS the "Plans" page in the canonical Creator app
+       shell (section 2/4) - never the public marketing nav for a logged-in user. #}
+    {% set nav_active = 'plans' %}
+    {% include "user/_creator_nav.html" %}
+    {% else %}
+    {# Anonymous visitor: keeps the public marketing IA (section 4) - login/register,
+       not the authenticated Creator shell. #}
     <nav>
         <div class="nav-container mx-auto">
             <div class="flex justify-between items-center h-16">
@@ -835,20 +864,6 @@
 
                 <!-- Desktop Menu -->
                 <div class="desktop-menu flex items-center space-x-2 md:space-x-4">
-                    {% if user %}
-                    <a href="{{ url_for('dashboard') }}"
-                        class="text-gray-300 hover:text-white px-2 md:px-3 py-2 rounded-md transition-all duration-300 text-xs md:text-sm font-bold uppercase tracking-widest whitespace-nowrap">
-                        <i class="fas fa-home mr-1 md:mr-2"></i> <span class="hidden sm:inline">Dashboard</span>
-                    </a>
-                    <a href="{{ url_for('user_profile') }}"
-                        class="text-gray-300 hover:text-white px-2 md:px-3 py-2 rounded-md transition-all duration-300 text-xs md:text-sm font-bold uppercase tracking-widest whitespace-nowrap">
-                        <i class="fas fa-user mr-1 md:mr-2"></i> <span class="hidden sm:inline">Profile</span>
-                    </a>
-                    <a href="{{ url_for('logout') }}"
-                        class="text-gray-300 hover:text-white px-2 md:px-3 py-2 rounded-md transition-all duration-300 text-xs md:text-sm font-bold uppercase tracking-widest whitespace-nowrap">
-                        <i class="fas fa-sign-out-alt mr-1 md:mr-2"></i> <span class="hidden sm:inline">Logout</span>
-                    </a>
-                    {% else %}
                     <a href="{{ url_for('login') }}"
                         class="text-gray-300 hover:text-white px-2 md:px-3 py-2 rounded-md transition-all duration-300 text-xs md:text-sm font-bold uppercase tracking-widest whitespace-nowrap">
                         <i class="fas fa-sign-in-alt mr-1 md:mr-2"></i> <span class="hidden sm:inline">Login</span>
@@ -858,7 +873,6 @@
                         <i class="fas fa-user-plus mr-1 md:mr-2"></i> <span class="hidden sm:inline">Register
                             Free</span>
                     </a>
-                    {% endif %}
                 </div>
 
                 <!-- Mobile Menu Button -->
@@ -870,20 +884,6 @@
 
         <!-- Mobile Menu (hidden by default) -->
         <div class="mobile-menu" id="mobileMenu">
-            {% if user %}
-            <a href="{{ url_for('dashboard') }}"
-                class="text-gray-300 hover:text-white transition-all duration-300 text-sm font-bold uppercase tracking-widest">
-                <i class="fas fa-home mr-2"></i> Dashboard
-            </a>
-            <a href="{{ url_for('user_profile') }}"
-                class="text-gray-300 hover:text-white transition-all duration-300 text-sm font-bold uppercase tracking-widest">
-                <i class="fas fa-user mr-2"></i> Profile
-            </a>
-            <a href="{{ url_for('logout') }}"
-                class="text-gray-300 hover:text-white transition-all duration-300 text-sm font-bold uppercase tracking-widest">
-                <i class="fas fa-sign-out-alt mr-2"></i> Logout
-            </a>
-            {% else %}
             <a href="{{ url_for('landing') }}"
                 class="text-gray-300 hover:text-white transition-all duration-300 text-sm font-bold uppercase tracking-widest">
                 <i class="fas fa-home mr-2"></i> Home
@@ -896,9 +896,9 @@
                 class="text-pink-400 hover:text-white transition-all duration-300 text-sm font-bold uppercase tracking-widest">
                 <i class="fas fa-user-plus mr-2"></i> Register Free
             </a>
-            {% endif %}
         </div>
     </nav>
+    {% endif %}
 
     <!-- Flash Messages -->
     {#
@@ -1421,66 +1421,64 @@
                        nothing charges a renewal - a plan simply runs to its
                        expiry date. The old answer promised a control that does
                        not exist. #}
-                    <div>
-                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
-                            <i class="fas fa-question-circle text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                    <details class="ss-disclosure ss-faq-item">
+                        <summary>
+                            <i class="fas fa-question-circle text-accent mr-2 md:mr-3 text-sm md:text-base" aria-hidden="true"></i>
                             <span class="text-sm md:text-base">Will I be charged again automatically?</span>
-                        </h3>
+                        </summary>
                         <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">No. Each ScanStory plan is a one-time
                             payment that runs for the period shown on its card. Nothing renews on its own and no card is
                             charged again — when the term ends you simply choose a plan again if you want to carry on.
                             Your existing ScanStories are kept either way.</p>
-                    </div>
-                    <div>
-                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
-                            <i class="fas fa-credit-card text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                    </details>
+                    <details class="ss-disclosure ss-faq-item">
+                        <summary>
+                            <i class="fas fa-credit-card text-accent mr-2 md:mr-3 text-sm md:text-base" aria-hidden="true"></i>
                             <span class="text-sm md:text-base">What payment methods are accepted?</span>
-                        </h3>
+                        </summary>
                         <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">We accept all major credit/debit cards,
                             UPI, net banking, and wallets through Razorpay.</p>
-                    </div>
-                    <div>
-                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
-                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                    </details>
+                    <details class="ss-disclosure ss-faq-item">
+                        <summary>
+                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base" aria-hidden="true"></i>
                             <span class="text-sm md:text-base">Can I change my plan later?</span>
-                        </h3>
+                        </summary>
                         <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">Upgrades take effect after confirmed payment. Downgrades are scheduled for the next plan-term boundary and do not delete existing projects.</p>
-                    </div>
+                    </details>
 
-                    <div>
-                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
-                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                    <details class="ss-disclosure ss-faq-item">
+                        <summary>
+                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base" aria-hidden="true"></i>
                             <span class="text-sm md:text-base">What is a scan limit?</span>
-                        </h3>
+                        </summary>
                         <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">A scan limit is the number of
                             successful AR views allowed under a plan. Each time a viewer scans a QR code and opens an AR
                             experience, it can count toward the scan usage depending on the plan rules.
                         </p>
-                    </div>
+                    </details>
 
-                    <div>
-                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
-                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                    <details class="ss-disclosure ss-faq-item">
+                        <summary>
+                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base" aria-hidden="true"></i>
                             <span class="text-sm md:text-base">What is a photo-video pair?</span>
-                        </h3>
+                        </summary>
                         <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">A photo-video pair is one target image
                             connected to one video. The image is used for AR detection, and the video appears as an
                             overlay when the viewer scans the QR code and points the camera at that image.
                         </p>
-                    </div>
+                    </details>
 
-                    <div>
-                        <h3 class="font-bold text-white mb-2 md:mb-3 flex items-center">
-                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base"></i>
+                    <details class="ss-disclosure ss-faq-item">
+                        <summary>
+                            <i class="fas fa-exchange-alt text-accent mr-2 md:mr-3 text-sm md:text-base" aria-hidden="true"></i>
                             <span class="text-sm md:text-base"> Is ScanStory a free augmented reality QR code maker?</span>
-                        </h3>
+                        </summary>
                         <p class="text-gray-400 text-xs md:text-sm pl-5 md:pl-8">ScanStory offers a free trial plan that
                             lets users create a QR-based AR experience, generate a scan code, and test WebAR without
                             installing an app. Paid plans are available for higher project limits and scan usage.
                         </p>
-                    </div>
-
-
+                    </details>
 
                 </div>
             </div>
@@ -1492,8 +1490,8 @@
         <div class="main-content">
             <div class="text-center">
                 <p class="text-gray-500 text-[10px] uppercase tracking-[0.2em] font-bold mb-3">
-                    Need help? <a href="mailto:contact@myscanstory.com"
-                        class="text-accent hover:text-white transition-all ml-1">contact@myscanstory.com</a>
+                    Need help? <a href="mailto:connect@myscanstory.com"
+                        class="text-accent hover:text-white transition-all ml-1">connect@myscanstory.com</a>
                     {% if user %} | <a href="{{ url_for('user_profile') }}"
                         class="text-accent hover:text-white transition-all ml-1">View Profile</a>{% endif %}
                 </p>
@@ -1542,32 +1540,38 @@
         const DEV_TEST_ENTITLED = {{ 'true' if dev_test_entitled else 'false' }};
         let isMobileMenuOpen = false;
 
-        // Mobile menu toggle
-        document.querySelector('.mobile-menu-btn').addEventListener('click', function () {
-            isMobileMenuOpen = !isMobileMenuOpen;
-            document.getElementById('mobileMenu').classList.toggle('active', isMobileMenuOpen);
-        });
-
-        // Close mobile menu when clicking outside
-        document.addEventListener('click', function (event) {
-            const mobileMenu = document.getElementById('mobileMenu');
-            const mobileMenuBtn = document.querySelector('.mobile-menu-btn');
-
-            if (isMobileMenuOpen &&
-                !mobileMenu.contains(event.target) &&
-                !mobileMenuBtn.contains(event.target)) {
-                isMobileMenuOpen = false;
-                mobileMenu.classList.remove('active');
-            }
-        });
-
-        // Close mobile menu when clicking a link
-        document.querySelectorAll('.mobile-menu a').forEach(link => {
-            link.addEventListener('click', function () {
-                isMobileMenuOpen = false;
-                document.getElementById('mobileMenu').classList.remove('active');
+        // Mobile menu toggle - this markup only renders for anonymous visitors
+        // (see the user/else nav split above); logged-in visitors get the shared
+        // Creator app-shell drawer instead (static/js/nav.js), so guard on the
+        // button actually existing rather than assuming it always does.
+        var mobileMenuBtnEl = document.querySelector('.mobile-menu-btn');
+        if (mobileMenuBtnEl) {
+            mobileMenuBtnEl.addEventListener('click', function () {
+                isMobileMenuOpen = !isMobileMenuOpen;
+                document.getElementById('mobileMenu').classList.toggle('active', isMobileMenuOpen);
             });
-        });
+
+            // Close mobile menu when clicking outside
+            document.addEventListener('click', function (event) {
+                const mobileMenu = document.getElementById('mobileMenu');
+                const mobileMenuBtn = document.querySelector('.mobile-menu-btn');
+
+                if (isMobileMenuOpen &&
+                    !mobileMenu.contains(event.target) &&
+                    !mobileMenuBtn.contains(event.target)) {
+                    isMobileMenuOpen = false;
+                    mobileMenu.classList.remove('active');
+                }
+            });
+
+            // Close mobile menu when clicking a link
+            document.querySelectorAll('.mobile-menu a').forEach(link => {
+                link.addEventListener('click', function () {
+                    isMobileMenuOpen = false;
+                    document.getElementById('mobileMenu').classList.remove('active');
+                });
+            });
+        }
 
         // In-flight latch. A second tap on a Choose Plan button used to fire a
         // second POST /create-razorpay-order. Visual guard only - server-side
@@ -1889,7 +1893,8 @@
         window.addEventListener('resize', function () {
             if (window.innerWidth > 768) {
                 isMobileMenuOpen = false;
-                document.getElementById('mobileMenu').classList.remove('active');
+                var mobileMenuEl = document.getElementById('mobileMenu');
+                if (mobileMenuEl) mobileMenuEl.classList.remove('active');
             }
         });
     

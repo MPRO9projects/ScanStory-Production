@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Sign in | ScanStory</title>
     <meta name="robots" content="noindex, nofollow">
-    <link rel="canonical" href="https://myscanstory.com/">
+    <link rel="canonical" href="https://myscanstory.com/login/">
 
     <link rel="stylesheet" href="{{ url_for('static', filename='css/tailwind.build.css') }}">
     {# design-system.css + font + icons, in the order design-system.css needs:
@@ -143,7 +143,14 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
+            /* Public QA fix (F/section 33): was justify-content: center. Centering a
+               flex item inside a scrollable (overflow-y: auto) container clips the
+               START of any overflow - scrollTop can't go negative, so a form taller
+               than the viewport pushed its top fields above y=0 with no way to scroll
+               up to them. flex-start + margin:auto 0 on .form-section below gives the
+               same centered look when content fits, and correctly falls back to 0
+               (top-aligned, fully scrollable) when it doesn't. */
+            justify-content: flex-start;
             padding: 40px;
             position: relative;
             border-left: 1px solid rgba(255, 255, 255, 0.05);
@@ -168,6 +175,20 @@
         .form-section {
             width: 100%;
             max-width: 480px;
+        }
+
+        /* Public QA fix (F/section 33): restores .right-panel's centered look on
+           desktop without its old justify-content: center, which clipped the START
+           of any overflow (scrollTop can't go negative) when a form was taller than
+           a short-ish desktop viewport (1366x768 etc). Auto margins collapse to 0
+           instead of clipping when content doesn't fit, so the form stays fully
+           reachable by scrolling. min-width-scoped so it never fights the <=1024px
+           breakpoint below, which already top-aligns via justify-content: flex-start
+           for its own reason (back-btn clearance). */
+        @media (min-width: 1025px) {
+            .form-section {
+                margin: auto 0;
+            }
         }
 
         .logo-branding {
@@ -259,7 +280,11 @@
 
         .toggle-password {
             position: absolute;
-            right: 22px;
+            /* Hit target enlarged to 40x40 (still inside the input's 60px
+               right-padding gutter, clear of the typed text) - the icon
+               itself stays visually 14px via font-size, only the tappable
+               box grows for a comfortable mobile tap target. */
+            right: 14px;
             top: 50%;
             transform: translateY(-50%);
             background: none;
@@ -268,8 +293,8 @@
             cursor: pointer;
             font-size: 14px;
             padding: 0;
-            width: 24px;
-            height: 24px;
+            width: 40px;
+            height: 40px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -535,7 +560,10 @@
 
             .input-gloss {
                 padding: 12px 16px;
-                font-size: 13px;
+                /* iOS Safari auto-zooms the page on focus of any text input
+                   with a computed font-size under 16px - this must stay at
+                   16px or larger on every iPhone width. */
+                font-size: 16px;
             }
 
             .submit-btn {

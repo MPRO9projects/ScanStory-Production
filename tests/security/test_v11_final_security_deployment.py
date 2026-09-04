@@ -226,7 +226,10 @@ def test_error_response_receives_csp_header(client):
 def test_scanner_page_receives_compatible_security_headers(client, project_with_pair):
     project, _pair = project_with_pair
 
-    response = client.get(f"/scanner/{project.id}")
+    # follow_redirects: /scanner/<id> is now a 302 to the canonical
+    # /s/<public_key>, which is the endpoint that actually renders the scanner.
+    # The headers under test belong to that rendered page, not to the redirect.
+    response = client.get(f"/scanner/{project.id}", follow_redirects=True)
     header = response.headers.get("Content-Security-Policy-Report-Only") or response.headers.get("Content-Security-Policy")
 
     assert response.status_code == 200
@@ -242,7 +245,7 @@ def test_opencv_eval_csp_exception_is_scanner_scoped(client, project_with_pair):
     project, _pair = project_with_pair
 
     normal = client.get("/")
-    scanner = client.get(f"/scanner/{project.id}")
+    scanner = client.get(f"/scanner/{project.id}", follow_redirects=True)
 
     normal_header = normal.headers.get("Content-Security-Policy-Report-Only") or normal.headers.get("Content-Security-Policy")
     scanner_header = scanner.headers.get("Content-Security-Policy-Report-Only") or scanner.headers.get("Content-Security-Policy")

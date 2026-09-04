@@ -307,7 +307,7 @@
         <div class="card">
             <div class="payment-header">
                 <div>
-                    <div class="payment-amount">₹{{ "%.2f"|format(payment.total_amount) }}</div>
+                    <div class="payment-amount">{% if (payment.currency or 'INR') == 'INR' %}₹{{ "%.2f"|format(payment.total_amount) }}{% else %}{{ "%.2f"|format(payment.total_amount) }} {{ payment.currency }}{% endif %}</div>
                     <div style="color: rgba(255,255,255,0.6); margin-top: 5px;">{{ payment.plan.plan_name if payment.plan else 'N/A' }}</div>
                 </div>
                 <div style="text-align: right;">
@@ -690,24 +690,7 @@
 
 {% block extra_js %}
 <script>
-function toggleDropdown() {
-            const dropdown = document.getElementById('userDropdown');
-            dropdown.classList.toggle('show');
-        }
-
-        // Close dropdown when clicking outside
-        window.onclick = function(event) {
-            if (!event.target.matches('.user-menu span')) {
-                const dropdowns = document.querySelectorAll('.dropdown-menu');
-                dropdowns.forEach(dropdown => {
-                    if (dropdown.classList.contains('show')) {
-                        dropdown.classList.remove('show');
-                    }
-                });
-            }
-        };
-
-        // Copy payment ID to clipboard
+// Copy payment ID to clipboard
         function copyToClipboard(text) {
             navigator.clipboard.writeText(text).then(() => {
                 alert('Payment ID copied to clipboard!');

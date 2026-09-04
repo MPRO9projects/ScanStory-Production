@@ -373,10 +373,96 @@ select:focus-visible {
   overflow-y: auto;
 }
 .ss-mobile-menu.is-open .ss-mobile-menu-panel { transform: translateX(0); }
-.ss-mobile-menu-panel .ss-nav-link { padding: var(--ss-space-3) var(--ss-space-3); font-size: 1rem; min-height: 44px; display: flex; align-items: center; }
+.ss-mobile-menu-panel .ss-nav-link { padding: var(--ss-space-3) var(--ss-space-3); font-size: 1rem; min-height: 44px; display: flex; align-items: center; gap: var(--ss-space-3); }
 
 /* When the mobile sheet is open, the page behind it must not scroll */
 body.ss-menu-open { overflow: hidden; }
+
+/* ---------- App shell (canonical authenticated Creator header + drawer) ----------
+ * One shell, reused via templates/user/_creator_nav.html across every authenticated
+ * Creator page. Visual language matches the values the pre-shell dashboard.html
+ * already shipped (74px sticky header, pill user badge, neo mobile toggle) - this
+ * centralizes that language rather than inventing a new one.
+ */
+.ss-app-topbar {
+  height: 74px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ss-space-3);
+  padding: 0 var(--ss-space-5);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(5, 5, 5, 0.72);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--ss-border);
+}
+.ss-app-brand {
+  display: flex;
+  align-items: center;
+  gap: var(--ss-space-3);
+  min-width: 0;
+}
+.ss-app-brand-title {
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  font-style: italic;
+  font-size: 1.2rem;
+  text-decoration: none;
+  color: inherit;
+  white-space: nowrap;
+}
+.ss-app-brand-title .text-pink-500 { color: var(--ss-primary); }
+.ss-app-user-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ss-space-2);
+  padding: var(--ss-space-2) var(--ss-space-3);
+  border-radius: var(--ss-radius-pill);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  border: 1px solid var(--ss-border-strong);
+  background: rgba(255, 255, 255, 0.03);
+  text-decoration: none;
+  color: var(--ss-text);
+  transition: transform var(--ss-duration-fast) var(--ss-ease);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ss-app-user-badge:hover { transform: scale(1.03); }
+.ss-app-desktop-nav { display: flex; align-items: center; gap: var(--ss-space-2); flex-wrap: wrap; }
+.ss-app-menu-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--ss-radius-lg);
+  border: 1px solid var(--ss-border-strong);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--ss-text);
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+@media (max-width: 860px) {
+  .ss-app-topbar { padding: 0 var(--ss-space-4); }
+  .ss-app-desktop-nav { display: none; }
+  .ss-app-menu-toggle { display: inline-flex; }
+}
+/* Short-height landscape (e.g. a phone rotated, ~812x375): width alone can stay
+   above the 860px breakpoint above, so the full desktop nav row would overflow
+   the fixed 74px topbar. Same collapse the narrow-portrait case gets, gated on
+   height instead of width - desktop/tablet behavior is untouched. */
+@media (max-height: 420px) and (orientation: landscape) {
+  .ss-app-topbar { height: auto; min-height: 56px; padding: 0.4rem var(--ss-space-4); }
+  .ss-app-desktop-nav { display: none; }
+  .ss-app-menu-toggle { display: inline-flex; }
+}
 
 /* ---------- Utility ---------- */
 .ss-container { max-width: 1200px; margin: 0 auto; padding-left: var(--ss-space-5); padding-right: var(--ss-space-5); }
@@ -960,6 +1046,50 @@ body.ss-menu-open { overflow: hidden; }
   color: var(--ss-text-muted);
 }
 
+/* Shared collapsible-explanation pattern (physical QA text-density fix).
+   Same visual spec as the page-local .ss-disclosure used in the Creator
+   wizard, centralised here so any page can reuse it without duplicating the
+   rule. A page's own <style> loads after this one, so a local override
+   still wins the cascade if a page wants different treatment. */
+.ss-disclosure > summary {
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ss-accent);
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  /* Physical QA fix (section 31): a plain clickable line of text gives no
+     visible affordance that it opens anything - the native marker triangle
+     this replaces is both invisible in some browsers and impossible to
+     style consistently, so it's hidden in favour of one explicit chevron
+     that rotates on [open]. */
+  list-style: none;
+}
+.ss-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+/* Same unicode-glyph-swap convention the Creator wizard's .marker-disclosure
+   chevron already uses (down = collapsed, up = expanded) - kept visually
+   consistent rather than introducing a second chevron style. */
+.ss-disclosure > summary::after {
+  content: "\25be";
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.ss-disclosure[open] > summary::after {
+  content: "\25b4";
+}
+.ss-disclosure > summary:focus-visible {
+  outline: 2px solid var(--ss-accent);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
 /* Status chips. data-tone picks the colour; the text inside always states
    the status too. */
 .ss-chip {
@@ -1101,7 +1231,15 @@ body.ss-menu-open { overflow: hidden; }
 .ss-sheet {
   position: fixed;
   inset: 0;
-  z-index: 10000;
+  /* Universal-video-duplicate-rule pass, 2026-08-31: was 10000, tied with
+     scanner.html's #experienceIntro (also 10000) and the same-priority
+     opening screen. A DOM-order tie between two equal-z-index fixed
+     siblings resolves to whichever is LATER in the document, which happened
+     to be #experienceIntro - so on Direct QR (where that overlay is never
+     dismissed, unlike Overlay/Detect Once) this sheet rendered fully hidden
+     behind it. Only .ss-sheet uses this class (scanner.html exclusively),
+     so raising it is safe everywhere it's used. */
+  z-index: 10002;
   display: flex;
   align-items: center;
   justify-content: center;

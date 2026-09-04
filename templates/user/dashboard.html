@@ -90,30 +90,6 @@
             color: #000;
         }
 
-        .topbar {
-            height: 74px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 1.25rem;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-
-        .brand {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .brand-title {
-            font-weight: 900;
-            letter-spacing: -0.02em;
-            font-style: italic;
-            font-size: 1.2rem;
-        }
-
         .badge {
             display: inline-flex;
             align-items: center;
@@ -255,25 +231,9 @@
             border-color: rgba(255, 0, 122, 0.4);
         }
 
-        .mobile-menu {
-            display: none;
-        }
-
         @media (max-width: 768px) {
-            .topbar {
-                padding: 0 1rem;
-            }
-
             .btn-neo {
                 padding: 0.85rem 1rem;
-            }
-
-            .desktop-actions {
-                display: none !important;
-            }
-
-            .mobile-menu {
-                display: inline-flex;
             }
 
             .project-stats {
@@ -338,80 +298,8 @@
     <div id="blob1" class="blob w-96 h-96 bg-purple-600 top-[-10%] left-[-5%]" aria-hidden="true"></div>
     <div id="blob2" class="blob w-[500px] h-[500px] bg-pink-600 bottom-[-10%] right-[-5%]" aria-hidden="true"></div>
 
-    <!-- Topbar -->
-    <header class="topbar glass">
-        <div class="brand">
-            <a href="{{ url_for('dashboard') }}" class="brand-title" style="text-decoration:none;color:inherit;">
-                SCAN<span class="text-pink-500">STORY</span>
-            </a>
-
-            {% if user %}
-            <a href="{{ url_for('user_profile') }}" class="badge hover:scale-[1.03] transition cursor-pointer">
-                <i class="fa-solid fa-user-astronaut"></i>
-                {{ user.first_name or user.email }}
-            </a>
-            {% endif %}
-        </div>
-
-        <!-- Desktop actions -->
-        <nav class="desktop-actions flex items-center gap-2" aria-label="Primary">
-            <a class="ss-nav-link is-active" href="{{ url_for('dashboard') }}" aria-current="page">
-                <i class="fa-solid fa-house" aria-hidden="true"></i> Dashboard
-            </a>
-            <a class="ss-nav-link" href="{{ url_for('projects_page') }}">
-                <i class="fa-solid fa-folder-open" aria-hidden="true"></i> My Stories
-            </a>
-            <a class="ss-nav-link" href="{{ url_for('ownership_center') }}">
-                <i class="fa-solid fa-right-left" aria-hidden="true"></i> Ownership
-            </a>
-            <a class="ss-nav-link" href="{{ url_for('user_profile') }}">
-                <i class="fa-solid fa-user" aria-hidden="true"></i> Profile
-            </a>
-            <a class="ss-nav-link" href="{{ url_for('subscribe_page') }}">
-                <i class="fa-solid fa-crown" aria-hidden="true"></i> Plans
-            </a>
-            <a class="ss-btn ss-btn-tertiary ss-btn-sm" href="{{ url_for('logout') }}">
-                <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> Logout
-            </a>
-        </nav>
-
-        <!-- Mobile menu button -->
-        <button class="btn-neo mobile-menu" type="button" id="mobileMenuToggle"
-            aria-label="Open menu" aria-expanded="false" aria-controls="mobileMenuPanel">
-            <i class="fa-solid fa-bars" aria-hidden="true"></i>
-        </button>
-    </header>
-
-    <!-- Mobile menu sheet -->
-    <div id="mobileMenuPanel" class="ss-mobile-menu" role="dialog" aria-modal="true" aria-label="Menu">
-        <div class="ss-mobile-menu-backdrop" data-menu-close></div>
-        <nav class="ss-mobile-menu-panel" aria-label="Primary">
-            <div class="flex items-center justify-between mb-4">
-                <span class="brand-title" style="font-size:1rem;">SCAN<span class="text-pink-500">STORY</span></span>
-                <button type="button" class="ss-btn ss-btn-ghost" data-menu-close aria-label="Close menu">
-                    <i class="fa-solid fa-xmark" aria-hidden="true"></i>
-                </button>
-            </div>
-            <a class="ss-nav-link is-active" href="{{ url_for('dashboard') }}" aria-current="page">
-                <i class="fa-solid fa-house" aria-hidden="true"></i> Dashboard
-            </a>
-            <a class="ss-nav-link" href="{{ url_for('projects_page') }}">
-                <i class="fa-solid fa-folder-open" aria-hidden="true"></i> My Stories
-            </a>
-            <a class="ss-nav-link" href="{{ url_for('ownership_center') }}">
-                <i class="fa-solid fa-right-left" aria-hidden="true"></i> Ownership
-            </a>
-            <a class="ss-nav-link" href="{{ url_for('user_profile') }}">
-                <i class="fa-solid fa-user" aria-hidden="true"></i> Profile
-            </a>
-            <a class="ss-nav-link" href="{{ url_for('subscribe_page') }}">
-                <i class="fa-solid fa-crown" aria-hidden="true"></i> Plans
-            </a>
-            <a class="ss-nav-link" href="{{ url_for('logout') }}" style="color:#f87171;">
-                <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> Logout
-            </a>
-        </nav>
-    </div>
+    {% set nav_active = 'dashboard' %}
+    {% include "user/_creator_nav.html" %}
 
     <!-- Flash Messages -->
     {% with messages = get_flashed_messages(with_categories=true) %}

@@ -5,6 +5,7 @@ import calendar
 from dataclasses import dataclass
 import shutil
 import mimetypes
+import tempfile
 import threading
 import json
 import uuid
@@ -19,6 +20,7 @@ from markupsafe import escape
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.datastructures import FileStorage
+from werkzeug.exceptions import HTTPException
 from flask_wtf import CSRFProtect
 from flask_wtf.csrf import CSRFError
 from flask_migrate import Migrate
@@ -55,7 +57,7 @@ from core.config import (
 # ✅ Import models
 from models import (
     db, User, Admin, SubscriptionPlan, TrialDetails, OTPCode,
-    Project, ProjectPair, PaymentOrder, ScanLog, SystemConfig,
+    Project, ProjectPair, PairMedia, PaymentOrder, ScanLog, SystemConfig,
     UserLoginActivity, AdminActivity, CapacityConfig, PaymentReservation,
     RazorpayWebhookEvent, ProcessingJob, UploadSession, UPLOAD_SESSION_PURPOSES, get_utc_now,
     ScanEvent, SCAN_EVENT_TYPES, UserConsentEvidence, AddonCatalog,
@@ -84,6 +86,7 @@ from rate_limit import identity_digest, limiter as request_limiter
 from processing_queue import (
     QueueUnavailable,
     active_project_job,
+    enqueue_pair_media_optimization,
     enqueue_project_pair_processing,
     queue_config_summary,
     queue_mode,
@@ -307,6 +310,14 @@ if database_uri and database_backend != "sqlite":
 app.config.update(
     TESTING=SCANSTORY_TESTING,
     DEBUG=FLASK_DEBUG_ENABLED,
+    # Jinja template auto-reload follows the same explicit, non-production
+    # opt-in as DEBUG/the reloader above - never on by default, never on
+    # during tests (FLASK_DEBUG_ENABLED is already False whenever
+    # SCANSTORY_TESTING is set). Without this, a long-running dev/QA server
+    # compiles a template once and keeps serving that exact version from
+    # memory regardless of later on-disk edits (Direct QR landing
+    # stale-template fix, 2026-09-03).
+    TEMPLATES_AUTO_RELOAD=FLASK_DEBUG_ENABLED,
     SQLALCHEMY_DATABASE_URI=database_uri,
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     SQLALCHEMY_ENGINE_OPTIONS=engine_options,
@@ -388,8 +399,25 @@ RATE_LIMITS = {
     "login_identity": (15, 900),
     "register_ip": (30, 3600),
     "forgot_password_ip": (30, 3600),
+    # Pre-production gate (2026-08-31): reset-password itself had no
+    # request-layer throttle at all, relying only on _verify_otp's own
+    # per-challenge max_attempts/expiry - that bounds one challenge's OTP
+    # guesses but not the volume of reset attempts an IP can fire overall.
+    # Same cadence as forgot_password_ip, same defense-in-depth pattern.
+    "reset_password_ip": (30, 3600),
     "resend_otp_ip": (20, 3600),
     "content_report": (5, 3600),
+    # Pre-production gate (2026-08-31): the public contact form had no
+    # request-layer throttle at all, relying solely on reCAPTCHA v3 - a
+    # second, cheap IP bucket costs nothing and covers a reCAPTCHA bypass/
+    # low-score-tolerance edge case.
+    "contact_form_ip": (10, 3600),
+    # Pre-production gate (2026-08-31): create-order/verify-payment had only
+    # @login_required, no request-layer throttle - keyed on user identity
+    # (not IP) since a real customer legitimately retries from one account;
+    # generous enough for normal checkout retries, tight enough to stop a
+    # scripted loop against one account's order/verify endpoints.
+    "payment_action": (20, 3600),
     # P0-8. /admin/login and /admin/forgot-password had NO request-layer limit
     # at all: admin login was protected only by a per-email DB lockout (useless
     # against distributed spray across many admin emails) and admin
@@ -487,7 +515,10 @@ def _log_scanner_latency(event, start_time, stage_timings=None, **fields):
         "duration_ms": round((time.time() - start_time) * 1000, 2),
     }
     for key, value in fields.items():
-        if key in {"project_id", "outcome", "stage", "pair_id", "scan_session_id"}:
+        if key in {
+            "project_id", "outcome", "stage", "pair_id", "scan_session_id", "frame_quality_reason",
+            "recognition_pass", "recovery_reason", "recovery_attempted", "recovery_success", "recovery_duration_ms",
+        }:
             safe[key] = value
     if stage_timings:
         for key, value in stage_timings.items():
@@ -567,6 +598,61 @@ def inject_recaptcha_key():
     return {
         "RECAPTCHA_SITE_KEY": RECAPTCHA_SITE_KEY
     }
+
+
+_STATIC_ASSET_VERSION_CACHE = {}
+
+
+def static_asset_version(filename):
+    """Deterministic cache-busting version for a static file under
+    static/ - the file's own mtime, computed once and cached per process
+    (never random, never per-request). Same idea as the existing `v=`
+    cache-bust already used for per-row image/video URLs; this closes the
+    one gap the audit found - scanner.html's design-system.css/
+    scanner-runtime.js <link>/<script> tags carried no cache-busting at all,
+    so a stale browser/CDN copy could keep serving old CSS/JS after a real
+    deploy (Direct QR landing stale-cache fix, 2026-09-03)."""
+    if filename not in _STATIC_ASSET_VERSION_CACHE:
+        try:
+            path = os.path.join(app.static_folder, filename)
+            _STATIC_ASSET_VERSION_CACHE[filename] = int(os.path.getmtime(path))
+        except OSError:
+            _STATIC_ASSET_VERSION_CACHE[filename] = 0
+    return _STATIC_ASSET_VERSION_CACHE[filename]
+
+
+app.jinja_env.globals["static_asset_version"] = static_asset_version
+
+# Human labels for raw backend enum values that were leaking straight into
+# Admin-facing copy (Final Product Completeness Pass, Lane H audit finding).
+# A plain dict.get(...) in the template, not a Jinja filter, since some
+# templates already have a local variable named "status".
+PLAN_LIFECYCLE_LABELS = {
+    "DRAFT": "Draft",
+    "ACTIVE": "Active",
+    "CLOSED_FOR_NEW_PURCHASE": "Closed to new purchases",
+    "ARCHIVED": "Archived",
+}
+app.jinja_env.globals["PLAN_LIFECYCLE_LABELS"] = PLAN_LIFECYCLE_LABELS
+
+ADDON_TYPE_LABELS = {
+    "EXTRA_SCANS": "Extra Scans",
+    "PROJECT_CAPACITY": "Extra Story Slots",
+    "VALIDITY_EXTENSION": "Validity Extension",
+    "ACCOUNT_STORAGE": "Extra Storage",
+    "PROJECT_SERVICE_COVERAGE": "Project Service Coverage",
+}
+app.jinja_env.globals["ADDON_TYPE_LABELS"] = ADDON_TYPE_LABELS
+
+
+@app.template_filter("humanize_snake")
+def humanize_snake_filter(value):
+    """snake_case -> Title Case With Spaces. Activity-log activity_type values
+    are an open-ended, ever-growing set (project_suspend, self_password_change,
+    plan_lifecycle_change, ...) - a hand-maintained label dict for every one of
+    them would need updating on every new audited action, so this generic
+    humanizer is the sustainable fix for that one raw-enum leak (Lane H)."""
+    return (value or "").replace("_", " ").replace("-", " ").title()
 
 
 def verify_recaptcha_v3(expected_action):
@@ -831,8 +917,19 @@ def _scanner_csp_policy():
 SCANNER_CONTENT_SECURITY_POLICY = _scanner_csp_policy()
 
 
+# Endpoints that actually RENDER user/scanner.html and therefore need the
+# OpenCV/WASM eval exception. `scanner` (the legacy /scanner/<id> route) no
+# longer renders anything - it 302s to the canonical /s/<public_key>, whose
+# endpoint is `public_scanner`. Keying the exception on "scanner" alone meant
+# the real scanner page was served the ordinary policy, so under an enforcing
+# CSP (the production default) Emscripten's dynamic code init was blocked and
+# recognition never came up at all. Keep this set in lockstep with
+# _render_scanner_project()'s callers.
+SCANNER_RENDERING_ENDPOINTS = frozenset({"scanner", "public_scanner"})
+
+
 def _response_csp_policy():
-    if request.endpoint == "scanner":
+    if request.endpoint in SCANNER_RENDERING_ENDPOINTS:
         return SCANNER_CONTENT_SECURITY_POLICY
     return CONTENT_SECURITY_POLICY
 
@@ -948,7 +1045,14 @@ def ready():
         except Exception:
             pass
         app.logger.warning("readiness_check_failed", exc_info=True)
-        response = jsonify({"status": "not_ready", "checks": {"database": "unavailable"}})
+        # Pre-production gate (2026-08-31): this used to hardcode
+        # {"database": "unavailable"} for ANY unhandled exception here, even
+        # ones from a later check (queue/worker) that never touched the DB -
+        # a real crash in queue_worker_state() was misreported as a database
+        # outage (confirmed live). The real component and traceback are
+        # already logged above; the response just needs to stop naming the
+        # wrong one.
+        response = jsonify({"status": "not_ready", "checks": {"readiness": "unavailable"}})
         response.headers["Cache-Control"] = "no-store"
         return response, 503
 
@@ -996,7 +1100,18 @@ _RAZORPAY_AUTH_ERROR = getattr(razorpay.errors, "AuthenticationError", type("_Ra
 # --------------------------------------------------------------------------------------------
 # Storage paths
 # --------------------------------------------------------------------------------------------
-DATA_DIR = os.environ.get("SCANSTORY_DATA_DIR", "data")
+# Anchored to BASE_DIR (== app.root_path), NOT left relative. Every write goes
+# through os.path.join(IMAGES_DIR, ...) -> resolved against the process CWD,
+# while every read goes through send_from_directory(IMAGES_DIR, ...) -> Flask
+# joins a relative directory onto app.root_path. With the old bare "data" those
+# two only agreed when the server happened to be launched from the repo root;
+# any other launch dir wrote the target images to <cwd>/data/images and served
+# them from <repo>/data/images, so /image/<project>/<pair> 404'd and every
+# surface that embeds it (creator preview, public project preview, the scanner's
+# target guide, and the same pages over the Cloudflare tunnel) showed a broken
+# image while the "Target 1" caption still rendered. ADMIN_DATA_DIR below was
+# already BASE_DIR-anchored; this makes the user side match.
+DATA_DIR = os.environ.get("SCANSTORY_DATA_DIR", os.path.join(BASE_DIR, "data"))
 IMAGES_DIR = os.path.join(DATA_DIR, "images")
 VIDEOS_DIR = os.path.join(DATA_DIR, "videos")
 FEATURES_DIR = os.path.join(DATA_DIR, "features")
@@ -1816,7 +1931,13 @@ ADMIN_ROLE_PERMISSIONS = {
         "admin.users.view",
         "admin.users.manage",
         "admin.projects.view",
-        "admin.projects.suspend",
+        # Suspend/Restore is platform-wide moderation, not Creator project
+        # management (Preview/Edit/Delete/etc, which regular Admin keeps via
+        # its own ownership-scoped routes) - Final Product Completeness Pass,
+        # Lane B: a regular Admin could otherwise suspend/restore ANY project
+        # on the platform (customer-owned, another admin's, even a project
+        # they don't manage) purely because this permission string used to be
+        # shared with "superadmin" below. Moved to superadmin-only.
         "admin.payments.view",
         "admin.processing.view",
         "admin.reports.view",
@@ -1829,7 +1950,6 @@ ADMIN_ROLE_PERMISSIONS = {
         "admin.users.view",
         "admin.users.manage",
         "admin.projects.view",
-        "admin.projects.suspend",
         "admin.payments.view",
         "admin.payments.refund",
         "admin.processing.view",
@@ -1845,6 +1965,8 @@ ADMIN_ROLE_PERMISSIONS = {
         "superadmin.audit.view",
         "superadmin.operations.view",
         "superadmin.repair.execute",
+        "superadmin.projects.manage_all",
+        "superadmin.projects.suspend",
     },
 }
 HIGH_IMPACT_PERMISSIONS = {
@@ -2140,6 +2262,48 @@ def user_can_manage_project(user, project):
     if project_current_owner_user_id(project) == user_id:
         return True
     return bool(project.manager_vendor_user_id == user_id and is_business_vendor(user))
+
+
+def admin_can_manage_project(admin, project):
+    """Admin project-management scope (Admin CRUD parity pass, 2026-09-02) -
+    an admin-owned project ONLY, exactly matching the existing
+    admin_project_preview/admin_delete_own_project precedent. Never a
+    user-owned project - editing never crosses into moderating someone
+    else's project, only managing the admin's own."""
+    return bool(admin and project and project.owner_admin_id == admin.id)
+
+
+def resolve_project_manager(user, admin, project):
+    """True if EITHER identity may manage this project. Exactly one of
+    user/admin is ever non-None for a real session (see _upload_identity's
+    own docstring) - this just picks the matching ownership rule."""
+    if user and user_can_manage_project(user, project):
+        return True
+    if admin and admin_can_manage_project(admin, project):
+        return True
+    return False
+
+
+def project_ownership_state(project):
+    """"valid" | "both" | "neither" (Admin IA restructure, 2026-09-02).
+
+    The Project schema has no CHECK constraint forcing exactly one of
+    owner_user_id/owner_admin_id (audit finding, SCANSTORY_ADMIN_IA_AUDIT).
+    Live data is clean today by creation-path convention only, not by the
+    schema - this makes the invalid states detectable and visible instead of
+    silently defaulting to "User-owned" (the pre-existing _owner_display
+    behavior) so an operator can see and fix a bad row rather than editing it
+    blind.
+    """
+    if not project:
+        return "valid"
+    has_user = bool(project.owner_user_id)
+    has_admin = bool(project.owner_admin_id)
+    if has_user and has_admin:
+        return "both"
+    if not has_user and not has_admin:
+        return "neither"
+    return "valid"
 
 
 def user_can_transfer_project(user, project):
@@ -3433,6 +3597,67 @@ def send_payment_success_email(user, plan, order):
     )
     send_email_smtp(user.email, "ScanStory - Payment Successful", html)
 
+def _experience_mode_label(project):
+    return next(
+        (o["label"] for o in V11_EXPERIENCE_PRESENTATION
+         if o["experience_type"] == project.experience_type and o["playback_mode"] == project.playback_mode),
+        "ScanStory",
+    )
+
+
+def _render_in_request_context(template_name, **context):
+    """Both processing-terminal emails are sent from the RQ worker
+    (processing_operations.run_processing_job runs inside an app context
+    only - no request), and each template calls url_for(..., _external=True)
+    for its CTA link. Outside a real request and with no SERVER_NAME
+    configured, Flask cannot build that URL at all (not just the external
+    part) and raises - caught live the first time this pass's worker
+    actually drained a backlog. test_request_context(base_url=...) gives
+    url_for a host to build against, using the same public_host config QR
+    generation already relies on for exactly this "background job needs an
+    absolute URL" problem."""
+    public_host = get_system_config("public_host")
+    with app.test_request_context(base_url=public_host or None):
+        return render_template(template_name, **context)
+
+
+def send_processing_ready_email(user, project):
+    """Best-effort; called only after mark_job_completed for the WHOLE
+    project's pair set (never per-pair, never for a job still retrying).
+    Caller is responsible for catching failures - project state is already
+    final by the time this runs, so an SMTP error here must never look like
+    a processing failure."""
+    html = _render_in_request_context(
+        "user/processing_ready_email.html",
+        name=user.first_name or user.email.split("@")[0], project=project,
+        mode_label=_experience_mode_label(project), year=dt.utcnow().year,
+    )
+    send_email_smtp(user.email, "ScanStory - Your ScanStory is ready", html)
+
+
+def send_processing_failed_email(user, project):
+    """Best-effort; called only once a process_project_pairs job reaches its
+    final, non-retryable failed status - never on an intermediate retry."""
+    html = _render_in_request_context(
+        "user/processing_failed_email.html",
+        name=user.first_name or user.email.split("@")[0], project=project,
+        mode_label=_experience_mode_label(project), year=dt.utcnow().year,
+    )
+    send_email_smtp(user.email, "ScanStory - Processing failed", html)
+
+
+def send_password_changed_email(name, email, changed_at=None):
+    """Best-effort security notification after a self-service password
+    change. Never called in a way that can undo the change itself - the
+    password_hash write and commit always happen before this, and any
+    exception here is caught by the caller."""
+    html = render_template(
+        "user/password_changed_email.html",
+        name=name, email=email, changed_at=changed_at or dt.utcnow(), year=dt.utcnow().year,
+    )
+    send_email_smtp(email, "ScanStory - Your password was changed", html)
+
+
 def send_admin_password_reset_email(to_email: str, code: str, minutes: int = 2):
     """Send admin password reset email"""
     html = render_template(
@@ -3506,6 +3731,39 @@ def login_required(view):
             flash("Please verify your email before continuing.", "warning")
             return redirect(url_for("verify_email"))
         return view(*args, **kwargs)
+    return wrapped
+
+
+def user_or_admin_required(view):
+    """Admin CRUD parity pass (2026-09-02): like login_required, but a real
+    Admin session is also accepted through - for the handful of project-
+    management routes genuinely shared between User project management and
+    Admin managing their OWN admin-owned projects (Edit/Add/Replace Target,
+    Add/Replace/Remove Video, reorder, default-media, Remove Target,
+    Delete). Per-route ownership is still enforced separately via
+    resolve_project_manager()/admin_can_manage_project() - this decorator
+    only gates "logged in as either", exactly the same division of concerns
+    login_required already has for the User-only case (this decorator does
+    not touch login_required itself, so every other route using it is
+    completely unaffected)."""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        u = current_user()
+        if u:
+            if getattr(u, "is_blocked", False):
+                logout_user()
+                flash("Your account is blocked. Contact support.", "error")
+                return redirect(url_for("login"))
+            if not getattr(u, "is_verified", False):
+                pending_email = u.email
+                _clear_normal_user_auth_session()
+                session["pending_verify_email"] = pending_email
+                flash("Please verify your email before continuing.", "warning")
+                return redirect(url_for("verify_email"))
+            return view(*args, **kwargs)
+        if current_admin():
+            return view(*args, **kwargs)
+        return redirect(url_for("login"))
     return wrapped
 
 def admin_login(admin: Admin):
@@ -3700,12 +3958,21 @@ def _repair_missing_trial_details(user, trial_plan=None):
         user.subscription_status = "expired"
         return None, True
     trial_plan = trial_plan or SubscriptionPlan.query.filter_by(is_trial_plan=True, is_active=True).first()
+    # Same source register() uses for a brand-new trial user - trial_plan's
+    # own total_project_limit/total_scan_limit, never the free_trial_projects/
+    # free_trial_scans SystemConfig keys the old Admin "Trial Settings" tab
+    # wrote. Those two were a stale duplicate source of truth: this repair
+    # path used them while every real trial signup already read the plan
+    # instead, so changing "Trial Settings" changed nothing a customer would
+    # ever see (Final Pre-Freeze Closure Pass, Lane E).
+    trial_project_limit = trial_plan.total_project_limit if trial_plan else int(get_system_config("free_trial_projects", 1) or 1)
+    trial_scan_limit = trial_plan.total_scan_limit if trial_plan else int(get_system_config("free_trial_scans", 50) or 50)
     trial = TrialDetails(
         user_id=user.id,
         trial_start=anchor,
         trial_end=anchor + timedelta(days=_trial_days_from_plan(trial_plan)),
-        trial_project_limit=int(get_system_config("free_trial_projects", 1) or 1),
-        trial_scan_limit=int(get_system_config("free_trial_scans", 50) or 50),
+        trial_project_limit=trial_project_limit,
+        trial_scan_limit=trial_scan_limit,
     )
     db.session.add(trial)
     return trial, True
@@ -4003,6 +4270,25 @@ def _consume_scan_quota_atomic(user):
 
 def _lock_project_for_pair_quota(project_id):
     query = Project.query.filter(Project.id == project_id)
+    if _supports_row_level_locking():
+        query = query.with_for_update()
+    return query.one()
+
+
+def _lock_pair_for_media_order(pair_id):
+    """Row-lock the ProjectPair so next_sort_order computation serializes.
+
+    Concurrency proof (pre-freeze, 2026-09-01) showed two simultaneous
+    "Add Video" requests against the same pair both read pair.media_items
+    before either committed, computed the SAME next_sort_order, and raced
+    to write the SAME target filename - a Windows PermissionError on
+    os.replace(), and on POSIX a silent same-filename collision (one
+    video's bytes overwritten despite two distinct PairMedia rows). Same
+    with_for_update() pattern as _lock_project_for_pair_quota: the second
+    request's SELECT blocks until the first commits its INSERT, so it then
+    reads the up-to-date max(sort_order).
+    """
+    query = ProjectPair.query.filter(ProjectPair.id == pair_id)
     if _supports_row_level_locking():
         query = query.with_for_update()
     return query.one()
@@ -4707,6 +4993,35 @@ def evaluate_project_storage_transfer(project, recipient):
     return _storage.evaluate_storage_transfer(project.id, used, allowance)
 
 
+def record_pair_video_media_object(project, pair, video_filename, video_bytes, source="upload"):
+    """Ledger row for ONE physical uploaded video, addressed by its own
+    filename/bytes rather than pair.video_filename.
+
+    Shared by record_pair_media_objects() (the pair's default video) and
+    additional PairMedia videos (Issue 3E-C) - each physically uploaded video
+    gets exactly one row here, so N uploaded videos are billed as N
+    MediaObject rows regardless of how many ProjectPair/PairMedia rows point
+    at them, never fewer and never more.
+    """
+    if video_bytes is None:
+        return None
+    key = build_media_storage_key(project, "videos", video_filename)
+    if not key:
+        return None
+    owner_user_id, owner_admin_id = project_storage_owner_ids(project)
+    return _storage.record_media_object(
+        storage_key=key,
+        size_bytes=video_bytes,
+        media_role=MEDIA_KIND_ROLES["videos"],
+        owner_user_id=owner_user_id,
+        owner_admin_id=owner_admin_id,
+        project_id=project.id,
+        pair_id=pair.id,
+        source=source,
+        counts_toward_quota=owner_user_id is not None,
+    )
+
+
 def record_pair_media_objects(project, pair, image_bytes=None, video_bytes=None, source="upload"):
     """Ledger rows for a newly persisted pair's retained media.
 
@@ -4716,17 +5031,12 @@ def record_pair_media_objects(project, pair, image_bytes=None, video_bytes=None,
     """
     owner_user_id, owner_admin_id = project_storage_owner_ids(project)
     created = []
-    for kind, filename, size in (
-        ("images", pair.image_filename, image_bytes),
-        ("videos", pair.video_filename, video_bytes),
-    ):
-        key = build_media_storage_key(project, kind, filename)
-        if not key or size is None:
-            continue
+    key = build_media_storage_key(project, "images", pair.image_filename)
+    if key and image_bytes is not None:
         created.append(_storage.record_media_object(
             storage_key=key,
-            size_bytes=size,
-            media_role=MEDIA_KIND_ROLES[kind],
+            size_bytes=image_bytes,
+            media_role=MEDIA_KIND_ROLES["images"],
             owner_user_id=owner_user_id,
             owner_admin_id=owner_admin_id,
             project_id=project.id,
@@ -4736,7 +5046,232 @@ def record_pair_media_objects(project, pair, image_bytes=None, video_bytes=None,
             # for it - there is no subscription behind an admin project.
             counts_toward_quota=owner_user_id is not None,
         ))
+    video_row = record_pair_video_media_object(project, pair, pair.video_filename, video_bytes, source=source)
+    if video_row:
+        created.append(video_row)
     return created
+
+
+# ---------------------------------------------------------------------------
+# Issue 3E-C: multi-video-per-target upload contract, shared by the user and
+# admin upload routes so there is exactly one implementation of the
+# parse/validate/group/entitlement pipeline.
+#
+# images = [target images]; videos = [ALL uploaded videos, across every
+# target]; the optional parallel form field video_target_indexes says which
+# target (0-based position in images) each entry in videos belongs to. If
+# absent AND len(images) == len(videos), the legacy 1:1 mapping is inferred
+# unchanged - no existing client/form breaks.
+# ---------------------------------------------------------------------------
+MULTI_VIDEO_ERROR_MESSAGES = {
+    "MULTI_VIDEO_NOT_ENTITLED": "Multiple videos per target aren't included in your current plan.",
+    "VIDEO_LIMIT_REACHED": "You've reached your plan's limit of {max} videos per target.",
+    "INVALID_TARGET_INDEX": "One or more videos were assigned to an invalid target.",
+    "VIDEO_TARGET_MAPPING_REQUIRED": "Every target image needs at least one video.",
+}
+
+
+def _resolve_video_target_indexes(form, images_count, videos_count):
+    """(indexes, error_code). indexes has exactly videos_count entries, each
+    a valid 0-based index into images; error_code names why not, else None."""
+    raw = form.getlist("video_target_indexes")
+    if not raw:
+        if images_count == videos_count:
+            # Legacy 1:1 contract: every existing client/form that has never
+            # heard of video_target_indexes keeps working unchanged.
+            return list(range(videos_count)), None
+        return None, "VIDEO_TARGET_MAPPING_REQUIRED"
+    if len(raw) != videos_count:
+        return None, "VIDEO_TARGET_MAPPING_REQUIRED"
+    indexes = []
+    for value in raw:
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            return None, "INVALID_TARGET_INDEX"
+        if index < 0 or index >= images_count:
+            return None, "INVALID_TARGET_INDEX"
+        indexes.append(index)
+    return indexes, None
+
+
+def _group_videos_by_target(target_indexes, images_count):
+    """groups[i] = the video-list indexes assigned to target i, in the order
+    they were uploaded. Every group's first entry becomes that target's
+    default (legacy-compatible) video."""
+    groups = [[] for _ in range(images_count)]
+    for video_index, target_index in enumerate(target_indexes):
+        groups[target_index].append(video_index)
+    return groups
+
+
+def _check_multi_video_entitlement(entitlements, groups):
+    """(error_code, limit_value_or_None). entitlements=None means unlimited -
+    used for admin-created projects, which are already exempt from every
+    other plan-based limit in this codebase (pairs-per-project, storage) -
+    there is no subscription plan behind an Admin to check against, so
+    multi-video follows the same "unlimited & free for admin" precedent
+    rather than resolving a nonexistent plan as "not entitled"."""
+    max_at_any_target = max((len(g) for g in groups), default=1)
+    if max_at_any_target <= 1 or entitlements is None:
+        return None, None
+    if not entitlements.get("allow_multi_video_per_target"):
+        return "MULTI_VIDEO_NOT_ENTITLED", None
+    effective_max = entitlements.get("effective_max_videos_per_target")
+    if effective_max is not None and max_at_any_target > effective_max:
+        return "VIDEO_LIMIT_REACHED", effective_max
+    return None, None
+
+
+def resolve_video_target_groups(form, images_count, videos_count, entitlements):
+    """Full parse + validate + entitlement pipeline. Returns (groups, None)
+    or (None, UploadValidationError) - the SAME error type/contract the rest
+    of the upload path already raises, so a single except block covers both.
+    """
+    target_indexes, error_code = _resolve_video_target_indexes(form, images_count, videos_count)
+    if error_code:
+        return None, UploadValidationError(
+            MULTI_VIDEO_ERROR_MESSAGES[error_code], detail=error_code, code=error_code
+        )
+    groups = _group_videos_by_target(target_indexes, images_count)
+    if any(not group for group in groups):
+        return None, UploadValidationError(
+            MULTI_VIDEO_ERROR_MESSAGES["VIDEO_TARGET_MAPPING_REQUIRED"],
+            detail="VIDEO_TARGET_MAPPING_REQUIRED (empty target)",
+            code="VIDEO_TARGET_MAPPING_REQUIRED",
+        )
+    error_code, limit_value = _check_multi_video_entitlement(entitlements, groups)
+    if error_code:
+        message = MULTI_VIDEO_ERROR_MESSAGES[error_code]
+        if limit_value is not None:
+            message = message.format(max=limit_value)
+        return None, UploadValidationError(message, detail=error_code, code=error_code)
+    return groups, None
+
+
+def build_additional_pair_media_filename(project_id, pair_index, sort_order, ext):
+    """Deterministic, collision-free filename for a non-default PairMedia
+    video. Distinguishable at a glance from the legacy/default
+    "{project_id}_{pair_index}{ext}" shape (serve_video reads that exact
+    pattern via pair.video_filename, so the default video's name is never
+    changed by this function) and unique within the pair because sort_order
+    is assigned once, strictly increasing, at creation time."""
+    return f"{project_id}_{pair_index}_video_{sort_order}{ext}"
+
+
+def build_pair_media_replacement_filename(project_id, pair_index, media_id, ext):
+    """Deterministic-enough, collision-free filename for a REPLACED PairMedia
+    video - always a NEW physical name, distinct from the file being
+    replaced. This is what makes a safe deferred-cleanup replace possible:
+    the new bytes are written under a name nothing else points at yet, the
+    DB transaction commits (or rolls back) against that new name, and only
+    THEN is the old file removed - a failure before commit leaves the
+    previously-working original completely untouched."""
+    return f"{project_id}_{pair_index}_media_{media_id}_{uuid.uuid4().hex[:8]}{ext}"
+
+
+def _ensure_default_pair_media(pair):
+    """Lazily backfill a default PairMedia row for a legacy pair that has
+    none yet (created before Issue 3E-B, or via a path that never called
+    create_pair_media_rows) - mirrors pair.video_filename/
+    original_video_name/video_size exactly, so it becomes indistinguishable
+    from a pair whose default row was created normally at upload time.
+    No-op (returns the existing row) for any pair that already has one.
+    Callers must db.session.flush() afterward if they need media.id."""
+    existing = pair.default_media
+    if existing is not None:
+        return existing
+    if pair.media_items:
+        # Existing rows but none flagged default - should not happen given
+        # this app's own invariants; never silently create a second row.
+        return pair.media_items[0]
+    media = PairMedia(
+        pair=pair,
+        video_filename=pair.video_filename,
+        original_video_name=pair.original_video_name,
+        video_size=pair.video_size,
+        sort_order=0,
+        is_default=True,
+    )
+    db.session.add(media)
+    return media
+
+
+def create_pair_media_rows(pair, video_specs):
+    """video_specs: ordered list of dicts with filename/original_name/size,
+    one per video assigned to this target, index 0 = the default (already
+    mirrored onto pair.video_filename/original_video_name/video_size by the
+    caller). Returns the created PairMedia rows in sort_order.
+
+    Creates one PairMedia per video - never one ProjectPair per video, and
+    never a second recognition artifact: the caller creates exactly one
+    ProjectPair per target regardless of how many videos this function is
+    given.
+    """
+    rows = []
+    for sort_order, spec in enumerate(video_specs):
+        media = PairMedia(
+            # Relationship assignment, not pair_id=pair.id: pair may not be
+            # flushed yet (its id can still be None here) - SQLAlchemy
+            # resolves the FK through ProjectPair.media_items' backref at
+            # flush time regardless of assignment order.
+            pair=pair,
+            video_filename=spec["filename"],
+            original_video_name=spec.get("original_name"),
+            video_size=spec.get("size"),
+            sort_order=sort_order,
+            is_default=(sort_order == 0),
+        )
+        db.session.add(media)
+        rows.append(media)
+    return rows
+
+
+def resolve_pair_media_filename(media, videos_dir):
+    """Fast Video Phase 2: the one place that decides which bytes to serve
+    for a PairMedia row. Prefers the optimized derivative only when the DB
+    says ready AND the file still physically exists in videos_dir - ready
+    status alone is never trusted, since the file can be deleted out from
+    under it (manually, or by a future cleanup bug) without the row being
+    updated. Falls back to the original video_filename (never mutated) in
+    every other case: pending, processing, failed, or ready-but-missing."""
+    if media.optimization_status == "ready" and media.optimized_video_filename:
+        candidate = os.path.join(videos_dir, media.optimized_video_filename)
+        if os.path.isfile(candidate):
+            return media.optimized_video_filename
+    return media.video_filename
+
+
+def resolve_pair_default_video_filename(pair, videos_dir):
+    """Fast Video Phase 2: legacy default-video resolver for serve_video/
+    serve_admin_video, which read pair.video_filename directly and have no
+    media_id in their URL. Only substitutes the optimized derivative when
+    the pair's default PairMedia is verifiably the same asset as
+    pair.video_filename - if a pair's default PairMedia has ever drifted
+    from pair.video_filename, this returns pair.video_filename unchanged
+    rather than guess. A legacy pair with no PairMedia rows at all
+    (default_media is None) is completely unaffected, matching pre-Phase-2
+    behavior exactly."""
+    default_media = pair.default_media
+    if default_media is not None and default_media.video_filename == pair.video_filename:
+        return resolve_pair_media_filename(default_media, videos_dir)
+    return pair.video_filename
+
+
+def _enqueue_pair_media_optimizations(media_rows):
+    """Fast Video Phase 2: best-effort auto-enqueue, called only AFTER the
+    PairMedia rows are committed (job identity is the real PairMedia.id,
+    which does not exist pre-commit). Deliberately swallows every failure -
+    a queue outage must never fail project creation, the original video
+    stays fully playable either way, and a PairMedia stuck at
+    optimization_status="pending" is safely retryable later."""
+    for media in media_rows:
+        try:
+            enqueue_pair_media_optimization(media.id)
+        except Exception:
+            app.logger.warning(
+                "fast_video_auto_enqueue_failed pair_media_id=%s", media.id, exc_info=True
+            )
 
 
 def _unlink_project_media(paths, project_id):
@@ -4872,6 +5407,16 @@ def _delete_project_files_and_rows(project: Project):
         if pair.video_filename:
             stem = os.path.splitext(os.path.basename(str(pair.video_filename)))[0]
             targets.append(_safe_media_path(videos_dir, f"{stem}_fast.mp4"))
+        # Issue 3E-B/Fast Video Phase 1: PairMedia rows (multi-video-per-target
+        # originals, and any Fast Video optimized derivative) were previously
+        # never unlinked here at all - only cascade-deleted at the DB level,
+        # leaving every physical file behind as an orphan. The default row's
+        # video_filename is usually the same as pair.video_filename above;
+        # dict.fromkeys() below already de-duplicates that overlap.
+        for media in pair.media_items:
+            targets.append(_safe_media_path(videos_dir, media.video_filename))
+            if media.optimized_video_filename:
+                targets.append(_safe_media_path(videos_dir, media.optimized_video_filename))
 
     if project.qr_code_path:
         targets.append(_safe_media_path(qr_dir, os.path.basename(project.qr_code_path)))
@@ -4907,6 +5452,25 @@ def _delete_project_files_and_rows(project: Project):
     # is detached and kept, never cascade-deleted (P0-2). Must run before the
     # project row goes, while the FK is still satisfiable.
     _detach_ownership_history(project_id, project_name)
+
+    # Same FK gap fixed for the single-media remove route (user_remove_pair_media),
+    # widened here after a real-Postgres physical QA pass showed it goes deeper:
+    # ProcessingJob.project_id/pair_id/pair_media_id have NO ondelete clause at
+    # all, so deleting a project with ANY processing history (which is nearly
+    # every real project) hits a FK violation on Postgres - SQLite doesn't
+    # enforce these FKs by default, which is exactly why this was never caught
+    # before. Same philosophy as the UploadSession detach right above: job
+    # history is audit evidence and is detached, never deleted or blocking.
+    all_media_ids = [media.id for pair in pairs for media in pair.media_items]
+    job_conditions = [ProcessingJob.project_id == project_id]
+    if pair_ids:
+        job_conditions.append(ProcessingJob.pair_id.in_(pair_ids))
+    if all_media_ids:
+        job_conditions.append(ProcessingJob.pair_media_id.in_(all_media_ids))
+    ProcessingJob.query.filter(or_(*job_conditions)).update(
+        {ProcessingJob.project_id: None, ProcessingJob.pair_id: None, ProcessingJob.pair_media_id: None},
+        synchronize_session=False,
+    )
 
     for pair in pairs:
         db.session.delete(pair)
@@ -5622,6 +6186,20 @@ MAX_INLIERS_REQUIRED = 40
 
 _tls = threading.local()
 _fast_bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+
+
+def _recovery_clahe():
+    """Thread-local CLAHE for the controlled bad-frame recovery retry (see
+    _apply_recovery_correction). Conservative settings only — clipLimit=2.0,
+    tileGridSize=(8,8) is a standard mild setting, never an aggressive global
+    equalize. Used for exactly one retry on a frame that already failed
+    normal recognition, never as a per-frame default."""
+    c = getattr(_tls, "recovery_clahe", None)
+    if c is None:
+        c = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        _tls.recovery_clahe = c
+    return c
+
 
 def _orb():
     o = getattr(_tls, "orb", None)
@@ -6446,6 +7024,79 @@ def quick_score(test_desc, feats, ratio=0.84, max_checks=QUICK_DESC_LIMIT):
 
     return best_score
 
+
+# Frames worse than these fractions are treated as clipped/blown-out beyond
+# what a pixel-level nudge can recover — software cannot restore detail that
+# was never captured. Kept separate from the (lower) "likely_*" guidance
+# thresholds in detect_init: guidance fires earlier/more sensitively than the
+# recovery gate, on purpose — a frame can be worth warning the user about
+# while still being worth one recovery retry.
+RECOVERY_SEVERE_HIGHLIGHT_FRACTION = 0.85
+RECOVERY_SEVERE_SHADOW_FRACTION = 0.85
+RECOVERY_SEVERE_LOCALIZED_HIGHLIGHT_FRACTION = 0.85
+
+
+def _classify_recovery_reason(frame_diag, global_highlight_fraction, global_shadow_fraction, max_cell_highlight_fraction):
+    """Decide whether a frame that just failed normal recognition is worth
+    ONE lightweight corrected retry, and if so, which correction to apply.
+
+    Deliberately reuses the moderate-degradation signals already computed for
+    user guidance (frame_diag) rather than doing any new heavy analysis. Any
+    severe/clipped condition returns None (guidance-only — no retry): a
+    pixel-level nudge cannot reconstruct detail that was never captured, and
+    running one anyway would only waste CPU on a frame the client is about to
+    replace. Blur is never a recovery candidate for the same reason — CLAHE/
+    gamma cannot un-blur motion blur.
+    """
+    if frame_diag.get("likely_blurry"):
+        return None
+    if global_highlight_fraction >= RECOVERY_SEVERE_HIGHLIGHT_FRACTION:
+        return None
+    if global_shadow_fraction >= RECOVERY_SEVERE_SHADOW_FRACTION:
+        return None
+    if max_cell_highlight_fraction >= RECOVERY_SEVERE_LOCALIZED_HIGHLIGHT_FRACTION and global_highlight_fraction < 0.5:
+        return None
+    if frame_diag.get("likely_localized_glare"):
+        return "glare"
+    if frame_diag.get("likely_overexposed"):
+        return "overexposed"
+    if frame_diag.get("likely_underexposed"):
+        return "underexposed"
+    if frame_diag.get("likely_low_contrast"):
+        return "low_contrast"
+    return None
+
+
+_GAMMA_LUT_CACHE = {}
+
+
+def _gamma_lut(gamma):
+    table = _GAMMA_LUT_CACHE.get(gamma)
+    if table is None:
+        table = np.array([((i / 255.0) ** gamma) * 255.0 for i in range(256)], dtype=np.uint8)
+        _GAMMA_LUT_CACHE[gamma] = table
+    return table
+
+
+def _apply_recovery_correction(gray, reason):
+    """Build ONE lightweight corrected grayscale frame for the single
+    controlled recognition retry. Operates on the already-resized small
+    grayscale ORB input (cheap, no extra decode/resize), and only ever
+    applies conservative, single-step corrections — never a chain, never
+    color/hue reconstruction, never inpainting. `reason` is whatever
+    _classify_recovery_reason returned (never called for severe/blurry
+    frames, so no additional clipping guard is needed here)."""
+    if reason in ("low_contrast", "glare"):
+        # Conservative local contrast lift only — no inpainting/reconstruction,
+        # so it only helps when enough real structure already remains.
+        return _recovery_clahe().apply(gray)
+    if reason == "underexposed":
+        return cv2.LUT(gray, _gamma_lut(0.6))  # < 1 lifts shadows/midtones, mild
+    if reason == "overexposed":
+        return cv2.LUT(gray, _gamma_lut(1.6))  # > 1 pulls highlights down, mild
+    return gray
+
+
 # A crop narrower or shorter than this (in pixels, post-clamp) is treated as degenerate —
 # almost certainly a bad/empty selection, not a real marker photograph.
 MIN_CROP_ROI_PIXELS = 32
@@ -6790,7 +7441,15 @@ def _process_pair_upload_simple(project_id: int, i: int, image_file, video_file)
 def landing():
     # Fetch only active plans for landing page, ordered by display order
     plans = purchasable_plans_query().order_by(SubscriptionPlan.display_order.asc()).all()
-    return render_template("user/landing.html", plans=plans)
+    response = make_response(render_template("user/landing.html", plans=plans))
+    # Admin plan-sync stabilization pass (2026-09-02): the plan data itself
+    # was already always live (same SubscriptionPlan rows admin edits, no
+    # cache layer) - but with no Cache-Control header at all, a browser's
+    # own disk/back-forward cache could still show a stale render of THIS
+    # page after an admin price edit until a hard refresh. Explicit no-store
+    # closes that off without touching the (already-correct) data path.
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 @app.route("/terms")
 def terms_page():
@@ -7331,15 +7990,13 @@ def dashboard():
             entitlement_summary=user_entitlement_summary(user),
         )
         
-    except Exception as e:
-        print(f"❌ FATAL ERROR in dashboard route: {str(e)}")
-        print(traceback.format_exc())
-        return f"""
+    except Exception:
+        app.logger.exception("dashboard route failed")
+        return """
         <h1>Internal Server Error</h1>
-        <p>Error: {str(e)}</p>
-        <p>Please try again or contact support.</p>
+        <p>Something went wrong loading your dashboard. Please try again or contact support.</p>
         <a href="/">Go to Home</a>
-        """
+        """, 500
         
     
 @app.route("/contact")
@@ -7349,6 +8006,12 @@ def contact_page():
 
 @app.route('/send-contact-email', methods=['POST'])
 def send_contact_email():
+    ok, retry_after = _check_rate_limit("contact_form_ip", _rate_limit_key("contact_form"))
+    if not ok:
+        response = jsonify({"success": False, "error": "Too many messages sent. Please try again later."})
+        response.status_code = 429
+        response.headers["Retry-After"] = str(retry_after)
+        return response
     try:
         # Get form data
         name = request.form.get('name')
@@ -7427,7 +8090,7 @@ def send_contact_email():
         
         # Send email using your existing SMTP function
         send_email_smtp(
-            to_email="contact@myscanstory.com",
+            to_email="connect@myscanstory.com",
             subject=subject,
             html_body=html_body
         )
@@ -7463,6 +8126,40 @@ def user_profile():
         entitlement_summary=user_entitlement_summary(user),
         get_system_config=get_system_config
     )
+
+@app.route("/profile/change-password", methods=["POST"])
+@login_required
+def user_change_password():
+    user = current_user()
+    current_password = request.form.get("current_password") or ""
+    new_password = request.form.get("new_password") or ""
+    confirm_password = request.form.get("confirm_password") or ""
+
+    if not check_password_hash(user.password_hash, current_password):
+        flash("Current password is incorrect.", "error")
+        return redirect(url_for("user_profile"))
+    if new_password != confirm_password:
+        flash("New passwords do not match.", "error")
+        return redirect(url_for("user_profile"))
+    # Same minimum this identity already enforces at reset_password() - one
+    # canonical policy per identity, not a new stricter rule invented here.
+    if len(new_password) < 6:
+        flash("Password must be at least 6 characters.", "error")
+        return redirect(url_for("user_profile"))
+    if check_password_hash(user.password_hash, new_password):
+        flash("New password must be different from your current password.", "error")
+        return redirect(url_for("user_profile"))
+
+    user.password_hash = generate_password_hash(new_password)
+    db.session.commit()
+
+    try:
+        send_password_changed_email(user.first_name or user.email.split("@")[0], user.email)
+    except Exception:
+        app.logger.exception("Failed to send password-changed email to user %s", user.id)
+
+    flash("Password updated.", "success")
+    return redirect(url_for("user_profile"))
 
 @app.route("/projects", methods=["GET"])
 @login_required
@@ -7609,19 +8306,22 @@ def _notify_ownership(to_user, subject, message):
     Matches the existing payment-success pattern exactly: transactional
     correctness has already been committed by the time this runs, and a dead
     SMTP server must not undo an ownership transfer.
+
+    `message` is built by callers via f-string interpolation of
+    user-controlled values (project.name, user.email) - rendered here through
+    the shared branded template rather than hand-built raw HTML, so Jinja's
+    autoescaping (the project-wide default for .html templates) escapes those
+    values instead of embedding them unescaped in the email body.
     """
     email = (getattr(to_user, "email", "") or "").strip()
     if not email:
         return
     try:
-        send_email_smtp(
-            email,
-            f"ScanStory - {subject}",
-            "<html><body style=\"font-family:Arial,sans-serif;padding:20px;\">"
-            f"<p>{message}</p>"
-            "<p style=\"color:#888;font-size:12px;\">You can review this from your ScanStory account.</p>"
-            "</body></html>",
+        html = render_template(
+            "user/ownership_notification_email.html",
+            subject=subject, message=message, year=dt.utcnow().year,
         )
+        send_email_smtp(email, f"ScanStory - {subject}", html)
     except Exception as exc:  # pragma: no cover - depends on live SMTP
         print(f"Failed to send ownership notification: {exc}")
 
@@ -8013,24 +8713,58 @@ def user_delete_project(project_id):
 
 
 @app.route("/projects/<int:project_id>/edit", methods=["GET"])
-@login_required
+@user_or_admin_required
 def user_edit_project_page(project_id):
-    user = current_user()
+    # Admin CRUD parity pass (2026-09-02): dual-identity, same pattern as
+    # every other route in this file already extended this pass. An admin
+    # session may only ever reach an admin-owned project (owner_admin_id ==
+    # admin.id), matching admin_project_preview's own established scope.
+    user, admin = _upload_identity()
     project = Project.query.get(project_id)
-    if not user_can_manage_project(user, project):
+    if not resolve_project_manager(user, admin, project):
         abort(404)
+    if project_ownership_state(project) != "valid":
+        flash("Ownership Error: this project's ownership record is invalid (both or neither owner set). Editing is blocked until this is resolved.", "error")
+        return redirect(url_for("admin_view_project", project_id=project_id) if admin else url_for("projects_page"))
 
     pairs = ProjectPair.query.filter_by(project_id=project_id).order_by(ProjectPair.pair_index).all()
-    return render_template("user/edit_project.html", project=project, pairs=pairs, user=user)
+    # Admin-owned projects are exempt from every plan-based limit, same
+    # "Unlimited & Free for Admin" precedent as admin_create_project_page.
+    ents = user_entitlements(user) if user else None
+    max_pairs = get_plan_pairs_limit(user) if user else None
+    dev_test_entitled = has_dev_test_entitlement(user) if user else False
+    return render_template(
+        "user/edit_project.html", project=project, pairs=pairs, user=user, is_admin=(admin is not None),
+        allow_multi_video_per_target=(ents.get("allow_multi_video_per_target") if ents is not None else True),
+        effective_max_videos_per_target=(ents.get("effective_max_videos_per_target") if ents is not None else None),
+        # Edit Add Target (Creator Identity remediation pass): whether the
+        # "+ Add another target" affordance can be used at all right now -
+        # image_video only (Direct QR has no per-pair target image concept),
+        # and only while there's real room left under the plan's pair limit.
+        can_add_target=(
+            project.experience_type == "image_video"
+            and (dev_test_entitled or max_pairs is None or len(pairs) < int(max_pairs))
+        ),
+        # Direct QR Edit parity pass: the video-only equivalent of can_add_target
+        # above - direct_qr only, same plan-room check, no target/ROI concept at all.
+        can_add_direct_qr_video=(
+            project.experience_type == "direct_qr"
+            and (dev_test_entitled or max_pairs is None or len(pairs) < int(max_pairs))
+        ),
+        max_pairs_per_project=max_pairs,
+    )
 
 
 @app.route("/projects/<int:project_id>/edit", methods=["POST"])
-@login_required
+@user_or_admin_required
 def user_edit_project(project_id):
-    user = current_user()
+    user, admin = _upload_identity()
     project = Project.query.get(project_id)
-    if not user_can_manage_project(user, project):
+    if not resolve_project_manager(user, admin, project):
         abort(404)
+    if project_ownership_state(project) != "valid":
+        flash("Ownership Error: this project's ownership record is invalid (both or neither owner set). Editing is blocked until this is resolved.", "error")
+        return redirect(url_for("admin_view_project", project_id=project_id) if admin else url_for("projects_page"))
 
     pairs = ProjectPair.query.filter_by(project_id=project_id).order_by(ProjectPair.pair_index).all()
     updated = 0
@@ -8038,9 +8772,15 @@ def user_edit_project(project_id):
     # Replacement media must satisfy the CURRENT per-file policy (grandfathering
     # protects what is already stored, never what is newly uploaded). Replacing
     # a pair is count-neutral, so no pair-limit check belongs on this path.
-    _ents = user_entitlements(user)
-    _img_max, _img_dim, _img_px = image_limits(_ents)
-    _vid_max, _vid_dur = video_limits(_ents)
+    # Admin-owned projects are exempt, same "Unlimited & Free for Admin"
+    # precedent as every other route in this pass.
+    _ents = user_entitlements(user) if user else None
+    _img_max, _img_dim, _img_px = (
+        image_limits(_ents) if _ents is not None else (_ent.MAX_IMAGE_SIZE, _ent.MAX_IMAGE_DIMENSION_PX, _ent.MAX_IMAGE_PIXELS)
+    )
+    _vid_max, _vid_dur = (
+        video_limits(_ents) if _ents is not None else (_ent.MAX_VIDEO_SIZE, _ent.MAX_VIDEO_DURATION_SECONDS)
+    )
 
     # STORAGE ACCOUNT for the replacement (Wave 3). Bytes are charged to the
     # CURRENT owner, not the editing manager - a vendor replacing media on a
@@ -8084,6 +8824,53 @@ def user_edit_project(project_id):
                     raise _ReplacementRejected()
                 staged.append(temp_path)
 
+                # Target-replacement self-collision / duplicate-target race
+                # hardening. Canonical target identity remediation pass:
+                # standardize FIRST, then hash - the identity must be the
+                # FINAL persisted/served bytes, not the pre-standardize
+                # upload, or a legitimate re-upload of an existing target's
+                # own (already-standardized) served image would never match
+                # its own stored hash. PHASE 2 below no longer re-standardizes
+                # this same file - it's already final here.
+                image_digest = None
+                if kind == "images":
+                    standardize_uploaded_image(temp_path, target_size=1200)
+                    # Two-layer target-identity check (real-browser remediation pass):
+                    # Layer 1 exact SHA-256 handles byte-identical re-uploads; Layer 2
+                    # conservative ORB+homography similarity handles a real
+                    # recapture/re-crop of an existing target that Layer 1 alone would
+                    # miss (proven necessary by the audit - real camera recaptures of
+                    # "the same" target legitimately produce different final bytes).
+                    # See resolve_target_identity_conflict()'s own docstring.
+                    verdict, conflict_pair, conflict_diag = resolve_target_identity_conflict(
+                        project.id, temp_path, current_pair_id=pair.id
+                    )
+                    if verdict == "SAME_CURRENT_PAIR":
+                        # This pair already has exactly (or, per the similarity layer,
+                        # effectively) this target. No functional reason to rewrite the
+                        # file or re-trigger feature extraction - true no-op.
+                        staged.remove(temp_path)
+                        _safe_remove(temp_path)
+                        flash(
+                            f"Already your current target||This image is already being used for "
+                            f"content set {pair.pair_index + 1}.",
+                            "info-modal",
+                        )
+                        continue
+                    if verdict == "CONFLICT_OTHER_PAIR":
+                        app.logger.info(
+                            f"Replace-target blocked: project={project.id} pair={pair.id} "
+                            f"conflict_pair={getattr(conflict_pair, 'id', None)} diag={conflict_diag}"
+                        )
+                        flash(
+                            f"Target already used||This target is already part of this ScanStory "
+                            f"(content set {pair.pair_index + 1}). Add your new video to the existing "
+                            "target instead, or choose a different image.",
+                            "error-modal",
+                        )
+                        raise _ReplacementRejected()
+                    image_digest = _sha256_of_file(temp_path)
+
                 storage_key = build_media_storage_key(project, kind, filename)
                 old_object = _storage.active_media_object_for_key(storage_key) if storage_key else None
                 old_bytes = int(getattr(old_object, "size_bytes", 0) or 0)
@@ -8105,6 +8892,7 @@ def user_edit_project(project_id):
                     "pair": pair, "kind": kind, "temp_path": temp_path,
                     "storage_key": storage_key, "old_object": old_object,
                     "old_bytes": old_bytes, "new_bytes": new_bytes,
+                    "image_digest": image_digest,
                 })
     except _ReplacementRejected:
         for temp_path in staged:
@@ -8116,54 +8904,99 @@ def user_edit_project(project_id):
     # leaves the old file intact, so there is no window where accounting has
     # been freed but the old media survives. QR, pair count and the project's
     # grandfathered experience mode are untouched by all of this.
-    for swap in swaps:
-        pair, kind = swap["pair"], swap["kind"]
-        directory = IMAGES_DIR if kind == "images" else VIDEOS_DIR
-        filename = pair.image_filename if kind == "images" else pair.video_filename
-        final_path = os.path.join(directory, filename)
-        os.replace(swap["temp_path"], final_path)  # already-validated content only
-        if kind == "images":
-            standardize_uploaded_image(final_path, target_size=1200)
-            pair.is_processed = False
-            pair.processing_status = "uploaded"
-            pair.feature_extraction_status = "pending"
-            pair.processing_error = None
-        updated += 1
+    reset_default_media = []
+    try:
+        for swap in swaps:
+            pair, kind = swap["pair"], swap["kind"]
+            directory = IMAGES_DIR if kind == "images" else VIDEOS_DIR
+            filename = pair.image_filename if kind == "images" else pair.video_filename
+            final_path = os.path.join(directory, filename)
+            # Canonical target identity remediation pass: standardize now
+            # happens in PHASE 1, on temp_path, before image_digest was
+            # computed - this file is already final. Standardizing again
+            # here would be redundant (and would re-open the exact
+            # hash-vs-served-file mismatch this pass fixes if it ever
+            # changed a byte on a second pass).
+            os.replace(swap["temp_path"], final_path)  # already-validated, already-standardized content
+            if kind == "images":
+                pair.is_processed = False
+                pair.processing_status = "uploaded"
+                pair.feature_extraction_status = "pending"
+                pair.processing_error = None
+                pair.image_hash = swap["image_digest"]
+            updated += 1
 
-        # standardize_uploaded_image() rewrites the file, so re-stat rather than
-        # trusting the pre-swap size - the ledger records the bytes that are
-        # actually on disk.
-        final_bytes = os.path.getsize(final_path)
-        if kind == "images":
-            pair.image_size = final_bytes
-        else:
-            pair.video_size = final_bytes
-        if swap["storage_key"]:
-            _storage.supersede_media_object(swap["old_object"])
-            # Flush the supersede BEFORE inserting the replacement row: both
-            # claim the same storage_key, and SQLAlchemy's unit of work emits
-            # INSERTs before UPDATEs, which would trip the
-            # uq_media_objects_active_storage_key partial unique index.
-            db.session.flush()
-            _storage.record_media_object(
-                storage_key=swap["storage_key"],
-                size_bytes=final_bytes,
-                media_role=MEDIA_KIND_ROLES[kind],
-                owner_user_id=getattr(storage_owner, "id", None),
-                project_id=project.id,
-                pair_id=pair.id,
-                counts_toward_quota=storage_owner is not None,
-            )
-            if storage_owner is not None:
-                # Net delta only. Negative deltas release; the growth case was
-                # already authorised by evaluate_replacement above, and the
-                # unconditional apply keeps the column consistent with the
-                # ledger rows written in this same transaction.
-                _storage.reserve_account_storage(
-                    storage_owner.id, final_bytes - swap["old_bytes"], None
+            final_bytes = os.path.getsize(final_path)
+            if kind == "images":
+                pair.image_size = final_bytes
+            else:
+                pair.video_size = final_bytes
+                # Multi-video editing completion: this in-place swap keeps the
+                # SAME filename (matching this route's existing os.replace
+                # contract above), but the bytes underneath it just changed -
+                # any default PairMedia row sharing that filename must have its
+                # Fast Video state reset, or the resolver would keep serving a
+                # now-stale optimized derivative of the OLD content. Only the
+                # size/optimization metadata is touched here; video_filename
+                # itself is intentionally left alone (still the same name).
+                default_media = pair.default_media
+                if default_media is not None and default_media.video_filename == filename:
+                    default_media.video_size = final_bytes
+                    if default_media.optimized_video_filename:
+                        stale_optimized_path = _safe_media_path(VIDEOS_DIR, default_media.optimized_video_filename)
+                        if stale_optimized_path:
+                            _unlink_project_media([stale_optimized_path], project.id)
+                    default_media.optimized_video_filename = None
+                    default_media.optimization_status = "pending"
+                    default_media.optimization_error = None
+                    default_media.optimized_video_size = None
+                    default_media.optimized_at = None
+                    reset_default_media.append(default_media)
+            if swap["storage_key"]:
+                _storage.supersede_media_object(swap["old_object"])
+                # Flush the supersede BEFORE inserting the replacement row: both
+                # claim the same storage_key, and SQLAlchemy's unit of work emits
+                # INSERTs before UPDATEs, which would trip the
+                # uq_media_objects_active_storage_key partial unique index.
+                # This flush (like the final commit below) can also be where
+                # a pending pair.image_hash UPDATE first hits
+                # uq_project_pair_image_hash under a race - both must be
+                # caught by the same handler, so the try wraps this whole loop.
+                db.session.flush()
+                _storage.record_media_object(
+                    storage_key=swap["storage_key"],
+                    size_bytes=final_bytes,
+                    media_role=MEDIA_KIND_ROLES[kind],
+                    owner_user_id=getattr(storage_owner, "id", None),
+                    project_id=project.id,
+                    pair_id=pair.id,
+                    counts_toward_quota=storage_owner is not None,
                 )
+                if storage_owner is not None:
+                    # Net delta only. Negative deltas release; the growth case was
+                    # already authorised by evaluate_replacement above, and the
+                    # unconditional apply keeps the column consistent with the
+                    # ledger rows written in this same transaction.
+                    _storage.reserve_account_storage(
+                        storage_owner.id, final_bytes - swap["old_bytes"], None
+                    )
 
-    db.session.commit()
+        db.session.commit()
+    except IntegrityError:
+        # Race lost: another request committed the same target image to a
+        # different pair in this project between our app-level check above
+        # and this commit (or an earlier flush inside this same loop). The
+        # DB unique index (uq_project_pair_image_hash) is the authoritative
+        # guard - this is its error-mapping half.
+        db.session.rollback()
+        flash(
+            "Target already used||This target is already part of this ScanStory. Add your new video "
+            "to the existing target instead, or choose a different image.",
+            "error-modal",
+        )
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+    if reset_default_media:
+        _enqueue_pair_media_optimizations(reset_default_media)
 
     if updated == 0:
         flash("No files were replaced. Upload at least one new image or video.", "info")
@@ -8222,21 +9055,1110 @@ def user_edit_project(project_id):
             return redirect(url_for("user_edit_project_page", project_id=project_id))
 
     flash("Changes saved. Your ScanStory will be ready in about a minute.", "success")
+    # Admin CRUD parity pass (2026-09-02): projects_page is a User-only route
+    # (@login_required) - an admin session that just successfully saved
+    # would be bounced away to /admin/dashboard instead of seeing their own
+    # save take effect. Redirect back to the SAME edit page for admin,
+    # exactly matching every OTHER outcome in this function already does;
+    # unchanged for User.
+    if admin:
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
     return redirect(url_for("projects_page"))
 
 
-@app.route("/projects/<int:project_id>/reprocess", methods=["POST"])
-@login_required
-def user_reprocess_project(project_id):
-    user = current_user()
+# ---------------------------------------------------------------------------
+# Add a new content set (Creator Identity / Edit Flow remediation pass,
+# 2026-08-29). Confirmed gap: no route existed anywhere to add a NEW
+# ProjectPair to an already-created project - Edit could only modify existing
+# ones. image_video only (Direct QR pairs have no target image concept, and
+# its edit surface never offered per-pair replacement either - out of scope,
+# unchanged). Reuses the exact same helpers the creation and replace paths
+# use: _reserve_pair_slots_for_project (already generalizes to "N more on top
+# of what's here"), the canonical-identity duplicate-target check, and
+# create_pair_media_rows - no parallel implementation.
+# ---------------------------------------------------------------------------
+@app.route("/projects/<int:project_id>/pair/add", methods=["POST"])
+@user_or_admin_required
+def user_add_project_pair(project_id):
+    # Admin CRUD parity pass (2026-09-02): dual-identity lookup, same as
+    # _upload_identity()'s own established pattern - an admin session may
+    # only ever reach an admin-owned project here, never a user-owned one.
+    user, admin = _upload_identity()
     project = Project.query.get(project_id)
-    if not user_can_manage_project(user, project):
+    if not resolve_project_manager(user, admin, project):
         abort(404)
+    if project.experience_type != "image_video":
+        flash("Adding a new target is only available for image + video stories.", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    image_upload = request.files.get("new_pair_image")
+    video_upload = request.files.get("new_pair_video")
+    if not image_upload or not image_upload.filename:
+        flash("Choose a target image for the new content set.", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+    if not video_upload or not video_upload.filename:
+        flash("Choose a video for the new content set.", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    # Admin-owned projects are exempt from every plan-based limit on this
+    # path (pairs-per-project, storage), matching admin_create_project_page's
+    # own "Unlimited & Free for Admin" precedent - max_pairs stays None
+    # (unlimited) and no plan-based flash ever fires for admin.
+    ents = user_entitlements(user) if user else None
+    dev_test_entitled = has_dev_test_entitlement(user) if user else False
+    max_pairs = get_plan_pairs_limit(user) if user else None
+    if user and max_pairs is None and not dev_test_entitled:
+        flash("Adding new targets is not configured for your current plan. Please contact admin.", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    # Holds the Project row locked (where supported) for the rest of this
+    # transaction - _reserve_pair_slots_for_project acquires it, and it stays
+    # held through the pair_index computation and the final commit below, so
+    # two concurrent "Add another target" requests for the SAME project
+    # cannot both compute the same next pair_index (section 13 of the brief).
+    pair_slots_ok, pair_slots_error = _reserve_pair_slots_for_project(project.id, 1, max_pairs)
+    if not pair_slots_ok:
+        flash(pair_slots_error, "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    _img_max, _img_dim, _img_px = (
+        image_limits(ents) if ents is not None else (_ent.MAX_IMAGE_SIZE, _ent.MAX_IMAGE_DIMENSION_PX, _ent.MAX_IMAGE_PIXELS)
+    )
+    _vid_max, _vid_dur = (
+        video_limits(ents) if ents is not None else (_ent.MAX_VIDEO_SIZE, _ent.MAX_VIDEO_DURATION_SECONDS)
+    )
+    try:
+        img_temp, img_ext = validate_image(image_upload, TMP_UPLOADS_DIR, _img_max, _img_dim, _img_px)
+    except UploadValidationError as exc:
+        flash(f"Image: {exc.safe_message}", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+    try:
+        vid_temp, vid_ext = validate_video(video_upload, TMP_UPLOADS_DIR, _vid_max, _vid_dur)
+    except UploadValidationError as exc:
+        _safe_remove(img_temp)
+        flash(f"Video: {exc.safe_message}", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    # Canonical target identity (same rule as creation/replacement): the hash
+    # must describe the FINAL persisted image, so standardize before hashing.
+    standardize_uploaded_image(img_temp, target_size=1200)
+    # Two-layer target-identity check (real-browser remediation pass): Layer 1 exact
+    # SHA-256 catches the byte-identical case; Layer 2 conservative ORB+homography
+    # similarity catches a real recapture/re-crop of an existing target that Layer 1
+    # alone would miss (see resolve_target_identity_conflict()'s own docstring).
+    # current_pair_id=None here - this route only ever creates a brand-new pair, so
+    # SAME_CURRENT_PAIR can never apply, only UNIQUE or CONFLICT_OTHER_PAIR.
+    verdict, conflict_pair, conflict_diag = resolve_target_identity_conflict(project.id, img_temp, current_pair_id=None)
+    if verdict != "UNIQUE":
+        app.logger.info(f"Add-target blocked: project={project.id} conflict_pair={getattr(conflict_pair, 'id', None)} diag={conflict_diag}")
+        _safe_remove(img_temp)
+        _safe_remove(vid_temp)
+        flash(
+            "Target already used||This target is already part of this ScanStory. Add your new video "
+            "to the existing target instead, or choose a different image.",
+            "error-modal",
+        )
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+    image_digest = _sha256_of_file(img_temp)
+
+    new_bytes = os.path.getsize(img_temp) + os.path.getsize(vid_temp)
+    storage_owner = User.query.get(project_current_owner_user_id(project)) if project_current_owner_user_id(project) else None
+    storage_used, storage_allowance = account_storage_state(storage_owner)
+    if not _storage.can_consume(storage_used, storage_allowance, new_bytes):
+        _safe_remove(img_temp)
+        _safe_remove(vid_temp)
+        flash(STORAGE_LIMIT_MESSAGE, "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    # Next pair_index: max(existing) + 1, not count() - pair_index can in
+    # principle have gaps (a removed/legacy pair), and count() would risk
+    # colliding with uq_project_pair_index. Computed under the pair-quota
+    # lock acquired above, so this is race-safe against a concurrent
+    # "Add another target" request on the same project.
+    max_index = db.session.query(func.max(ProjectPair.pair_index)).filter(ProjectPair.project_id == project.id).scalar()
+    next_index = (int(max_index) + 1) if max_index is not None else 0
+
+    img_filename = f"{project.id}_{next_index}.jpg"
+    img_path = os.path.join(IMAGES_DIR, img_filename)
+    os.replace(img_temp, img_path)
+    video_hash = _sha256_of_file(vid_temp)
+    vid_filename = f"{project.id}_{next_index}{vid_ext}"
+    vid_path = os.path.join(VIDEOS_DIR, vid_filename)
+    os.replace(vid_temp, vid_path)
+
+    pair = ProjectPair(
+        project_id=project.id,
+        pair_index=next_index,
+        image_filename=img_filename,
+        video_filename=vid_filename,
+        image_path=f"/image/{project.id}/{next_index}",
+        image_hash=image_digest,
+        original_image_name=image_upload.filename,
+        original_video_name=video_upload.filename,
+        image_size=os.path.getsize(img_path),
+        video_size=os.path.getsize(vid_path),
+        is_processed=False,
+        processing_status="uploaded",
+        feature_extraction_status="pending",
+        processing_error=None,
+    )
+    db.session.add(pair)
+    try:
+        # The INSERT (and its uq_project_pair_image_hash check) happens on
+        # THIS flush, immediately - not deferred to the final commit below -
+        # so the race guard must wrap here too, not just commit(). Same
+        # premature-flush shape found and fixed in user_add_pair_media
+        # during the prior pass's own concurrency proof.
+        db.session.flush()  # real pair.id for create_pair_media_rows below
+
+        media_rows = create_pair_media_rows(pair, [{
+            "filename": vid_filename, "original_name": video_upload.filename, "size": os.path.getsize(vid_path),
+        }])
+        media_rows[0].video_hash = video_hash
+
+        storage_key_img = build_media_storage_key(project, "images", img_filename)
+        storage_key_vid = build_media_storage_key(project, "videos", vid_filename)
+        owner_user_id, owner_admin_id = project_storage_owner_ids(project)
+        if storage_key_img:
+            _storage.record_media_object(
+                storage_key=storage_key_img, size_bytes=os.path.getsize(img_path), media_role=MEDIA_KIND_ROLES["images"],
+                owner_user_id=owner_user_id, owner_admin_id=owner_admin_id,
+                project_id=project.id, pair_id=pair.id, counts_toward_quota=owner_user_id is not None,
+            )
+        if storage_key_vid:
+            _storage.record_media_object(
+                storage_key=storage_key_vid, size_bytes=os.path.getsize(vid_path), media_role=MEDIA_KIND_ROLES["videos"],
+                owner_user_id=owner_user_id, owner_admin_id=owner_admin_id,
+                project_id=project.id, pair_id=pair.id, counts_toward_quota=owner_user_id is not None,
+            )
+        if owner_user_id is not None:
+            _storage.reserve_account_storage(owner_user_id, new_bytes, None)
+
+        db.session.commit()
+    except IntegrityError:
+        # Race lost: a concurrent request for a DIFFERENT new pair in this
+        # SAME project committed an identical target image first
+        # (uq_project_pair_image_hash) - the app-level check above can't see
+        # an in-flight, not-yet-committed sibling request.
+        db.session.rollback()
+        _safe_remove(img_path)
+        _safe_remove(vid_path)
+        flash(
+            "Target already used||This target is already part of this ScanStory. Add your new video "
+            "to the existing target instead, or choose a different image.",
+            "error-modal",
+        )
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    _enqueue_pair_media_optimizations(media_rows)
+    _schedule_project_pair_processing(project.id, attempt_scope="reprocess")
+
+    flash("New target added. It will be ready to scan in about a minute.", "success")
+    return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+
+# ---------------------------------------------------------------------------
+# Admin stabilization pass (Part A, 2026-09-02): Create's target-image
+# duplicate decision was only made at full resumable-upload finalize time
+# (canonical_target_identity_check, added the previous pass) - correct, but
+# too late in the UX per physical-device QA: the whole project's bytes had
+# already been uploaded before the rejection surfaced. This route runs the
+# SAME canonical check the moment a crop/full-image candidate is confirmed,
+# before any full project upload begins. No Project row exists yet at Create
+# time (see canonical_target_identity_check's own docstring on why
+# project_id=None there is correct and matches the finalize-time call) - this
+# validates a candidate against OTHER already-accepted candidates in THIS
+# SAME creation session only, via canonical_target_identity_check's
+# sibling_candidates parameter. Read-only/validation-only - no persistence,
+# same contract as user_validate_target_candidate below. Shared by User AND
+# Admin Create (both render the same user_create_project.html wizard) via
+# _upload_identity()'s dual-identity lookup, the exact same pattern the
+# resumable upload session routes already use for the same reason.
+# ---------------------------------------------------------------------------
+@app.route("/create/validate-target", methods=["POST"])
+def create_validate_target_candidate():
+    user, admin = _upload_identity()
+    if not user and not admin:
+        return jsonify({"error": "Login required."}), 401
+
+    experience_type = request.form.get("experience_type") or "image_video"
+    if experience_type != "image_video":
+        # Direct QR has no target/ROI identity concept at all (section 20 of
+        # the audit) - never introduce one here.
+        return jsonify({"verdict": "UNIQUE"})
+
+    upload = request.files.get("candidate_image")
+    if not upload or not upload.filename:
+        return jsonify({"error": "No candidate image provided."}), 400
+
+    ents = user_entitlements(user) if user else None
+    _img_max, _img_dim, _img_px = (
+        image_limits(ents) if ents
+        else (_ent.MAX_IMAGE_SIZE, _ent.MAX_IMAGE_DIMENSION_PX, _ent.MAX_IMAGE_PIXELS)
+    )
+
+    temp_paths = []
+    try:
+        try:
+            candidate_temp, _ext = validate_image(upload, TMP_UPLOADS_DIR, _img_max, _img_dim, _img_px)
+        except UploadValidationError as exc:
+            return jsonify({"error": exc.safe_message}), 400
+        temp_paths.append(candidate_temp)
+        # Admin-owned Create is never standardized (unchanged design, matches
+        # _finalize_assemble_and_validate's own is_admin_owner gate) - the
+        # check must run on whatever the FINAL persisted bytes will be.
+        if user:
+            standardize_uploaded_image(candidate_temp, target_size=1200)
+
+        sibling_candidates = []
+        for index, sibling_upload in enumerate(request.files.getlist("sibling_candidates")):
+            if not sibling_upload or not sibling_upload.filename:
+                continue
+            try:
+                sib_temp, _ext = validate_image(sibling_upload, TMP_UPLOADS_DIR, _img_max, _img_dim, _img_px)
+            except UploadValidationError:
+                # A sibling that fails re-validation here was already accepted
+                # earlier in this same session - best-effort skip rather than
+                # failing the CURRENT candidate's own validation over it.
+                continue
+            temp_paths.append(sib_temp)
+            if user:
+                standardize_uploaded_image(sib_temp, target_size=1200)
+            sibling_candidates.append((str(index), sib_temp))
+
+        verdict, match, _diag = canonical_target_identity_check(
+            None, candidate_temp, current_pair_id=None, sibling_candidates=sibling_candidates
+        )
+        conflict_label = match if verdict == "CONFLICT_SIBLING_CANDIDATE" else None
+        return jsonify({"verdict": verdict, "conflict_label": conflict_label})
+    finally:
+        for p in temp_paths:
+            _safe_remove(p)
+
+
+# ---------------------------------------------------------------------------
+# Narrow duplicate-handling fix (Edit frontend pre-check, 2026-09-01). Edit's
+# Add/Replace Target and Add/Replace Video forms had NO client-side duplicate
+# check at all (unlike Create's, which exists but was buggy) - every
+# duplicate was only ever caught after a real form submission, per the
+# audit. resolve_target_identity_conflict()'s Layer 2 (ORB+homography) cannot
+# be reimplemented in JavaScript without duplicating real CV logic client
+# side, so per the audit's own preferred option, these are thin read/
+# validation-only endpoints that call the EXACT SAME authoritative backend
+# helpers Edit's real submit routes already use - no new duplicate-detection
+# semantics, no persistence, no schema change, same auth as Edit itself.
+# ---------------------------------------------------------------------------
+@app.route("/projects/<int:project_id>/pair/validate-target", methods=["POST"])
+@user_or_admin_required
+def user_validate_target_candidate(project_id):
+    # Preflight parity fix (World-Class Admin Restructure, 2026-09-02): the
+    # shared edit_project.html template Admin also renders calls this exact
+    # endpoint from validateTargetCandidateOnServer() - it was left
+    # @login_required-only, so it always 404'd for an admin session and the
+    # JS's own fail-open path silently treated every candidate as UNIQUE
+    # client-side. The real authoritative check (resolve_target_identity_conflict,
+    # inside user_edit_project/user_add_pair_media) was never affected - this
+    # only restores the early client-side warning for Admin too.
+    user, admin = _upload_identity()
+    project = Project.query.get(project_id)
+    if not resolve_project_manager(user, admin, project):
+        abort(404)
+    if project.experience_type != "image_video":
+        return jsonify({"verdict": "UNIQUE"})
+
+    upload = request.files.get("candidate_image")
+    if not upload or not upload.filename:
+        return jsonify({"error": "No candidate image provided."}), 400
+
+    current_pair_id = None
+    raw_pair_index = request.form.get("pair_index")
+    if raw_pair_index not in (None, "", "new"):
+        try:
+            pair_index = int(raw_pair_index)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid pair_index."}), 400
+        current_pair = ProjectPair.query.filter_by(project_id=project.id, pair_index=pair_index).first()
+        if current_pair is None:
+            abort(404)
+        current_pair_id = current_pair.id
+
+    ents = user_entitlements(user) if user else None
+    _img_max, _img_dim, _img_px = (
+        image_limits(ents) if ents is not None else (_ent.MAX_IMAGE_SIZE, _ent.MAX_IMAGE_DIMENSION_PX, _ent.MAX_IMAGE_PIXELS)
+    )
+    try:
+        temp_path, _ext = validate_image(upload, TMP_UPLOADS_DIR, _img_max, _img_dim, _img_px)
+    except UploadValidationError as exc:
+        return jsonify({"error": exc.safe_message}), 400
+
+    try:
+        # Same "standardize before hash" rule as every real Add/Replace Target
+        # route - the identity check must describe the FINAL persisted bytes.
+        standardize_uploaded_image(temp_path, target_size=1200)
+        verdict, conflict_pair, _diag = resolve_target_identity_conflict(
+            project.id, temp_path, current_pair_id=current_pair_id
+        )
+    finally:
+        _safe_remove(temp_path)
+
+    conflict_pair_number = (conflict_pair.pair_index + 1) if conflict_pair is not None else None
+    return jsonify({"verdict": verdict, "conflict_pair_number": conflict_pair_number})
+
+
+@app.route("/projects/<int:project_id>/media/validate-video", methods=["POST"])
+@user_or_admin_required
+def user_validate_video_candidate(project_id):
+    # Same preflight parity fix as user_validate_target_candidate above - the
+    # shared edit_project.html template's validateVideoCandidateOnServer()
+    # call reaches this route for Admin sessions too.
+    user, admin = _upload_identity()
+    project = Project.query.get(project_id)
+    if not resolve_project_manager(user, admin, project):
+        abort(404)
+
+    payload = request.get_json(silent=True) or request.form
+    candidate_hash = (payload.get("video_hash") or "").strip().lower()
+    if not candidate_hash or len(candidate_hash) != 64:
+        return jsonify({"error": "Invalid video_hash."}), 400
+
+    pair_id = None
+    raw_pair_index = payload.get("pair_index")
+    if raw_pair_index not in (None, "", "new"):
+        try:
+            pair_index = int(raw_pair_index)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid pair_index."}), 400
+        pair = ProjectPair.query.filter_by(project_id=project.id, pair_index=pair_index).first()
+        if pair is None:
+            abort(404)
+        # Same rule as user_replace_pair_media/user_add_pair_media: Direct QR
+        # has no per-target grouping (every video is its own pair), so its
+        # scope is always the whole project's playlist regardless of which
+        # pair_index the candidate is being added/replaced under - narrowing
+        # to one pair here would make the check meaningless for Direct QR.
+        pair_id = None if project.experience_type == "direct_qr" else pair.id
+    # pair_index omitted entirely (Direct QR's Add Video - a brand-new
+    # target/pair that does not exist yet): also whole-project scope.
+
+    current_media_id = None
+    raw_media_id = payload.get("current_media_id")
+    if raw_media_id not in (None, ""):
+        try:
+            current_media_id = int(raw_media_id)
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid current_media_id."}), 400
+
+    verdict, match = find_video_duplicate(project.id, candidate_hash, pair_id=pair_id, current_media_id=current_media_id)
+    return jsonify({"verdict": verdict})
+
+
+# ---------------------------------------------------------------------------
+# Multi-video editing (V1.1 completion): add/replace/remove/reorder/set-default
+# for individual PairMedia rows on an existing target. Reuses the SAME
+# validate_video/temp-file idiom user_edit_project above already uses (not a
+# second uploader architecture) and the SAME transaction-safety principles as
+# the 3E-C creation paths: DB changes are one coherent commit; a new physical
+# file is written under a name nothing else points at yet BEFORE that commit;
+# an OLD file is only unlinked AFTER the commit that stops needing it
+# succeeds; a Fast Video optimize job is only enqueued once, after commit,
+# using the real (post-commit) PairMedia.id.
+# ---------------------------------------------------------------------------
+def _pair_media_route_context(project_id, pair_index, media_id=None):
+    """Shared owner/ownership-scoped lookup for every route below. Returns
+    (user, admin, project, pair, media) - exactly one of user/admin is ever
+    non-None for a real session (see _upload_identity's own docstring) -
+    aborts 404 the moment ANY link in that chain (project ownership,
+    pair-under-project, media-under-pair) doesn't hold, exactly mirroring
+    serve_pair_media_video's existing pair_id=pair.id scoping so a media_id
+    can never be pointed at a different pair/project than the URL claims.
+
+    Admin CRUD parity pass (2026-09-02): admin is resolved via the same
+    _upload_identity() dual-lookup the resumable upload routes already use,
+    and ownership via resolve_project_manager() - an admin session may only
+    ever reach an admin-owned project here (admin_can_manage_project()),
+    never a user-owned one, matching admin_project_preview's own
+    established scope exactly."""
+    user, admin = _upload_identity()
+    project = Project.query.get(project_id)
+    if not resolve_project_manager(user, admin, project):
+        abort(404)
+    pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=pair_index).first()
+    if not pair:
+        abort(404)
+    media = None
+    if media_id is not None:
+        media = PairMedia.query.filter_by(id=media_id, pair_id=pair.id).first()
+        if not media:
+            abort(404)
+    return user, admin, project, pair, media
+
+
+@app.route("/projects/<int:project_id>/pair/<int:pair_index>/media/add", methods=["POST"])
+@user_or_admin_required
+def user_add_pair_media(project_id, pair_index):
+    user, admin, project, pair, _media = _pair_media_route_context(project_id, pair_index)
+
+    if project.experience_type == "direct_qr":
+        flash("Direct QR targets support only one video.", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    # Admin CRUD parity pass: user_entitlements(None) does NOT crash - it
+    # returns a real but RESTRICTIVE dict (allow_multi_video_per_target:
+    # False, effective_max_videos_per_target: 1), which would wrongly block
+    # an admin instead of granting the unlimited access "Admin: Unlimited &
+    # Free" already establishes elsewhere (admin_create_project_page,
+    # _finalize_assemble_and_validate's is_admin_owner branch). ents=None
+    # for admin, matching that same established fallback convention.
+    ents = user_entitlements(user) if user else None
+    if ents is not None and not ents.get("allow_multi_video_per_target"):
+        flash("Your plan does not support multiple videos per target.", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    _ensure_default_pair_media(pair)
+    try:
+        db.session.flush()  # real PairMedia.id values, so len()/ordering below are trustworthy
+    except IntegrityError:
+        # Pre-production gate (2026-08-31): concurrency proof against real
+        # Postgres showed this flush is not just the later new-video insert -
+        # a pair with ZERO PairMedia rows racing two "Add Video" requests can
+        # both reach _ensure_default_pair_media's backfill at once, and only
+        # one wins uq_pair_media_one_default_per_pair. Previously unguarded,
+        # this crashed with a raw 500 instead of the friendly duplicate/retry
+        # path the later insert already has. Roll back our own losing insert;
+        # `pair` is expired by the rollback, so the next `pair.media_items`
+        # access below re-queries and sees the row the concurrent request
+        # already committed - the route then proceeds normally against it.
+        db.session.rollback()
+
+    max_videos = ents.get("effective_max_videos_per_target") if ents is not None else None
+    current_count = len(pair.media_items)
+    if max_videos is not None and current_count >= max_videos:
+        flash(f"This target already has the maximum {max_videos} videos your plan allows.", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    upload = request.files.get("new_video")
+    if not upload or not upload.filename:
+        flash("Choose a video to add.", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    _vid_max, _vid_dur = (
+        video_limits(ents) if ents is not None else (_ent.MAX_VIDEO_SIZE, _ent.MAX_VIDEO_DURATION_SECONDS)
+    )
+    try:
+        temp_path, ext = validate_video(upload, TMP_UPLOADS_DIR, _vid_max, _vid_dur)
+    except UploadValidationError as exc:
+        flash(f"Video: {exc.safe_message}", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    # Exact-duplicate-video guard (physical QA fix, centralized in the video
+    # duplicate/Direct QR parity pass): adding the SAME video content to a
+    # target that already has it plays that video twice back-to-back with no
+    # product-visible difference. Exact-bytes only, scoped to THIS pair via
+    # find_video_duplicate() - never blocks the same video content used under
+    # a DIFFERENT target.
+    new_video_hash = _sha256_of_file(temp_path)
+    verdict, _dup_media = find_video_duplicate(project.id, new_video_hash, pair_id=pair.id)
+    if verdict == "DUPLICATE_EXISTING_MEDIA":
+        _safe_remove(temp_path)
+        flash(
+            "Video already added||This video is already part of this target. Choose another video or "
+            "keep the existing one.",
+            "error-modal",
+        )
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    storage_owner = User.query.get(project_current_owner_user_id(project)) if project_current_owner_user_id(project) else None
+    storage_used, storage_allowance = account_storage_state(storage_owner)
+    new_bytes = os.path.getsize(temp_path)
+    if not _storage.can_consume(storage_used, storage_allowance, new_bytes):
+        _safe_remove(temp_path)
+        flash(f"Video: {STORAGE_LIMIT_MESSAGE}", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    _lock_pair_for_media_order(pair.id)
+    existing_sort_orders = db.session.query(PairMedia.sort_order).filter(PairMedia.pair_id == pair.id).all()
+    next_sort_order = max((row[0] for row in existing_sort_orders), default=-1) + 1
+    videos_dir = project_media_dirs(project)[1]
+    filename = build_additional_pair_media_filename(project.id, pair.pair_index, next_sort_order, ext)
+    final_path = os.path.join(videos_dir, filename)
+    os.replace(temp_path, final_path)  # brand-new filename, already-validated content only
+
+    media = PairMedia(
+        pair=pair, video_filename=filename, original_video_name=upload.filename,
+        video_size=new_bytes, sort_order=next_sort_order, is_default=False,
+        video_hash=new_video_hash,
+    )
+    db.session.add(media)
+    try:
+        # The INSERT (and its uq_pair_media_video_hash check) happens on
+        # THIS flush, immediately - not deferred to the final commit below -
+        # so the race guard must wrap here, not just the later commit() call.
+        db.session.flush()
+
+        storage_key = build_media_storage_key(project, "videos", filename)
+        owner_user_id, owner_admin_id = project_storage_owner_ids(project)
+        if storage_key:
+            _storage.record_media_object(
+                storage_key=storage_key, size_bytes=new_bytes, media_role=MEDIA_KIND_ROLES["videos"],
+                owner_user_id=owner_user_id, owner_admin_id=owner_admin_id,
+                project_id=project.id, pair_id=pair.id, counts_toward_quota=owner_user_id is not None,
+            )
+            if owner_user_id is not None:
+                # Growth already authorised by can_consume() above - unconditional
+                # apply, same idiom the default-replace path above uses.
+                _storage.reserve_account_storage(owner_user_id, new_bytes, None)
+
+        db.session.commit()
+    except IntegrityError:
+        # Race lost: a concurrent "Add Video" request for this exact same
+        # file already committed first (uq_pair_media_video_hash). The
+        # app-level pre-check above (existing_videos_dir loop) can't see an
+        # in-flight, not-yet-committed sibling request - this is the DB-level
+        # backstop, same friendly message as that pre-check already uses.
+        db.session.rollback()
+        _safe_remove(final_path)
+        flash(
+            "Video already added||This video is already part of this target. Choose another video or "
+            "keep the existing one.",
+            "error-modal",
+        )
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+    _enqueue_pair_media_optimizations([media])
+
+    flash("Video added.", "success")
+    return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+
+@app.route("/projects/<int:project_id>/pair/<int:pair_index>/media/<int:media_id>/replace", methods=["POST"])
+@user_or_admin_required
+def user_replace_pair_media(project_id, pair_index, media_id):
+    user, admin, project, pair, media = _pair_media_route_context(project_id, pair_index, media_id)
+
+    upload = request.files.get("replacement_video")
+    if not upload or not upload.filename:
+        flash("Choose a video to upload.", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    ents = user_entitlements(user) if user else None
+    _vid_max, _vid_dur = (
+        video_limits(ents) if ents is not None else (_ent.MAX_VIDEO_SIZE, _ent.MAX_VIDEO_DURATION_SECONDS)
+    )
+    try:
+        temp_path, ext = validate_video(upload, TMP_UPLOADS_DIR, _vid_max, _vid_dur)
+    except UploadValidationError as exc:
+        flash(f"Video: {exc.safe_message}", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    # Video duplicate/Direct QR parity pass: Tracked Overlay and Detect Once scope
+    # duplicate video content to THIS pair (a target); Direct QR has no per-target
+    # grouping at all - every video in the story is its own pair, so the scope is
+    # the whole project's playlist (pair_id=None).
+    new_video_hash = _sha256_of_file(temp_path)
+    duplicate_scope_pair_id = None if project.experience_type == "direct_qr" else pair.id
+    verdict, _dup_media = find_video_duplicate(
+        project.id, new_video_hash, pair_id=duplicate_scope_pair_id, current_media_id=media.id
+    )
+    if verdict == "SAME_CURRENT_MEDIA":
+        _safe_remove(temp_path)
+        flash("Already your current video||This is already the video used in this position.", "info-modal")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+    if verdict == "DUPLICATE_EXISTING_MEDIA":
+        _safe_remove(temp_path)
+        body = (
+            "This video is already part of this ScanStory. Choose another video to continue."
+            if project.experience_type == "direct_qr"
+            else "This video is already part of this target. Choose another video to continue."
+        )
+        flash(f"Video already added||{body}", "error-modal")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    storage_owner = User.query.get(project_current_owner_user_id(project)) if project_current_owner_user_id(project) else None
+    storage_used, storage_allowance = account_storage_state(storage_owner)
+    old_storage_key = build_media_storage_key(project, "videos", media.video_filename)
+    old_object = _storage.active_media_object_for_key(old_storage_key) if old_storage_key else None
+    old_bytes = int(getattr(old_object, "size_bytes", 0) or 0)
+    new_bytes = os.path.getsize(temp_path)
+
+    allowed, _projected = _storage.evaluate_replacement(storage_used, storage_allowance, old_bytes, new_bytes)
+    if not allowed:
+        _safe_remove(temp_path)
+        message = (
+            STORAGE_REPLACEMENT_OVER_LIMIT_MESSAGE
+            if storage_allowance is not None and storage_used > storage_allowance
+            else STORAGE_LIMIT_MESSAGE
+        )
+        flash(f"Video: {message}", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    videos_dir = project_media_dirs(project)[1]
+    new_filename = build_pair_media_replacement_filename(project.id, pair.pair_index, media.id, ext)
+    final_path = os.path.join(videos_dir, new_filename)
+    os.replace(temp_path, final_path)  # brand-new filename - the OLD file is untouched here
+
+    old_video_filename = media.video_filename
+    old_optimized_filename = media.optimized_video_filename
+    was_default = media.is_default and media.video_filename == pair.video_filename
+
+    # PairMedia identity (media.id) stays stable - only its content changes.
+    media.video_filename = new_filename
+    media.original_video_name = upload.filename
+    media.video_size = new_bytes
+    # Video duplicate/Direct QR parity pass: this was never refreshed on replace
+    # before, which would have let a stale pre-replace hash keep matching (or
+    # keep NOT matching) future duplicate checks against this row's new content.
+    media.video_hash = new_video_hash
+    # Fast Video lifecycle: a replaced original invalidates any existing
+    # derivative outright - never serve an optimized copy of bytes that no
+    # longer exist. Falls back to the (new) original until the new optimize
+    # job completes, exactly like a fresh upload.
+    media.optimized_video_filename = None
+    media.optimization_status = "pending"
+    media.optimization_error = None
+    media.optimized_video_size = None
+    media.optimized_at = None
+
+    if was_default:
+        # Legacy mirror: serve_video/serve_admin_video read pair.video_filename
+        # directly and have no media_id - keep them in sync with the default's
+        # new content.
+        pair.video_filename = new_filename
+        pair.original_video_name = upload.filename
+        pair.video_size = new_bytes
+
+    if old_storage_key:
+        _storage.supersede_media_object(old_object)
+        db.session.flush()
+        new_storage_key = build_media_storage_key(project, "videos", new_filename)
+        owner_user_id, owner_admin_id = project_storage_owner_ids(project)
+        _storage.record_media_object(
+            storage_key=new_storage_key, size_bytes=new_bytes, media_role=MEDIA_KIND_ROLES["videos"],
+            owner_user_id=owner_user_id, owner_admin_id=owner_admin_id,
+            project_id=project.id, pair_id=pair.id, counts_toward_quota=owner_user_id is not None,
+        )
+        if owner_user_id is not None:
+            _storage.reserve_account_storage(owner_user_id, new_bytes - old_bytes, None)
+
+    db.session.commit()
+
+    # Deferred cleanup: the OLD physical files are only removed AFTER the
+    # transaction above safely committed - a failure before this point leaves
+    # the previously-working original/derivative completely untouched.
+    stale_paths = []
+    if old_video_filename and old_video_filename != new_filename:
+        stale_paths.append(_safe_media_path(videos_dir, old_video_filename))
+    if old_optimized_filename:
+        stale_paths.append(_safe_media_path(videos_dir, old_optimized_filename))
+    _unlink_project_media([p for p in stale_paths if p], project.id)
+
+    _enqueue_pair_media_optimizations([media])
+    flash("Video replaced.", "success")
+    return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+
+@app.route("/projects/<int:project_id>/pair/<int:pair_index>/media/<int:media_id>/remove", methods=["POST"])
+@user_or_admin_required
+def user_remove_pair_media(project_id, pair_index, media_id):
+    _user, _admin, project, pair, media = _pair_media_route_context(project_id, pair_index, media_id)
+
+    if media.is_default:
+        flash("Can't remove this video||Set another video as default before removing this one.", "error-modal")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+    if len(pair.media_items) <= 1:
+        flash("Can't remove this video||A target must keep at least one video.", "error-modal")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    videos_dir = project_media_dirs(project)[1]
+    old_video_filename = media.video_filename
+    old_optimized_filename = media.optimized_video_filename
+    storage_key = build_media_storage_key(project, "videos", old_video_filename)
+    old_object = _storage.active_media_object_for_key(storage_key) if storage_key else None
+    owner_user_id, _owner_admin_id = project_storage_owner_ids(project)
+
+    # ProcessingJob.pair_media_id is a real FK with no ON DELETE clause -
+    # every PairMedia gets at least one optimize_pair_media job row pointing
+    # at it (Fast Video auto-enqueue), so deleting the PairMedia outright
+    # would violate that FK and raise mid-commit. Detach (not delete) those
+    # job rows first: they are a historical/diagnostic record of a job that
+    # really ran, not billing/ledger data, so preserving them minus the
+    # now-gone reference is correct - matching the ledger's own
+    # soft-delete-not-hard-delete convention elsewhere in this file.
+    ProcessingJob.query.filter_by(pair_media_id=media.id).update(
+        {ProcessingJob.pair_media_id: None}, synchronize_session=False
+    )
+
+    db.session.delete(media)
+    db.session.flush()
+
+    # Compact sort_order to a contiguous 0..N-1 run, preserving relative order -
+    # queried fresh rather than trusting pair.media_items' in-memory cache
+    # right after a same-session delete.
+    remaining = PairMedia.query.filter_by(pair_id=pair.id).order_by(PairMedia.sort_order, PairMedia.id).all()
+    for index, m in enumerate(remaining):
+        if m.sort_order != index:
+            m.sort_order = index
+
+    paths = [p for p in (
+        _safe_media_path(videos_dir, old_video_filename),
+        _safe_media_path(videos_dir, old_optimized_filename) if old_optimized_filename else None,
+    ) if p]
+    failures = _unlink_project_media(paths, project.id)
+
+    if storage_key and old_object is not None and old_object.status == "ACTIVE":
+        removed_path = _safe_media_path(videos_dir, old_video_filename)
+        if removed_path not in failures:
+            _storage.mark_media_object_deleted(old_object)
+            if owner_user_id and old_object.counts_toward_quota:
+                _storage.release_account_storage(owner_user_id, old_object.size_bytes)
+
+    db.session.commit()
+    flash("Video removed.", "success")
+    return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+
+# ===========================================================================
+# Direct QR video-only edit parity (video duplicate/Direct QR parity pass,
+# 2026-08-31). Direct QR has NO target image and NO per-target grouping - every
+# video in the story is its own ProjectPair (pair_index 0..N-1, image_filename
+# always None), created identically to how handle_upload/finalize already build
+# a Direct QR project's initial playlist. These two routes are the "Add Video" /
+# "Remove Video" halves of that same shape; "Replace Video" reuses the existing
+# user_replace_pair_media route unchanged (each Direct QR pair already has
+# exactly one PairMedia row from creation, so that route's (project_id,
+# pair_index, media_id) contract already fits it with no new code).
+#
+# Deliberately absent here, per the locked product rule: ROI/crop, marker
+# metadata, target-image hashing/duplicate-target logic, "Add Target"/"Add
+# Pair" terminology. Video-only.
+# ===========================================================================
+
+@app.route("/projects/<int:project_id>/direct-qr/video/add", methods=["POST"])
+@user_or_admin_required
+def user_add_direct_qr_video(project_id):
+    user, admin = _upload_identity()
+    project = Project.query.get(project_id)
+    if not resolve_project_manager(user, admin, project):
+        abort(404)
+    if project.experience_type != "direct_qr":
+        abort(404)
+
+    # Row-locked unconditionally (not just when a plan limit applies) for the
+    # duration of this transaction, so two concurrent "Add Video" submissions
+    # for the SAME project can never both pass the duplicate-video check
+    # against a not-yet-committed sibling - the second serializes behind the
+    # first's commit/rollback. uq_pair_media_video_hash cannot backstop this
+    # the way it does for Tracked Overlay/Detect Once, because Direct QR's
+    # whole-playlist duplicate scope spans DIFFERENT pair_ids (that index is
+    # scoped to a single pair_id) - this lock is the sole concurrency guard.
+    project = _lock_project_for_pair_quota(project.id)
+
+    # Admin-owned projects are exempt from every plan-based limit here, same
+    # precedent as user_add_project_pair's identical fix just above.
+    ents = user_entitlements(user) if user else None
+    dev_test_entitled = has_dev_test_entitlement(user) if user else False
+    max_pairs = get_plan_pairs_limit(user) if user else None
+    if user and max_pairs is None and not dev_test_entitled:
+        flash("Adding videos is not configured for your current plan. Please contact admin.", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+    if max_pairs is not None:
+        existing_count = ProjectPair.query.filter_by(project_id=project.id).count()
+        if existing_count + 1 > int(max_pairs):
+            flash(f"Your current plan allows a maximum of {max_pairs} videos per ScanStory.", "error")
+            return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    upload = request.files.get("new_video")
+    if not upload or not upload.filename:
+        flash("Choose a video to add.", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    _vid_max, _vid_dur = (
+        video_limits(ents) if ents is not None else (_ent.MAX_VIDEO_SIZE, _ent.MAX_VIDEO_DURATION_SECONDS)
+    )
+    try:
+        temp_path, ext = validate_video(upload, TMP_UPLOADS_DIR, _vid_max, _vid_dur)
+    except UploadValidationError as exc:
+        flash(f"Video: {exc.safe_message}", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    new_video_hash = _sha256_of_file(temp_path)
+    verdict, _dup_media = find_video_duplicate(project.id, new_video_hash, pair_id=None)
+    if verdict == "DUPLICATE_EXISTING_MEDIA":
+        _safe_remove(temp_path)
+        flash(
+            "Video already added||This video is already part of this ScanStory. Choose another video "
+            "to continue.",
+            "error-modal",
+        )
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    storage_owner = User.query.get(project_current_owner_user_id(project)) if project_current_owner_user_id(project) else None
+    storage_used, storage_allowance = account_storage_state(storage_owner)
+    new_bytes = os.path.getsize(temp_path)
+    if not _storage.can_consume(storage_used, storage_allowance, new_bytes):
+        _safe_remove(temp_path)
+        flash(f"Video: {STORAGE_LIMIT_MESSAGE}", "error")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    # Next pair_index: max(existing) + 1, not count() - same reasoning as the
+    # Add-Target route's identical pattern (pair_index can have gaps from a
+    # removed pair, count() would risk uq_project_pair_index).
+    max_index = db.session.query(func.max(ProjectPair.pair_index)).filter(ProjectPair.project_id == project.id).scalar()
+    next_index = (int(max_index) + 1) if max_index is not None else 0
+
+    videos_dir = project_media_dirs(project)[1]
+    vid_filename = f"{project.id}_{next_index}{ext}"
+    vid_path = os.path.join(videos_dir, vid_filename)
+    os.replace(temp_path, vid_path)
+
+    pair = ProjectPair(
+        project_id=project.id,
+        pair_index=next_index,
+        image_filename=None,
+        video_filename=vid_filename,
+        image_path=None,
+        original_video_name=upload.filename,
+        video_size=new_bytes,
+        is_processed=True,
+        processing_status="completed",
+        feature_extraction_status="not_required",
+        processing_error=None,
+    )
+    db.session.add(pair)
+    try:
+        db.session.flush()  # real pair.id for create_pair_media_rows below
+
+        media_rows = create_pair_media_rows(pair, [{
+            "filename": vid_filename, "original_name": upload.filename, "size": new_bytes,
+        }])
+        media_rows[0].video_hash = new_video_hash
+
+        video_row = record_pair_video_media_object(project, pair, vid_filename, new_bytes)
+        if video_row and project_current_owner_user_id(project):
+            _storage.reserve_account_storage(project_current_owner_user_id(project), new_bytes, None)
+
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        _safe_remove(vid_path)
+        flash(
+            "Video already added||This video is already part of this ScanStory. Choose another video "
+            "to continue.",
+            "error-modal",
+        )
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    _enqueue_pair_media_optimizations(media_rows)
+    flash("Video added.", "success")
+    return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+
+@app.route("/projects/<int:project_id>/direct-qr/video/<int:pair_index>/remove", methods=["POST"])
+@user_or_admin_required
+def user_remove_direct_qr_video(project_id, pair_index):
+    _user, _admin, project, pair, _media = _pair_media_route_context(project_id, pair_index)
+    if project.experience_type != "direct_qr":
+        abort(404)
+
+    total_videos = ProjectPair.query.filter_by(project_id=project.id).count()
+    if total_videos <= 1:
+        flash("Can't remove this video||A ScanStory must keep at least one video.", "error-modal")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    videos_dir = project_media_dirs(project)[1]
+    owner_user_id, _owner_admin_id = project_storage_owner_ids(project)
+    stale_paths = []
+    for media in list(pair.media_items):
+        storage_key = build_media_storage_key(project, "videos", media.video_filename)
+        old_object = _storage.active_media_object_for_key(storage_key) if storage_key else None
+        # Same FK-detach reasoning as user_remove_pair_media: ProcessingJob.pair_media_id
+        # has no ON DELETE clause, and these job rows are a historical record, not
+        # billing/ledger data - detach, never delete.
+        ProcessingJob.query.filter_by(pair_media_id=media.id).update(
+            {ProcessingJob.pair_media_id: None}, synchronize_session=False
+        )
+        db.session.delete(media)
+        stale_paths.append(_safe_media_path(videos_dir, media.video_filename))
+        if media.optimized_video_filename:
+            stale_paths.append(_safe_media_path(videos_dir, media.optimized_video_filename))
+        if storage_key and old_object is not None and old_object.status == "ACTIVE":
+            _storage.mark_media_object_deleted(old_object)
+            if owner_user_id and old_object.counts_toward_quota:
+                _storage.release_account_storage(owner_user_id, old_object.size_bytes)
+
+    # ProcessingJob.pair_id and ScanLog.pair_id also have no ON DELETE clause -
+    # same detach treatment for any rows still pointing at the pair itself
+    # before it goes away. ScanLog rows are real scan history, never deleted.
+    ProcessingJob.query.filter_by(pair_id=pair.id).update(
+        {ProcessingJob.pair_id: None}, synchronize_session=False
+    )
+    ScanLog.query.filter_by(pair_id=pair.id).update(
+        {ScanLog.pair_id: None}, synchronize_session=False
+    )
+    db.session.delete(pair)
+    db.session.commit()
+
+    _unlink_project_media([p for p in stale_paths if p], project.id)
+
+    flash("Video removed.", "success")
+    return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+
+# ---------------------------------------------------------------------------
+# Admin CRUD parity pass (2026-09-02): whole-target removal for Tracked
+# Overlay / Detect Once. This did not exist for EITHER User or Admin before
+# this pass - genuinely new, not a duplicated implementation - built by
+# directly reusing the exact same cleanup shape user_remove_direct_qr_video
+# above already uses (detach ProcessingJob/ScanLog FKs before deleting,
+# delete PairMedia rows, release storage, delete the physical files), plus
+# the per-pair image/feature-file cleanup _delete_project_files_and_rows
+# already uses for a full project delete. pair_index gaps left by a removed
+# pair are an already-documented, tolerated design (see the "Next pair_index:
+# max(existing)+1, not count()" comment on the Add-Target route above) - no
+# renumbering here.
+# ---------------------------------------------------------------------------
+@app.route("/projects/<int:project_id>/pair/<int:pair_index>/remove", methods=["POST"])
+@user_or_admin_required
+def user_remove_project_pair(project_id, pair_index):
+    _user, _admin, project, pair, _media = _pair_media_route_context(project_id, pair_index)
+    if project.experience_type == "direct_qr":
+        # Direct QR has no target concept - use the video-remove route.
+        abort(404)
+
+    total_pairs = ProjectPair.query.filter_by(project_id=project.id).count()
+    if total_pairs <= 1:
+        flash("Can't remove this target||A ScanStory must keep at least one target.", "error-modal")
+        return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+    images_dir, videos_dir, features_dir, _qr_dir = project_media_dirs(project)
+    owner_user_id, _owner_admin_id = project_storage_owner_ids(project)
+    stale_paths = [
+        _safe_media_path(images_dir, pair.image_filename),
+        _safe_media_path(features_dir, f"{project.id}_{pair.pair_index}.npz"),
+    ]
+
+    for media in list(pair.media_items):
+        storage_key = build_media_storage_key(project, "videos", media.video_filename)
+        old_object = _storage.active_media_object_for_key(storage_key) if storage_key else None
+        ProcessingJob.query.filter_by(pair_media_id=media.id).update(
+            {ProcessingJob.pair_media_id: None}, synchronize_session=False
+        )
+        db.session.delete(media)
+        stale_paths.append(_safe_media_path(videos_dir, media.video_filename))
+        if media.optimized_video_filename:
+            stale_paths.append(_safe_media_path(videos_dir, media.optimized_video_filename))
+        if storage_key and old_object is not None and old_object.status == "ACTIVE":
+            _storage.mark_media_object_deleted(old_object)
+            if owner_user_id and old_object.counts_toward_quota:
+                _storage.release_account_storage(owner_user_id, old_object.size_bytes)
+
+    # The pair's own target image is a separate storage object from its
+    # videos - same detach-then-release treatment.
+    image_storage_key = build_media_storage_key(project, "images", pair.image_filename) if pair.image_filename else None
+    image_object = _storage.active_media_object_for_key(image_storage_key) if image_storage_key else None
+    if image_storage_key and image_object is not None and image_object.status == "ACTIVE":
+        _storage.mark_media_object_deleted(image_object)
+        if owner_user_id and image_object.counts_toward_quota:
+            _storage.release_account_storage(owner_user_id, image_object.size_bytes)
+
+    ProcessingJob.query.filter_by(pair_id=pair.id).update(
+        {ProcessingJob.pair_id: None}, synchronize_session=False
+    )
+    ScanLog.query.filter_by(pair_id=pair.id).update(
+        {ScanLog.pair_id: None}, synchronize_session=False
+    )
+    db.session.delete(pair)
+    db.session.commit()
+
+    _unlink_project_media([p for p in stale_paths if p], project.id)
+
+    flash("Target removed.", "success")
+    return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+
+@app.route("/projects/<int:project_id>/pair/<int:pair_index>/media/<int:media_id>/set-default", methods=["POST"])
+@user_or_admin_required
+def user_set_default_pair_media(project_id, pair_index, media_id):
+    _user, _admin, project, pair, media = _pair_media_route_context(project_id, pair_index, media_id)
+
+    if not media.is_default:
+        current_default = pair.default_media
+        if current_default is not None:
+            # Clear the OLD default and flush BEFORE setting the new one, so
+            # the partial unique index (at most one is_default=True per pair)
+            # never sees two TRUE rows in the same flush.
+            current_default.is_default = False
+            db.session.flush()
+        media.is_default = True
+
+        # Legacy mirror: single-video routes/serve_video read pair.video_filename
+        # directly and have no media_id - keep them pointed at the new
+        # default's ORIGINAL (never the optimized derivative).
+        pair.video_filename = media.video_filename
+        pair.original_video_name = media.original_video_name
+        pair.video_size = media.video_size
+
+        db.session.commit()
+        flash("Default video updated.", "success")
+    return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+
+@app.route("/projects/<int:project_id>/pair/<int:pair_index>/media/<int:media_id>/move", methods=["POST"])
+@user_or_admin_required
+def user_move_pair_media(project_id, pair_index, media_id):
+    _user, _admin, _project, pair, media = _pair_media_route_context(project_id, pair_index, media_id)
+
+    direction = request.form.get("direction")
+    if direction not in ("up", "down"):
+        abort(400)
+
+    ordered = PairMedia.query.filter_by(pair_id=pair.id).order_by(PairMedia.sort_order, PairMedia.id).all()
+    idx = next((i for i, m in enumerate(ordered) if m.id == media.id), None)
+    if idx is None:
+        abort(404)
+    swap_idx = idx - 1 if direction == "up" else idx + 1
+    if 0 <= swap_idx < len(ordered):
+        other = ordered[swap_idx]
+        # is_default is deliberately untouched here - sequence order and
+        # default status are independent (see the reorder decision in the
+        # multi-video editing report: sequential playback always starts at
+        # array index 0 regardless of which entry is_default).
+        media.sort_order, other.sort_order = other.sort_order, media.sort_order
+        db.session.commit()
+    return redirect(url_for("user_edit_project_page", project_id=project_id))
+
+
+@app.route("/projects/<int:project_id>/reprocess", methods=["POST"])
+@user_or_admin_required
+def user_reprocess_project(project_id):
+    # Admin-owner parity (2026-09-03): same dual-identity pattern as every
+    # other project-management route in this pass. Admin may only reprocess
+    # their OWN admin-owned project - resolve_project_manager enforces this
+    # identically to Edit/Add-Target/etc, never another admin's or a
+    # customer's project.
+    user, admin = _upload_identity()
+    project = Project.query.get(project_id)
+    if not resolve_project_manager(user, admin, project):
+        abort(404)
+    _reprocess_return_endpoint = "admin_my_projects" if admin else "projects_page"
+    if project_ownership_state(project) != "valid":
+        flash("Ownership Error: this project's ownership record is invalid (both or neither owner set). Reprocessing is blocked until this is resolved.", "error")
+        return redirect(url_for(_reprocess_return_endpoint))
+
+    # Direct QR safety fix (2026-09-03): Direct QR projects have no
+    # recognition target - their ProjectPair rows carry image_filename=None,
+    # feature_extraction_status="not_required". The generic reprocess loop
+    # below used to flip them to "processing"/"extracting" anyway, then
+    # _process_pair crashed on os.path.join(dir, None) and the except branch
+    # marked an already-healthy Direct QR pair "failed" - a real, live bug
+    # (see SCANSTORY_DIRECT_QR_LANDING_AND_ADMIN_PARITY_AUDIT). Direct QR has
+    # nothing to reprocess, so this is a safe no-op, not an error.
+    if project.experience_type == "direct_qr":
+        flash("Direct QR does not require target reprocessing.", "success")
+        return redirect(url_for(_reprocess_return_endpoint))
 
     pairs_to_reprocess = ProjectPair.query.filter_by(project_id=project_id).all()
     if not pairs_to_reprocess:
         flash("No pairs found to reprocess.", "error")
-        return redirect(url_for("projects_page"))
+        return redirect(url_for(_reprocess_return_endpoint))
 
     for pair in pairs_to_reprocess:
         pair.processing_status = "processing"
@@ -8246,10 +10168,10 @@ def user_reprocess_project(project_id):
 
     job = _schedule_project_pair_processing(project_id, attempt_scope="reprocess")
     if not job:
-        return redirect(url_for("projects_page"))
+        return redirect(url_for(_reprocess_return_endpoint))
 
     flash("Reprocessing started. Your QR code stays the same - refresh in a minute to check.", "success")
-    return redirect(url_for("projects_page"))
+    return redirect(url_for(_reprocess_return_endpoint))
 
 
 @app.route("/register", methods=["GET", "POST"])
@@ -8641,7 +10563,14 @@ def reset_password():
     
     if request.method == "GET":
         return render_template("user/reset_password.html", email=email)
-    
+
+    ok, retry_after = _check_rate_limit("reset_password_ip", _rate_limit_key("reset_password"))
+    if not ok:
+        flash("Too many attempts. Please wait and try again.", "error")
+        response = make_response(render_template("user/reset_password.html", email=email), 429)
+        response.headers["Retry-After"] = str(retry_after)
+        return response
+
     otp = (request.form.get("otp") or "").strip()
     new_password = request.form.get("new_password") or ""
     confirm_password = request.form.get("confirm_password") or ""
@@ -8692,11 +10621,19 @@ def user_create_project_page():
         flash("Pairs allowed per project is not configured for your current plan. Please contact admin.", "error")
         return redirect(url_for("subscribe_page"))
 
+    # Issue 3E-D: the smallest safe entitlement values the Creator's
+    # multi-video UI needs - the effective ceiling only, already capped by
+    # the immutable server ceiling. Backend upload/finalize enforcement
+    # (3E-C/3E-D0) is authoritative regardless of what this renders; these
+    # values only drive whether "+ Add another video" appears at all.
+    _ents = user_entitlements(user)
     return render_template(
         "user/user_create_project.html",
         user=user,
         max_pairs_per_project=max_pairs_per_project,
         dev_test_entitled=dev_test_entitled,
+        allow_multi_video_per_target=_ents["allow_multi_video_per_target"],
+        effective_max_videos_per_target=_ents["effective_max_videos_per_target"],
         # Step 1's "Creating this ScanStory for:" choice exists for vendors
         # only; an INDIVIDUAL account never renders it at all.
         viewer_is_business_vendor=is_business_vendor(user),
@@ -8766,8 +10703,11 @@ def handle_upload():
 
     # Validation
     _upload_log("UPLOAD VALIDATION START", upload_id, user_id=user.id, pair_count=pair_count)
-    if experience_type == "image_video" and (not images or not videos or len(images) != len(videos)):
-        flash("Error: Please upload equal number of images and videos", "error")
+    if experience_type == "image_video" and not images:
+        flash("Error: Please upload at least one target image", "error")
+        return redirect(url_for("user_create_project_page"))
+    if experience_type == "image_video" and not videos:
+        flash("Error: Please upload at least one video", "error")
         return redirect(url_for("user_create_project_page"))
     if experience_type == "direct_qr" and not videos:
         flash("Error: Please upload a video for Direct QR", "error")
@@ -8794,17 +10734,37 @@ def handle_upload():
 
     # Validate every file from its actual content BEFORE any quota
     # reservation or DB row is created (P0D) - a rejected upload must never
-    # consume project/pair quota. All-or-nothing: every pair in the request
-    # must validate before any of them are persisted.
-    validated_media = []
+    # consume project/pair quota. All-or-nothing: every file in the request
+    # must validate, and every uploaded video must resolve to a valid target,
+    # before any of them are persisted.
+    #
+    # Issue 3E-C: images and videos are validated as two independent lists
+    # (not a zipped per-pair loop) because a target's video COUNT can now
+    # differ from 1 - video_target_groups (see resolve_video_target_groups)
+    # says which target each validated video belongs to. Direct QR keeps its
+    # original one-video-is-its-own-pair shape unchanged - it never reads
+    # video_target_indexes and is never subject to the multi-video
+    # entitlement check (there is exactly one video per Direct QR pair,
+    # always, both before and after this change).
     _ents = user_entitlements(user)
     _img_max, _img_dim, _img_px = image_limits(_ents)
     _vid_max, _vid_dur = video_limits(_ents)
+    validated_images = []
+    validated_videos = []
+    video_target_groups = None
     try:
-        for i, video_file in enumerate(videos):
-            image_file = images[i] if experience_type == "image_video" else None
-            img_temp = img_ext = None
-            if image_file is not None:
+        if experience_type == "image_video":
+            video_target_groups, group_error = resolve_video_target_groups(
+                request.form, len(images), len(videos), _ents
+            )
+            if group_error:
+                app.logger.warning(
+                    f"Upload rejected (video target mapping, upload_id={upload_id}, "
+                    f"code={group_error.code}): {group_error.detail}"
+                )
+                raise group_error
+
+            for i, image_file in enumerate(images):
                 try:
                     img_temp, img_ext = validate_image(
                         image_file, TMP_UPLOADS_DIR, _img_max, _img_dim, _img_px
@@ -8812,21 +10772,71 @@ def handle_upload():
                 except UploadValidationError as exc:
                     app.logger.warning(f"Upload rejected (image, pair {i}, upload_id={upload_id}): {exc.detail}")
                     raise
+                validated_images.append({"image_temp": img_temp, "image_ext": img_ext})
+        else:
+            video_target_groups = [[i] for i in range(len(videos))]
+
+        for i, video_file in enumerate(videos):
             try:
                 vid_temp, vid_ext = validate_video(
                     video_file, TMP_UPLOADS_DIR, _vid_max, _vid_dur
                 )
             except UploadValidationError as exc:
-                _safe_remove(img_temp)
                 app.logger.warning(f"Upload rejected (video, pair {i}, upload_id={upload_id}): {exc.detail}")
                 raise
-            validated_media.append({"image_temp": img_temp, "image_ext": img_ext, "video_temp": vid_temp, "video_ext": vid_ext})
+            validated_videos.append({"video_temp": vid_temp, "video_ext": vid_ext})
     except UploadValidationError as exc:
-        for item in validated_media:
+        for item in validated_images:
             _safe_remove(item.get("image_temp"))
-            _safe_remove(item["video_temp"])
+        for item in validated_videos:
+            _safe_remove(item.get("video_temp"))
         flash(exc.safe_message, "error")
         return redirect(url_for("user_create_project_page"))
+
+    # ---- Universal video duplicate enforcement (initial Create path),
+    # universal-video-duplicate-rule pass, 2026-08-31. Mirrors
+    # _finalize_assemble_and_validate's own per-target (image_video) and
+    # whole-playlist (direct_qr) guards - handle_upload never had either
+    # before this pass, so a single multi-target creation request could
+    # persist exact-duplicate videos with no guard at all except, for
+    # image_video, the DB-level uq_pair_media_video_hash index - which is
+    # scoped per pair_id, so it only ever catches a resubmission WITHIN the
+    # same pair, never across pairs in the same batch (by design - reusing a
+    # video under a different target stays valid). Runs before ANY storage
+    # reservation or persistence, on the already-validated (standardized,
+    # for images) temp files - a duplicate is rejected before it costs
+    # anything, matching every other route's "check before persist" order.
+    if experience_type == "image_video":
+        for target_index in range(pair_count):
+            _video_indexes = video_target_groups[target_index]
+            _video_labels = [
+                (str(i), validated_videos[i]["video_temp"])
+                for i in _video_indexes
+                if validated_videos[i]["video_temp"]
+            ]
+            if len(_video_labels) > 1 and _find_duplicate_target_image(_video_labels) is not None:
+                for item in validated_images:
+                    _safe_remove(item.get("image_temp"))
+                for item in validated_videos:
+                    _safe_remove(item.get("video_temp"))
+                flash("This video is already added to this target.", "error")
+                return redirect(url_for("user_create_project_page"))
+    elif experience_type == "direct_qr":
+        # No per-target grouping exists for Direct QR - every video in the
+        # story is its own target, so the scope is the WHOLE playlist being
+        # created in this one request.
+        _playlist_video_labels = [
+            (str(i), validated_videos[i]["video_temp"])
+            for i in range(len(validated_videos))
+            if validated_videos[i]["video_temp"]
+        ]
+        if len(_playlist_video_labels) > 1 and _find_duplicate_target_image(_playlist_video_labels) is not None:
+            for item in validated_images:
+                _safe_remove(item.get("image_temp"))
+            for item in validated_videos:
+                _safe_remove(item.get("video_temp"))
+            flash("This video is already part of this ScanStory.", "error")
+            return redirect(url_for("user_create_project_page"))
 
     # STORAGE GATE (Wave 3). Two separate checks, both of which must pass: the
     # per-file policy above (bytes/duration/dimensions/pixels, already capped by
@@ -8834,24 +10844,37 @@ def handle_upload():
     # storage allowance never substitutes for a per-file limit and never
     # relaxes one.
     #
-    # The ENTIRE retained logical set is weighed at once - a multi-pair project
-    # is accepted or rejected whole, so we never persist pair 1 and then reject
-    # pair 2 leaving a half-created project with orphaned accounting.
+    # The ENTIRE retained logical set is weighed at once - a multi-pair,
+    # multi-video project is accepted or rejected whole, so we never persist
+    # target 1 and then reject target 2 leaving a half-created project with
+    # orphaned accounting.
     #
     # Sizes come from the validated temp files, i.e. the bytes that will
     # actually be retained, not a client-declared length. This is the cheap
     # PRECHECK; the authoritative atomic reservation runs inside the
-    # transaction below.
-    retained_bytes = []
-    for media in validated_media:
-        image_bytes = os.path.getsize(media["image_temp"]) if media.get("image_temp") else None
-        retained_bytes.append((image_bytes, os.path.getsize(media["video_temp"])))
-    total_new_storage_bytes = sum((image_bytes or 0) + video_bytes for image_bytes, video_bytes in retained_bytes)
+    # transaction below. Every physical file (image or video) is weighed
+    # exactly once here, regardless of how many targets/videos it ends up
+    # distributed across.
+    # Canonical target identity remediation pass: standardize each image temp
+    # file HERE, before its size is measured for storage accounting - not
+    # later in the per-target loop. The storage RESERVATION below and the
+    # ledger row record_pair_media_objects writes per pair must agree on the
+    # same final byte count; computing them from two different points in the
+    # pipeline (pre- vs post-standardize) silently drifted them apart by a
+    # few bytes per image (caught by test_16_quota_and_storage_accounting_is_
+    # correct_for_a_group's own byte-exact assertion during this pass's own
+    # regression run).
+    for item in validated_images:
+        standardize_uploaded_image(item["image_temp"], target_size=1200)
+    retained_image_bytes = [os.path.getsize(item["image_temp"]) for item in validated_images]
+    retained_video_bytes = [os.path.getsize(item["video_temp"]) for item in validated_videos]
+    total_new_storage_bytes = sum(retained_image_bytes) + sum(retained_video_bytes)
     storage_used, storage_allowance = account_storage_state(user)
     if not _storage.can_consume(storage_used, storage_allowance, total_new_storage_bytes):
-        for media in validated_media:
-            _safe_remove(media.get("image_temp"))
-            _safe_remove(media["video_temp"])
+        for item in validated_images:
+            _safe_remove(item.get("image_temp"))
+        for item in validated_videos:
+            _safe_remove(item.get("video_temp"))
         flash(STORAGE_LIMIT_MESSAGE, "error")
         return redirect(url_for("user_create_project_page"))
 
@@ -8860,6 +10883,7 @@ def handle_upload():
     saved_paths = []
     pairs_data = []
     created_pairs = []
+    created_pair_media_rows = []
     project = None
     try:
         # AUTHORITATIVE storage reservation: one conditional UPDATE on the user
@@ -8891,6 +10915,12 @@ def handle_upload():
             user_project_index=user_project_index,
             experience_type=experience_type,
             playback_mode=playback_mode,
+            # Local Creator Integrity pass: upload_id is already a fresh
+            # crypto.randomUUID() minted once per "Create ScanStory" click
+            # (see its parsing above) - persisting it here turns the
+            # client's existing per-submission token into real server-side
+            # idempotency (see the commit's IntegrityError handling below).
+            creation_idempotency_key=upload_id,
         )
         _upload_log("UPLOAD PERSIST START", upload_id, user_id=user.id, pair_count=pair_count)
         db.session.add(project)
@@ -8900,58 +10930,105 @@ def handle_upload():
         if not pair_slots_ok:
             raise ValueError(pair_slots_error)
 
-        for i, video_file in enumerate(videos):
-            image_file = images[i] if experience_type == "image_video" else None
-            marker_meta = marker_metadata[i]
-            media = validated_media[i]
-            img_filename = f"{project.id}_{i}.jpg" if image_file is not None else None
-            vid_filename = f"{project.id}_{i}{media['video_ext']}"
+        for target_index in range(pair_count):
+            marker_meta = marker_metadata[target_index]
+            image_file = images[target_index] if experience_type == "image_video" else None
+            img_media = validated_images[target_index] if experience_type == "image_video" else None
+            video_indexes = video_target_groups[target_index]
 
+            img_filename = f"{project.id}_{target_index}.jpg" if image_file is not None else None
+            image_bytes = None
+            image_hash = None
             if image_file is not None:
                 img_path = os.path.join(IMAGES_DIR, img_filename)
-                os.replace(media["image_temp"], img_path)  # atomic move: already-validated content only
+                os.replace(img_media["image_temp"], img_path)  # atomic move: already-validated content only
                 saved_paths.append(img_path)
+                # Canonical target identity remediation pass: image_temp was
+                # already standardized above (before the storage-accounting
+                # gate), so img_path (its post-os.replace destination) is
+                # already the FINAL persisted/served bytes here - no second
+                # standardize call, which would only be redundant (proven
+                # idempotent) and would risk the size/hash drifting from what
+                # the storage gate already measured. The stored image_hash
+                # therefore describes the FINAL file, not the pre-standardize
+                # upload - otherwise a legitimate re-upload of an existing
+                # target's own (already-standardized) served image would
+                # never match its own stored hash, silently defeating
+                # duplicate-target detection.
+                image_bytes = os.path.getsize(img_path)
+                # The in-batch _find_duplicate_target_image check above
+                # already catches this within one submission; persisting
+                # the hash makes the DB unique index
+                # (uq_project_pair_image_hash) the authoritative guard
+                # against a concurrent second submission.
+                image_hash = _sha256_of_file(img_path)
 
-            vid_path = os.path.join(VIDEOS_DIR, vid_filename)
-            video_persist_start = time.time()
-            _upload_log(
-                "VIDEO SERVER PERSIST START",
-                upload_id,
-                **_video_log_fields(
-                    video_file,
-                    user_id=user.id,
-                    project_id=project.id,
-                    pair_index=i,
-                    content_length=request.content_length,
-                ),
-            )
-            os.replace(media["video_temp"], vid_path)  # atomic move: already-validated content only
-            saved_paths.append(vid_path)
-            video_size = os.path.getsize(vid_path)
-            _upload_log(
-                "VIDEO SERVER PERSIST DONE",
-                upload_id,
-                **_video_log_fields(
-                    video_file,
-                    user_id=user.id,
-                    project_id=project.id,
-                    pair_index=i,
-                    content_length=request.content_length,
-                    video_size=video_size,
-                    persistence_duration_ms=round((time.time() - video_persist_start) * 1000),
-                ),
-            )
+            # Issue 3E-C: one target may now have multiple videos. The first
+            # (sort_order 0) keeps the EXACT legacy filename shape
+            # ("{project_id}_{pair_index}{ext}") and is mirrored onto
+            # ProjectPair's own video_filename/original_video_name/video_size
+            # - every existing reader of those columns (serve_video, the
+            # scanner) sees the same thing it always has. Any additional
+            # video gets a deterministic, collision-free name and exists only
+            # as a PairMedia row - ProjectPair never carries a second video.
+            video_specs = []
+            for slot, video_index in enumerate(video_indexes):
+                video_file = videos[video_index]
+                vid_media = validated_videos[video_index]
+                if slot == 0:
+                    vid_filename = f"{project.id}_{target_index}{vid_media['video_ext']}"
+                else:
+                    vid_filename = build_additional_pair_media_filename(
+                        project.id, target_index, slot, vid_media["video_ext"]
+                    )
+                vid_path = os.path.join(VIDEOS_DIR, vid_filename)
+                video_persist_start = time.time()
+                _upload_log(
+                    "VIDEO SERVER PERSIST START",
+                    upload_id,
+                    **_video_log_fields(
+                        video_file,
+                        user_id=user.id,
+                        project_id=project.id,
+                        pair_index=target_index,
+                        content_length=request.content_length,
+                    ),
+                )
+                os.replace(vid_media["video_temp"], vid_path)  # atomic move: already-validated content only
+                saved_paths.append(vid_path)
+                video_size = os.path.getsize(vid_path)
+                _upload_log(
+                    "VIDEO SERVER PERSIST DONE",
+                    upload_id,
+                    **_video_log_fields(
+                        video_file,
+                        user_id=user.id,
+                        project_id=project.id,
+                        pair_index=target_index,
+                        content_length=request.content_length,
+                        video_size=video_size,
+                        persistence_duration_ms=round((time.time() - video_persist_start) * 1000),
+                    ),
+                )
+                video_specs.append({
+                    "filename": vid_filename,
+                    "original_name": video_file.filename,
+                    "size": video_size,
+                    "mime_type": video_file.mimetype,
+                })
 
+            default_video = video_specs[0]
             pair = ProjectPair(
                 project_id=project.id,
-                pair_index=i,
+                pair_index=target_index,
                 image_filename=img_filename,
-                video_filename=vid_filename,
-                image_path=f"/image/{project.id}/{i}" if image_file is not None else None,
+                video_filename=default_video["filename"],
+                image_path=f"/image/{project.id}/{target_index}" if image_file is not None else None,
+                image_hash=image_hash,
                 original_image_name=image_file.filename if image_file is not None else None,
-                original_video_name=video_file.filename,
+                original_video_name=default_video["original_name"],
                 image_size=(marker_meta["processed_size_bytes"] or image_file.content_length) if image_file is not None else None,
-                video_size=video_size,
+                video_size=default_video["size"],
                 marker_mode=marker_meta["mode"],
                 marker_crop_x=marker_meta["crop_x"],
                 marker_crop_y=marker_meta["crop_y"],
@@ -8971,27 +11048,58 @@ def handle_upload():
                 processing_error=None,
             )
             db.session.add(pair)
-            created_pairs.append((pair, retained_bytes[i]))
+            created_pair_media_rows.extend(create_pair_media_rows(pair, video_specs))
+            created_pairs.append((pair, image_bytes, video_specs))
 
             pairs_data.append({
-                "pair_index": i,
+                "pair_index": target_index,
                 "image_filename": img_filename,
-                "video_filename": vid_filename,
-                "video_size": video_size,
-                "original_video_name": video_file.filename,
-                "video_mime_type": video_file.mimetype,
+                "video_filename": default_video["filename"],
+                "video_size": default_video["size"],
+                "original_video_name": default_video["original_name"],
+                "video_mime_type": default_video["mime_type"],
             })
 
         # Ledger rows for the retained media, in the SAME transaction as the
         # reservation and the pair rows, so accounting can never be half-applied.
+        # Every physically uploaded video is billed exactly once here - the
+        # default video via record_pair_media_objects (mirroring the legacy
+        # image+video pair), any additional ones via
+        # record_pair_video_media_object, keyed by their own filename/bytes.
         db.session.flush()
-        for pair, (image_bytes, video_bytes) in created_pairs:
-            record_pair_media_objects(project, pair, image_bytes=image_bytes, video_bytes=video_bytes)
+        for pair, image_bytes, video_specs in created_pairs:
+            record_pair_media_objects(project, pair, image_bytes=image_bytes, video_bytes=video_specs[0]["size"])
+            for spec in video_specs[1:]:
+                record_pair_video_media_object(project, pair, spec["filename"], spec["size"])
 
         upload_timing["files_persisted_at"] = time.time()
         _upload_log("UPLOAD PERSIST DONE", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data), duration_ms=round((upload_timing["files_persisted_at"] - request_start) * 1000))
         db.session.commit()
         _upload_log("UPLOAD DB COMMIT DONE", upload_id, user_id=user.id, project_id=project.id, pair_count=len(pairs_data))
+        _enqueue_pair_media_optimizations(created_pair_media_rows)
+    except IntegrityError:
+        # Local Creator Integrity pass, IDEMP proof: a duplicate submission
+        # (same upload_id) already won this race and committed first. Clean
+        # up exactly like any other failed attempt - the files this request
+        # wrote are for a project row that will never exist - then hand the
+        # user the ALREADY-CREATED project instead of a false failure.
+        db.session.rollback()
+        for saved_path in saved_paths:
+            try:
+                if saved_path and os.path.exists(saved_path):
+                    os.remove(saved_path)
+            except Exception:
+                pass
+        for item in validated_images:
+            _safe_remove(item.get("image_temp"))
+        for item in validated_videos:
+            _safe_remove(item.get("video_temp"))
+        existing_project = Project.query.filter_by(creation_idempotency_key=upload_id).first()
+        if existing_project:
+            flash("Your ScanStory was already created.", "success")
+            return redirect(url_for("projects_page"))
+        flash("Project upload failed. Please try again.", "error")
+        return redirect(url_for("user_create_project_page"))
     except Exception as exc:
         db.session.rollback()
         for saved_path in saved_paths:
@@ -9000,11 +11108,13 @@ def handle_upload():
                     os.remove(saved_path)
             except Exception:
                 pass
-        # Any pairs not yet reached in the loop above still have their
-        # validated temp files sitting in TMP_UPLOADS_DIR - clean those up too.
-        for media in validated_media:
-            _safe_remove(media.get("image_temp"))
-            _safe_remove(media.get("video_temp"))
+        # Any targets/videos not yet reached in the loop above still have
+        # their validated temp files sitting in TMP_UPLOADS_DIR - clean
+        # those up too.
+        for item in validated_images:
+            _safe_remove(item.get("image_temp"))
+        for item in validated_videos:
+            _safe_remove(item.get("video_temp"))
         flash(str(exc) if isinstance(exc, ValueError) else "Project upload failed. Please try again.", "error")
         return redirect(url_for("user_create_project_page"))
     # ✅ STEP 4: Generate QR code (FAST)
@@ -9296,6 +11406,336 @@ def _upload_session_owned(session_row, user, admin):
     if admin and session_row.owner_admin_id == admin.id:
         return True
     return False
+
+
+def _sha256_of_file(path):
+    """Streamed, constant-memory - same block-read idiom the assembled-bytes
+    checksum step already uses (see the client_checksum_sha256 verification
+    above)."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _project_pair_target_conflict(project_id, image_hash, exclude_pair_id=None):
+    """Local Creator Integrity pass: returns the sibling ProjectPair already
+    using this exact target image within the same project, or None. Scoped to
+    project_id only - the same target image reused across DIFFERENT projects
+    stays allowed. `exclude_pair_id` is the pair currently being replaced, so
+    replacing a pair with the SAME image it already has is never reported as
+    a collision against itself (only another pair is a real conflict)."""
+    if not image_hash:
+        return None
+    query = ProjectPair.query.filter_by(project_id=project_id, image_hash=image_hash)
+    if exclude_pair_id is not None:
+        query = query.filter(ProjectPair.id != exclude_pair_id)
+    return query.first()
+
+
+# Conservative duplicate-target similarity guard (target-identity remediation pass,
+# 2026-08-29). This is a DUPLICATE GUARD, not the live scanner - a false positive here
+# would silently block a genuinely different target from ever being added/replaced, so
+# every threshold below is deliberately stricter than the live scanner's own
+# MIN_GOOD_MATCHES/MIN_INLIERS_* (tuned instead to tolerate partial occlusion/motion
+# blur/lighting on a live camera frame, where a false NEGATIVE - not a false positive -
+# is the tolerable failure mode there). "Uncertain" always resolves to ALLOW here,
+# never BLOCK - see resolve_target_identity_conflict().
+TARGET_SIMILARITY_MIN_GOOD_MATCHES = 25
+TARGET_SIMILARITY_MIN_INLIERS = 18
+TARGET_SIMILARITY_MIN_INLIER_RATIO = 0.50
+
+
+def _extract_orb_query_features(image_path):
+    """Single-orientation ORB query (descriptors + raw cv2.KeyPoint list) from a
+    candidate target image, in exactly the shape match_best_variant() and the live
+    scanner's own detect_init already expect for the query side (test_kp, test_desc =
+    orb.detectAndCompute(...), test_kp kept as raw KeyPoints, not converted to an xy
+    array - see detect_init's own `test_kp[m.queryIdx].pt` usage). Stored-side
+    rotation/mirror invariance already lives in the stored FEATURE_TAGS variants (see
+    extract_features_multi), so the query itself only needs its own orientation.
+    Returns (None, None) if the image can't be read or yields no descriptors."""
+    img = cv2.imread(image_path, cv2.IMREAD_COLOR)
+    if img is None:
+        return None, None
+    img = _enhance_bgr_for_orb(img)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape[:2]
+    m = max(h, w)
+    if m > ORB_MAX_DIM:
+        scale = ORB_MAX_DIM / float(m)
+        gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    kp, desc = _orb().detectAndCompute(gray, None)
+    if desc is None or kp is None or desc.size == 0:
+        return None, None
+    return desc.astype(np.uint8), kp
+
+
+def _is_high_confidence_same_target(candidate_desc, candidate_kp, stored_feats):
+    """candidate_desc/candidate_kp: from _extract_orb_query_features(). stored_feats:
+    load_features()'s dict (all FEATURE_TAGS variants). Reuses the exact same
+    match_best_variant() ratio-test matcher the live scanner uses, then requires its
+    OWN stricter RANSAC-homography verification on top of that - raw match count alone
+    is never treated as sufficient evidence, since two genuinely different but
+    texture-similar targets (e.g. two blank cards, two similar product labels) can rack
+    up a deceptively high raw match count with no consistent geometry behind it.
+    Returns (bool, diag_dict); False on any extraction/matching failure (never raises)."""
+    if candidate_desc is None or candidate_desc.size == 0:
+        return False, {"reason": "no_candidate_features"}
+    best_tag, good_matches, stored_kp = match_best_variant(candidate_desc, stored_feats, ratio=0.75)
+    if not good_matches or len(good_matches) < TARGET_SIMILARITY_MIN_GOOD_MATCHES:
+        return False, {"reason": "insufficient_matches", "good_matches": len(good_matches) if good_matches else 0}
+    try:
+        src_pts = np.float32([stored_kp[m.trainIdx] for m in good_matches]).reshape(-1, 1, 2)
+        dst_pts = np.float32([candidate_kp[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+    except Exception:
+        return False, {"reason": "homography_error"}
+    if H is None or mask is None:
+        return False, {"reason": "no_homography", "good_matches": len(good_matches)}
+    inlier_mask = mask.reshape(-1).astype(bool)
+    inliers = int(np.sum(inlier_mask))
+    inlier_ratio = inliers / float(max(len(good_matches), 1))
+    diag = {"winning_tag": best_tag, "good_matches": len(good_matches), "inliers": inliers, "inlier_ratio": inlier_ratio}
+    if inliers < TARGET_SIMILARITY_MIN_INLIERS or inlier_ratio < TARGET_SIMILARITY_MIN_INLIER_RATIO:
+        return False, diag
+    return True, diag
+
+
+def resolve_target_identity_conflict(project_id, candidate_image_path, current_pair_id=None):
+    """Single authoritative target-identity check for Create/Add-Target/Replace-Target
+    (real-browser target-identity remediation pass, 2026-08-29 - see
+    SCANSTORY_V1_1_REAL_BROWSER_TARGET_IDENTITY_EDIT_ROI_AUDIT.md). Returns a 3-tuple:
+      ("UNIQUE", None, diag)
+      ("SAME_CURRENT_PAIR", pair, diag)   - candidate is (exactly, or per the
+                                             similarity layer, effectively) the pair
+                                             identified by current_pair_id's own
+                                             existing target; caller should no-op.
+      ("CONFLICT_OTHER_PAIR", pair, diag) - candidate matches a DIFFERENT pair in this
+                                             project; caller must block.
+
+    Layer 1 (exact SHA-256, via _project_pair_target_conflict) always runs first and is
+    authoritative when it fires - it is also what the DB-enforced backstop
+    (uq_project_pair_image_hash) ultimately checks, so its verdict here must agree with
+    that unique index for race safety.
+
+    Layer 2 (conservative ORB+homography similarity) only runs when Layer 1 found
+    nothing, because real camera recaptures/re-crops of the same physical target can
+    legitimately produce completely different SHA-256 (proven in the real-browser
+    audit) - exact hash alone is provably insufficient on its own. Layer 2 only ever
+    produces SAME_CURRENT_PAIR or CONFLICT_OTHER_PAIR at high confidence; any other
+    outcome (including any extraction/matching error) resolves to UNIQUE, never a
+    similarity-only BLOCK on uncertain evidence."""
+    candidate_hash = _sha256_of_file(candidate_image_path)
+
+    current_pair = ProjectPair.query.get(current_pair_id) if current_pair_id is not None else None
+    if current_pair is not None and current_pair.image_hash and current_pair.image_hash == candidate_hash:
+        return "SAME_CURRENT_PAIR", current_pair, {"layer": 1, "reason": "exact_hash"}
+
+    other_conflict = _project_pair_target_conflict(project_id, candidate_hash, exclude_pair_id=current_pair_id)
+    if other_conflict is not None:
+        return "CONFLICT_OTHER_PAIR", other_conflict, {"layer": 1, "reason": "exact_hash"}
+
+    candidate_desc, candidate_kp = _extract_orb_query_features(candidate_image_path)
+    if candidate_desc is None:
+        return "UNIQUE", None, {"layer": 2, "reason": "no_candidate_features"}
+
+    siblings = ProjectPair.query.filter(ProjectPair.project_id == project_id).all()
+    for sibling in siblings:
+        if current_pair_id is not None and sibling.id == current_pair_id:
+            continue
+        try:
+            stored_feats = load_features(project_id, sibling.pair_index)
+        except Exception:
+            continue
+        if not stored_feats or not stored_feats.get("w"):
+            continue
+        is_match, diag = _is_high_confidence_same_target(candidate_desc, candidate_kp, stored_feats)
+        if is_match:
+            diag["layer"] = 2
+            return "CONFLICT_OTHER_PAIR", sibling, diag
+
+    if current_pair is not None:
+        try:
+            current_feats = load_features(project_id, current_pair.pair_index)
+        except Exception:
+            current_feats = None
+        if current_feats and current_feats.get("w"):
+            is_match, diag = _is_high_confidence_same_target(candidate_desc, candidate_kp, current_feats)
+            if is_match:
+                diag["layer"] = 2
+                return "SAME_CURRENT_PAIR", current_pair, diag
+
+    return "UNIQUE", None, {"layer": 2, "reason": "no_similarity_match"}
+
+
+def _extract_multi_variant_features_from_temp_file(image_path):
+    """Same np.savez/np.load round-trip extract_features_multi()/load_features()
+    use for a PERSISTED pair's permanent features/<project>_<pair_index>.npz,
+    but through a throwaway temp .npz deleted immediately after - so an
+    in-session Create candidate that has no ProjectPair row yet (and
+    therefore no permanent feature file to load_features() from) can still be
+    compared via the exact same match_best_variant()/_is_high_confidence_
+    same_target() logic as a persisted sibling. Never touches
+    FEATURES_DIR/ADMIN_FEATURES_DIR or the DB - purely a format-compatible
+    detour through the same extraction function. Returns the same dict shape
+    _load_features_cached() returns, or None on any extraction failure."""
+    fd, npz_path = tempfile.mkstemp(suffix=".npz", dir=TMP_UPLOADS_DIR)
+    os.close(fd)
+    actual_path = npz_path
+    try:
+        extract_features_multi(image_path, npz_path)
+        # np.savez only ever APPENDS .npz if the given path doesn't already
+        # end with it - mkstemp already gave us a .npz-suffixed path, so this
+        # covers both possible outcomes without duplicating the suffix.
+        if not os.path.exists(actual_path) and os.path.exists(npz_path + ".npz"):
+            actual_path = npz_path + ".npz"
+        if not os.path.exists(actual_path):
+            return None
+        data = np.load(actual_path, allow_pickle=False)
+        out = {"w": int(data["w"]), "h": int(data["h"])}
+        for tag in FEATURE_TAGS:
+            desc_key, kp_key = f"desc_{tag}", f"kp_{tag}"
+            if desc_key in data.files and kp_key in data.files:
+                out[tag] = (data[desc_key].astype(np.uint8), data[kp_key].astype(np.float32))
+            else:
+                out[tag] = (np.zeros((0, 32), dtype=np.uint8), np.zeros((0, 2), dtype=np.float32))
+        return out
+    except Exception:
+        return None
+    finally:
+        _safe_remove(npz_path)
+        _safe_remove(npz_path + ".npz")
+
+
+def canonical_target_identity_check(project_id, candidate_image_path, current_pair_id=None, sibling_candidates=None):
+    """THE single authoritative target-identity decision for every path that
+    creates or replaces a ProjectPair's target image - User/Admin Create,
+    User/Admin Edit Add/Replace Target (canonical cross-device identity pass,
+    2026-09-01). Wraps resolve_target_identity_conflict() (persisted-pair
+    comparison, algorithm unchanged - no new thresholds, no rewritten
+    ORB/RANSAC logic) and additionally compares against sibling_candidates:
+    an ordered [(label, image_path), ...] list of ALREADY-VALIDATED,
+    NOT-YET-PERSISTED candidates from the SAME creation batch.
+
+    Why this exists: Create can have Pair 2 duplicate Pair 1 before EITHER is
+    a real ProjectPair row (physical-device QA proof, 2026-09-01) - Pair 1
+    has no persisted image_hash/stored ORB features for
+    resolve_target_identity_conflict() to find yet, so comparing only against
+    the DB let a genuine duplicate through purely because of upload ordering,
+    not because the underlying photos actually differ. The sibling
+    comparison below reuses the exact same two-layer methodology (exact
+    SHA-256, then the same conservative ORB+homography check via
+    _is_high_confidence_same_target(), fed sibling features extracted
+    through the same extract_features_multi() the persisted path uses) -
+    identity can never depend on whether a pair has been saved to the
+    database yet.
+
+    Returns (verdict, label_or_pair, diag):
+      "UNIQUE"                     - candidate is a genuinely new target.
+      "SAME_CURRENT_PAIR"          - matches current_pair_id's own existing
+                                      target (caller should no-op).
+      "CONFLICT_OTHER_PAIR"        - matches an already-PERSISTED different pair.
+      "CONFLICT_SIBLING_CANDIDATE" - matches a not-yet-persisted sibling in
+                                      this same batch; label_or_pair is that
+                                      sibling's label from sibling_candidates.
+    """
+    verdict, match, diag = resolve_target_identity_conflict(
+        project_id, candidate_image_path, current_pair_id=current_pair_id
+    )
+    if verdict != "UNIQUE" or not sibling_candidates:
+        return verdict, match, diag
+
+    candidate_hash = _sha256_of_file(candidate_image_path)
+    for label, sib_path in sibling_candidates:
+        if _sha256_of_file(sib_path) == candidate_hash:
+            return "CONFLICT_SIBLING_CANDIDATE", label, {"layer": 1, "reason": "exact_hash"}
+
+    candidate_desc, candidate_kp = _extract_orb_query_features(candidate_image_path)
+    if candidate_desc is None:
+        return "UNIQUE", None, {"layer": 2, "reason": "no_candidate_features"}
+
+    for label, sib_path in sibling_candidates:
+        sib_feats = _extract_multi_variant_features_from_temp_file(sib_path)
+        if not sib_feats or not sib_feats.get("w"):
+            continue
+        is_match, match_diag = _is_high_confidence_same_target(candidate_desc, candidate_kp, sib_feats)
+        if is_match:
+            match_diag["layer"] = 2
+            return "CONFLICT_SIBLING_CANDIDATE", label, match_diag
+
+    return "UNIQUE", None, {"layer": 2, "reason": "no_similarity_match"}
+
+
+def find_video_duplicate(project_id, candidate_video_hash, pair_id=None, current_media_id=None):
+    """Single authoritative video-identity check (video duplicate + Direct QR Edit
+    parity pass, 2026-08-31). Exact content identity only (video_hash, the same
+    sha256-of-uploaded-bytes column every video-creating path already populates) -
+    no perceptual/frame/audio fingerprinting, matching the locked V1.1 rule that a
+    re-encode of the same visual content is treated as different content.
+
+    Scope is the caller's choice, matching the two different product rules:
+      - pair_id given (Tracked Overlay / Detect Once "Add/Replace Video"): scope is
+        that ONE pair's own PairMedia rows - the same video reused under a
+        DIFFERENT target must stay allowed.
+      - pair_id=None (Direct QR, which has no per-target grouping - every video in
+        the story is its own ProjectPair): scope is every PairMedia row across
+        every pair in the project, i.e. the whole playlist.
+
+    current_media_id, when given (Replace Video), is compared FIRST against its own
+    stored hash (a real no-op replace: the exact same content already sitting in
+    this position) before being excluded from the scope search, so a no-op never
+    gets misreported as a conflict against itself.
+
+    Returns (verdict, media_row_or_None) where verdict is one of:
+      "UNIQUE"                    - safe to proceed.
+      "SAME_CURRENT_MEDIA"        - candidate is exactly what current_media_id
+                                     already has; caller should no-op.
+      "DUPLICATE_EXISTING_MEDIA"  - candidate matches a DIFFERENT row already in
+                                     scope; caller must block.
+
+    Rows with a NULL video_hash (not yet backfilled) never match anything, exactly
+    mirroring uq_pair_media_video_hash's own "NULL rows never collide" contract."""
+    if not candidate_video_hash:
+        return "UNIQUE", None
+
+    if current_media_id is not None:
+        current = PairMedia.query.get(current_media_id)
+        if current is not None and current.video_hash == candidate_video_hash:
+            return "SAME_CURRENT_MEDIA", current
+
+    query = PairMedia.query.join(ProjectPair, PairMedia.pair_id == ProjectPair.id).filter(
+        ProjectPair.project_id == project_id,
+        PairMedia.video_hash == candidate_video_hash,
+    )
+    if pair_id is not None:
+        query = query.filter(PairMedia.pair_id == pair_id)
+    if current_media_id is not None:
+        query = query.filter(PairMedia.id != current_media_id)
+    match = query.first()
+    if match:
+        return "DUPLICATE_EXISTING_MEDIA", match
+    return "UNIQUE", None
+
+
+def _find_duplicate_target_image(image_paths):
+    """image_paths: ordered [(label, path), ...] of ALREADY-VALIDATED target
+    images from ONE upload batch (never a project's existing pairs - there is
+    no route that adds a brand-new target/pair to an already-created project,
+    only new videos on an existing target, so exact-duplicate-target risk is
+    confined to project-creation time). Returns (label_a, label_b) for the
+    first exact byte-identical pair found by content hash, else None.
+
+    Deliberately exact-bytes only (server-enforced, cheap, unambiguous) - not
+    perceptual similarity, which the brief explicitly rules out building."""
+    seen = {}
+    for label, path in image_paths:
+        digest = _sha256_of_file(path)
+        if digest in seen:
+            return seen[digest], label
+        seen[digest] = label
+    return None
 
 
 def _upload_api_error(code, message, http_status, **extra):
@@ -9592,6 +12032,21 @@ def _finalize_enqueue_and_complete(session_rows):
     return False
 
 
+def _assembled_group_for_project(project_id):
+    """Every session still parked in 'assembled' for one project - every
+    target's primary AND every extra-video session (Issue 3E-D0), since
+    _finalize_enqueue_and_complete's settle() sets them all to the same
+    status together. Used by both finalize routes' retry-enqueue-only
+    recovery branch instead of the client's own submitted id list, which
+    was never told about extra-video sessions it doesn't track."""
+    return (
+        UploadSession.query
+        .filter_by(project_id=project_id, status="assembled")
+        .order_by(UploadSession.id)
+        .all()
+    )
+
+
 @app.route("/api/uploads/sessions", methods=["POST"])
 def create_upload_session():
     """1. Create upload session. Validates declared sizes against the
@@ -9613,13 +12068,33 @@ def create_upload_session():
     except ValueError as exc:
         return _upload_api_error("INVALID_EXPERIENCE_PLAYBACK", str(exc), 400)
 
+    # Parsed early (moved ahead of the earlier duplicate parse below) because
+    # the size validation immediately after needs to know it: Issue 3E-D0's
+    # "pair_video" purpose is a pure video byte stream (no marker image) for
+    # ANY experience_type it is legal under, the same image_size=0 shape
+    # Direct QR sessions already use for a different reason.
+    purpose = _sanitize_display_text(payload.get("purpose"), max_len=30) or "project_pair"
+    if purpose not in UPLOAD_SESSION_PURPOSES:
+        return _upload_api_error("INVALID_PURPOSE", "Unsupported upload session purpose.", 400)
+    if purpose == "pair_video" and experience_type != "image_video":
+        return _upload_api_error(
+            "INVALID_PURPOSE", "An additional video session is only valid for Image → Video targets.", 400
+        )
+
     try:
         image_size = int(payload.get("image_size"))
         video_size = int(payload.get("video_size"))
     except (TypeError, ValueError):
         return _upload_api_error("INVALID_SIZE", "image_size and video_size must be provided as integers.", 400)
 
-    if video_size <= 0 or image_size < 0 or (experience_type == "image_video" and image_size <= 0):
+    if video_size <= 0:
+        return _upload_api_error("INVALID_SIZE", "video_size must be positive.", 400)
+    if purpose == "pair_video":
+        if image_size != 0:
+            return _upload_api_error(
+                "INVALID_SIZE", "An additional video session must not include marker image bytes.", 400
+            )
+    elif image_size < 0 or (experience_type == "image_video" and image_size <= 0):
         return _upload_api_error("INVALID_SIZE", "image_size and video_size must be positive for Image → Video; Direct QR may omit image bytes.", 400)
     if experience_type == "direct_qr" and image_size != 0:
         return _upload_api_error("INVALID_SIZE", "Direct QR resumable uploads must not include marker image bytes.", 400)
@@ -9663,13 +12138,11 @@ def create_upload_session():
         if not ok:
             return _upload_api_error("SUBSCRIPTION_LIMIT", message or "Subscription limit reached.", 403)
 
-    # A content set of a multi-set project is marked as such at creation, so
-    # the single-session finalize route can refuse it and it can only ever be
-    # finalized together with its siblings.
-    purpose = _sanitize_display_text(payload.get("purpose"), max_len=30) or "project_pair"
-    if purpose not in UPLOAD_SESSION_PURPOSES:
-        return _upload_api_error("INVALID_PURPOSE", "Unsupported upload session purpose.", 400)
-
+    # purpose was already parsed and validated above (needed earlier for the
+    # size-validation branch). A content set of a multi-set project - or an
+    # additional-video session - is marked as such at creation, so the
+    # single-session finalize route can refuse it and it can only ever be
+    # finalized together with its target.
     storage_token = str(uuid.uuid4())
     now = get_utc_now()
     session_row = UploadSession(
@@ -9909,8 +12382,8 @@ def upload_session_status(session_id):
     return response
 
 
-def _finalize_assemble_and_validate(session_rows, user, admin):
-    """The validate -> quota -> Project/ProjectPair -> QR -> enqueue
+def _finalize_assemble_and_validate(targets, user, admin):
+    """The validate -> quota -> Project/ProjectPair/PairMedia -> QR -> enqueue
     sequence, run exactly once per winning atomic 'active'->'finalizing'
     transition. Mirrors handle_upload()/admin_handle_upload() step for
     step: same validate_image()/validate_video() calls, same
@@ -9919,18 +12392,33 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
     os.replace() atomic-move convention, same QR helpers, same
     _schedule_project_pair_processing() enqueue call.
 
-    `session_rows` is the ORDERED content-set list: one row for a
-    single-pair project, N rows for a multi-content-set one. The length
-    changes none of the invariants - one Project, one project-quota unit,
-    N ProjectPairs at pair_index 0..N-1 in exactly this order, one QR
-    image, one processing job. That is precisely what handle_upload()
-    already does for an N-pair multipart POST, which is why multi-pair was
-    converged onto this one function instead of growing a parallel
-    multi-pair finalizer that would have to be kept in step with it.
+    `targets` is the ORDERED target list: one entry per future ProjectPair,
+    each `(primary_row, extra_video_rows)` - `primary_row` is the existing
+    image+first-video combined-stream session (purpose 'project_pair' or
+    'project_content_set'), `extra_video_rows` (Issue 3E-D0) is an ordered
+    list of zero or more 'pair_video' sessions, each a pure video byte
+    stream (image_size=0) that becomes a non-default PairMedia row under
+    that SAME target - never its own ProjectPair. The length of `targets`
+    changes none of the invariants - one Project, one project-quota unit, N
+    ProjectPairs at pair_index 0..N-1 in exactly this order, one QR image,
+    one processing job (recognition runs once per target regardless of how
+    many videos it has, because there is still exactly one ProjectPair per
+    target). That is precisely what handle_upload() already does for an
+    N-pair, multi-video multipart POST, which is why this stayed one
+    function instead of growing a parallel finalizer to keep in step.
     """
     finalize_start = time.perf_counter()
-    session_rows = list(session_rows)
-    primary = session_rows[0]
+    targets = [(primary, list(extras)) for primary, extras in targets]
+    primary = targets[0][0]
+    # Flat, ordered list of EVERY session row involved - every primary
+    # followed by its own extra videos, in target order. This is what the
+    # per-row steps below (bytes-present, checksum, content validation,
+    # failure isolation, status bookkeeping, client-facing session list)
+    # operate over; grouping back into targets happens only where a target
+    # boundary actually matters (entitlement check, ProjectPair/PairMedia
+    # creation).
+    session_rows = [row for primary_row, extras in targets for row in ([primary_row] + extras)]
+    extra_row_ids = {row.id for _, extras in targets for row in extras}
     multi = len(session_rows) > 1
     checksum_duration_ms = 0
     validation_duration_ms = 0
@@ -9944,7 +12432,7 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
         fields = {
             "upload_session_id": primary.id,
             "project_id": primary.project_id,
-            "pair_count": len(session_rows),
+            "pair_count": len(targets),
             "set_count": len(session_rows),
             "total_bytes": declared_total_bytes,
             "checksum_duration_ms": checksum_duration_ms,
@@ -9960,16 +12448,17 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
         _log_upload_timing("upload_session_finalize", **fields)
 
     def fail(code, message, http_status=422, offender=None):
-        """Park the offending content set - and, when it has siblings, hand
-        every sibling back its 'active' state with its confirmed bytes
-        untouched.
+        """Park the offending session - and hand every OTHER session
+        (sibling targets, and every video of every target) back its
+        'active' state with its confirmed bytes untouched.
 
-        FAILURE ISOLATION. A later content set failing validation must never
-        cost a creator the bytes an earlier one already got across, so only
-        the offender's own assembled temp file is discarded and only the
-        offender becomes 'failed'. The creator re-selects one file, not
-        three. Single-set behaviour is byte-for-byte what it was: there is
-        no sibling to preserve, so the session is simply marked failed.
+        FAILURE ISOLATION. One video (or target) failing validation must
+        never cost a creator the bytes already confirmed elsewhere in the
+        SAME request, so only the offender's own assembled temp file is
+        discarded and only the offender becomes 'failed'. The creator
+        re-selects one file, not the whole project. Single-session
+        behaviour is byte-for-byte what it was: there is no sibling to
+        preserve, so the session is simply marked failed.
         """
         offender = offender or primary
         offender_index = next(i for i, row in enumerate(session_rows) if row.id == offender.id)
@@ -9986,12 +12475,14 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
         return _upload_api_error(code, message, http_status, **extra)
 
     def fail_group(code, message, http_status):
-        """Terminal for every content set. Used only for failures that
-        happen AFTER the assembled temp files have been consumed by
-        validation (quota, storage allowance, project creation) - at that
+        """Terminal for every session in this request (every target's
+        primary AND every extra video). Used only for failures that happen
+        AFTER the assembled temp files have been consumed by validation
+        (entitlement, quota, storage allowance, project creation) - at that
         point there are no confirmed bytes left to preserve for anyone, so
-        pretending a set is still resumable would be a lie. Same behaviour
-        the single-pair path has always had, now applied uniformly.
+        pretending a session is still resumable would be a lie. Same
+        behaviour the single-pair path has always had, now applied
+        uniformly across every video of every target.
         """
         for row in session_rows:
             row.status = "failed"
@@ -10000,7 +12491,19 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
         _timing(status="failed", safe_error_code=code)
         return _upload_api_error(code, message, http_status)
 
-    # ---- 1. Every set's assembled bytes must be present and the declared length.
+    def revert_all_to_active(code, message, http_status):
+        """Like fail_group(), but nothing is actually invalid - only used
+        for the entitlement check below, which runs BEFORE any temp file is
+        touched. Every session's confirmed bytes stay fully resumable; the
+        creator can retry finalize after removing a video or upgrading,
+        without re-uploading anything."""
+        for row in session_rows:
+            row.status = "active"
+        db.session.commit()
+        _timing(status="active", safe_error_code=code)
+        return _upload_api_error(code, message, http_status)
+
+    # ---- 1. Every session's assembled bytes must be present and the declared length.
     for row in session_rows:
         path = combined_paths[row.id]
         if not os.path.exists(path) or os.path.getsize(path) != row.expected_total_size:
@@ -10017,9 +12520,9 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
             if computed != row.client_checksum_sha256:
                 return fail("CHECKSUM_MISMATCH", "Uploaded data failed checksum verification.", offender=row)
 
-    # Experience/playback is a PROJECT fact, so it is read from the first set
-    # only; the route that got here already refused a group whose sets
-    # disagreed about it.
+    # Experience/playback is a PROJECT fact, so it is read from the first
+    # target's primary session only; the route that got here already
+    # refused a group whose sessions disagreed about it.
     experience_type = primary.experience_type or "image_video"
     playback_mode = primary.playback_mode or _default_playback_mode_for_experience(experience_type)
     try:
@@ -10027,20 +12530,46 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
     except ValueError as exc:
         return fail("INVALID_EXPERIENCE_PLAYBACK", str(exc), 400)
 
-    # ---- 2. Validate every set's image/video slice from its own assembled file.
-    validation_start = time.perf_counter()
     # Same plan-effective policy as the direct upload path; admin-owned
-    # sessions have no plan and fall back to the server ceiling.
+    # sessions have no plan and fall back to the server ceiling. Computed
+    # here (rather than just above the content-validation loop below)
+    # because the multi-video entitlement check needs it too, and it must
+    # run first - see the comment on that check.
     _fin_ents = user_entitlements(user) if user else None
+
+    # ---- 1.5. Multi-video entitlement (Issue 3E-D0). Reuses the exact
+    # 3E-C commercial-policy helper - no duplicated logic - and runs BEFORE
+    # any per-file content validation, because nothing has been consumed
+    # yet at this point: a rejection here can safely hand every session
+    # back to 'active' with every confirmed byte untouched (see
+    # revert_all_to_active), instead of discarding anything. entitlements
+    # of None means unlimited - admin-owned sessions are already exempt
+    # from every other plan-based limit on this path (project quota,
+    # storage), so multi-video follows that same precedent.
+    video_count_groups = [list(range(1 + len(extras))) for _, extras in targets]
+    entitlement_error_code, entitlement_limit = _check_multi_video_entitlement(_fin_ents, video_count_groups)
+    if entitlement_error_code:
+        message = MULTI_VIDEO_ERROR_MESSAGES[entitlement_error_code]
+        if entitlement_limit is not None:
+            message = message.format(max=entitlement_limit)
+        return revert_all_to_active(entitlement_error_code, message, 403)
+
+    # ---- 2. Validate every session's image/video slice from its own
+    # assembled file. A primary session's image_size>0 slice is its target's
+    # recognition image; an extra-video session's image_size is always 0
+    # (enforced at session creation), so its "image slice" is correctly
+    # skipped here rather than validated as a zero-byte image.
+    validation_start = time.perf_counter()
     _img_max, _img_dim, _img_px = (
         image_limits(_fin_ents) if _fin_ents else (_ent.MAX_IMAGE_SIZE, _ent.MAX_IMAGE_DIMENSION_PX, _ent.MAX_IMAGE_PIXELS)
     )
     _vid_max, _vid_dur = video_limits(_fin_ents) if _fin_ents else (_ent.MAX_VIDEO_SIZE, _ent.MAX_VIDEO_DURATION_SECONDS)
-    validated = []
+    validated_by_id = {}
     failed_row = failed_code = failed_message = None
     for row in session_rows:
         path = combined_paths[row.id]
-        image_view = _BoundedFileView(path, 0, row.image_size) if experience_type == "image_video" else None
+        has_image_slice = experience_type == "image_video" and row.id not in extra_row_ids
+        image_view = _BoundedFileView(path, 0, row.image_size) if has_image_slice else None
         video_view = _BoundedFileView(path, row.image_size, row.video_size)
         img_temp = vid_temp = img_ext = vid_ext = None
         image_error = video_error = None
@@ -10071,10 +12600,10 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
                 except UploadValidationError as exc:
                     video_error = exc
         finally:
-            # Close both view handles BEFORE any attempt to delete this set's
-            # assembled file below (via `fail()`) - on Windows, a file with an
-            # open handle cannot be deleted, so doing this any later would
-            # silently no-op the cleanup on failure.
+            # Close both view handles BEFORE any attempt to delete this
+            # session's assembled file below (via `fail()`) - on Windows, a
+            # file with an open handle cannot be deleted, so doing this any
+            # later would silently no-op the cleanup on failure.
             if image_view:
                 image_view.close()
             video_view.close()
@@ -10088,38 +12617,168 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
             app.logger.warning(f"resumable_upload_rejected video session_id={row.id}: {video_error.detail}")
             failed_row, failed_code, failed_message = row, "VIDEO_VALIDATION_FAILED", video_error.safe_message
             break
-        validated.append({
+        validated_by_id[row.id] = {
             "session": row, "image_temp": img_temp, "image_ext": img_ext,
             "video_temp": vid_temp, "video_ext": vid_ext,
-        })
+        }
     validation_duration_ms = _elapsed_ms(validation_start)
 
     if failed_row is not None:
-        # The copies made for the sets that DID validate are throwaway; their
-        # authoritative bytes are still in their own assembled temp files,
-        # which fail() deliberately leaves alone.
-        for item in validated:
+        # The copies made for the sessions that DID validate are throwaway;
+        # their authoritative bytes are still in their own assembled temp
+        # files, which fail() deliberately leaves alone.
+        for item in validated_by_id.values():
             _safe_remove(item["image_temp"])
             _safe_remove(item["video_temp"])
         return fail(failed_code, failed_message, offender=failed_row)
 
-    # Every set validated and was copied out by validate_image/validate_video's
-    # own save_to_temp - the assembled temp files are no longer needed.
+    # Re-group the flat per-row validation results back into per-target
+    # structures - moved here (was after 2.6/2.7 below) so both the
+    # standardization step and the canonical target-identity check below can
+    # use per-target grouping.
+    validated_targets = [
+        {"primary": validated_by_id[primary_row.id], "extras": [validated_by_id[row.id] for row in extras]}
+        for primary_row, extras in targets
+    ]
+    is_admin_owner = admin is not None
+
+    # Canonical target identity remediation pass (moved earlier, canonical
+    # cross-device identity pass, 2026-09-01): standardize each target's
+    # image temp file BEFORE any identity/duplicate decision is made about
+    # it, not after. The old ordering hashed the PRE-standardize bytes for
+    # the 2.5 duplicate check below, then standardized afterward - so two
+    # crops that were genuinely identical post-standardize could still
+    # exact-hash as "different" pre-standardize (JPEG encoder
+    # nondeterminism across browsers/devices), and any similarity check would
+    # have been comparing against not-yet-canonical pixel data. Admin-owned
+    # uploads are still never standardized (unchanged design, matches
+    # processing_operations._process_pair's own gate) - the identity check
+    # below runs on whatever the FINAL persisted bytes will actually be,
+    # standardized or not, which is the only invariant that matters.
+    if not is_admin_owner:
+        for vt in validated_targets:
+            if vt["primary"]["image_temp"]:
+                standardize_uploaded_image(vt["primary"]["image_temp"], target_size=1200)
+
+    # ---- 2.5. Canonical target-identity guard (canonical cross-device
+    # identity pass, 2026-09-01), BEFORE the assembled temp files are
+    # consumed below - same "nothing committed yet" window the multi-video
+    # entitlement check above relies on, so a rejection here can hand every
+    # session straight back to 'active' with every confirmed byte untouched
+    # (revert_all_to_active), exactly like that check.
+    #
+    # Replaces the old exact-SHA-256-only, batch-only _find_duplicate_target_
+    # image check: physical-device QA proved identity must NOT depend on
+    # exact crop/ROI bytes - a slightly different ROI on the SAME underlying
+    # target must still be recognized as the same target, exactly as Edit's
+    # Add/Replace Target already require via resolve_target_identity_
+    # conflict(). This is now that SAME authoritative two-layer helper
+    # (canonical_target_identity_check(), see its own docstring), extended
+    # with sibling_candidates so pairs within THIS SAME creation batch (which
+    # have no ProjectPair row yet) are checked against each other too, not
+    # just against already-persisted pairs.
+    #
+    # Two targets in the SAME project-creation batch that are the same
+    # underlying recognition target is not a valid independent-recognition
+    # structure - the scanner cannot reliably tell them apart. Must never be
+    # confused with "different targets that happen to share video content"
+    # (that stays fully valid - build_additional_pair_media_filename's
+    # filenames are index-based, never content-based).
+    # primary.project_id is genuinely None here - the Project row itself
+    # isn't created until section 3 below (this resumable flow always
+    # creates a brand-new project; "attach to an existing project" is out of
+    # scope per UploadSession's own docstring). That makes
+    # canonical_target_identity_check's persisted-DB comparison a structural
+    # no-op (nothing can reference a project that doesn't exist yet) - fully
+    # correct, since a brand-new project trivially has no existing pairs to
+    # conflict with. The sibling_candidates comparison below is what actually
+    # does the real work for this same-batch case.
+    _accepted_target_candidates = []
+    for _index, _vt in enumerate(validated_targets):
+        _image_temp = _vt["primary"]["image_temp"]
+        if not _image_temp:
+            continue
+        _verdict, _match, _diag = canonical_target_identity_check(
+            primary.project_id, _image_temp, current_pair_id=None,
+            sibling_candidates=_accepted_target_candidates,
+        )
+        if _verdict != "UNIQUE":
+            for item in validated_by_id.values():
+                _safe_remove(item["image_temp"])
+                _safe_remove(item["video_temp"])
+            return revert_all_to_active(
+                "DUPLICATE_TARGET_IMAGE",
+                "This target is already part of this story. Add the new video to the existing target instead.",
+                409,
+            )
+        _accepted_target_candidates.append((str(_index), _image_temp))
+
+    # ---- 2.6. Exact-duplicate-video guard (physical QA fix), same
+    # nothing-committed-yet window as 2.5 above. One target with the SAME
+    # video content added twice (e.g. Video 1 and Video 2 byte-identical)
+    # plays that video twice back-to-back with no product-visible
+    # difference - accidental duplicate media, not a supported repeat-count
+    # feature. Scoped strictly WITHIN one target's own video set - the same
+    # video content legitimately reused across DIFFERENT targets (see the
+    # image-dup guard's docstring) stays fully valid.
+    for primary_row, extras in targets:
+        _video_labels = [("primary", validated_by_id[primary_row.id]["video_temp"])] + [
+            (str(slot), validated_by_id[extra_row.id]["video_temp"]) for slot, extra_row in enumerate(extras)
+        ]
+        _video_labels = [(label, path) for label, path in _video_labels if path]
+        if len(_video_labels) > 1 and _find_duplicate_target_image(_video_labels) is not None:
+            for item in validated_by_id.values():
+                _safe_remove(item["image_temp"])
+                _safe_remove(item["video_temp"])
+            return revert_all_to_active(
+                "DUPLICATE_TARGET_VIDEO",
+                "This video is already added to this target.",
+                409,
+            )
+
+    # ---- 2.7. Direct QR whole-playlist duplicate-video guard
+    # (universal-video-duplicate-rule pass, 2026-08-31). Direct QR has no
+    # per-target grouping - every video in the story is its own
+    # target/ProjectPair, so 2.6 above (which only compares a target's OWN
+    # primary+extras) can never catch two DIFFERENT direct_qr targets in this
+    # same creation batch sharing the exact same video content. Scoped to
+    # direct_qr only - the image_video same-video-different-target allowance
+    # (2.6's own docstring) must stay untouched.
+    if experience_type == "direct_qr":
+        _playlist_video_labels = [
+            (str(index), validated_by_id[primary_row.id]["video_temp"])
+            for index, (primary_row, _extras) in enumerate(targets)
+            if validated_by_id[primary_row.id]["video_temp"]
+        ]
+        if len(_playlist_video_labels) > 1 and _find_duplicate_target_image(_playlist_video_labels) is not None:
+            for item in validated_by_id.values():
+                _safe_remove(item["image_temp"])
+                _safe_remove(item["video_temp"])
+            return revert_all_to_active(
+                "DUPLICATE_TARGET_VIDEO",
+                "This video is already part of this ScanStory.",
+                409,
+            )
+
+    # Every session validated and was copied out by validate_image/
+    # validate_video's own save_to_temp - the assembled temp files are no
+    # longer needed.
     for row in session_rows:
         _safe_delete_upload_temp(combined_paths[row.id])
 
     # ---- 3. One project, N pairs, one quota unit, in one transaction.
-    is_admin_owner = admin is not None
+    # validated_targets/is_admin_owner and the standardization pass are both
+    # computed earlier now (see the canonical target-identity guard above) -
+    # the duplicate check needs them before it can run, so there is no
+    # second grouping/standardization pass here anymore.
     saved_paths = []
     project_create_start = time.perf_counter()
-    retained = [
-        (
-            os.path.getsize(item["image_temp"]) if item["image_temp"] else None,
-            os.path.getsize(item["video_temp"]),
-        )
-        for item in validated
-    ]
-    total_new_storage_bytes = sum((image_bytes or 0) + video_bytes for image_bytes, video_bytes in retained)
+    total_new_storage_bytes = sum(
+        (os.path.getsize(vt["primary"]["image_temp"]) if vt["primary"]["image_temp"] else 0)
+        + os.path.getsize(vt["primary"]["video_temp"])
+        + sum(os.path.getsize(extra["video_temp"]) for extra in vt["extras"])
+        for vt in validated_targets
+    )
     _storage_used, storage_allowance = account_storage_state(user) if user else (0, None)
 
     try:
@@ -10127,8 +12786,9 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
             # Same authoritative atomic reservation as handle_upload(); a
             # rollback in either except block below releases it. Admin-owned
             # sessions bill no account and are recorded uncounted. The ENTIRE
-            # retained set is weighed at once, exactly like the multipart
-            # path - never set 1 persisted and set 2 rejected.
+            # retained set - every target's image plus every one of its
+            # videos - is weighed at once, exactly like the multipart path -
+            # never target 1 persisted and target 2 rejected.
             if not _storage.reserve_account_storage(user.id, total_new_storage_bytes, storage_allowance):
                 raise _ResumableQuotaLimitReached("STORAGE_LIMIT_REACHED", STORAGE_LIMIT_MESSAGE)
             if not _reserve_project_quota_atomic(user):
@@ -10174,23 +12834,54 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
 
         if not is_admin_owner:
             max_pairs = get_plan_pairs_limit(user)
-            pair_slots_ok, pair_slots_error = _reserve_pair_slots_for_project(project.id, len(validated), max_pairs)
+            pair_slots_ok, pair_slots_error = _reserve_pair_slots_for_project(project.id, len(validated_targets), max_pairs)
             if not pair_slots_ok:
                 raise ValueError(pair_slots_error)
 
         created_pairs = []
-        for index, item in enumerate(validated):
+        created_pair_media_rows = []
+        for index, vt in enumerate(validated_targets):
+            primary_item = vt["primary"]
             img_filename = f"{project.id}_{index}.jpg" if experience_type == "image_video" else None
-            vid_filename = f"{project.id}_{index}{item['video_ext']}"
             img_path = None
+            img_hash = None
             if img_filename:
                 img_path = os.path.join(images_dir, img_filename)
-                os.replace(item["image_temp"], img_path)  # atomic move: already-validated content only
+                os.replace(primary_item["image_temp"], img_path)  # atomic move: already-validated content only
                 saved_paths.append(img_path)
-            vid_path = os.path.join(videos_dir, vid_filename)
-            os.replace(item["video_temp"], vid_path)  # atomic move: already-validated content only
-            saved_paths.append(vid_path)
+                # Canonical target identity remediation pass: image_temp was
+                # already standardized above (before the storage-accounting
+                # gate, for non-admin owners), so img_path is already final
+                # here - no second standardize call, which would only drift
+                # this hash away from what the storage gate already measured
+                # for the exact same file. Admin-owned pairs are never
+                # standardized at all (matching processing_operations.
+                # _process_pair's own `if not project.owner_admin_id` gate)
+                # - hashed as their exact uploaded bytes, since that's what
+                # stays final for them.
+                img_hash = _sha256_of_file(img_path)
 
+            # Default (sort_order 0) video keeps the exact legacy filename
+            # shape; any additional video gets a deterministic name and
+            # exists only as a PairMedia row - ProjectPair never carries a
+            # second video. Same contract handle_upload()/
+            # admin_handle_upload() already use (Issue 3E-C).
+            video_specs = []
+            for slot, item in enumerate([primary_item] + vt["extras"]):
+                if slot == 0:
+                    vid_filename = f"{project.id}_{index}{item['video_ext']}"
+                else:
+                    vid_filename = build_additional_pair_media_filename(project.id, index, slot, item["video_ext"])
+                vid_path = os.path.join(videos_dir, vid_filename)
+                os.replace(item["video_temp"], vid_path)  # atomic move: already-validated content only
+                saved_paths.append(vid_path)
+                video_specs.append({
+                    "filename": vid_filename,
+                    "original_name": item["session"].original_video_name,
+                    "size": os.path.getsize(vid_path),
+                })
+
+            default_video = video_specs[0]
             image_path_url = None
             if img_filename:
                 image_path_url = f"/admin/image/{project.id}/{index}" if is_admin_owner else f"/image/{project.id}/{index}"
@@ -10198,42 +12889,77 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
                 project_id=project.id,
                 pair_index=index,
                 image_filename=img_filename,
-                video_filename=vid_filename,
+                video_filename=default_video["filename"],
                 image_path=image_path_url,
-                original_image_name=item["session"].original_image_name,
-                original_video_name=item["session"].original_video_name,
+                image_hash=img_hash,
+                original_image_name=primary_item["session"].original_image_name,
+                original_video_name=default_video["original_name"],
                 image_size=os.path.getsize(img_path) if img_path else None,
-                video_size=os.path.getsize(vid_path),
+                video_size=default_video["size"],
                 is_processed=experience_type == "direct_qr",
                 processing_status="completed" if experience_type == "direct_qr" else "uploaded",
                 feature_extraction_status="not_required" if experience_type == "direct_qr" else "pending",
                 processing_error=None,
             )
             db.session.add(pair)
-            created_pairs.append((item["session"], pair, img_path, vid_path))
+            created_pair_media_rows.extend(create_pair_media_rows(pair, video_specs))
+            created_pairs.append((primary_item["session"], vt["extras"], pair, img_path, video_specs))
 
         # Ledger rows for the retained media, in the SAME transaction as the
         # reservation and the pair rows, so accounting can never be
-        # half-applied across content sets.
+        # half-applied across targets. Every physically uploaded video is
+        # billed exactly once - the default via record_pair_media_objects,
+        # any additional ones via record_pair_video_media_object keyed by
+        # their own filename/bytes (Issue 3E-C helpers, reused unmodified).
         db.session.flush()
-        for row, pair, img_path, vid_path in created_pairs:
+        for row, extra_items, pair, img_path, video_specs in created_pairs:
+            default_video = video_specs[0]
             record_pair_media_objects(
                 project, pair,
                 image_bytes=os.path.getsize(img_path) if img_path else None,
-                video_bytes=os.path.getsize(vid_path),
+                video_bytes=default_video["size"],
             )
+            for spec in video_specs[1:]:
+                record_pair_video_media_object(project, pair, spec["filename"], spec["size"])
             row.project_id = project.id
             row.pair_id = pair.id
+            for extra_item in extra_items:
+                extra_row = extra_item["session"]
+                extra_row.project_id = project.id
+                extra_row.pair_id = pair.id
 
         db.session.commit()
+        _enqueue_pair_media_optimizations(created_pair_media_rows)
         project_create_duration_ms = _elapsed_ms(project_create_start)
     except _ResumableQuotaLimitReached as limit_exc:
         db.session.rollback()
-        for item in validated:
+        for item in validated_by_id.values():
             _safe_remove(item["image_temp"])
             _safe_remove(item["video_temp"])
         project_create_duration_ms = _elapsed_ms(project_create_start)
         return fail_group(limit_exc.code, limit_exc.message, 403)
+    except IntegrityError:
+        # Race lost: a concurrent finalize in this SAME project (see
+        # uq_project_pair_image_hash) already committed a pair using this
+        # exact target image. The in-batch check above only catches
+        # duplicates WITHIN one submission - this is the DB-level backstop
+        # for two submissions racing each other.
+        db.session.rollback()
+        for saved_path in saved_paths:
+            try:
+                if saved_path and os.path.exists(saved_path):
+                    os.remove(saved_path)
+            except Exception:
+                pass
+        for item in validated_by_id.values():
+            _safe_remove(item["image_temp"])
+            _safe_remove(item["video_temp"])
+        project_create_duration_ms = _elapsed_ms(project_create_start)
+        return fail_group(
+            "DUPLICATE_TARGET_IMAGE",
+            "This target is already part of this story. Add the new video to the existing target instead.",
+            409,
+        )
     except Exception as exc:
         db.session.rollback()
         for saved_path in saved_paths:
@@ -10242,7 +12968,7 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
                     os.remove(saved_path)
             except Exception:
                 pass
-        for item in validated:
+        for item in validated_by_id.values():
             _safe_remove(item["image_temp"])
             _safe_remove(item["video_temp"])
         project_create_duration_ms = _elapsed_ms(project_create_start)
@@ -10250,7 +12976,7 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
         return fail_group("PROJECT_CREATION_FAILED", "Project creation failed. Please try again.", 500)
 
     # QR code generation - same helpers/convention the non-resumable path
-    # uses, unmodified. One QR per project, never one per content set.
+    # uses, unmodified. One QR per project, never one per target.
     qr_start = time.perf_counter()
     if is_admin_owner:
         scanner_url = _canonical_public_scanner_url(project)
@@ -10286,6 +13012,76 @@ def _finalize_assemble_and_validate(session_rows, user, admin):
     )
 
 
+def _resolve_extra_video_sessions(raw_ids, user, admin, primary_row):
+    """(rows, error_response) - Issue 3E-D0.
+
+    Validates every id in `raw_ids` (an optional, ordered list from the
+    finalize request body): owned by the SAME creator as `primary_row`,
+    purpose exactly 'pair_video' (never an image+video session reused as an
+    extra video, and never the same rule bent to let one BE a target on its
+    own - see the 'pair_video' purpose check in finalize_upload_session),
+    fully uploaded (either already 'assembled', or 'active' with every byte
+    confirmed - never a still-uploading session), and declaring the same
+    experience_type as the target it is being attached to. Order is
+    preserved - it becomes PairMedia sort_order 1, 2, 3... under that
+    target.
+
+    `raw_ids` omitted or empty returns ([], None): the exact pre-3E-D0
+    behaviour of a target with no additional videos.
+    """
+    if not raw_ids:
+        return [], None
+    if not isinstance(raw_ids, list):
+        return None, _upload_api_error(
+            "INVALID_SESSION_IDS", "extra_video_session_ids must be a list of upload session ids.", 400
+        )
+    ids = []
+    for value in raw_ids:
+        if isinstance(value, bool):
+            return None, _upload_api_error(
+                "INVALID_SESSION_IDS", "extra_video_session_ids must contain upload session ids.", 400
+            )
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            return None, _upload_api_error(
+                "INVALID_SESSION_IDS", "extra_video_session_ids must contain upload session ids.", 400
+            )
+    if len(set(ids)) != len(ids):
+        return None, _upload_api_error(
+            "DUPLICATE_SESSION_IDS", "A video session may only be attached to one target.", 400
+        )
+    if primary_row.id in ids:
+        return None, _upload_api_error(
+            "INVALID_SESSION_IDS", "A target's own session cannot also be listed as an additional video.", 400
+        )
+    rows_by_id = {row.id: row for row in UploadSession.query.filter(UploadSession.id.in_(ids)).all()}
+    rows = []
+    for session_id in ids:
+        row = rows_by_id.get(session_id)
+        if not row or not _upload_session_owned(row, user, admin):
+            return None, _upload_api_error("NOT_FOUND", "Upload session not found.", 404)
+        if row.purpose != "pair_video":
+            return None, _upload_api_error(
+                "INVALID_PURPOSE",
+                "Only an additional-video session may be attached to a target this way.",
+                400,
+            )
+        if row.status == "active" and row.current_offset != row.expected_total_size:
+            return None, _upload_api_error(
+                "SESSION_INCOMPLETE", "An additional video has not finished uploading.", 409
+            )
+        if row.status not in ("active", "assembled"):
+            code = _UPLOAD_SESSION_CONFLICT_CODES.get(row.status, "SESSION_NOT_ACTIVE")
+            return None, _upload_api_error(code, f"Upload session is not ready to finalize (status={row.status}).", 409)
+        if row.experience_type != primary_row.experience_type:
+            return None, _upload_api_error(
+                "CONTENT_SET_MISMATCH", "An additional video does not match its target's experience type.", 409
+            )
+        rows.append(row)
+    return rows, None
+
+
 @app.route("/api/uploads/sessions/<int:session_id>/finalize", methods=["POST"])
 def finalize_upload_session(session_id):
     """4. Finalize upload. Atomic conditional status transition guards
@@ -10312,17 +13108,35 @@ def finalize_upload_session(session_id):
             409,
         )
 
+    if session_row.purpose == "pair_video":
+        # An additional-video session (Issue 3E-D0) has no image of its own -
+        # it can never be a target on its own, only ever attached to one via
+        # extra_video_session_ids on ITS target's finalize call.
+        return _upload_api_error(
+            "INVALID_PURPOSE",
+            "An additional video cannot be finalized on its own; it must be attached to its target.",
+            409,
+        )
+
     if session_row.status == "assembled":
         enqueue_start = time.perf_counter()
+        # Every session that reached 'assembled' together (this target's
+        # primary AND any extra videos) must retry the enqueue TOGETHER -
+        # the client's own request body is not consulted here, since a
+        # retry-enqueue call carries no body and the extras were never
+        # re-declared anyway (see _assembled_group_for_project).
+        group_rows = _assembled_group_for_project(session_row.project_id)
+        group_ids = [row.id for row in group_rows]
         updated = UploadSession.query.filter(
-            UploadSession.id == session_row.id, UploadSession.status == "assembled"
+            UploadSession.id.in_(group_ids), UploadSession.status == "assembled"
         ).update({UploadSession.status: "finalizing"}, synchronize_session=False)
-        if updated != 1:
+        if updated != len(group_ids):
             db.session.rollback()
             return _finalize_conflict_response(UploadSession.query.get(session_row.id))
         db.session.commit()
         session_row = UploadSession.query.get(session_row.id)
-        if _finalize_enqueue_and_complete([session_row]):
+        group_rows = [UploadSession.query.get(i) for i in group_ids]
+        if _finalize_enqueue_and_complete(group_rows):
             _log_upload_timing(
                 "upload_session_finalize",
                 upload_session_id=session_row.id,
@@ -10334,7 +13148,10 @@ def finalize_upload_session(session_id):
                 recovered_existing_completion=True,
                 status=session_row.status,
             )
-            return jsonify({"success": True, "session": _upload_session_payload(session_row)})
+            response_payload = {"success": True, "session": _upload_session_payload(session_row)}
+            if len(group_rows) > 1:
+                response_payload["sessions"] = _upload_session_group_payload(group_rows)
+            return jsonify(response_payload)
         _log_upload_timing(
             "upload_session_finalize",
             upload_session_id=session_row.id,
@@ -10360,12 +13177,24 @@ def finalize_upload_session(session_id):
         db.session.commit()
         return _upload_api_error("SESSION_EXPIRED", "This upload session has expired.", 409)
 
+    # Issue 3E-D0: resolve any additional-video sessions for this target
+    # BEFORE the atomic status transition below - a rejection here (bad
+    # ownership, wrong purpose, an incomplete video) must leave the primary
+    # session untouched and still 'active', not stranded 'finalizing'.
+    payload = request.get_json(silent=True) or {}
+    extra_video_rows, extra_error = _resolve_extra_video_sessions(
+        payload.get("extra_video_session_ids"), user, admin, session_row
+    )
+    if extra_error is not None:
+        return extra_error
+
+    all_ids = [session_row.id] + [row.id for row in extra_video_rows]
     updated = UploadSession.query.filter(
-        UploadSession.id == session_row.id,
+        UploadSession.id.in_(all_ids),
         UploadSession.status == "active",
         UploadSession.current_offset == UploadSession.expected_total_size,
     ).update({UploadSession.status: "finalizing"}, synchronize_session=False)
-    if updated != 1:
+    if updated != len(all_ids):
         db.session.rollback()
         current = UploadSession.query.get(session_row.id)
         if current and current.status == "completed":
@@ -10383,8 +13212,9 @@ def finalize_upload_session(session_id):
         return _finalize_conflict_response(current)
     db.session.commit()
     session_row = UploadSession.query.get(session_row.id)
+    extra_video_rows = [UploadSession.query.get(row.id) for row in extra_video_rows]
 
-    return _finalize_assemble_and_validate([session_row], user, admin)
+    return _finalize_assemble_and_validate([(session_row, extra_video_rows)], user, admin)
 
 
 # Widest a single project-finalize request may declare. This is a
@@ -10415,6 +13245,39 @@ def _parse_content_set_ids(payload):
     if len(set(ids)) != len(ids):
         return None, _upload_api_error("DUPLICATE_SESSION_IDS", "A content set may only appear once in a project.", 400)
     return ids, None
+
+
+def _parse_extra_video_session_id_map(payload, primary_ids):
+    """(map_by_primary_id, error_response) - Issue 3E-D0.
+
+    {primary_session_id: [extra_video_session_id, ...]}, keyed by JSON
+    object (string keys, parsed to int here). Omitted entirely, or an empty
+    object, means no additional videos for any target - the exact
+    pre-3E-D0 shape. Every key must reference a primary id that is actually
+    present in THIS request's session_ids; a stray key would silently try
+    to attach videos to a target the caller never declared.
+    """
+    raw = payload.get("extra_video_session_ids")
+    if raw is None:
+        return {}, None
+    if not isinstance(raw, dict):
+        return None, _upload_api_error(
+            "INVALID_SESSION_IDS", "extra_video_session_ids must be an object keyed by target session id.", 400
+        )
+    result = {}
+    for key, value in raw.items():
+        try:
+            primary_id = int(key)
+        except (TypeError, ValueError):
+            return None, _upload_api_error(
+                "INVALID_SESSION_IDS", "extra_video_session_ids keys must be upload session ids.", 400
+            )
+        if primary_id not in primary_ids:
+            return None, _upload_api_error(
+                "INVALID_SESSION_IDS", "extra_video_session_ids references a target not in session_ids.", 400
+            )
+        result[primary_id] = value
+    return result, None
 
 
 @app.route("/api/uploads/projects/finalize", methods=["POST"])
@@ -10458,6 +13321,16 @@ def finalize_upload_project():
     session_rows = [rows_by_id[i] for i in ids]
     primary = session_rows[0]
 
+    if any(row.purpose == "pair_video" for row in session_rows):
+        # An additional-video session (Issue 3E-D0) has no image of its own -
+        # it can never be a target/content-set on its own, only ever
+        # attached to one via extra_video_session_ids.
+        return _upload_api_error(
+            "INVALID_PURPOSE",
+            "An additional video cannot be finalized on its own; it must be attached to its target.",
+            409,
+        )
+
     # Every set must belong to the same project intent. Disagreement here means
     # two different creation flows got mixed up client-side, and guessing which
     # one the creator meant is not something a server may do.
@@ -10474,6 +13347,22 @@ def finalize_upload_project():
                 409,
                 sessions=_upload_session_group_payload(session_rows),
             )
+
+    # Issue 3E-D0: resolve each target's additional-video sessions BEFORE any
+    # status transition - a rejection here must leave every primary
+    # untouched and still 'active'. extra_by_primary_id[pid] = [] for a
+    # target with no additional videos (the exact pre-3E-D0 shape).
+    extra_id_map, extra_id_map_error = _parse_extra_video_session_id_map(payload, set(ids))
+    if extra_id_map_error is not None:
+        return extra_id_map_error
+    extra_by_primary_id = {}
+    for row in session_rows:
+        extra_rows, extra_error = _resolve_extra_video_sessions(extra_id_map.get(row.id), user, admin, row)
+        if extra_error is not None:
+            return extra_error
+        extra_by_primary_id[row.id] = extra_rows
+    all_rows = [row for primary_row in session_rows for row in ([primary_row] + extra_by_primary_id[primary_row.id])]
+    all_ids = [row.id for row in all_rows]
 
     statuses = {row.status for row in session_rows}
     project_ids = {row.project_id for row in session_rows}
@@ -10506,36 +13395,41 @@ def finalize_upload_project():
     # or quota here would duplicate both.
     if statuses == {"assembled"} and len(project_ids) == 1 and primary.project_id:
         enqueue_start = time.perf_counter()
+        # Retry-enqueue reads the FULL group by project_id, not the client's
+        # own session_ids - the client's primary list was never told about
+        # any extra-video sessions attached at the original finalize call.
+        group_rows = _assembled_group_for_project(primary.project_id)
+        group_ids = [row.id for row in group_rows]
         claimed = UploadSession.query.filter(
-            UploadSession.id.in_(ids), UploadSession.status == "assembled"
+            UploadSession.id.in_(group_ids), UploadSession.status == "assembled"
         ).update({UploadSession.status: "finalizing"}, synchronize_session=False)
-        if claimed != len(ids):
+        if claimed != len(group_ids):
             db.session.rollback()
-            fresh = [UploadSession.query.get(i) for i in ids]
+            fresh = [UploadSession.query.get(i) for i in group_ids]
             return _upload_api_error(
                 "FINALIZE_IN_PROGRESS", "This project is already being finalized.", 409,
                 sessions=_upload_session_group_payload([row for row in fresh if row]),
             )
         db.session.commit()
-        session_rows = [UploadSession.query.get(i) for i in ids]
-        ok = _finalize_enqueue_and_complete(session_rows)
+        group_rows = [UploadSession.query.get(i) for i in group_ids]
+        ok = _finalize_enqueue_and_complete(group_rows)
         _log_upload_timing(
             "upload_project_finalize",
-            upload_session_id=session_rows[0].id,
-            project_id=session_rows[0].project_id,
+            upload_session_id=group_rows[0].id,
+            project_id=group_rows[0].project_id,
             pair_count=len(session_rows),
-            set_count=len(session_rows),
+            set_count=len(group_rows),
             enqueue_duration_ms=_elapsed_ms(enqueue_start),
             finalize_duration_ms=_elapsed_ms(finalize_start),
             recovered_existing_completion=True,
-            status=session_rows[0].status,
+            status=group_rows[0].status,
             safe_error_code=None if ok else "QUEUE_ENQUEUE_FAILED",
         )
         if ok:
             return jsonify({
                 "success": True,
-                "session": _upload_session_payload(session_rows[0]),
-                "sessions": _upload_session_group_payload(session_rows),
+                "session": _upload_session_payload(group_rows[0]),
+                "sessions": _upload_session_group_payload(group_rows),
             })
         return _upload_api_error(
             "QUEUE_ENQUEUE_FAILED",
@@ -10546,9 +13440,14 @@ def finalize_upload_project():
     # Expire anything genuinely past its inactivity deadline before judging the
     # group, so the client is told SESSION_EXPIRED for that set rather than an
     # opaque "incomplete".
+    # From here on, every readiness/atomicity check covers the FULL group -
+    # every target's primary AND every additional-video session (Issue
+    # 3E-D0) - via all_rows/all_ids, not just the primaries in session_rows.
+    # An incomplete or expired extra video must block finalize exactly like
+    # an incomplete or expired primary would.
     now = get_utc_now()
     expired_any = False
-    for row in session_rows:
+    for row in all_rows:
         if row.status == "active" and row.expires_at < now:
             row.status = "expired"
             row.failure_code = "SESSION_TTL_EXPIRED"
@@ -10557,7 +13456,7 @@ def finalize_upload_project():
         db.session.commit()
         return _upload_api_error(
             "SESSION_EXPIRED", "One or more content sets in this project expired.", 409,
-            sessions=_upload_session_group_payload(session_rows),
+            sessions=_upload_session_group_payload(all_rows),
         )
 
     # Some sets are already past the claim gate. Either another request is
@@ -10565,61 +13464,52 @@ def finalize_upload_project():
     # Either way the answer is "re-read the state", never "start again" - and
     # the per-set payload is what lets the client see which sets are already
     # done instead of guessing.
-    settled = [row for row in session_rows if row.status in {"finalizing", "assembled", "completed"}]
+    settled = [row for row in all_rows if row.status in {"finalizing", "assembled", "completed"}]
     if settled:
         return _upload_api_error(
             "FINALIZE_IN_PROGRESS", "This project is already being finalized.", 409,
-            sessions=_upload_session_group_payload(session_rows),
-        )
-
-    # Some sets are already past the claim gate. Either another request is
-    # finalizing this group right now, or a previous attempt settled part of it.
-    # Either way the answer is "re-read the state", never "start again" - and
-    # the per-set payload is what lets the client see which sets are already
-    # done instead of guessing.
-    settled = [row for row in session_rows if row.status in {"finalizing", "assembled", "completed"}]
-    if settled:
-        return _upload_api_error(
-            "FINALIZE_IN_PROGRESS", "This project is already being finalized.", 409,
-            sessions=_upload_session_group_payload(session_rows),
+            sessions=_upload_session_group_payload(all_rows),
         )
 
     # Not every set is byte-complete yet. The response carries every set's
     # authoritative offset so the client resumes exactly the sets that need it
     # and re-sends nothing for the ones that are already done.
     incomplete = [
-        row for row in session_rows
+        row for row in all_rows
         if row.status != "active" or int(row.current_offset or 0) != int(row.expected_total_size or 0)
     ]
     if incomplete:
         return _upload_api_error(
             "INCOMPLETE_UPLOAD",
-            f"{len(incomplete)} of {len(session_rows)} content sets are not fully uploaded yet.",
+            f"{len(incomplete)} of {len(all_rows)} uploads are not fully uploaded yet.",
             409,
-            sessions=_upload_session_group_payload(session_rows),
+            sessions=_upload_session_group_payload(all_rows),
         )
 
     if user:
         max_pairs = get_plan_pairs_limit(user)
         if max_pairs is not None and len(session_rows) > int(max_pairs):
-            # Refused BEFORE the claim, so a plan-limited request leaves every
-            # set 'active' and every uploaded byte exactly where it was.
+            # Pairs-per-project governs TARGETS (session_rows, the
+            # primaries), never videos - refused BEFORE the claim, so a
+            # plan-limited request leaves every session 'active' and every
+            # uploaded byte exactly where it was.
             return _upload_api_error(
                 "PAIR_LIMIT_REACHED",
                 f"Your current plan allows maximum {max_pairs} pairs per project.",
                 403,
-                sessions=_upload_session_group_payload(session_rows),
+                sessions=_upload_session_group_payload(all_rows),
             )
 
-    # THE atomic gate. All N or none.
+    # THE atomic gate. All N or none - N now counts every target's primary
+    # AND every additional-video session together.
     claimed = UploadSession.query.filter(
-        UploadSession.id.in_(ids),
+        UploadSession.id.in_(all_ids),
         UploadSession.status == "active",
         UploadSession.current_offset == UploadSession.expected_total_size,
     ).update({UploadSession.status: "finalizing"}, synchronize_session=False)
-    if claimed != len(ids):
+    if claimed != len(all_ids):
         db.session.rollback()
-        fresh = [row for row in (UploadSession.query.get(i) for i in ids) if row]
+        fresh = [row for row in (UploadSession.query.get(i) for i in all_ids) if row]
         if fresh and all(row.status == "completed" for row in fresh) and fresh[0].project_id:
             return jsonify({
                 "success": True,
@@ -10633,8 +13523,13 @@ def finalize_upload_project():
         )
     db.session.commit()
     session_rows = [UploadSession.query.get(i) for i in ids]
+    extra_by_primary_id = {
+        primary_id: [UploadSession.query.get(row.id) for row in extras]
+        for primary_id, extras in extra_by_primary_id.items()
+    }
+    targets = [(row, extra_by_primary_id[row.id]) for row in session_rows]
 
-    return _finalize_assemble_and_validate(session_rows, user, admin)
+    return _finalize_assemble_and_validate(targets, user, admin)
 
 
 @app.route("/api/uploads/sessions/<int:session_id>/cancel", methods=["POST"])
@@ -11979,7 +14874,7 @@ def pricing_page():
     """Public pricing page — no login required. Passes user=None for guests."""
     plans = purchasable_plans_query().order_by(SubscriptionPlan.display_order.asc()).all()
     user = current_user()  # None for guests, User object if logged in
-    return render_template(
+    response = make_response(render_template(
         "user/subscribe.html",
         plans=plans,
         user=user,
@@ -11987,7 +14882,12 @@ def pricing_page():
         dev_test_entitled=has_dev_test_entitlement(user),
         entitlement_summary=user_entitlement_summary(user),
         v11_experience_options=V11_EXPERIENCE_PRESENTATION,
-    )
+    ))
+    # Admin plan-sync stabilization pass: see landing()'s identical comment -
+    # the plan data was already live, this only prevents a browser's own
+    # cache from showing a stale render after an admin price edit.
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 
 @app.route("/subscribe", methods=["GET"])
@@ -11996,14 +14896,16 @@ def subscribe_page():
     """Show subscription plans"""
     user = current_user()
     plans = purchasable_plans_query().order_by(SubscriptionPlan.display_order.asc()).all()
-    
-    return render_template("user/subscribe.html", 
-                         plans=plans, 
+
+    response = make_response(render_template("user/subscribe.html",
+                         plans=plans,
                          user=user,
                          get_system_config=get_system_config,
                          dev_test_entitled=has_dev_test_entitlement(user),
                          entitlement_summary=user_entitlement_summary(user),
-                         v11_experience_options=V11_EXPERIENCE_PRESENTATION)
+                         v11_experience_options=V11_EXPERIENCE_PRESENTATION))
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 def activate_payment(payment_order):
     """Idempotently activate a subscription for a PaymentOrder whose Razorpay
@@ -12191,6 +15093,12 @@ def activate_payment(payment_order):
 def create_razorpay_order():
     """Create Razorpay order for subscription"""
     user = current_user()
+    ok, retry_after = _check_rate_limit("payment_action", _rate_limit_key("payment_order", user.id))
+    if not ok:
+        response = jsonify({"success": False, "error": "Too many payment attempts. Please try again later."})
+        response.status_code = 429
+        response.headers["Retry-After"] = str(retry_after)
+        return response
     if has_dev_test_entitlement(user):
         return jsonify({
             "success": False,
@@ -12235,9 +15143,10 @@ def create_razorpay_order():
     try:
         quote = _inr_checkout_quote(plan.effective_price)
         amount_paise = _gateway_minor_units(quote["quoted_amount"])
-    except Exception as e:
+    except Exception:
         _release_capacity_slot(reservation, "released", "invalid-amount")
-        return jsonify({"success": False, "error": f"Invalid amount: {str(e)}"})
+        app.logger.exception("Invalid checkout amount for plan_id=%s", plan.id)
+        return jsonify({"success": False, "error": "Invalid amount for this plan."})
 
     # Create Razorpay order
     try:
@@ -12307,21 +15216,21 @@ def create_razorpay_order():
             }
         })
 
-    except razorpay.errors.BadRequestError as e:
+    except razorpay.errors.BadRequestError:
         db.session.rollback()
         _release_capacity_slot(reservation, "released", "razorpay-bad-request")
-        print(f"❌ Razorpay Bad Request: {e}")
-        return jsonify({"success": False, "error": f"Invalid request to payment gateway: {str(e)}"})
-    except _RAZORPAY_AUTH_ERROR as e:
+        app.logger.exception("Razorpay Bad Request creating order for user_id=%s plan_id=%s", user.id, plan.id)
+        return jsonify({"success": False, "error": "Invalid request to payment gateway."})
+    except _RAZORPAY_AUTH_ERROR:
         db.session.rollback()
         _release_capacity_slot(reservation, "released", "razorpay-auth-error")
-        print(f"❌ Razorpay Authentication Error: {e}")
+        app.logger.exception("Razorpay Authentication Error creating order for user_id=%s", user.id)
         return jsonify({"success": False, "error": "Payment gateway authentication failed. Please check API keys."})
-    except Exception as e:
+    except Exception:
         db.session.rollback()
         _release_capacity_slot(reservation, "released", "razorpay-order-create-failed")
-        print(f"❌ Razorpay order creation failed: {e}")
-        return jsonify({"success": False, "error": f"Payment gateway error: {str(e)}"})
+        app.logger.exception("Razorpay order creation failed for user_id=%s plan_id=%s", user.id, plan.id)
+        return jsonify({"success": False, "error": "Payment gateway error. Please try again."})
 
 @app.route("/verify-payment", methods=["POST"])
 @login_required
@@ -12329,6 +15238,12 @@ def verify_payment():
     """Verify Razorpay payment and activate subscription (idempotent - see
     activate_payment() above for the DB-level replay-safety guarantee)."""
     user = current_user()
+    ok, retry_after = _check_rate_limit("payment_action", _rate_limit_key("payment_verify", user.id))
+    if not ok:
+        response = jsonify({"success": False, "error": "Too many payment attempts. Please try again later."})
+        response.status_code = 429
+        response.headers["Retry-After"] = str(retry_after)
+        return response
 
     razorpay_payment_id = request.form.get("razorpay_payment_id")
     razorpay_order_id = request.form.get("razorpay_order_id")
@@ -12349,9 +15264,9 @@ def verify_payment():
         razorpay_client.utility.verify_payment_signature(params_dict)
     except razorpay.errors.SignatureVerificationError:
         return jsonify({"success": False, "error": "Invalid payment signature"})
-    except Exception as e:
-        print(f"Payment verification failed: {e}")
-        return jsonify({"success": False, "error": str(e)})
+    except Exception:
+        app.logger.exception("Payment verification failed for order_id=%s", razorpay_order_id)
+        return jsonify({"success": False, "error": "Payment verification failed. Please try again."})
 
     # Get payment order from database - must belong to the session user.
     payment_order = PaymentOrder.query.filter_by(razorpay_order_id=razorpay_order_id).first()
@@ -13135,7 +16050,35 @@ def serve_video(project_id, image_id):
     if not pair:
         return "Pair not found"
 
-    response = send_from_directory(VIDEOS_DIR, pair.video_filename)
+    filename = resolve_pair_default_video_filename(pair, VIDEOS_DIR)
+    response = send_from_directory(VIDEOS_DIR, filename)
+    response.headers["Content-Disposition"] = "inline"
+    return _apply_no_store_cache(response) if investigating else _apply_short_public_cache(response)
+
+@app.route("/video/<int:project_id>/<int:image_id>/media/<int:media_id>")
+def serve_pair_media_video(project_id, image_id, media_id):
+    """Issue 3E-E: serve one specific PairMedia video (not just the pair's
+    default) for sequential multi-video playback. Additive - serve_video
+    above is untouched and still serves the default video."""
+    project = Project.query.get(project_id)
+    if not project:
+        return "Project not found"
+    investigating = False
+    if not _project_is_available(project):
+        if not _admin_media_investigation_allowed():
+            return _project_unavailable_response()
+        investigating = True
+
+    pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
+    if not pair:
+        return "Pair not found"
+
+    media = PairMedia.query.filter_by(id=media_id, pair_id=pair.id).first()
+    if not media:
+        abort(404)
+
+    filename = resolve_pair_media_filename(media, VIDEOS_DIR)
+    response = send_from_directory(VIDEOS_DIR, filename)
     response.headers["Content-Disposition"] = "inline"
     return _apply_no_store_cache(response) if investigating else _apply_short_public_cache(response)
 
@@ -13321,6 +16264,36 @@ def admin_scanner_test_entry(project_id):
     return redirect(_canonical_public_scanner_path(project, test_token=token))
 
 
+def _pair_media_payload(pair, media_endpoint, external=False):
+    """Issue 3E-E: ordered [{id, video_url, sort_order, is_default}, ...]
+    for a pair's PairMedia rows (media_items is already ordered sort_order
+    ASC, id ASC), or None for a legacy pair with no PairMedia rows recorded
+    - callers omit the "media" key entirely in that case rather than send
+    an empty list, per the additive-payload contract."""
+    if not pair.media_items:
+        return None
+    kwargs = {"_external": True, "_scheme": "https"} if external else {}
+    return [
+        {
+            "id": media.id,
+            "video_url": url_for(
+                media_endpoint, project_id=pair.project_id, image_id=pair.pair_index,
+                media_id=media.id,
+                # Cache-busting (issue 5): PairMedia has no updated_at column, but
+                # video_size changes on any real content replace (see
+                # user_replace_pair_media) - good enough to make a replaced file's
+                # URL new to any cache still holding the pre-replace bytes. See the
+                # matching comment on matched_video_url in detect_init.
+                v=media.video_size or 0,
+                **kwargs,
+            ),
+            "sort_order": media.sort_order,
+            "is_default": media.is_default,
+        }
+        for media in pair.media_items
+    ]
+
+
 def _render_scanner_project(project, test_token=None):
     """Render scanner for a resolved public project."""
     if not _project_is_available(project):
@@ -13344,15 +16317,52 @@ def _render_scanner_project(project, test_token=None):
         .order_by(ProjectPair.pair_index)
         .all()
     )
-    targets = [
-        {
+    # Admin-created ScanStories keep their media in ADMIN_IMAGES_DIR /
+    # ADMIN_VIDEOS_DIR, which serve_image/serve_video do not read - they only
+    # ever look in the user-side IMAGES_DIR/VIDEOS_DIR. Building the public
+    # scanner's URLs unconditionally from the user-side endpoints therefore
+    # guaranteed a 404 for every admin-created project: the target guide showed
+    # the "Target 1" caption with a broken image, and the overlay video never
+    # loaded. Same owner-aware selection the rest of the codebase already does
+    # (see the resumable-upload finalize path and admin/view_project.html).
+    image_endpoint = "serve_admin_image" if project.owner_admin_id else "serve_image"
+    video_endpoint = "serve_admin_video" if project.owner_admin_id else "serve_video"
+    media_endpoint = "serve_admin_pair_media_video" if project.owner_admin_id else "serve_pair_media_video"
+    targets = []
+    for pair in pairs:
+        # Same free version signal the matched-detection response uses below
+        # (ProjectPair.updated_at ticks on every image/video replace) - without
+        # it, this initial page-load preload can keep serving pre-replace
+        # bytes from a browser/CDN cache even though the scan-time response
+        # already bypasses that cache correctly.
+        _preload_cache_bust = int(pair.updated_at.timestamp()) if pair.updated_at else 0
+        target = {
             "index": pair.pair_index,
-            "image_url": url_for("serve_image", project_id=project.id, image_id=pair.pair_index),
-            "video_url": url_for("serve_video", project_id=project.id, image_id=pair.pair_index),
+            "image_url": url_for(image_endpoint, project_id=project.id, image_id=pair.pair_index, v=_preload_cache_bust),
+            "video_url": url_for(video_endpoint, project_id=project.id, image_id=pair.pair_index, v=_preload_cache_bust),
             "label": "Target {}".format(pair.pair_index + 1),
         }
-        for pair in pairs
-    ]
+        media_list = _pair_media_payload(pair, media_endpoint)
+        if media_list:
+            target["media"] = media_list
+        targets.append(target)
+
+    # Direct QR playlist (physical QA fix): flattened, pair_index-ordered play
+    # list across every target/PairMedia the project has - same canonical
+    # ProjectPair -> ordered PairMedia source every other mode reads, just
+    # flattened into one linear sequence since Direct QR has no per-target
+    # recognition step to select among them. A target with its own multi-video
+    # PairMedia list (target["media"]) contributes each of those in order;
+    # a target with only the legacy single-video mirror contributes one entry.
+    direct_qr_playlist = []
+    if experience_type == "direct_qr":
+        for target in targets:
+            media_list = target.get("media")
+            if media_list:
+                for media_item in media_list:
+                    direct_qr_playlist.append({"url": media_item["video_url"], "label": target["label"]})
+            else:
+                direct_qr_playlist.append({"url": target["video_url"], "label": target["label"]})
 
     return render_template(
         "user/scanner.html",
@@ -13364,6 +16374,7 @@ def _render_scanner_project(project, test_token=None):
         experience_type=experience_type,
         playback_mode=playback_mode,
         targets=targets,
+        direct_qr_playlist=direct_qr_playlist,
         scanner_diagnostics_enabled=scanner_diagnostics_enabled(),
         scanner_entry_context=entry["context"],
         resolved_back_destination=entry["back_url"],
@@ -13395,6 +16406,7 @@ def scanner(project_id):
     gate-jr/cross-device-test-matrix.md.
     """
     test_token = request.args.get("test_token")
+    scanner_debug = request.args.get("scanner_debug")
 
     project = Project.query.get(project_id)
 
@@ -13405,6 +16417,16 @@ def scanner(project_id):
     query = {}
     if test_token:
         query["test_token"] = test_token
+    # Master stabilization pass (section 3/44): this redirect used to drop
+    # every query param except test_token, so ?scanner_debug=1 silently
+    # vanished on the way to the canonical /s/<key> URL - the QA-only
+    # diagnostics panel (already gated server-side by
+    # scanner_diagnostics_enabled(), never true in production regardless of
+    # this param) was unreachable through the documented /scanner/<id> entry
+    # point. Forwarding it is a pure client-visibility toggle, not a new
+    # capability.
+    if scanner_debug:
+        query["scanner_debug"] = scanner_debug
     return redirect(_canonical_public_scanner_path(project, **query), code=302)
 
     # Entry context is resolved purely server-side (signed token + real session ownership
@@ -13668,7 +16690,21 @@ def detect_init():
             new_w, new_h = int(w * scale), int(h * scale)
             img = cv2.resize(img, (new_w, new_h))
             print(f"📸 Resized to: {new_w}x{new_h}")
-        
+
+        # Cheap raw-exposure sample, taken BEFORE the mobile-enhancement step below.
+        # Histogram equalization (next block) deliberately FLATTENS extreme brightness
+        # to help ORB - reading exposure/contrast/glare off the post-equalized image
+        # would erase exactly the overexposed/underexposed signal we need to report
+        # to the user about the real physical scene. Small downscale keeps this cheap;
+        # diagnostic only, never gates accept/reject.
+        _raw_gray_for_exposure = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        _raw_dim = max(_raw_gray_for_exposure.shape[:2])
+        if _raw_dim > 240:
+            _exposure_scale = 240.0 / _raw_dim
+            _raw_gray_for_exposure = cv2.resize(
+                _raw_gray_for_exposure, None, fx=_exposure_scale, fy=_exposure_scale, interpolation=cv2.INTER_AREA
+            )
+
         # Mobile enhancement - applied to COPY only
         h, w = img.shape[:2]
         if h < 1000 or w < 1000:
@@ -13695,11 +16731,49 @@ def detect_init():
         # them to one compact frame-level diagnostic block (see _log_frame_diag()).
         blur_score = float(cv2.Laplacian(gray_small, cv2.CV_64F).var())
         brightness_score = float(np.mean(gray_small))
+        # Cheap coarse-grid highlight/shadow scan over the RAW pre-enhancement sample
+        # (see _raw_gray_for_exposure above) - a single global brightness mean cannot
+        # tell a small glossy hotspot (glare) apart from the whole frame being blown
+        # out (direct-light overexposure), since a hotspot barely moves the mean; it
+        # needs its own concentration signal. Diagnostic only, same contract as
+        # blur_score/brightness_score above: never gates accept/reject, only feeds
+        # user-facing guidance text.
+        _raw_brightness = float(np.mean(_raw_gray_for_exposure))
+        _raw_contrast = float(np.std(_raw_gray_for_exposure))
+        # Pixel-level highlight/shadow masks (not per-cell MEANS): a small hotspot
+        # diluted into a cell average can read as unremarkable even though most of
+        # THAT cell's pixels are fully blown out - concentration has to be measured
+        # per-pixel, then rolled up to "what's the most saturated single region".
+        _highlight_mask = _raw_gray_for_exposure > 235.0
+        _shadow_mask = _raw_gray_for_exposure < 25.0
+        _global_highlight_fraction = float(np.mean(_highlight_mask))
+        _global_shadow_fraction = float(np.mean(_shadow_mask))
+        _grid_h, _grid_w = _raw_gray_for_exposure.shape[:2]
+        _grid_n = 4
+        _cell_h = max(1, _grid_h // _grid_n)
+        _cell_w = max(1, _grid_w // _grid_n)
+        _max_cell_highlight_fraction = 0.0
+        for _gy in range(0, _grid_h, _cell_h):
+            for _gx in range(0, _grid_w, _cell_w):
+                _cell_mask = _highlight_mask[_gy:_gy + _cell_h, _gx:_gx + _cell_w]
+                if _cell_mask.size:
+                    _cell_fraction = float(np.mean(_cell_mask))
+                    if _cell_fraction > _max_cell_highlight_fraction:
+                        _max_cell_highlight_fraction = _cell_fraction
+
         frame_diag = {
             "blur_score": round(blur_score, 1),
             "brightness_score": round(brightness_score, 1),
+            "contrast_score": round(_raw_contrast, 1),
             "likely_blurry": blur_score < 40.0,
             "likely_glare_or_dark": brightness_score > 235.0 or brightness_score < 25.0,
+            # Most of the frame is blown out/crushed - a lighting problem, not a hotspot.
+            "likely_overexposed": _global_highlight_fraction >= 0.5,
+            "likely_underexposed": _global_shadow_fraction >= 0.5,
+            # One concentrated region is mostly blown out, but the WHOLE frame is
+            # NOT - a reflection/hotspot, not global overexposure.
+            "likely_localized_glare": _max_cell_highlight_fraction >= 0.5 and _global_highlight_fraction < 0.5,
+            "likely_low_contrast": _raw_contrast < 18.0,
         }
 
         def _log_frame_diag(stage, **extra):
@@ -13711,15 +16785,134 @@ def detect_init():
             payload = {
                 "blur_score": frame_diag.get("blur_score"),
                 "brightness_score": brightness,
+                "contrast_score": frame_diag.get("contrast_score"),
                 "likely_blurry": bool(frame_diag.get("likely_blurry")),
                 "likely_glare_or_dark": bool(frame_diag.get("likely_glare_or_dark")),
                 "likely_dark": bool(brightness is not None and brightness < 25.0),
                 "likely_glare": bool(brightness is not None and brightness > 235.0),
+                "likely_overexposed": bool(frame_diag.get("likely_overexposed")),
+                "likely_underexposed": bool(frame_diag.get("likely_underexposed")),
+                "likely_localized_glare": bool(frame_diag.get("likely_localized_glare")),
+                "likely_low_contrast": bool(frame_diag.get("likely_low_contrast")),
             }
             for key in ("raw_keypoints", "quick_score_candidates", "good_matches", "inliers", "frame_visibility"):
                 if key in extra:
                     payload[key] = extra[key]
             return payload
+
+        def _frame_quality_reason():
+            """One short, low-cardinality label for the structured scanner_latency
+            log - distinguishes "took 8 seconds because of a bad frame" from
+            recognition/network/video time without storing any image data. Reads
+            the same frame_diag keys _scanner_guidance() reads, same priority
+            order as the client's guidance resolver - first match wins."""
+            brightness = frame_diag.get("brightness_score")
+            likely_glare = brightness is not None and brightness > 235.0
+            likely_dark = brightness is not None and brightness < 25.0
+            if frame_diag.get("likely_localized_glare") or likely_glare:
+                return "glare"
+            if frame_diag.get("likely_blurry"):
+                return "blur"
+            if frame_diag.get("likely_overexposed"):
+                return "overexposed"
+            if frame_diag.get("likely_underexposed") or likely_dark or frame_diag.get("likely_glare_or_dark"):
+                return "underexposed"
+            if frame_diag.get("likely_low_contrast"):
+                return "low_contrast"
+            return "clean"
+
+        # ---------------------------------------------------------------
+        # Controlled bad-frame recovery (additive). Reuses the frame_diag
+        # signals already computed above — no new heavy analysis. Decided
+        # ONCE per request, from the ORIGINAL frame, before any recognition
+        # attempt runs; a severe/blurry frame gets recovery_reason=None and
+        # NEVER enters recovery below, no matter how normal recognition
+        # turns out. `recovery_attempted` is the single cross-site guard
+        # that enforces "at most one retry per frame" — see _attempt_recovery.
+        # ---------------------------------------------------------------
+        recovery_reason = _classify_recovery_reason(
+            frame_diag, _global_highlight_fraction, _global_shadow_fraction, _max_cell_highlight_fraction
+        )
+        recovery_attempted = False
+        recovery_success = False
+        recovery_duration_ms = None
+
+        def _recovery_payload():
+            return {"attempted": recovery_attempted, "reason": recovery_reason, "success": recovery_success}
+
+        def _attempt_recovery(gray_source):
+            """Runs at most once per request — callers only invoke this from
+            behind an `if not recovery_attempted` guard. Builds ONE corrected
+            grayscale frame and re-runs the SAME orb.detectAndCompute used for
+            the normal path; callers then run the identical downstream
+            quick-score/match/homography/corner checks on the result, so no
+            acceptance threshold is duplicated or weakened."""
+            nonlocal recovery_attempted, recovery_duration_ms
+            _t_recovery_start = time.time()
+            corrected_gray = _apply_recovery_correction(gray_source, recovery_reason)
+            recovered_kp, recovered_desc = orb.detectAndCompute(corrected_gray, None)
+            recovery_attempted = True
+            recovery_duration_ms = (time.time() - _t_recovery_start) * 1000.0
+            return recovered_kp, recovered_desc
+
+        def _score_and_match(desc):
+            """The exact quick-score + candidate-match logic normal detection
+            already ran once above/below — extracted only so the ONE recovery
+            retry can re-run it on a corrected descriptor set without a second,
+            divergent implementation. Same ratios (0.78/0.75/0.80/0.90), same
+            MIN_GOOD_MATCHES gate, same QUICK_TOPK candidate cap."""
+            scored_local = []
+            for pair in processed_pairs:
+                feats_local = load_features(project_id, pair.pair_index)
+                if feats_local is None:
+                    continue
+                s = quick_score(desc, feats_local, ratio=0.78, max_checks=QUICK_DESC_LIMIT)
+                if s > 2:
+                    scored_local.append((s, pair.pair_index))
+
+            scored_local.sort(reverse=True)
+            top_ids_local = [pid for _, pid in scored_local[:QUICK_TOPK]]
+            if not top_ids_local:
+                top_ids_local = [p.pair_index for p in processed_pairs[:min(QUICK_TOPK, len(processed_pairs))]]
+
+            best_match_local = None
+            best_match_id_local = -1
+            best_good_local = 0
+            second_good_local = 0
+            match_funnel_local = None
+
+            for pid in top_ids_local:
+                feats_local = load_features(project_id, pid)
+                if feats_local is None:
+                    continue
+
+                pid_diag = {}
+                best_tag_local, good_matches_local, stored_kp_local = match_best_variant(desc, feats_local, ratio=0.75, diag=pid_diag)
+
+                if not good_matches_local or len(good_matches_local) < MIN_GOOD_MATCHES:
+                    best_tag_local, good_matches_local, stored_kp_local = match_best_variant(desc, feats_local, ratio=0.80, diag=pid_diag)
+
+                if not good_matches_local or len(good_matches_local) < MIN_GOOD_MATCHES:
+                    best_tag_local, good_matches_local, stored_kp_local = match_best_variant(desc, feats_local, ratio=0.90, diag=pid_diag)
+
+                if good_matches_local and len(good_matches_local) > best_good_local:
+                    second_good_local = best_good_local
+                    best_good_local = len(good_matches_local)
+                    best_match_local = (best_tag_local, good_matches_local, stored_kp_local, feats_local)
+                    best_match_id_local = pid
+                    match_funnel_local = dict(pid_diag, pair_id=pid)
+                elif good_matches_local and len(good_matches_local) > second_good_local:
+                    second_good_local = len(good_matches_local)
+
+            return {
+                "scored": scored_local,
+                "top_ids": top_ids_local,
+                "best_match": best_match_local,
+                "best_match_id": best_match_id_local,
+                "best_good": best_good_local,
+                "second_good": second_good_local,
+                "match_funnel": match_funnel_local,
+            }
 
         orb = _orb_detect()
         test_kp, test_desc = orb.detectAndCompute(gray_small, None)
@@ -13727,21 +16920,29 @@ def detect_init():
         print(f"⏱ detect_time={(t_after_detect - t_after_prep):.3f}s (kp={len(test_kp) if test_kp else 0})")
 
         if test_kp is None or test_desc is None or len(test_kp) < MIN_TEST_KP:
-            print(f"❌ Too few features: {len(test_kp) if test_kp else 0}")
-            if scan_log and not is_admin_project:
-                db.session.commit()
-            return jsonify({
-                "detected": False, 
-                "reason": f"Too few features ({len(test_kp) if test_kp else 0})", 
-                "frame_width": frame_w, 
-                "frame_height": frame_h,
-                "scanner_generation": scanner_generation,
-                "source_frame_width": source_frame_width,
-                "source_frame_height": source_frame_height,
-                "orientation_revision": orientation_revision,
-                "scanner_guidance": _scanner_guidance(raw_keypoints=len(test_kp) if test_kp else 0),
-            }), 200
-        
+            if not recovery_attempted and recovery_reason:
+                recovered_kp, recovered_desc = _attempt_recovery(gray_small)
+                if recovered_kp is not None and recovered_desc is not None and len(recovered_kp) >= MIN_TEST_KP:
+                    recovery_success = True
+                    test_kp, test_desc = recovered_kp, recovered_desc
+
+            if test_kp is None or test_desc is None or len(test_kp) < MIN_TEST_KP:
+                print(f"❌ Too few features: {len(test_kp) if test_kp else 0}")
+                if scan_log and not is_admin_project:
+                    db.session.commit()
+                return jsonify({
+                    "detected": False,
+                    "reason": f"Too few features ({len(test_kp) if test_kp else 0})",
+                    "frame_width": frame_w,
+                    "frame_height": frame_h,
+                    "scanner_generation": scanner_generation,
+                    "source_frame_width": source_frame_width,
+                    "source_frame_height": source_frame_height,
+                    "orientation_revision": orientation_revision,
+                    "scanner_guidance": _scanner_guidance(raw_keypoints=len(test_kp) if test_kp else 0),
+                    "recovery": _recovery_payload(),
+                }), 200
+
         print(f"🔍 Found {len(test_kp)} features")
 
         # Limit keypoints/descriptors for live matching to improve speed
@@ -13749,75 +16950,62 @@ def detect_init():
         if N < len(test_kp):
             test_kp = test_kp[:N]
             test_desc = test_desc[:N]
-        
-        # Quick scoring
-        scored = []
-        for pair in processed_pairs:
-            feats = load_features(project_id, pair.pair_index)
-            if feats is None:
-                continue
-            s = quick_score(test_desc, feats, ratio=0.78, max_checks=QUICK_DESC_LIMIT)
-            print(f"  🔢 Pair {pair.pair_index} quick_score={s}")
-            if s > 2:  # lowered from 4 — quick_score with 500 descriptors is reliable enough at >2
-                scored.append((s, pair.pair_index))
 
-        t_after_quick = time.time()
-        print(f"⏱ quick_score_time={(t_after_quick - t_after_detect):.3f}s; scored_candidates={len(scored)}")
+        _m = _score_and_match(test_desc)
+        scored = _m["scored"]
+        top_ids = _m["top_ids"]
+        best_match = _m["best_match"]
+        best_match_id = _m["best_match_id"]
+        best_good = _m["best_good"]
+        second_good = _m["second_good"]
+        if _m["match_funnel"] is not None:
+            frame_diag["match_funnel"] = _m["match_funnel"]
 
-        print(f"📊 Quick scoring results: {len(scored)} pairs scored >4")
-        
-        scored.sort(reverse=True)
-        top_ids = [pid for _, pid in scored[:QUICK_TOPK]]
-        if not top_ids:
-            top_ids = [p.pair_index for p in processed_pairs[:min(QUICK_TOPK, len(processed_pairs))]]
-        
-        print(f"🎯 Top candidate pair IDs: {top_ids}")
-        
-        # Find best match
-        best_match = None
-        best_match_id = -1
-        best_good = 0
-        second_good = 0
+        print(f"📊 Quick scoring results: {len(scored)} pairs scored >2; top candidate={best_match_id}")
 
-        for pid in top_ids:
-            feats = load_features(project_id, pid)
-            if feats is None:
-                continue
-
-            pid_diag = {}
-            best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.75, diag=pid_diag)
-
-            if not good_matches or len(good_matches) < MIN_GOOD_MATCHES:
-                best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.80, diag=pid_diag)
-
-            if not good_matches or len(good_matches) < MIN_GOOD_MATCHES:
-                best_tag, good_matches, stored_kp = match_best_variant(test_desc, feats, ratio=0.90, diag=pid_diag)
-
-            if good_matches and len(good_matches) > best_good:
-                second_good = best_good
-                best_good = len(good_matches)
-                best_match = (best_tag, good_matches, stored_kp, feats)
-                best_match_id = pid
-                # Match-count funnel for the CURRENT winning candidate only — overwritten if
-                # a later pid in top_ids wins instead, so this always reflects best_match_id.
-                frame_diag["match_funnel"] = dict(pid_diag, pair_id=pid)
-                print(f"  - Pair {pid}: {len(good_matches)} good matches")
-            elif good_matches and len(good_matches) > second_good:
-                second_good = len(good_matches)
         t_after_match = time.time()
-        print(f"⏱ match_time={(t_after_match - t_after_quick):.3f}s; best_good={best_good}; second_good={second_good}")
+        print(f"⏱ match_time={(t_after_match - t_after_detect):.3f}s; best_good={best_good}; second_good={second_good}")
+
+        if not best_match or best_good < MIN_GOOD_MATCHES:
+            if not recovery_attempted and recovery_reason:
+                recovered_kp, recovered_desc = _attempt_recovery(gray_small)
+                if recovered_kp is not None and recovered_desc is not None and len(recovered_kp) >= MIN_TEST_KP:
+                    Nr = min(len(recovered_kp), QUICK_DESC_LIMIT)
+                    if Nr < len(recovered_kp):
+                        recovered_kp = recovered_kp[:Nr]
+                        recovered_desc = recovered_desc[:Nr]
+                    _m2 = _score_and_match(recovered_desc)
+                    if _m2["best_match"] and _m2["best_good"] >= MIN_GOOD_MATCHES:
+                        recovery_success = True
+                        test_kp, test_desc = recovered_kp, recovered_desc
+                        scored = _m2["scored"]
+                        top_ids = _m2["top_ids"]
+                        best_match = _m2["best_match"]
+                        best_match_id = _m2["best_match_id"]
+                        best_good = _m2["best_good"]
+                        second_good = _m2["second_good"]
+                        if _m2["match_funnel"] is not None:
+                            frame_diag["match_funnel"] = _m2["match_funnel"]
 
         if not best_match or best_good < MIN_GOOD_MATCHES:
             print(f"❌ Detection failed: best_good={best_good}")
             _log_frame_diag("mobile_detection_failed", raw_keypoints=len(test_kp), quick_score_candidates=len(scored), best_good=best_good)
             _log_scanner_latency(
                 "detect_init", t_start, project_id=project_id, outcome="no_match", stage="response", scan_session_id=scan_session_id,
+                frame_quality_reason=_frame_quality_reason(),
+                recognition_pass="recovered" if recovery_success else "normal",
+                recovery_reason=recovery_reason,
+                recovery_attempted=recovery_attempted,
+                recovery_success=recovery_success,
+                recovery_duration_ms=recovery_duration_ms,
                 stage_timings={
                     "read": t_after_read - t_start,
                     "prep": t_after_prep - t_after_read,
                     "detect": t_after_detect - t_after_prep,
-                    "quick_score": t_after_quick - t_after_detect,
-                    "match": t_after_match - t_after_quick,
+                    # quick_score + match are one combined call now (_score_and_match, shared
+                    # with the recovery retry) - reported together rather than split, since
+                    # splitting them here would be a fabricated (always-~0ms) "match" entry.
+                    "quick_score_and_match": t_after_match - t_after_detect,
                 },
             )
             if scan_log and not is_admin_project:
@@ -13834,6 +17022,7 @@ def detect_init():
                 "scanner_guidance": _scanner_guidance(
                     raw_keypoints=len(test_kp), quick_score_candidates=len(scored), good_matches=best_good
                 ),
+                "recovery": _recovery_payload(),
             }), 200
 
         margin_ok, margin_code = resolve_candidate_margin(best_good, second_good)
@@ -13856,6 +17045,7 @@ def detect_init():
                 "scanner_guidance": _scanner_guidance(
                     raw_keypoints=len(test_kp), quick_score_candidates=len(scored), good_matches=best_good
                 ),
+                "recovery": _recovery_payload(),
             }), 200
 
         print(f"✅ Best match: pair {best_match_id} with {best_good} matches")
@@ -13903,7 +17093,12 @@ def detect_init():
             _log_frame_diag("homography_failed", raw_keypoints=len(test_kp), quick_score_candidates=len(scored), good_matches=best_good)
             if scan_log and not is_admin_project:
                 db.session.commit()
-            return jsonify({"detected": False, "reason": "Homography failed", "code": "missing_homography"}), 200
+            return jsonify({
+                "detected": False,
+                "reason": "Homography failed",
+                "code": "missing_homography",
+                "recovery": _recovery_payload(),
+            }), 200
 
         inliers = int(np.sum(mask))
         print(f"📐 Inliers: {inliers}/{len(src_arr)}")
@@ -13956,6 +17151,7 @@ def detect_init():
                     inliers=inliers,
                     frame_visibility="partial" if homography_quality.get("code") in {"quad_out_of_bounds", "visible_area_too_small"} else "unknown",
                 ),
+                "recovery": _recovery_payload(),
             }), 200
 
         rect = np.array([[0, 0], [tw, 0], [tw, th], [0, th]], dtype=np.float32).reshape(-1, 1, 2)
@@ -13976,8 +17172,9 @@ def detect_init():
                     inliers=inliers,
                     frame_visibility="partial",
                 ),
+                "recovery": _recovery_payload(),
             }), 200
-        
+
         # ✅ Mark scan as successful - ONLY count for USER projects
         # ✅ Mark scan as successful only.
         # Do NOT increment scans_used here.
@@ -14019,20 +17216,41 @@ def detect_init():
         matched_pair = next((p for p in processed_pairs if p.pair_index == best_match_id), None)
         marker_mode = getattr(matched_pair, "marker_mode", None) or "full_image"
         
+        # Physical QA fix (issue 5): serve_video/serve_image are served with a long
+        # public Cache-Control (see _apply_short_public_cache) on a URL that never
+        # changes even after the creator replaces the file in place (os.replace onto
+        # the same filename) - a browser, or a shared/carrier cache in between, can
+        # keep serving the pre-replace bytes for up to an hour with no way to notice
+        # the content changed. ProjectPair.updated_at ticks (onupdate=func.now()) on
+        # every replace, so it's a free, already-existing version signal - appending
+        # it as a query param makes a replace a genuinely NEW URL, bypassing any
+        # cache still holding the old one, without touching Cache-Control itself.
+        _video_cache_bust = int(matched_pair.updated_at.timestamp()) if matched_pair and matched_pair.updated_at else 0
         if project.owner_admin_id:
-            matched_video_url = url_for("serve_admin_video", project_id=project_id, image_id=best_match_id, _external=True,_scheme="https")
+            matched_video_url = url_for("serve_admin_video", project_id=project_id, image_id=best_match_id, v=_video_cache_bust, _external=True,_scheme="https")
+            matched_media_endpoint = "serve_admin_pair_media_video"
         else:
-            matched_video_url = url_for("serve_video", project_id=project_id, image_id=best_match_id, _external=True,_scheme="https")
-        
+            matched_video_url = url_for("serve_video", project_id=project_id, image_id=best_match_id, v=_video_cache_bust, _external=True,_scheme="https")
+            matched_media_endpoint = "serve_pair_media_video"
+        # Issue 3E-E: sequential multi-video playback - additive "media" list
+        # alongside the existing "video_url" (which stays the default video,
+        # unchanged). None/absent for a legacy pair with no PairMedia rows.
+        matched_media = _pair_media_payload(matched_pair, matched_media_endpoint, external=True) if matched_pair else None
+
         print(f"✅ Detection successful! Returning response")
         _log_scanner_latency(
             "detect_init", t_start, project_id=project_id, outcome="accepted", stage="response", scan_session_id=scan_session_id,
+            frame_quality_reason=_frame_quality_reason(),
+            recognition_pass="recovered" if recovery_success else "normal",
+            recovery_reason=recovery_reason,
+            recovery_attempted=recovery_attempted,
+            recovery_success=recovery_success,
+            recovery_duration_ms=recovery_duration_ms,
             stage_timings={
                 "read": t_after_read - t_start,
                 "prep": t_after_prep - t_after_read,
                 "detect": t_after_detect - t_after_prep,
-                "quick_score": t_after_quick - t_after_detect,
-                "match": t_after_match - t_after_quick,
+                "quick_score_and_match": t_after_match - t_after_detect,
                 "homography": t_after_homography - t_after_match,
             },
         )
@@ -14072,7 +17290,9 @@ def detect_init():
             "scan_session_id": scan_session_id if scan_attribution_owner_id else None,
             "ready_pairs": len(processed_pairs),
             "total_pairs": total_pairs,
-            "is_admin_project": is_admin_project  # Let frontend know
+            "is_admin_project": is_admin_project,  # Let frontend know
+            "recovery": _recovery_payload(),
+            **({"media": matched_media} if matched_media else {}),
         }), 200
         
     except Exception as e:
@@ -14218,12 +17438,10 @@ def scanner_session_end():
             "counted": True,
             "user_total": user.scans_used
         })
-    except Exception as e:
-        print(f"❌ ERROR: {str(e)}")
-        import traceback
-        traceback.print_exc()
+    except Exception:
+        app.logger.exception("scanner_session_end failed for project_id=%s", project_id)
         db.session.rollback()
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": "Could not end scan session."}), 500
 
 
 @app.route("/api/scanner/<int:project_id>/fallback-event", methods=["POST"])
@@ -14757,6 +17975,44 @@ def admin_logout_route():
     flash("Logged out successfully.", "success")
     return redirect(url_for("admin_login_route"))
 
+@app.route("/admin/account/change-password", methods=["GET", "POST"])
+@admin_required
+def admin_change_password_page():
+    admin = current_admin()
+    if request.method == "GET":
+        return render_template("admin/change_password.html", admin=admin)
+
+    current_password = request.form.get("current_password") or ""
+    new_password = request.form.get("new_password") or ""
+    confirm_password = request.form.get("confirm_password") or ""
+
+    if not check_password_hash(admin.password_hash, current_password):
+        flash("Current password is incorrect.", "error")
+        return redirect(url_for("admin_change_password_page"))
+    if new_password != confirm_password:
+        flash("New passwords do not match.", "error")
+        return redirect(url_for("admin_change_password_page"))
+    # Same minimum this identity already enforces at admin_add_admin() /
+    # admin_reset_password() - one canonical policy per identity.
+    if len(new_password) < 8:
+        flash("Password must be at least 8 characters.", "error")
+        return redirect(url_for("admin_change_password_page"))
+    if check_password_hash(admin.password_hash, new_password):
+        flash("New password must be different from your current password.", "error")
+        return redirect(url_for("admin_change_password_page"))
+
+    admin.password_hash = generate_password_hash(new_password)
+    db.session.commit()
+    log_admin_activity(admin.id, "self_password_change", f"Admin {admin.email} changed their own password.")
+
+    try:
+        send_password_changed_email(admin.name or admin.email.split("@")[0], admin.email)
+    except Exception:
+        app.logger.exception("Failed to send password-changed email to admin %s", admin.id)
+
+    flash("Password updated.", "success")
+    return redirect(url_for("admin_change_password_page"))
+
 # --------------------------------------------------------------------------------------------
 # Admin Routes - Module 2: Manage Admins (Super Admin Only)
 # --------------------------------------------------------------------------------------------
@@ -14996,7 +18252,16 @@ def admin_dashboard():
             'user_count': user_count,
             'color': 'primary' if plan.is_popular else 'secondary'
         })
-    
+
+    # Dashboard restructure (World-Class Admin Restructure, 2026-09-02): an
+    # ATTENTION section needs a handful of cheap counts the dashboard never
+    # surfaced before. Each is a plain .count() against a model already used
+    # elsewhere in the admin console - no new query shape, no expensive scan.
+    open_reports_count = ContentReport.query.filter_by(status="OPEN").count()
+    processing_failures_count = ProcessingJob.query.filter_by(status="failed").count()
+    refunds_attention_count = PaymentRefund.query.filter(stuck_refund_filter()).count() if admin_has_permission(admin, "admin.payments.view") else 0
+    scans_today_count = ScanLog.query.filter(ScanLog.created_at >= dt.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)).count()
+
     return render_template("admin/dashboard.html",
                          admin=admin,
                          admin_projects=admin_projects,  # ✅ ADMIN'S PROJECTS
@@ -15012,22 +18277,15 @@ def admin_dashboard():
                          recent_payments=recent_payments,
                          recent_users=recent_users,
                          plan_stats=plan_stats,
+                         open_reports_count=open_reports_count,
+                         processing_failures_count=processing_failures_count,
+                         refunds_attention_count=refunds_attention_count,
+                         scans_today_count=scans_today_count,
                          current_time=dt.utcnow())
 
 # --------------------------------------------------------------------------------------------
 # Admin Routes - Module 4: User Management
 #
-@app.route("/admin/my-projects", methods=["GET"])
-@admin_required
-def admin_my_projects():
-    """Legacy route, kept for backward compatibility (bookmarks/links).
-
-    admin_projects (/admin/projects) is now the single canonical admin
-    project-management list - it's a strict superset of this narrower
-    "my own projects" view. Redirect directly rather than maintaining two
-    separate project-list implementations/templates.
-    """
-    return redirect(url_for("admin_projects", owner_type="admin"))
 @app.route("/admin/users", methods=["GET"])
 @require_admin_permission("admin.users.view")
 def admin_users():
@@ -15258,19 +18516,32 @@ def admin_extend_user_trial(user_id):
 def admin_add_user_scans(user_id):
     admin = current_admin()
     user = User.query.get_or_404(user_id)
-    
+
     additional_scans = request.form.get("additional_scans", type=int, default=0)
-    
+    reason = (request.form.get("reason") or "").strip()
+
     if additional_scans <= 0:
         flash("Please enter a positive number of scans.", "error")
         return redirect(url_for("admin_view_user", user_id=user_id))
-    
-    user.subscribed_scan_limit += additional_scans
+    if not reason:
+        flash("A reason is required to add scans.", "error")
+        return redirect(url_for("admin_view_user", user_id=user_id))
+
+    # Same anti-pattern this admin console already fixed once for
+    # admin_grant_extra_scans (a bare `+=` on the materialized column that
+    # the next plan renewal/upgrade/downgrade silently erases) - routed
+    # through the same governed ledger instead. This view_user.html modal
+    # and the /admin/scans/<id>/grant-extra form (user_scans.html) both grant
+    # EXTRA_SCANS to the same user; the ledger keeps both auditable without
+    # either overwriting the other.
+    try:
+        grant_account_entitlement(admin, user, "EXTRA_SCANS", additional_scans, reason=reason)
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("admin_view_user", user_id=user_id))
     db.session.commit()
-    
-    # Log activity
-    log_admin_activity(admin.id, "scan_add", f"Added {additional_scans} scans to user: {user.email}")
-    
+
     flash(f"Added {additional_scans} scans to user's limit.", "success")
     return redirect(url_for("admin_view_user", user_id=user_id))
 
@@ -15334,6 +18605,7 @@ PLAN_REVISION_TRACKED_FIELDS = (
     "max_video_bytes", "max_video_duration_seconds", "max_image_dimension_px",
     "max_image_pixels", "base_storage_bytes", "allow_direct_qr",
     "allow_detect_once", "allow_tracked_overlay",
+    "allow_multi_video_per_target", "max_videos_per_target",
 )
 PLAN_DURATION_TYPES = ("time", "count")
 
@@ -15377,7 +18649,7 @@ def _plan_form_values(form, existing=None):
     if "duration_type" in form:
         duration_type = (form.get("duration_type") or "").strip().lower()
         if duration_type not in PLAN_DURATION_TYPES:
-            return None, "Unsupported duration type."
+            return None, "Duration Type must be Time-based or Project-based."
         values["duration_type"] = duration_type
 
     if "plan_family" in form:
@@ -15411,6 +18683,20 @@ def _plan_form_values(form, existing=None):
             return None, error
         if value is not _PLAN_UNSET:
             values[field] = value
+
+    # plan_amount is NOT NULL on SubscriptionPlan (0 is a real, valid price -
+    # a free plan - never "unset"), but _plan_number_field treats an empty
+    # submitted field the same as every other numeric field: blank = None
+    # ("blank = server ceiling"/"unlimited"), which is correct for the media
+    # caps but not for price. Submitting an empty Price previously reached
+    # the database as a bare NULL and crashed with a raw NotNullViolation
+    # (the admin_edit_plan generic error handler then hid that behind "Plan
+    # configuration was rejected" with no indication which field was wrong -
+    # reproduced live editing the Free Trial plan, whose real price is a
+    # legitimate 0, Final Pre-Freeze Closure Pass, Lane F). Caught here as a
+    # clear, human-readable validation error instead.
+    if values.get("plan_amount") is None and (existing is None or "plan_amount" in form):
+        return None, "Price is required (enter 0 for a free plan)."
 
     # Unlimited checkboxes keep their long-standing meaning: NULL column.
     for field, unlimited_field in (
@@ -15456,6 +18742,36 @@ def _plan_form_values(form, existing=None):
             values[flag] for flag in ("allow_direct_qr", "allow_detect_once", "allow_tracked_overlay")
         ):
             return None, "A plan must allow at least one experience."
+
+    # Issue 3E-A: multi-video-per-target is a brand new capability, not an
+    # already-unrestricted one being codified, so unlike the experience flags
+    # above there is no "must allow at least one" fallback - False is a fully
+    # valid, expected state for a plan that doesn't sell this yet.
+    if form.get("plan_media_form"):
+        multi_video_enabled = form.get("allow_multi_video_per_target") == "on"
+        values["allow_multi_video_per_target"] = multi_video_enabled
+        if not multi_video_enabled:
+            # Disabling the feature normalizes the stored max to None rather
+            # than leaving a stale number in place - re-enabling later
+            # requires deliberately choosing a fresh limit instead of
+            # silently reviving whatever was last configured.
+            values["max_videos_per_target"] = None
+        else:
+            videos_raw = (form.get("max_videos_per_target") or "").strip()
+            if not videos_raw:
+                return None, "Maximum videos per target is required when multiple videos per target is enabled."
+            try:
+                videos_value = int(videos_raw)
+            except (TypeError, ValueError):
+                return None, "Maximum videos per target must be a whole number."
+            # One video per target is already the base/legacy capability with
+            # the feature off, so enabling it to still cap at 1 would be
+            # meaningless - the admin should just leave the feature disabled.
+            if videos_value < 2:
+                return None, "Maximum videos per target must be at least 2 when the feature is enabled."
+            if videos_value > _ent.MAX_VIDEOS_PER_TARGET_CEILING:
+                return None, f"Maximum videos per target cannot exceed the server limit of {_ent.MAX_VIDEOS_PER_TARGET_CEILING}."
+            values["max_videos_per_target"] = videos_value
 
     offer = values.get("offer_price", getattr(existing, "offer_price", None))
     amount = values.get("plan_amount", getattr(existing, "plan_amount", None))
@@ -15876,6 +19192,132 @@ def seed_addon_catalog_items(entries):
     return created, updated
 
 
+@app.cli.command("reconcile-canonical-target-hashes")
+@click.option("--apply", "apply_changes", is_flag=True, default=False, help="Write changes (default is dry-run).")
+def reconcile_canonical_target_hashes_command(apply_changes):
+    """Canonical target identity remediation pass: recompute image_hash for
+    every ProjectPair that already has one, from the file as it exists on
+    disk RIGHT NOW.
+
+    Root cause this repairs: before this pass, image_hash was computed from
+    the pre-standardize upload, but standardize_uploaded_image() rewrites the
+    file afterward (asynchronously, in the processing job) - so any pair
+    created before this fix has a stored hash that no longer matches its own
+    served file, silently defeating duplicate-target detection for anyone
+    who legitimately re-uses that pair's actual image. Every pair processed
+    before this command runs has already been through that async job (its
+    processing_status is 'completed'), so the on-disk file IS the final
+    canonical bytes - this command just re-derives the hash from it.
+
+    Safety: NEVER silently overwrites into a collision. If recomputing a
+    pair's hash would make it equal to another pair's CURRENT hash in the
+    SAME project, that pair is left untouched and reported as a conflict for
+    manual review - this is a real, previously-hidden duplicate-target the
+    old (wrong) hash was masking, not something to auto-resolve by picking a
+    winner. Dry-run by default; --apply writes and commits, one pair at a
+    time (a conflict on one pair never blocks reconciling the rest).
+    """
+    reconciled = unchanged = missing = conflicts = 0
+    conflict_details = []
+    for pair in ProjectPair.query.filter(
+        ProjectPair.image_hash.isnot(None), ProjectPair.image_filename.isnot(None)
+    ).order_by(ProjectPair.project_id, ProjectPair.pair_index).all():
+        directory = ADMIN_IMAGES_DIR if pair.project and pair.project.owner_admin_id else IMAGES_DIR
+        path = os.path.join(directory, pair.image_filename)
+        if not os.path.exists(path):
+            missing += 1
+            continue
+        current_hash = _sha256_of_file(path)
+        if current_hash == pair.image_hash:
+            unchanged += 1
+            continue
+        conflict = ProjectPair.query.filter(
+            ProjectPair.project_id == pair.project_id,
+            ProjectPair.image_hash == current_hash,
+            ProjectPair.id != pair.id,
+        ).first()
+        if conflict:
+            conflicts += 1
+            conflict_details.append(
+                f"project={pair.project_id} pair_index={pair.pair_index} (id={pair.id}) "
+                f"would newly collide with pair_index={conflict.pair_index} (id={conflict.id}) "
+                f"- left unchanged, needs manual review"
+            )
+            continue
+        reconciled += 1
+        if apply_changes:
+            pair.image_hash = current_hash
+            db.session.commit()
+
+    if apply_changes:
+        click.echo(f"Reconciled: {reconciled}, already correct: {unchanged}, missing file: {missing}, conflicts (left unchanged): {conflicts}")
+    else:
+        click.echo(f"[DRY RUN] Would reconcile: {reconciled}, already correct: {unchanged}, missing file: {missing}, conflicts (would leave unchanged): {conflicts}")
+        click.echo("Re-run with --apply to write.")
+    for line in conflict_details:
+        click.echo(f"  CONFLICT: {line}")
+
+
+@app.cli.command("backfill-media-hashes")
+@click.option("--apply", "apply_changes", is_flag=True, default=False, help="Write changes (default is dry-run).")
+def backfill_media_hashes_command(apply_changes):
+    """Local Creator Integrity pass: populate ProjectPair.image_hash and
+    PairMedia.video_hash for rows that existed before those columns did, so
+    the new duplicate-target/duplicate-video DB constraints are enforced
+    against every row, not just newly-created ones. Reads the actual files
+    already on disk (both user and admin storage roots) - never invents a
+    hash for a row whose file is missing, which would risk a false collision.
+    Dry-run by default; --apply writes and commits.
+    """
+    pairs_planned = pairs_written = pairs_missing = pairs_legacy_dupe = 0
+    for pair in ProjectPair.query.filter(ProjectPair.image_hash.is_(None), ProjectPair.image_filename.isnot(None)).all():
+        directory = ADMIN_IMAGES_DIR if pair.project and pair.project.owner_admin_id else IMAGES_DIR
+        path = os.path.join(directory, pair.image_filename)
+        if not os.path.exists(path):
+            pairs_missing += 1
+            continue
+        pairs_planned += 1
+        if apply_changes:
+            pair.image_hash = _sha256_of_file(path)
+            try:
+                db.session.commit()
+                pairs_written += 1
+            except IntegrityError:
+                # Pre-existing legacy duplicate target (created before this
+                # pass added the constraint) - leave it NULL rather than
+                # abort the whole backfill or silently pick a winner. Flagged
+                # for manual follow-up, never auto-resolved.
+                db.session.rollback()
+                pair.image_hash = None
+                pairs_legacy_dupe += 1
+
+    media_planned = media_written = media_missing = media_legacy_dupe = 0
+    for media in PairMedia.query.filter(PairMedia.video_hash.is_(None)).all():
+        directory = ADMIN_VIDEOS_DIR if media.pair and media.pair.project and media.pair.project.owner_admin_id else VIDEOS_DIR
+        path = os.path.join(directory, media.video_filename)
+        if not os.path.exists(path):
+            media_missing += 1
+            continue
+        media_planned += 1
+        if apply_changes:
+            media.video_hash = _sha256_of_file(path)
+            try:
+                db.session.commit()
+                media_written += 1
+            except IntegrityError:
+                db.session.rollback()
+                media.video_hash = None
+                media_legacy_dupe += 1
+
+    if apply_changes:
+        click.echo(f"ProjectPair.image_hash: wrote {pairs_written}, missing file {pairs_missing}, pre-existing duplicate (left NULL) {pairs_legacy_dupe}")
+        click.echo(f"PairMedia.video_hash: wrote {media_written}, missing file {media_missing}, pre-existing duplicate (left NULL) {media_legacy_dupe}")
+    else:
+        click.echo(f"[DRY RUN] ProjectPair.image_hash: would write {pairs_planned}, missing file {pairs_missing}")
+        click.echo(f"[DRY RUN] PairMedia.video_hash: would write {media_planned}, missing file {media_missing}")
+        click.echo("Re-run with --apply to write.")
+
+
 @app.cli.command("seed-addon-catalog")
 @click.option("--file", "source_file", default=None, help="Path to a JSON array of add-on definitions.")
 @click.option("--apply", "apply_changes", is_flag=True, default=False, help="Write changes (default is dry-run).")
@@ -16020,38 +19462,47 @@ def admin_extend_subscription(order_id):
 def admin_increase_subscription_limits(order_id):
     admin = current_admin()
     payment_order = PaymentOrder.query.get_or_404(order_id)
-    
+
     additional_projects = request.form.get("additional_projects", type=int, default=0)
     additional_scans = request.form.get("additional_scans", type=int, default=0)
-    
+    reason = (request.form.get("reason") or "").strip()
+
     if additional_projects <= 0 and additional_scans <= 0:
         flash("Please enter positive values for projects or scans.", "error")
         return redirect(url_for("admin_subscriptions"))
-    
-    # Update purchase limits
-    if additional_projects > 0:
-        payment_order.purchased_project_limit += additional_projects
-    
-    if additional_scans > 0:
-        payment_order.purchased_scan_limit += additional_scans
-    
-    # Update user limits
+    if not reason:
+        flash("A reason is required to increase subscription limits.", "error")
+        return redirect(url_for("admin_subscriptions"))
+
     user = User.query.get(payment_order.user_id)
-    if user:
+    if not user:
+        flash("This order has no associated user.", "error")
+        return redirect(url_for("admin_subscriptions"))
+
+    # Routed through the same governed entitlement ledger admin_grant_extra_scans
+    # already uses (grant_account_entitlement -> _apply_entitlement_transaction).
+    # A bare `user.subscribed_project_limit += additional_projects` here was the
+    # exact anti-pattern materialize_plan_entitlements' docstring already warns
+    # against (P0-1): the next renewal/upgrade/downgrade recomputes that column
+    # from plan + ledger only, silently erasing any admin bump that never made
+    # it into the ledger. Order-level purchased_project_limit/purchased_scan_limit
+    # are separate historical bookkeeping on the order itself, not an entitlement
+    # source of truth, and are still updated below for that record.
+    try:
         if additional_projects > 0:
-            user.subscribed_project_limit += additional_projects
-        
+            grant_account_entitlement(admin, user, "PROJECT_CAPACITY", additional_projects, reason=reason)
+            payment_order.purchased_project_limit += additional_projects
         if additional_scans > 0:
-            user.subscribed_scan_limit += additional_scans
-        
-        user.subscription_status = "active"
-    
+            grant_account_entitlement(admin, user, "EXTRA_SCANS", additional_scans, reason=reason)
+            payment_order.purchased_scan_limit += additional_scans
+    except ValueError as exc:
+        db.session.rollback()
+        flash(str(exc), "error")
+        return redirect(url_for("admin_subscriptions"))
+
+    user.subscription_status = "active"
     db.session.commit()
-    
-    # Log activity
-    log_admin_activity(admin.id, "limits_increase",
-                      f"Increased limits for order {payment_order.order_id}: +{additional_projects} projects, +{additional_scans} scans")
-    
+
     flash("Subscription limits increased successfully.", "success")
     return redirect(url_for("admin_subscriptions"))
 
@@ -16320,6 +19771,19 @@ def _safe_display_filename(value):
     return os.path.basename(str(value))
 
 def _owner_display(project, owner_user=None, owner_admin=None):
+    # Ownership-invalid-state defense (Admin IA restructure, 2026-09-02): a
+    # both-set row used to be silently reported as "User"-owned only (whoever
+    # read owner_user_id first), hiding the admin ownership from every admin
+    # page. Surface the invalid state explicitly instead - see
+    # project_ownership_state().
+    state = project_ownership_state(project)
+    if state == "both":
+        return {
+            "type": "Invalid (both)",
+            "id": None,
+            "name": f"User #{project.owner_user_id} AND Admin #{project.owner_admin_id}",
+            "email": "Ownership Error - resolve before editing",
+        }
     if project.owner_user_id:
         return {
             "type": "User",
@@ -16378,15 +19842,15 @@ def admin_user_profiles():
         per_page=request.args.get("per_page", type=int),
     ))
 
-@app.route("/admin/projects", methods=["GET"])
-@require_admin_permission("admin.projects.view")
-def admin_projects():
-    admin = current_admin()
-    search = request.args.get("search", "").strip()
-    owner_type = request.args.get("owner_type", "all")
-    readiness = request.args.get("readiness", "all")
-    page = max(request.args.get("page", 1, type=int), 1)
-    per_page = min(max(request.args.get("per_page", 25, type=int), 1), 100)
+def _admin_project_list_query(scope, admin, search="", readiness="all"):
+    """Single canonical project-list query (World-Class Admin Restructure,
+    2026-09-02), reused by every ownership-scoped destination so the
+    SQLAlchemy query exists exactly once no matter how many pages need it.
+
+    scope: "all" (legacy, no ownership filter) | "mine" (this admin's own
+    admin-owned projects) | "admin_all" (every admin-owned project,
+    Super Admin only) | "customers" (every user-owned project only).
+    """
     owner_admin = aliased(Admin)
 
     pair_counts = (
@@ -16430,10 +19894,14 @@ def admin_projects():
         .outerjoin(scan_counts, Project.id == scan_counts.c.project_id)
     )
 
-    if owner_type == "user":
-        query = query.filter(Project.owner_user_id.isnot(None))
-    elif owner_type == "admin":
+    if scope == "mine":
+        query = query.filter(Project.owner_admin_id == admin.id)
+    elif scope == "admin_all":
         query = query.filter(Project.owner_admin_id.isnot(None))
+    elif scope == "customers":
+        query = query.filter(Project.owner_user_id.isnot(None))
+    # scope == "all": no ownership filter - legacy /admin/projects, kept for
+    # internal reuse and old bookmarks but no longer linked from the sidebar.
 
     if readiness == "ready":
         query = query.filter(func.coalesce(pair_counts.c.pair_count, 0) > 0)
@@ -16470,6 +19938,62 @@ def admin_projects():
                 ])
         query = query.filter(or_(*search_terms))
 
+    return query
+
+
+_ADMIN_PROJECT_SCOPES = {
+    "all": {
+        "endpoint": "admin_projects",
+        "page_title": "All Projects",
+        "workspace_label": None,
+        "empty_message": "No projects match your current filters.",
+        "show_owner_filter": True,
+        "breadcrumb": ("Platform", "All Projects"),
+    },
+    "mine": {
+        "endpoint": "admin_my_projects",
+        "page_title": "My Projects",
+        "workspace_label": ("Workspace", "Owner: You"),
+        "empty_message": "You haven't created any ScanStory projects yet.",
+        "show_owner_filter": False,
+        "breadcrumb": ("Workspace", "My Projects"),
+    },
+    "admin_all": {
+        "endpoint": "admin_all_admin_projects",
+        "page_title": "All Admin Projects",
+        "workspace_label": ("Platform", "Super Admin only"),
+        "empty_message": "No admin-owned projects found.",
+        "show_owner_filter": False,
+        "breadcrumb": ("Workspace", "All Admin Projects"),
+    },
+    "customers": {
+        "endpoint": "admin_customer_projects",
+        "page_title": "Customer Projects",
+        "workspace_label": ("Customer Operations", None),
+        "empty_message": "No customer-owned projects found.",
+        "show_owner_filter": False,
+        "breadcrumb": ("Customer Operations", "Customer Projects"),
+    },
+}
+
+
+def _render_admin_project_list(scope):
+    admin = current_admin()
+    meta = _ADMIN_PROJECT_SCOPES[scope]
+    search = request.args.get("search", "").strip()
+    owner_type = request.args.get("owner_type", "all") if meta["show_owner_filter"] else "all"
+    readiness = request.args.get("readiness", "all")
+    page = max(request.args.get("page", 1, type=int), 1)
+    per_page = min(max(request.args.get("per_page", 25, type=int), 1), 100)
+
+    # /admin/projects (scope "all") keeps its old owner_type query-param
+    # behavior for any bookmarked link; the three new scoped destinations
+    # each have exactly one fixed ownership rule and never take owner_type.
+    query_scope = scope
+    if scope == "all" and owner_type in ("user", "admin"):
+        query_scope = "customers" if owner_type == "user" else "admin_all"
+
+    query = _admin_project_list_query(query_scope, admin, search=search, readiness=readiness)
     pagination = query.order_by(Project.created_at.desc(), Project.id.desc()).paginate(
         page=page,
         per_page=per_page,
@@ -16478,14 +20002,41 @@ def admin_projects():
     project_rows = []
     for project, owner_user, row_admin, pair_count, ready_pairs, failed_pairs, processing_pairs, scan_count, success_scans, failed_scans in pagination.items:
         owner = _owner_display(project, owner_user, row_admin)
+        pair_count = int(pair_count or 0)
+        ready_pairs = int(ready_pairs or 0)
+        failed_pairs = int(failed_pairs or 0)
+        processing_pairs = int(processing_pairs or 0)
+        # story_state: same normalized readiness rule as user/projects.html's
+        # own Jinja derivation (Admin My Projects action-parity pass,
+        # 2026-09-03) - computed once here so the template never reproduces
+        # the readiness algorithm a second time.
+        if not project.is_active:
+            story_state = "suspended"
+        elif pair_count == 0:
+            story_state = "attention"
+        elif failed_pairs > 0:
+            story_state = "failed"
+        elif processing_pairs > 0:
+            story_state = "processing"
+        elif ready_pairs >= pair_count:
+            story_state = "ready"
+        else:
+            story_state = "queued"
+        if scope == "mine":
+            # Copy Link, My Projects-only (§23) - same canonical URL helper
+            # the User list already uses, never a second URL algorithm.
+            project.public_share_url = _canonical_public_scanner_url(project)
         project_rows.append({
             "project": project,
             "owner": owner,
-            "pair_count": int(pair_count or 0),
-            "ready_pair_count": int(ready_pairs or 0),
-            "failed_pair_count": int(failed_pairs or 0),
-            "processing_pair_count": int(processing_pairs or 0),
+            "ownership_state": project_ownership_state(project),
+            "is_own_project": bool(admin and project.owner_admin_id == admin.id),
+            "pair_count": pair_count,
+            "ready_pair_count": ready_pairs,
+            "failed_pair_count": failed_pairs,
+            "processing_pair_count": processing_pairs,
             "readiness_summary": _project_readiness_summary(pair_count, ready_pairs, failed_pairs, processing_pairs),
+            "story_state": story_state,
             "qr_ready": bool(project.qr_code_path or project.qr_code_filename),
             "scan_count": int(scan_count or 0),
             "successful_scan_count": int(success_scans or 0),
@@ -16495,6 +20046,8 @@ def admin_projects():
     return render_template(
         "admin/projects.html",
         admin=admin,
+        scope=scope,
+        scope_meta=meta,
         project_rows=project_rows,
         pagination=pagination,
         search=search,
@@ -16502,6 +20055,42 @@ def admin_projects():
         readiness=readiness,
         per_page=per_page,
     )
+
+
+@app.route("/admin/projects", methods=["GET"])
+@require_admin_permission("admin.projects.view")
+def admin_projects():
+    return _render_admin_project_list("all")
+
+
+@app.route("/admin/my-projects", methods=["GET"])
+@admin_required
+def admin_my_projects():
+    """Admin's own admin-owned ScanStory projects only (owner_admin_id ==
+    current admin's id). Replaced the old redirect-only shim now that the
+    IA restructure needs a real Workspace destination distinct from the
+    ownership-agnostic /admin/projects list."""
+    return _render_admin_project_list("mine")
+
+
+@app.route("/admin/admin-projects", methods=["GET"])
+@require_admin_permission("superadmin.projects.manage_all")
+def admin_all_admin_projects():
+    """Every admin-owned project across the platform (owner_admin_id IS NOT
+    NULL) - Super Admin only. Never grants creative-edit access to another
+    admin's project; the template only shows Edit/Preview for rows this
+    admin actually owns (admin_can_manage_project), matching §8 of the
+    restructure brief - viewing another admin's project here is
+    operational/moderation only, same boundary as Customer Projects."""
+    return _render_admin_project_list("admin_all")
+
+
+@app.route("/admin/customer-projects", methods=["GET"])
+@require_admin_permission("admin.projects.view")
+def admin_customer_projects():
+    """Every customer/user-owned project only (owner_user_id IS NOT NULL) -
+    no admin-owned rows, no ambiguous unowned rows mixed in."""
+    return _render_admin_project_list("customers")
 
 @app.route("/admin/projects/<int:project_id>", methods=["GET"])
 @require_admin_permission("admin.projects.view")
@@ -16578,46 +20167,60 @@ def admin_view_project(project_id):
                          qr_ready=bool(project.qr_code_path or project.qr_code_filename))
 
 @app.route("/admin/projects/<int:project_id>/toggle-status", methods=["POST"])
-@require_admin_permission("admin.projects.suspend")
+@require_admin_permission("superadmin.projects.suspend")
 def admin_toggle_project_status(project_id):
     admin = current_admin()
     project = Project.query.get_or_404(project_id)
-    
+
     project.is_active = not project.is_active
     db.session.commit()
-    
+
     # Log activity
     status = "activated" if project.is_active else "deactivated"
     log_admin_activity(admin.id, "project_toggle", f"{status} project: {project.name} (ID: {project.id})")
-    
+
     flash(f"Project {status} successfully.", "success")
     return redirect(url_for("admin_view_project", project_id=project_id))
 
 @app.route("/admin/projects/<int:project_id>/suspend", methods=["POST"])
-@require_admin_permission("admin.projects.suspend")
+@require_admin_permission("superadmin.projects.suspend")
 def admin_suspend_project(project_id):
     admin = current_admin()
     project = Project.query.get_or_404(project_id)
+    reason = (request.form.get("reason") or "").strip()
+    if not reason:
+        flash("A reason is required to suspend a project.", "error")
+        return redirect(url_for("admin_view_project", project_id=project_id))
     if not project.is_active:
         flash("Project is already suspended.", "info")
         return redirect(url_for("admin_view_project", project_id=project_id))
     project.is_active = False
     db.session.commit()
-    log_admin_activity(admin.id, "project_suspend", f"Suspended project: {project.name} (ID: {project.id})")
+    log_admin_activity(
+        admin.id, "project_suspend",
+        f"Suspended project: {project.name} (ID: {project.id}), old_state=active, new_state=suspended, reason: {reason}",
+    )
     flash("Project suspended. Public scanner and media access are blocked.", "success")
     return redirect(url_for("admin_view_project", project_id=project_id))
 
 @app.route("/admin/projects/<int:project_id>/restore", methods=["POST"])
-@require_admin_permission("admin.projects.suspend")
+@require_admin_permission("superadmin.projects.suspend")
 def admin_restore_project(project_id):
     admin = current_admin()
     project = Project.query.get_or_404(project_id)
+    reason = (request.form.get("reason") or "").strip()
+    if not reason:
+        flash("A reason is required to restore a project.", "error")
+        return redirect(url_for("admin_view_project", project_id=project_id))
     if project.is_active:
         flash("Project is already active.", "info")
         return redirect(url_for("admin_view_project", project_id=project_id))
     project.is_active = True
     db.session.commit()
-    log_admin_activity(admin.id, "project_restore", f"Restored project: {project.name} (ID: {project.id})")
+    log_admin_activity(
+        admin.id, "project_restore",
+        f"Restored project: {project.name} (ID: {project.id}), old_state=suspended, new_state=active, reason: {reason}",
+    )
     flash("Project restored. Normal scanner and media access are available again.", "success")
     return redirect(url_for("admin_view_project", project_id=project_id))
 
@@ -16986,43 +20589,75 @@ def admin_grant_project_coverage(project_id):
 @app.route("/admin/scans", methods=["GET"])
 @require_admin_permission("admin.processing.view")
 def admin_scans():
+    """Scans: operational customer-usage page (Scans fix, World-Class Admin
+    Restructure, 2026-09-02). The previous version of this route supplied
+    scan_stats/users/selected_user_id/start_date/end_date while the template
+    read scan_logs/success_count/search/scan_type - a genuine contract
+    mismatch that raised UndefinedError on render (Jinja's default Undefined
+    has no __len__). Rebuilt as SUMMARY + USER USAGE + a bounded RECENT
+    ACTIVITY drill-down, using only real ScanLog columns - no fabricated
+    per-scan duration/detections/scan-type fields (ScanLog never tracked
+    those; user_scans.html zeroes them out as honest placeholders, this page
+    does not repeat that pattern for a platform-wide list)."""
     admin = current_admin()
-    
-    # Get filter parameters
+
     user_id = request.args.get("user_id", type=int)
     start_date = request.args.get("start_date")
     end_date = request.args.get("end_date")
-    
-    # Build query
-    query = db.session.query(
+
+    scan_filter = []
+    if start_date:
+        scan_filter.append(ScanLog.created_at >= dt.strptime(start_date, "%Y-%m-%d"))
+    if end_date:
+        scan_filter.append(ScanLog.created_at < dt.strptime(end_date, "%Y-%m-%d") + timedelta(days=1))
+    if user_id:
+        scan_filter.append(ScanLog.user_id == user_id)
+
+    summary_query = db.session.query(
+        func.count(ScanLog.id),
+        func.sum(case((ScanLog.is_successful == True, 1), else_=0)),
+        func.sum(case((ScanLog.is_successful == False, 1), else_=0)),
+    ).filter(*scan_filter)
+    total_scans, successful_scans, failed_scans = summary_query.first()
+    total_scans = int(total_scans or 0)
+    successful_scans = int(successful_scans or 0)
+    failed_scans = int(failed_scans or 0)
+
+    usage_query = db.session.query(
         User.id,
         User.email,
         User.first_name,
         User.last_name,
         func.count(ScanLog.id).label('total_scans'),
         func.sum(case((ScanLog.is_successful == True, 1), else_=0)).label('successful_scans'),
-        func.max(ScanLog.created_at).label('last_scan_date')
-    ).join(ScanLog, User.id == ScanLog.user_id, isouter=True)
-    
+        func.max(ScanLog.created_at).label('last_scan_date'),
+    ).join(ScanLog, User.id == ScanLog.user_id).filter(*scan_filter)
     if user_id:
-        query = query.filter(User.id == user_id)
-    
-    if start_date:
-        start_dt = dt.strptime(start_date, "%Y-%m-%d")
-        query = query.filter(ScanLog.created_at >= start_dt)
-    
-    if end_date:
-        end_dt = dt.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-        query = query.filter(ScanLog.created_at < end_dt)
-    
-    scan_stats = query.group_by(User.id).order_by(func.count(ScanLog.id).desc()).all()
-    
-    # Get users for filter dropdown
+        usage_query = usage_query.filter(User.id == user_id)
+    scan_stats = usage_query.group_by(User.id).order_by(func.count(ScanLog.id).desc()).limit(100).all()
+
+    # Per-user plan/limit/remaining/scanner-status context - real User fields
+    # already used elsewhere (view_user.html, user_scans.html), not invented.
+    usage_user_ids = [row.id for row in scan_stats]
+    usage_users = {u.id: u for u in User.query.filter(User.id.in_(usage_user_ids)).all()} if usage_user_ids else {}
+
+    recent_activity = (
+        ScanLog.query.filter(*scan_filter)
+        .order_by(ScanLog.created_at.desc())
+        .limit(20)
+        .all()
+    )
+
     users = User.query.order_by(User.email).all()
-    
+
     return render_template("admin/scans.html",
                          admin=admin,
+                         total_scans=total_scans,
+                         successful_scans=successful_scans,
+                         failed_scans=failed_scans,
                          scan_stats=scan_stats,
+                         usage_users=usage_users,
+                         recent_activity=recent_activity,
                          users=users,
                          selected_user_id=user_id,
                          start_date=start_date,
@@ -17474,15 +21109,48 @@ def _rq_diagnostics_payload():
     return payload
 
 
-@app.route("/admin/operations", methods=["GET"])
-@require_admin_permission("superadmin.operations.view")
-def admin_operations():
+def _refund_operations_context():
+    """Shared refund/add-on-refund data (World-Class Admin Restructure,
+    2026-09-02). Used by BOTH admin_operations() (a compact "N need
+    attention -> View in Payments" summary only, per the restructure brief's
+    §27) and admin_payments_refunds() (the full operator worklist, now
+    living under Payments where the other money-moving actions already
+    are). One query set, reused - not duplicated business logic."""
     addon_purchases = (
         AddonPurchase.query
         .order_by(AddonPurchase.updated_at.desc(), AddonPurchase.id.desc())
         .limit(25)
         .all()
     )
+    return {
+        "addon_purchases": addon_purchases,
+        # Same backend eligibility function the POST route enforces, resolved
+        # per row. The template never decides eligibility for itself.
+        "addon_refund_eligibility": {
+            purchase.id: refund_eligibility_for_addon_purchase(purchase)
+            for purchase in addon_purchases
+        },
+        "addon_refunds": {
+            purchase.id: _existing_refund_for_source(addon_purchase=purchase)
+            for purchase in addon_purchases
+        },
+        # The refund attention worklist (PAY-2). Deliberately the SAME predicate
+        # `flask reconcile-refunds` and /admin/api/refunds?needs_attention=1 use
+        # (stuck_refund_filter, P1-6), so the screen, the CLI and the API can
+        # never disagree about what is outstanding. A settled refund
+        # (REFUNDED + APPLIED) matches neither branch and is excluded by the
+        # predicate itself, not by the template.
+        "attention_refunds": stuck_refund_query().limit(50).all(),
+        # Provider-dashboard refunds with no local PaymentRefund row by design
+        # (P1-7). Ids and the correlated local source only.
+        "out_of_band_refunds": unlinked_out_of_band_refund_events(),
+    }
+
+
+@app.route("/admin/operations", methods=["GET"])
+@require_admin_permission("superadmin.operations.view")
+def admin_operations():
+    refund_ctx = _refund_operations_context()
     return render_template(
         "admin/operations.html",
         admin=current_admin(),
@@ -17498,27 +21166,12 @@ def admin_operations():
             .limit(25)
             .all()
         ),
-        addon_purchases=addon_purchases,
-        # Same backend eligibility function the POST route enforces, resolved
-        # per row. The template never decides eligibility for itself.
-        addon_refund_eligibility={
-            purchase.id: refund_eligibility_for_addon_purchase(purchase)
-            for purchase in addon_purchases
-        },
-        addon_refunds={
-            purchase.id: _existing_refund_for_source(addon_purchase=purchase)
-            for purchase in addon_purchases
-        },
-        # The refund attention worklist (PAY-2). Deliberately the SAME predicate
-        # `flask reconcile-refunds` and /admin/api/refunds?needs_attention=1 use
-        # (stuck_refund_filter, P1-6), so the screen, the CLI and the API can
-        # never disagree about what is outstanding. A settled refund
-        # (REFUNDED + APPLIED) matches neither branch and is excluded by the
-        # predicate itself, not by the template.
-        attention_refunds=stuck_refund_query().limit(50).all(),
-        # Provider-dashboard refunds with no local PaymentRefund row by design
-        # (P1-7). Ids and the correlated local source only.
-        out_of_band_refunds=unlinked_out_of_band_refund_events(),
+        attention_refund_count=len(refund_ctx["attention_refunds"]),
+        out_of_band_refund_count=len(refund_ctx["out_of_band_refunds"]),
+        addon_pending_refund_count=sum(
+            1 for p in refund_ctx["addon_purchases"]
+            if refund_ctx["addon_refund_eligibility"].get(p.id, {}).get("eligible")
+        ),
         entitlement_transactions=(
             EntitlementTransaction.query
             .order_by(EntitlementTransaction.created_at.desc(), EntitlementTransaction.id.desc())
@@ -17534,6 +21187,21 @@ def admin_operations():
         rq_diagnostics=_rq_diagnostics_payload(),
         smtp_diagnostics=_smtp_diagnostics_payload(),
         safe_basename=_safe_basename,
+    )
+
+
+@app.route("/admin/payments/refunds", methods=["GET"])
+@require_admin_permission("admin.payments.view")
+def admin_payments_refunds():
+    """Payments > Refunds (World-Class Admin Restructure, 2026-09-02). The
+    operator-facing refund worklist and add-on refund actions, relocated
+    here from Operations so every money-moving action lives under Payments;
+    Operations keeps only a count + link. Same data, same routes, same
+    permissions as before - only the page that renders them changed."""
+    return render_template(
+        "admin/payments_refunds.html",
+        admin=current_admin(),
+        **_refund_operations_context(),
     )
 
 # --------------------------------------------------------------------------------------------
@@ -17640,6 +21308,14 @@ def admin_create_project_page():
         is_admin=True,
         unlimited_pairs=True,
         max_pairs_per_project=None,
+        # Issue 3E-D: admin is already exempt from every other plan-based
+        # limit on this page (pairs-per-project, storage) - multi-video
+        # follows the same "Unlimited & Free for Admin" precedent. The
+        # actual JS constants are IS_ADMIN-overridden regardless (see
+        # ALLOW_MULTI_VIDEO_PER_TARGET/MAX_VIDEOS_PER_TARGET below), so
+        # these values are for template-rendering consistency only.
+        allow_multi_video_per_target=True,
+        effective_max_videos_per_target=None,
         get_system_config=get_system_config,
         video_upload_warnings=VIDEO_UPLOAD_WARNINGS,
         direct_qr_supported=direct_qr_experience_supported(),
@@ -17663,17 +21339,33 @@ def admin_handle_upload():
     videos = request.files.getlist("videos")
 
     # Validation
-    if not images or not videos or len(images) != len(videos):
-        flash("Error: Please upload equal number of images and videos", "error")
+    if not images or not videos:
+        flash("Error: Please upload at least one image and one video", "error")
         return redirect(url_for("admin_create_project_page"))
-    
-    
-    
+
     # Validate every file from its actual content BEFORE the project row or
     # any pair is created (P0D) - matches the user-upload path. All-or-nothing.
-    validated_media = []
+    #
+    # Issue 3E-C: images and videos are validated as two independent lists,
+    # grouped by video_target_indexes (see resolve_video_target_groups) -
+    # same shared contract the user-upload path uses. entitlements=None
+    # here is deliberate: an admin-created project is already exempt from
+    # every other plan-based limit in this codebase (pairs-per-project,
+    # storage - "Unlimited & Free for Admin" above), and there is no
+    # subscription plan behind an Admin to check multi-video against, so
+    # multi-video follows that same precedent rather than resolving a
+    # nonexistent plan as "not entitled".
+    validated_images = []
+    validated_videos = []
     try:
-        for i, (image_file, video_file) in enumerate(zip(images, videos)):
+        video_target_groups, group_error = resolve_video_target_groups(
+            request.form, len(images), len(videos), None
+        )
+        if group_error:
+            app.logger.warning(f"Admin upload rejected (video target mapping, code={group_error.code}): {group_error.detail}")
+            raise group_error
+
+        for i, image_file in enumerate(images):
             try:
                 img_temp, img_ext = validate_image(
                     image_file, TMP_UPLOADS_DIR, _ent.MAX_IMAGE_SIZE, _ent.MAX_IMAGE_DIMENSION_PX, _ent.MAX_IMAGE_PIXELS
@@ -17681,21 +21373,45 @@ def admin_handle_upload():
             except UploadValidationError as exc:
                 app.logger.warning(f"Admin upload rejected (image, pair {i}): {exc.detail}")
                 raise
+            validated_images.append({"image_temp": img_temp, "image_ext": img_ext})
+
+        for i, video_file in enumerate(videos):
             try:
                 vid_temp, vid_ext = validate_video(
                     video_file, TMP_UPLOADS_DIR, _ent.MAX_VIDEO_SIZE, _ent.MAX_VIDEO_DURATION_SECONDS
                 )
             except UploadValidationError as exc:
-                _safe_remove(img_temp)
                 app.logger.warning(f"Admin upload rejected (video, pair {i}): {exc.detail}")
                 raise
-            validated_media.append({"image_temp": img_temp, "image_ext": img_ext, "video_temp": vid_temp, "video_ext": vid_ext})
+            validated_videos.append({"video_temp": vid_temp, "video_ext": vid_ext})
     except UploadValidationError as exc:
-        for item in validated_media:
+        for item in validated_images:
             _safe_remove(item["image_temp"])
+        for item in validated_videos:
             _safe_remove(item["video_temp"])
         flash(exc.safe_message, "error")
         return redirect(url_for("admin_create_project_page"))
+
+    # ---- Universal video duplicate enforcement (universal-video-duplicate-
+    # rule pass, 2026-08-31). Admin projects are always image_video (no
+    # experience_type branch exists in this route) - mirrors handle_upload's
+    # own per-target guard: two videos assigned to the SAME target with
+    # identical bytes is a real accidental duplicate; the same video content
+    # reused across DIFFERENT admin targets stays valid.
+    for target_index in range(len(images)):
+        _video_indexes = video_target_groups[target_index]
+        _video_labels = [
+            (str(i), validated_videos[i]["video_temp"])
+            for i in _video_indexes
+            if validated_videos[i]["video_temp"]
+        ]
+        if len(_video_labels) > 1 and _find_duplicate_target_image(_video_labels) is not None:
+            for item in validated_images:
+                _safe_remove(item.get("image_temp"))
+            for item in validated_videos:
+                _safe_remove(item.get("video_temp"))
+            flash("This video is already added to this target.", "error")
+            return redirect(url_for("admin_create_project_page"))
 
     # Create project
     # Assign a per-admin project index (persisted) so admin projects also have stable numbers
@@ -17707,66 +21423,125 @@ def admin_handle_upload():
     except Exception:
         admin_project_index = 1
 
-    project = Project(
-        name=name,
-        owner_admin_id=admin.id,
-        owner_user_id=None,
-        user_project_index=admin_project_index
-    )
-    db.session.add(project)
-    db.session.flush()
-    add_project_service_coverage(
-        project,
-        "ADMIN_GRANT",
-        created_by_admin=admin,
-        reason="Admin-created project public service coverage.",
-    )
-    db.session.commit()
-    
-    # Move ALL already-validated files into place
-    pairs_data = []
-    for i, (image_file, video_file) in enumerate(zip(images, videos)):
-        media = validated_media[i]
-        # Generate filenames
-        img_filename = f"{project.id}_{i}.jpg"
-        vid_filename = f"{project.id}_{i}{media['video_ext']}"
-
-        # ✅ CHANGE 1: Save to ADMIN folders
-        img_path = os.path.join(ADMIN_IMAGES_DIR, img_filename)  # ← CHANGED
-        os.replace(media["image_temp"], img_path)
-
-        vid_path = os.path.join(ADMIN_VIDEOS_DIR, vid_filename)  # ← CHANGED
-        os.replace(media["video_temp"], vid_path)
-        
-        # ✅ CHANGE 2: Use admin image URL
-        pair = ProjectPair(
-            project_id=project.id,
-            pair_index=i,
-            image_filename=img_filename,
-            video_filename=vid_filename,
-            image_path=f"/admin/image/{project.id}/{i}",  # ← CHANGED
-            is_processed=False,
-            processing_status="uploaded",
-            feature_extraction_status="pending",
-            processing_error=None
+    # Issue 3E-C transactional-safety follow-up: Project creation, its
+    # service coverage, every ProjectPair, every PairMedia row and every
+    # storage-ledger row are now ONE atomic unit, committed exactly once at
+    # the end - matching the user-upload path's existing all-or-nothing
+    # contract. Previously the Project (and its service coverage) were
+    # committed BEFORE the pairs loop started, so a failure while saving a
+    # later pair/video could leave a real, permanently public admin project
+    # with zero pairs. That early commit was never load-bearing:
+    # add_project_service_coverage only ever needed project.id, which
+    # db.session.flush() already provides without committing - the same
+    # flush the pairs loop below already relied on for pair.id. Nothing
+    # downstream requires the ID to be committed rather than merely flushed,
+    # so the fix is purely moving the commit, not manufacturing an ID.
+    saved_paths = []
+    project = None
+    try:
+        project = Project(
+            name=name,
+            owner_admin_id=admin.id,
+            owner_user_id=None,
+            user_project_index=admin_project_index
         )
-        db.session.add(pair)
+        db.session.add(project)
         db.session.flush()
-        # Ledger row so deletion/reconciliation see this media, recorded
-        # UNCOUNTED: an admin-owned project bills no subscriber account.
-        record_pair_media_objects(
-            project, pair,
-            image_bytes=os.path.getsize(img_path),
-            video_bytes=os.path.getsize(vid_path),
+        add_project_service_coverage(
+            project,
+            "ADMIN_GRANT",
+            created_by_admin=admin,
+            reason="Admin-created project public service coverage.",
         )
 
-        pairs_data.append({
-            "pair_index": i,
-            "image_filename": img_filename,
-            "video_filename": vid_filename
-        })
+        # Move ALL already-validated files into place
+        pairs_data = []
+        created_pair_media_rows = []
+        for target_index, image_file in enumerate(images):
+            img_media = validated_images[target_index]
+            video_indexes = video_target_groups[target_index]
 
-    db.session.commit()
+            # Generate filenames
+            img_filename = f"{project.id}_{target_index}.jpg"
+
+            # ✅ CHANGE 1: Save to ADMIN folders
+            img_path = os.path.join(ADMIN_IMAGES_DIR, img_filename)  # ← CHANGED
+            os.replace(img_media["image_temp"], img_path)
+            saved_paths.append(img_path)
+
+            # Issue 3E-C: same default-video-mirrors-legacy-fields contract as
+            # the user-upload path - the first (sort_order 0) video keeps the
+            # exact legacy filename shape, any additional video gets a
+            # deterministic name and exists only as a PairMedia row.
+            video_specs = []
+            for slot, video_index in enumerate(video_indexes):
+                vid_media = validated_videos[video_index]
+                if slot == 0:
+                    vid_filename = f"{project.id}_{target_index}{vid_media['video_ext']}"
+                else:
+                    vid_filename = build_additional_pair_media_filename(
+                        project.id, target_index, slot, vid_media["video_ext"]
+                    )
+                vid_path = os.path.join(ADMIN_VIDEOS_DIR, vid_filename)  # ← CHANGED
+                os.replace(vid_media["video_temp"], vid_path)
+                saved_paths.append(vid_path)
+                video_specs.append({
+                    "filename": vid_filename,
+                    "size": os.path.getsize(vid_path),
+                })
+
+            default_video = video_specs[0]
+            # ✅ CHANGE 2: Use admin image URL
+            pair = ProjectPair(
+                project_id=project.id,
+                pair_index=target_index,
+                image_filename=img_filename,
+                video_filename=default_video["filename"],
+                image_path=f"/admin/image/{project.id}/{target_index}",  # ← CHANGED
+                is_processed=False,
+                processing_status="uploaded",
+                feature_extraction_status="pending",
+                processing_error=None
+            )
+            db.session.add(pair)
+            created_pair_media_rows.extend(create_pair_media_rows(pair, video_specs))
+            db.session.flush()
+            # Ledger rows so deletion/reconciliation see this media, recorded
+            # UNCOUNTED: an admin-owned project bills no subscriber account.
+            # Every physically uploaded video is billed exactly once - the
+            # default via record_pair_media_objects, any additional ones via
+            # record_pair_video_media_object keyed by their own filename/bytes.
+            record_pair_media_objects(
+                project, pair,
+                image_bytes=os.path.getsize(img_path),
+                video_bytes=default_video["size"],
+            )
+            for spec in video_specs[1:]:
+                record_pair_video_media_object(project, pair, spec["filename"], spec["size"])
+
+            pairs_data.append({
+                "pair_index": target_index,
+                "image_filename": img_filename,
+                "video_filename": default_video["filename"]
+            })
+
+        db.session.commit()
+        _enqueue_pair_media_optimizations(created_pair_media_rows)
+    except Exception:
+        failed_project_id = project.id if project is not None else None
+        db.session.rollback()
+        # Reuses the existing project-media unlink helper (already logs
+        # real failures - permission denied, file locked - by basename only,
+        # never a full path) rather than a bespoke cleanup loop. Only files
+        # THIS request just wrote are in saved_paths; nothing pre-existing
+        # is touched.
+        _unlink_project_media(saved_paths, failed_project_id)
+        for item in validated_images:
+            _safe_remove(item.get("image_temp"))
+        for item in validated_videos:
+            _safe_remove(item.get("video_temp"))
+        flash("Project upload failed. Please try again.", "error")
+        return redirect(url_for("admin_create_project_page"))
     
     # Generate QR code
     scanner_url = _canonical_public_scanner_url(project)
@@ -17941,7 +21716,33 @@ def serve_admin_video(project_id, image_id):
     if not pair:
         abort(404)
 
-    response = send_from_directory(ADMIN_VIDEOS_DIR, pair.video_filename)
+    filename = resolve_pair_default_video_filename(pair, ADMIN_VIDEOS_DIR)
+    response = send_from_directory(ADMIN_VIDEOS_DIR, filename)
+    response.headers["Content-Disposition"] = "inline"
+    return _apply_no_store_cache(response) if investigating else _apply_short_private_cache(response)
+
+@app.route("/admin/video/<int:project_id>/<int:image_id>/media/<int:media_id>")
+def serve_admin_pair_media_video(project_id, image_id, media_id):
+    """Issue 3E-E: admin-owned mirror of serve_pair_media_video."""
+    project = Project.query.get(project_id)
+    if not project or not project.owner_admin_id:
+        abort(404)
+    investigating = False
+    if not _project_is_available(project):
+        if not _admin_media_investigation_allowed():
+            return _project_unavailable_response()
+        investigating = True
+
+    pair = ProjectPair.query.filter_by(project_id=project_id, pair_index=image_id).first()
+    if not pair:
+        abort(404)
+
+    media = PairMedia.query.filter_by(id=media_id, pair_id=pair.id).first()
+    if not media:
+        abort(404)
+
+    filename = resolve_pair_media_filename(media, ADMIN_VIDEOS_DIR)
+    response = send_from_directory(ADMIN_VIDEOS_DIR, filename)
     response.headers["Content-Disposition"] = "inline"
     return _apply_no_store_cache(response) if investigating else _apply_short_private_cache(response)
 
@@ -18033,15 +21834,41 @@ def admin_delete_own_project(project_id):
         flash(blocked, "error")
         return redirect(url_for("admin_projects"))
 
+    project_name, project_id_for_log = project.name, project.id
     _delete_project_files_and_rows(project)
     db.session.commit()
-    
+    log_admin_activity(
+        admin.id, "project_delete",
+        f"Deleted own project: {project_name} (ID: {project_id_for_log})",
+    )
+
     flash("Project deleted successfully.", "success")
     return redirect(url_for("admin_projects"))
 
 # --------------------------------------------------------------------------------------------
 # Error Handlers for JSON Responses
 # --------------------------------------------------------------------------------------------
+def _safe_http_status(error):
+    """The ONLY valid source for an HTTP response status is a real
+    werkzeug HTTPException with an in-range integer .code (400-599) -
+    Flask/Werkzeug's own 404/429/etc. Anything else (a plain RuntimeError,
+    a SQLAlchemy error - whose `.code` is a short alphanumeric doc-reference
+    string like "gkpj", not a status - or any other application/runtime
+    exception) must fall back to 500. A real PostgreSQL run proved why this
+    matters: `getattr(error, "code", 500) or 500` happily forwarded
+    "gkpj" straight to Werkzeug as the response status, which emitted a
+    malformed status line ("HTTP/1.1 0 gkpj") that broke the HTTP response
+    for every client - not merely a wrong error page, but an unparseable
+    one. `hasattr`/`getattr` alone can never catch this: the attribute is
+    genuinely present, it just is not what this code assumed it was.
+    """
+    if isinstance(error, HTTPException):
+        code = error.code
+        if isinstance(code, int) and not isinstance(code, bool) and 400 <= code <= 599:
+            return code
+    return 500
+
+
 @app.errorhandler(404)
 @app.errorhandler(500)
 @app.errorhandler(Exception)
@@ -18052,21 +21879,21 @@ def handle_error(error):
     only via app.logger.exception(); clients never receive str(error),
     stack traces, SQL errors, or filesystem paths.
     """
-    error_code = getattr(error, 'code', 500) or 500
+    status_code = _safe_http_status(error)
     app.logger.exception(error)
 
     # Check if the request is for an API/detection endpoint
     if request.path.startswith('/detect') or request.path.startswith('/api'):
-        generic_reason = "Not found" if error_code == 404 else "Server error"
+        generic_reason = "Not found" if status_code == 404 else "Server error"
         return jsonify({
             "detected": False,
             "reason": generic_reason,
             "error": True,
             "path": request.path,
             "method": request.method
-        }), error_code
+        }), status_code
 
-    if error_code == 404:
+    if status_code == 404:
         return render_template(
             "user/error.html",
             status_code=404,
@@ -18077,10 +21904,10 @@ def handle_error(error):
     # For regular routes, return a generic HTTP response - never the raw exception
     return render_template(
         "user/error.html",
-        status_code=error_code,
+        status_code=status_code,
         title="Something went wrong.",
         message="Please try again in a moment. If this keeps happening, contact support.",
-    ), error_code
+    ), status_code
 # --------------------------------------------------------------------------------------------
 # SEO: sitemap.xml and robots.txt
 # --------------------------------------------------------------------------------------------
@@ -18123,7 +21950,15 @@ def yandex_verification():
 @app.route("/faqs")
 @app.route("/faqs/")
 def faqs_page():
-    return render_template("user/landing.html", open_faqs=True)
+    # Admin plan-sync stabilization pass: this route renders landing.html,
+    # which unconditionally loops `{% for plan in plans %}` - passing no
+    # `plans` here raised Jinja's strict UndefinedError on every visit. Same
+    # query as landing() itself so the FAQ page's pricing section (if
+    # visible) matches everywhere else.
+    plans = purchasable_plans_query().order_by(SubscriptionPlan.display_order.asc()).all()
+    response = make_response(render_template("user/landing.html", plans=plans, open_faqs=True))
+    response.headers["Cache-Control"] = "private, no-store"
+    return response
 
 # --------------------------------------------------------------------------------------------
 # Main Application Entry Point
@@ -18136,4 +21971,16 @@ if __name__ == "__main__":
     # this entry point never creates tables. debug/use_reloader only activate
     # when FLASK_DEBUG=1 is explicitly set (and are always off when
     # SCANSTORY_TESTING=1).
-    app.run(host="0.0.0.0", port=5000, debug=FLASK_DEBUG_ENABLED, use_reloader=FLASK_DEBUG_ENABLED)
+    # threaded=True (physical QA fix): this dev server was single-threaded, so a
+    # single detect_init request (real ORB matching, measured at 0.3-3+s under
+    # load) fully blocked EVERY other request behind it - including the video
+    # range requests the browser needs to actually start playback of an already-
+    # matched target. On a real device hitting the scanner's continuous ~350ms-1s
+    # poll loop, that serialization is exactly what made a genuinely-matched
+    # video sit "loading" for 10-20+ seconds even after detection succeeded - not
+    # a network- or recognition-side problem. Safe to enable: _orb()/_orb_detect()
+    # already cache their cv2.ORB_create() instances in `_tls` (threading.local()),
+    # specifically so each serving thread gets its own detector rather than
+    # sharing one - that design was already in place and simply never had
+    # threaded serving turned on to make use of it.
+    app.run(host="0.0.0.0", port=5000, debug=FLASK_DEBUG_ENABLED, use_reloader=FLASK_DEBUG_ENABLED, threaded=True)

@@ -254,9 +254,11 @@ def test_first_screen_touch_targets_meet_the_minimum():
     back_btn_css = html[html.index(".back-btn {"):html.index(".back-btn:hover")]
     assert "min-height: 44px;" in back_btn_css
     # The report trigger and every in-lens recovery button use the shared 44px button roles.
+    # Issue 3E-E's "Replay all" completion button reuses this same role rather than
+    # inventing a new one, hence 3 not 2.
     assert 'class="ss-report-trigger"' in html
     assert "min-height: 44px;" in Path("static/css/design-system.css").read_text(encoding="utf-8")
-    assert html.count("ss-scan-btn ss-scan-btn-primary") == 2
+    assert html.count("ss-scan-btn ss-scan-btn-primary") == 3
 
 
 def test_intro_dialog_moves_focus_to_its_one_primary_action():
@@ -374,7 +376,11 @@ def test_direct_qr_never_shows_image_target_guidance(app_module):
     text = _visible_text(html)
     for aiming_phrase in ("point your camera", "point at the", "point back at", "looking for image", "start camera"):
         assert aiming_phrase not in text, aiming_phrase
-    assert "your video is ready to play. no camera needed." in text
+    # Direct QR viewer UX upgrade (local Creator Integrity pass): copy now
+    # reads "story" rather than "video" for the single-video case, and states
+    # the video count for a multi-video playlist - see scanner.html's
+    # direct_qr_playlist-gated lede.
+    assert "your story is ready. no camera needed." in text
 
 
 def test_image_recognition_scanner_still_shows_the_aiming_guidance(app_module):

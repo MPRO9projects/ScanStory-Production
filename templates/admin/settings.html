@@ -341,7 +341,6 @@
         <!-- Settings Navigation -->
         <div class="settings-nav">
             <a href="#general" class="settings-nav-link active" onclick="showTab('general')">General</a>
-            <a href="#trial" class="settings-nav-link" onclick="showTab('trial')">Trial Settings</a>
             <a href="#payment" class="settings-nav-link" onclick="showTab('payment')">Payment</a>
             <a href="#security" class="settings-nav-link" onclick="showTab('security')">Security</a>
         </div>
@@ -412,38 +411,17 @@
             </div>
         </div>
         
-        <!-- Trial Settings -->
-        <div class="card tab-content" id="trialTab" style="display: none;">
-            <div class="card-header">
-                <h2 class="card-title">Trial Settings</h2>
-                <span class="badge badge-success">Editable</span>
-                <button type="submit" form="trialForm" class="btn btn-primary" data-busy-label="Saving&hellip;">Save Changes</button>
-            </div>
-            
-            <form id="trialForm" method="POST" action="{{ url_for('admin_settings') }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="free_trial_projects">Free Trial Projects</label>
-                        <input type="number" id="free_trial_projects" name="free_trial_projects" class="form-control" value="{{ get_system_config('free_trial_projects', 1) }}" min="1" max="100" required>
-                        <div class="form-text">Number of projects allowed during free trial</div>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="free_trial_scans">Free Trial Scans</label>
-                        <input type="number" id="free_trial_scans" name="free_trial_scans" class="form-control" value="{{ get_system_config('free_trial_scans', 50) }}" min="10" max="1000" required>
-                        <div class="form-text">Number of scans allowed during free trial</div>
-                    </div>
-                </div>
-                
-                <div class="form-group">
-                    <label for="free_trial_days">Free Trial Days</label>
-                    <input type="number" id="free_trial_days" name="free_trial_days" class="form-control" value="{{ get_system_config('free_trial_days', 7) }}" min="1" max="30" required>
-                    <div class="form-text">Duration of free trial in days</div>
-                </div>
-            </form>
-        </div>
-        
+        <!-- Trial Settings tab removed (Narrow Admin UI Cleanup pass): Plans
+             is the only Admin-visible source of truth for Free Trial
+             configuration now (edit the Free Trial plan directly under
+             Plans). The free_trial_projects/free_trial_scans/free_trial_days
+             SystemConfig keys this tab used to edit are untouched in the
+             backend - _repair_missing_trial_details() in app.py still reads
+             them as a last-resort fallback for the near-impossible case no
+             Free Trial plan exists at all - they are just no longer exposed
+             as an editable Admin surface, so there is only one place an
+             Admin can find and change trial configuration. -->
+
         <!-- Payment Settings -->
         <div class="card tab-content" id="paymentTab" style="display: none;">
             <div class="card-header">
@@ -547,24 +525,7 @@
             });
         });
 
-        function toggleDropdown() {
-            const dropdown = document.getElementById('userDropdown');
-            dropdown.classList.toggle('show');
-        }
-        
-        // Close dropdown when clicking outside
-        window.onclick = function(event) {
-            if (!event.target.matches('.user-menu span')) {
-                const dropdowns = document.querySelectorAll('.dropdown-menu');
-                dropdowns.forEach(dropdown => {
-                    if (dropdown.classList.contains('show')) {
-                        dropdown.classList.remove('show');
-                    }
-                });
-            }
-        };
-        
-        // Tab switching
+// Tab switching
         function showTab(tabName) {
             // Hide all tabs
             document.querySelectorAll('.tab-content').forEach(tab => {
@@ -600,7 +561,7 @@
             
             // Check for hash in URL
             const hash = window.location.hash.substring(1);
-            if (hash && ['general', 'trial', 'payment', 'security'].includes(hash)) {
+            if (hash && ['general', 'payment', 'security'].includes(hash)) {
                 showTab(hash);
             }
         });

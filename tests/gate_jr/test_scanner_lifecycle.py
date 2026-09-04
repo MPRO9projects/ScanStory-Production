@@ -48,10 +48,13 @@ def _success_html():
 
 def _extract_inline_scanner_script(html):
     """The inline <script> (no src=) — the one with the actual scanner logic, as opposed to
-    the <script src="...scanner-runtime.js"> tag right before it."""
+    the <script src="...scanner-runtime.js"> tag right before it. Also skips
+    type="application/json" data islands (e.g. the Direct QR playlist blob) - those are
+    data, not executable script, and would otherwise be matched first since they sit
+    earlier in the document than the real scanner logic block."""
     for match in re.finditer(r"<script\b([^>]*)>(.*?)</script>", html, re.DOTALL):
         attrs, body = match.group(1), match.group(2)
-        if "src=" not in attrs and body.strip():
+        if "src=" not in attrs and 'type="application/json"' not in attrs and body.strip():
             return body
     raise AssertionError("could not find the inline scanner <script> block")
 
@@ -473,11 +476,33 @@ def test_first_start_only_auto_recovers_the_recoverable_opencv_reason():
 
 def test_setup_camera_inner_guard_and_getusermedia_are_unchanged():
     """The fix only changes WHO calls setupCamera() and WHEN - setupCameraInner()
-    itself (including its own fallback guard, used by both callers) is untouched."""
+    itself (its fallback guard, used by both callers, and the getUserMedia() call
+    itself) is untouched. Its catch block's error classification DID change (a later
+    pass, see test_camera_error_classification_distinguishes_not_found_from_other_failures) -
+    that is covered separately, not by this test."""
     html = _scanner_html()
     assert "if (scannerState.state === 'fallback') return;" in html
     assert "cameraStream = await navigator.mediaDevices.getUserMedia(constraints);" in html
-    assert "enterFallback(denied ? 'CAMERA_PERMISSION_DENIED' : 'CAMERA_UNAVAILABLE');" in html
+
+
+def test_camera_error_classification_distinguishes_not_found_from_other_failures():
+    """Root-cause fix (Issue 3B): every getUserMedia() failure that was not a permission
+    denial used to collapse into the same 'CAMERA_UNAVAILABLE' code as a genuine
+    NotFoundError - the browser's own DOMException name is real evidence for which
+    happened and must classify it, not a guess."""
+    html = _scanner_html()
+    catch_start = html.index("} catch (err) {\n        console.error('Camera error:', err);")
+    catch_end = html.index("enterFallback(cameraFailureCode);", catch_start)
+    body = html[catch_start:catch_end]
+    assert "errName === 'NotAllowedError' || errName === 'PermissionDeniedError'" in body
+    assert "cameraFailureCode = 'CAMERA_PERMISSION_DENIED';" in body
+    assert "errName === 'NotFoundError' || errName === 'DevicesNotFoundError'" in body
+    assert "cameraFailureCode = 'CAMERA_NOT_FOUND';" in body
+    assert "cameraFailureCode = 'CAMERA_START_FAILED';" in body
+    # No call site still produces the old overloaded code (comments mentioning it in
+    # prose while explaining the change are fine and expected - real calls/returns
+    # always continue with a semicolon immediately, prose never does).
+    assert not re.search(r"enterFallback\('CAMERA_UNAVAILABLE'\);|return 'CAMERA_UNAVAILABLE';", html)
 
 
 def test_scanner_runtime_js_and_scanner_runtime_py_are_byte_identical_to_baseline():
@@ -949,8 +974,14 @@ def test_camera_ready_transition_chain_reaches_ready_to_scan():
     rest of the session — the detect/tracking loops don't check scannerState.state at all,
     so scanning worked perfectly while the status text was simply frozen on the wrong word.
     TRANSITIONS only allows a straight chain from initializing_camera to ready_to_scan
-    (loading_opencv -> loading_wasm -> initializing_scanner -> ready_to_scan), so all four
-    steps must be walked through once metadata actually loads."""
+    (loading_opencv -> loading_wasm -> initializing_scanner -> ready_to_scan).
+
+    Superseded by a later cold-start-honesty pass (Issue 3A): the chain now stops at
+    initializing_scanner and defers the final ready_to_scan hop to
+    markScannerReadyIfPossible(), which only takes it if cvReady is ALSO true - reaching
+    ready_to_scan unconditionally here was itself a false readiness claim on a
+    slow-OpenCV cold start (see test_scanner_cold_start_js.py). The three walked states
+    plus the deferred gate are what this test now guards."""
     html = _scanner_html()
     onloadedmetadata_start = html.index("cam.onloadedmetadata = async () => {")
     onloadedmetadata_end = html.index("} catch (err) {", onloadedmetadata_start)
@@ -958,12 +989,13 @@ def test_camera_ready_transition_chain_reaches_ready_to_scan():
     assert "safeTransition('loading_opencv', 'camera_ready');" in body
     assert "safeTransition('loading_wasm', 'camera_ready');" in body
     assert "safeTransition('initializing_scanner', 'camera_ready');" in body
-    assert "safeTransition('ready_to_scan', 'camera_ready');" in body
+    assert "markScannerReadyIfPossible('camera_ready')" in body
+    assert "safeTransition('ready_to_scan', 'camera_ready');" not in body
     # ordering matches the only valid TRANSITIONS chain — index the actual calls, not the
     # bare state names (which also appear earlier, in this function's own explanatory
     # comment about why the chain is needed)
     assert (body.index("safeTransition('loading_opencv'") < body.index("safeTransition('loading_wasm'")
-            < body.index("safeTransition('initializing_scanner'") < body.index("safeTransition('ready_to_scan'"))
+            < body.index("safeTransition('initializing_scanner'") < body.index("markScannerReadyIfPossible('camera_ready')"))
 
 
 def test_scroll_or_resize_not_required_for_preview_revival():
@@ -1009,24 +1041,37 @@ def test_camera_recovery_is_bounded_not_infinite():
 def test_recovery_failure_enters_fallback_and_does_not_resume_loops():
     """If both bounded attempts fail, recovery must give up to a real fallback state — it
     must NOT fall through to safeTransition('ready_to_scan')/startDetectLoop() as if the
-    camera were healthy."""
+    camera were healthy.
+
+    Issue 3B root-cause fix: the failure code changed from 'CAMERA_UNAVAILABLE' to
+    'CAMERA_INTERRUPTED' — every caller that reaches recoverScannerInner (track 'ended',
+    a dead stream found on visibility/bfcache resume) only does so because the camera WAS
+    part of a live session, never because no camera was ever found. And the SECOND
+    enterFallback (on a rejected ready_to_scan transition after a successful restart) was
+    removed outright: `recovered` is only true once isStreamDead() just confirmed the
+    camera IS alive, so a rejected transition there is a state-machine race, never
+    evidence of a camera failure — claiming one would itself be the exact false failure
+    this pass exists to remove."""
     html = _scanner_html()
     recover_start = html.index("async function recoverScannerInner(reason, restartCamera)")
     recover_end = html.index("function stopCameraStream(reason)")
     body = html[recover_start:recover_end]
     not_recovered_idx = body.index("if (!recovered) {")
-    enter_fallback_idx = body.index("enterFallback('CAMERA_UNAVAILABLE');", not_recovered_idx)
+    enter_fallback_idx = body.index("enterFallback('CAMERA_INTERRUPTED');", not_recovered_idx)
     return_idx = body.index("return;", enter_fallback_idx)
-    # Fix 7 (V1 Agent 2): this transition's return value is now checked before the loops
-    # start - a rejected transition routes to its OWN enterFallback('CAMERA_UNAVAILABLE')
-    # + return instead of silently starting the loops anyway.
     ready_to_scan_idx = body.index(
         "const readyForScan = safeTransition('ready_to_scan', reason, { site: 'recoverScannerInner_success' });"
     )
     assert not_recovered_idx < enter_fallback_idx < return_idx < ready_to_scan_idx
     assert "if (!readyForScan) {" in body
+    rejected_body = body[body.index("if (!readyForScan) {"):body.index("startDetectLoop();\n      startTrackingLoop();", ready_to_scan_idx)]
+    # A real call always reads "enterFallback('CODE');" — only the explanatory comment
+    # above may mention the function name in prose (no trailing "();" there).
+    assert "enterFallback('CAMERA_UNAVAILABLE');" not in rejected_body
+    assert not re.search(r"enterFallback\('[A-Z_]+'\);", rejected_body)
     start_loops_idx = body.index("startDetectLoop();\n      startTrackingLoop();", ready_to_scan_idx)
     assert ready_to_scan_idx < start_loops_idx
+    assert not re.search(r"enterFallback\('CAMERA_UNAVAILABLE'\);", body)
     assert "'automatic_recovery_failed'" in body
     assert "'automatic_recovery_succeeded'" in body
 
@@ -2311,15 +2356,16 @@ def test_video_loop_detection_does_not_reassign_source():
 
 
 def test_overlay_src_is_only_reassigned_on_marker_switch():
-    """The only legitimate source reassignment is the marker-switch branch in the accept
-    path — confirms no other code path (loop detection, ended handler, pause/stop) recreates
-    or reloads the video element's source, matching 'preserve a single long-lived video
-    element' from earlier passes."""
+    """The only legitimate source reassignments are the marker-switch branch in the accept
+    path and (Issue 3E-E) sequential multi-video advancing to the next media - confirms no
+    OTHER code path (loop detection, ended handler, pause/stop) recreates or reloads the
+    video element's source, matching 'preserve a single long-lived video element' from
+    earlier passes."""
     html = _scanner_html()
-    assert html.count("overlay.src = ") == 1
-    assign_idx = html.index("overlay.src = ")
-    nearby = html[max(0, assign_idx - 300):assign_idx]
-    assert "[MARKER SWITCH]" in nearby
+    assign_contexts = [html[max(0, m.start() - 500):m.start()] for m in re.finditer(r"overlay\.src = ", html)]
+    assert len(assign_contexts) == 2
+    assert any("[MARKER SWITCH]" in ctx for ctx in assign_contexts)
+    assert any("sequence_advance" in ctx for ctx in assign_contexts)
 
 
 def test_marker_loss_still_performs_cleanup_and_logs_playback_state():
@@ -2786,8 +2832,16 @@ def test_schedule_next_scan_refuses_healthy_tracking_loop():
 
 
 def test_scan_tick_stale_timer_cannot_capture_or_reschedule_while_tracking_healthy():
+    """Blocker audit (2026-08-27): the healthy-tracking suppression is now
+    gated on the SAME FORCE_REDETECT_MS budget the bounded re-anchor check
+    below it already existed to enforce (TC-04 Android P2-never-detected
+    root cause - see the comment directly above this line in scanner.html).
+    Local optical-flow tracking that "successfully" follows something across
+    a pan to a genuinely different target must not suppress detect requests
+    forever - only within the SAME bounded window a fresh server detection
+    already gets."""
     body = _scan_tick_body(_scanner_html())
-    healthy_at = body.index("if (isHealthyLocalTracking())")
+    healthy_at = body.index("if (isHealthyLocalTracking() && (performance.now() - lastDetectTs) <= FORCE_REDETECT_MS)")
     capture_at = body.index("await detectOnceFromServer();")
     finally_at = body.index("} finally {")
     assert "allowScanReschedule = false;" in body[healthy_at:capture_at]
@@ -3213,9 +3267,8 @@ def test_bounded_hold_still_governs_every_new_tracking_failure_reason():
 def test_new_failure_paths_never_touch_video_source_or_currenttime_or_loop():
     """Stream B item 13/14/15: dropTracking, clearTrackingGeometry, and requestPoseHold —
     the entire controlled-failure/hold path used by every new tracking-loss reason — never
-    assign overlay.src or overlay.currentTime, and the native <video loop> attribute is
-    untouched. Temporary local-tracking weakness must never reset the video source,
-    scrub playback position, or replace native looping."""
+    assign overlay.src, overlay.currentTime, or overlay.loop. Temporary local-tracking
+    weakness must never reset the video source, scrub playback position, or change looping."""
     html = _scanner_html()
     for fn_start, fn_end in (
         ("function dropTracking(reason, extraMats", "function handleDetectionTimeout()"),
@@ -3225,11 +3278,31 @@ def test_new_failure_paths_never_touch_video_source_or_currenttime_or_loop():
         body = html[html.index(fn_start):html.index(fn_end)]
         assert "overlay.src =" not in body
         assert "overlay.currentTime =" not in body
+        assert "overlay.loop =" not in body
     assert html.count('<video id="overlay"') == 1
     overlay_tag_end = html.index(">", html.index('<video id="overlay"'))
     overlay_tag = html[html.index('<video id="overlay"'):overlay_tag_end]
     assert "loop" in overlay_tag
-    assert "overlay.loop =" not in html
+    # Issue 3E-E: overlay.loop IS now programmatically toggled (off for a 2+-media target
+    # or for Detect Once - physical QA fix, so a single-video Detect Once target can still
+    # reach 'ended' - on again for a plain single-video tracked_overlay target / full
+    # reset) - but ONLY inside the two sequential multi-video lifecycle functions, never in
+    # the failure/hold path checked above and never anywhere else in the file. Finds the
+    # nearest ENCLOSING function name (last "function X(" before the assignment) rather than
+    # a fixed lookback window, so this stays correct regardless of how much explanatory
+    # comment sits between the function's opening brace and the assignment itself.
+    enclosing_fn_pattern = re.compile(r"function (\w+)\(")
+    loop_assignment_fns = []
+    for m in re.finditer(r"overlay\.loop = ", html):
+        preceding = html[:m.start()]
+        fn_matches = list(enclosing_fn_pattern.finditer(preceding))
+        assert fn_matches, "overlay.loop assignment found with no enclosing function"
+        loop_assignment_fns.append(fn_matches[-1].group(1))
+    assert loop_assignment_fns, "expected Issue 3E-E's sequence lifecycle to assign overlay.loop"
+    assert all(
+        fn in ("startSequenceForTarget", "resetSequencePlaybackState")
+        for fn in loop_assignment_fns
+    )
 
 
 def test_server_reacquisition_starts_exactly_one_fresh_epoch():
@@ -6832,12 +6905,39 @@ def test_wave6_camera_unavailable_and_recognition_timeout_have_distinct_events()
     html = _scanner_html()
     assert "'camera_unavailable'" in html
     assert "'recognition_timeout'" in html
-    assert "setScannerUiState(code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' ? 'camera_unavailable' : 'fallback_available', code);" in html
+    # Issue 3B: the inline 'CAMERA_UNAVAILABLE'/'CAMERA_PERMISSION_DENIED' ternary was
+    # replaced by isCameraFailureCode(code), the single place that now knows about all
+    # four camera-classed codes (permission denied / not found / start failed /
+    # interrupted) — see test_show_fallback_panel_uses_the_shared_camera_failure_classifier.
+    assert "setScannerUiState(isCameraFailureCode(code) ? 'camera_unavailable' : 'fallback_available', code);" in html
     assert "setScannerUiState('recognition_timeout', reason);" in html
     assert "submitFallbackAnalytics('recognition_timeout'" in html
     assert "submitFallbackAnalytics('camera_unavailable'" in html
     assert "recognitionContinueBtn.addEventListener('click', continueScanningFromRecognitionHelp);" in html
     assert "fallbackRetryBtn.addEventListener('click', retryCameraFromFallback);" in html
+
+
+def test_show_fallback_panel_uses_the_shared_camera_failure_classifier():
+    """isCameraFailureCode() is the single place that has to know all four camera-classed
+    codes. showFallbackPanel() (and the fallback-video-close handler) must call it rather
+    than re-deriving their own inline subset — otherwise adding a new camera failure code
+    means hunting down every duplicated ternary by hand."""
+    html = _scanner_html()
+    classifier_start = html.index("function isCameraFailureCode(code) {")
+    classifier_end = html.index("}", classifier_start)
+    classifier_body = html[classifier_start:classifier_end]
+    for code in ("CAMERA_PERMISSION_DENIED", "CAMERA_NOT_FOUND", "CAMERA_START_FAILED", "CAMERA_INTERRUPTED", "SECURE_CONTEXT_REQUIRED"):
+        assert f"code === '{code}'" in classifier_body
+
+    panel_start = html.index("function showFallbackPanel(code, message) {")
+    panel_end = html.index("function hideFallbackPanel(reason)")
+    panel_body = html[panel_start:panel_end]
+    assert panel_body.count("isCameraFailureCode(code)") >= 3
+    assert "CAMERA_UNAVAILABLE" not in panel_body
+
+    close_handler_start = html.index("fallbackVideoCloseBtn.addEventListener('click', function () {")
+    close_handler_end = html.index("});", close_handler_start)
+    assert "isCameraFailureCode(code)" in html[close_handler_start:close_handler_end]
 
 
 def test_wave6_pair_fallback_and_project_fallback_emit_correct_event_types():

@@ -1,0 +1,73 @@
+{# Canonical authenticated Creator app shell: header + mobile drawer.
+   Set nav_active to dashboard / my_stories / ownership / plans / profile BEFORE
+   including this partial.
+   Requires: user (current_user) in context, static/js/nav.js loaded on the page,
+   design-system.css loaded (via _head_assets.html). #}
+{% set nav_active = nav_active|default('') %}
+<header class="ss-app-topbar">
+  <div class="ss-app-brand">
+    <a href="{{ url_for('dashboard') }}" class="ss-app-brand-title">SCAN<span class="text-pink-500">STORY</span></a>
+    {% if user %}
+    <a href="{{ url_for('user_profile') }}" class="ss-app-user-badge">
+      <i class="fa-solid fa-user-astronaut" aria-hidden="true"></i>
+      <span>{{ user.first_name or user.email }}</span>
+    </a>
+    {% endif %}
+  </div>
+
+  <nav class="ss-app-desktop-nav" aria-label="Primary">
+    <a class="ss-nav-link{{ ' is-active' if nav_active == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}"{{ ' aria-current="page"'|safe if nav_active == 'dashboard' else '' }}>
+      <i class="fa-solid fa-house" aria-hidden="true"></i> Dashboard
+    </a>
+    <a class="ss-nav-link{{ ' is-active' if nav_active == 'my_stories' else '' }}" href="{{ url_for('projects_page') }}"{{ ' aria-current="page"'|safe if nav_active == 'my_stories' else '' }}>
+      <i class="fa-solid fa-folder-open" aria-hidden="true"></i> My Stories
+    </a>
+    <a class="ss-nav-link{{ ' is-active' if nav_active == 'ownership' else '' }}" href="{{ url_for('ownership_center') }}"{{ ' aria-current="page"'|safe if nav_active == 'ownership' else '' }}>
+      <i class="fa-solid fa-right-left" aria-hidden="true"></i> Ownership
+    </a>
+    <a class="ss-nav-link{{ ' is-active' if nav_active == 'plans' else '' }}" href="{{ url_for('subscribe_page') }}"{{ ' aria-current="page"'|safe if nav_active == 'plans' else '' }}>
+      <i class="fa-solid fa-crown" aria-hidden="true"></i> Plans
+    </a>
+    <a class="ss-nav-link{{ ' is-active' if nav_active == 'profile' else '' }}" href="{{ url_for('user_profile') }}"{{ ' aria-current="page"'|safe if nav_active == 'profile' else '' }}>
+      <i class="fa-solid fa-user" aria-hidden="true"></i> Profile
+    </a>
+    <a class="ss-btn ss-btn-tertiary ss-btn-sm" href="{{ url_for('logout') }}">
+      <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> Logout
+    </a>
+  </nav>
+
+  <button class="ss-app-menu-toggle" type="button" id="mobileMenuToggle"
+    aria-label="Open menu" aria-expanded="false" aria-controls="mobileMenuPanel">
+    <i class="fa-solid fa-bars" aria-hidden="true"></i>
+  </button>
+</header>
+
+<div id="mobileMenuPanel" class="ss-mobile-menu" role="dialog" aria-modal="true" aria-label="Menu">
+  <div class="ss-mobile-menu-backdrop" data-menu-close></div>
+  <nav class="ss-mobile-menu-panel" aria-label="Primary">
+    <div class="flex items-center justify-between mb-4">
+      <span class="ss-app-brand-title" style="font-size:1rem;">SCAN<span class="text-pink-500">STORY</span></span>
+      <button type="button" class="ss-btn ss-btn-ghost" data-menu-close aria-label="Close menu">
+        <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+      </button>
+    </div>
+    <a class="ss-nav-link{{ ' is-active' if nav_active == 'dashboard' else '' }}" href="{{ url_for('dashboard') }}"{{ ' aria-current="page"'|safe if nav_active == 'dashboard' else '' }}>
+      <i class="fa-solid fa-house" aria-hidden="true"></i> Dashboard
+    </a>
+    <a class="ss-nav-link{{ ' is-active' if nav_active == 'my_stories' else '' }}" href="{{ url_for('projects_page') }}"{{ ' aria-current="page"'|safe if nav_active == 'my_stories' else '' }}>
+      <i class="fa-solid fa-folder-open" aria-hidden="true"></i> My Stories
+    </a>
+    <a class="ss-nav-link{{ ' is-active' if nav_active == 'ownership' else '' }}" href="{{ url_for('ownership_center') }}"{{ ' aria-current="page"'|safe if nav_active == 'ownership' else '' }}>
+      <i class="fa-solid fa-right-left" aria-hidden="true"></i> Ownership
+    </a>
+    <a class="ss-nav-link{{ ' is-active' if nav_active == 'plans' else '' }}" href="{{ url_for('subscribe_page') }}"{{ ' aria-current="page"'|safe if nav_active == 'plans' else '' }}>
+      <i class="fa-solid fa-crown" aria-hidden="true"></i> Plans
+    </a>
+    <a class="ss-nav-link{{ ' is-active' if nav_active == 'profile' else '' }}" href="{{ url_for('user_profile') }}"{{ ' aria-current="page"'|safe if nav_active == 'profile' else '' }}>
+      <i class="fa-solid fa-user" aria-hidden="true"></i> Profile
+    </a>
+    <a class="ss-nav-link" href="{{ url_for('logout') }}" style="color:#f87171;">
+      <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> Logout
+    </a>
+  </nav>
+</div>

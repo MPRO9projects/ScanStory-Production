@@ -10,6 +10,15 @@ Root causes fixed:
    competing top-level project links ("My Projects" -> admin_my_projects,
    "User Projects" -> admin_projects) pointing at two different routes for
    what is conceptually the same "admin project management" destination.
+3. Mobile drawer nav unreachable: admin-console.css's off-canvas drawer rule
+   (id selector, specificity beats admin/base.html's class-only rule
+   regardless of source order) set the open drawer's z-index to 1002, below
+   the backdrop's 1029. The backdrop painted over every open link, so any tap
+   just closed the drawer via the backdrop's click handler - admins and
+   superadmins could never leave Dashboard on mobile. Also tightened the
+   768px/992px breakpoints to Bootstrap's exact 767.98/768/991.98 so no
+   viewport width fell into a dead zone matched by neither the tablet-rail
+   nor the off-canvas-drawer media query.
 """
 from pathlib import Path
 
@@ -153,12 +162,24 @@ def test_admin_session_visiting_user_login_page_is_redirected_away(client, login
 # 8-9: canonical Admin Projects navigation + stable active-menu state
 # ---------------------------------------------------------------------------
 
-def test_admin_nav_has_one_canonical_project_entry(client, login_admin):
+# ---------------------------------------------------------------------------
+# World-Class Admin Restructure (2026-09-02) superseded the single canonical
+# "/admin/projects" nav entry with three ownership-scoped destinations (My
+# Projects / All Admin Projects [Super Admin] / Customer Projects) - the
+# whole point of that pass was reversing the "one link, ambiguous meaning"
+# decision this file used to guard. Updated in place rather than deleted so
+# the surrounding still-valid coverage (dashboard redirects, dropdown JS,
+# mobile drawer, capacity permission) stays intact.
+# ---------------------------------------------------------------------------
+
+def test_admin_nav_splits_projects_into_ownership_scoped_entries(client, login_admin):
     response = client.get("/admin/dashboard")
     data = response.data
-    assert b"User Projects" not in data
-    assert b"My Projects" not in data
-    assert data.count(b'href="/admin/projects"') == 1
+    assert b'href="/admin/my-projects"' in data
+    assert b'href="/admin/customer-projects"' in data
+    # login_admin is a superadmin fixture - All Admin Projects must be visible.
+    assert b'href="/admin/admin-projects"' in data
+    assert b"My Projects" in data
 
 
 def test_admin_nav_exposes_users_scans_subscriptions_and_activity_logs_once(client, login_admin):
@@ -173,19 +194,17 @@ def test_admin_nav_exposes_users_scans_subscriptions_and_activity_logs_once(clie
     ):
         assert href in data
     assert b"Admin Management" in data
-    # "User Profiles" was consolidated into the single canonical Users nav
-    # entry (the dashboard's separate "Recent Users -> View All" shortcut
-    # also links to /admin/users, so this checks the sidebar item specifically
-    # rather than every href on the page).
-    assert data.count(b'<span>Users</span>') == 1
+    # Sidebar label renamed Users -> Customers (restructure §15); the backend
+    # route/endpoint name (admin_users) is unchanged.
+    assert data.count(b'<span>Customers</span>') == 1
     assert b"User Profiles" not in data
     assert b'href="/admin/user-profiles"' not in data
 
 
-def test_project_list_page_shows_correct_active_nav_state(client, login_admin):
-    response = client.get("/admin/projects")
+def test_my_projects_page_shows_correct_active_nav_state(client, login_admin):
+    response = client.get("/admin/my-projects")
     assert response.status_code == 200
-    assert b'href="/admin/projects" class="sidebar-link active"' in response.data
+    assert b'href="/admin/my-projects" class="sidebar-link active"' in response.data
 
 
 def test_project_detail_page_shows_correct_active_nav_state(client, login_admin, app_module, db_session):
@@ -194,17 +213,20 @@ def test_project_detail_page_shows_correct_active_nav_state(client, login_admin,
     db_session.commit()
     response = client.get(f"/admin/projects/{project.id}")
     assert response.status_code == 200
-    assert b'href="/admin/projects" class="sidebar-link active"' in response.data
+    assert b'href="/admin/customer-projects" class="sidebar-link active"' in response.data
 
 
 # ---------------------------------------------------------------------------
-# 10: legacy project route redirects directly to the canonical route
+# 10: /admin/my-projects is now a real page, not a redirect shim
 # ---------------------------------------------------------------------------
 
-def test_legacy_my_projects_route_redirects_to_canonical_admin_projects(client, login_admin):
+def test_my_projects_route_is_a_real_page_not_a_redirect(client, login_admin, app_module, db_session):
+    project = app_module.Project(name="Own Workspace Project", owner_admin_id=login_admin.id)
+    db_session.add(project)
+    db_session.commit()
     response = client.get("/admin/my-projects", follow_redirects=False)
-    assert response.status_code == 302
-    assert response.headers["Location"].startswith("/admin/projects")
+    assert response.status_code == 200
+    assert b"Own Workspace Project" in response.data
 
 
 def test_admin_user_profiles_redirects_to_canonical_admin_users(client, login_admin, normal_user):
@@ -428,7 +450,8 @@ def test_retired_admin_templates_are_deleted():
 def test_sidebar_active_state_contains_no_redirect_only_endpoints():
     html = (ADMIN_TEMPLATES / "_sidebar_links.html").read_text(encoding="utf-8")
     assert "admin_user_profiles" not in html
-    assert "admin_my_projects" not in html
+    # admin_my_projects is intentionally in the sidebar now - it's a real
+    # page (World-Class Admin Restructure), not the old redirect shim.
 
 
 def test_admin_addons_shared_shell_keeps_critical_forms(client, login_admin):
@@ -466,6 +489,31 @@ def test_admin_console_css_hardens_tables_forms_and_modals():
     assert ".ss-admin-scope .table-container" in css
     assert ".ss-admin-scope .modal.show" in css
     assert ".ss-admin-scope .action-buttons .btn" in css
+
+
+def test_admin_console_css_mobile_drawer_outranks_backdrop():
+    """Regression guard for the "stuck on Dashboard" mobile nav bug: the
+    #adminSidebar id selector always beats base.html's class-only .sidebar
+    rule, so this file's own drawer z-index (not base.html's) is what
+    actually has to clear the backdrop's 1029."""
+    css = Path("static/css/admin-console.css").read_text(encoding="utf-8")
+
+    drawer_block_start = css.index("#adminSidebar.sidebar {")
+    drawer_block_end = css.index("}", drawer_block_start)
+    drawer_block = css[drawer_block_start:drawer_block_end]
+    assert "z-index: 1030" in drawer_block
+
+    base_css = Path("templates/admin/base.html").read_text(encoding="utf-8")
+    backdrop_block_start = base_css.index(".sidebar-backdrop {")
+    backdrop_block_end = base_css.index("}", backdrop_block_start)
+    assert "z-index: 1029" in base_css[backdrop_block_start:backdrop_block_end]
+
+    # No dead zone: the tablet-rail and off-canvas-drawer breakpoints must
+    # meet exactly at Bootstrap's md boundary (767.98 / 768), not overlap
+    # or leave a gap where a viewport matches neither.
+    assert "max-width: 991.98px) and (min-width: 768px)" in css
+    assert "@media (max-width: 767.98px)" in css
+    assert "@media (max-width: 768px)" not in css
 
 
 def test_admin_capacity_direct_access_denied_for_admin_without_permission(client, secondary_admin):
@@ -511,13 +559,20 @@ def test_superadmin_can_open_operations_diagnostics(client, login_admin, app_mod
     assert b"Recent Upload Sessions" in body
     assert b"Recent Processing Jobs" in body
     assert b"Current Entitlement Visibility" in body
-    assert b"Recent Add-on Purchases" in body
     assert b"Recent Entitlement Ledger" in body
     assert b"marker.jpg" in body
     assert b"video.mp4" in body
     assert b"C:/secret/path" not in body
     assert b"/private/" not in body
     assert b"SMTP_PASS" not in body
+    # Refund/add-on-refund actions relocated to Payments > Refunds
+    # (World-Class Admin Restructure) - Operations keeps only a summary + link.
+    assert b"Recent Add-on Purchases" not in body
+    assert b'href="/admin/payments/refunds"' in body
+
+    refunds_response = client.get("/admin/payments/refunds")
+    assert refunds_response.status_code == 200
+    assert b"Recent Add-on Purchases" in refunds_response.data
 
 
 def test_normal_admin_cannot_open_operations_diagnostics(client, secondary_admin):
@@ -526,6 +581,99 @@ def test_normal_admin_cannot_open_operations_diagnostics(client, secondary_admin
     response = client.get("/admin/operations", follow_redirects=False)
     assert response.status_code == 302
     assert response.headers["Location"].rstrip("/").endswith("/admin/dashboard")
+
+
+# ---------------------------------------------------------------------------
+# Issue 1B: Profile dropdown inert / Logout unreachable on every migrated
+# admin page except Dashboard. Root cause: 13 templates carried leftover
+# pre-Bootstrap-migration dropdown-toggle JS in their own {% block extra_js
+# %} - a window.onclick handler whose guard (`!event.target.matches(
+# '.user-menu span')`) referenced a selector no longer present anywhere in
+# the current markup, so it was always true and unconditionally closed any
+# open .dropdown-menu on *every* click, including the same click Bootstrap's
+# native data-bs-toggle="dropdown" (in admin/base.html) had just used to
+# open it. Dashboard/Operations/Subscriptions never carried this dead code,
+# which is why only they worked. Fix: delete the dead handler + the
+# toggleDropdown() function it paired with from all 13 templates and rely
+# solely on base.html's shared, already-correct Bootstrap dropdown.
+# ---------------------------------------------------------------------------
+
+DROPDOWN_DEAD_CODE_TEMPLATES = (
+    "add_plan.html",
+    "edit_plan.html",
+    "manage_admins.html",
+    "payments.html",
+    "plans.html",
+    "projects.html",
+    "scans.html",
+    "settings.html",
+    "user_scans.html",
+    "users.html",
+    "view_payment.html",
+    "view_project.html",
+    "view_user.html",
+)
+
+
+def test_admin_pages_no_longer_carry_dead_dropdown_toggle_js():
+    for name in DROPDOWN_DEAD_CODE_TEMPLATES:
+        html = (ADMIN_TEMPLATES / name).read_text(encoding="utf-8")
+        assert "window.onclick" not in html, name
+        assert "toggleDropdown" not in html, name
+        assert ".user-menu span" not in html, name
+
+
+def test_admin_base_shell_is_the_only_place_defining_the_profile_dropdown():
+    for path in ADMIN_TEMPLATES.glob("*.html"):
+        if path.name == "base.html":
+            continue
+        html = path.read_text(encoding="utf-8")
+        assert 'id="userDropdown"' not in html, path.name
+        assert "data-bs-toggle=\"dropdown\"" not in html, path.name
+
+
+@pytest.mark.parametrize("path", [
+    "/admin/dashboard",
+    "/admin/users",
+    "/admin/projects",
+    "/admin/payments",
+    "/admin/plans",
+    "/admin/admins",
+    "/admin/scans",
+    "/admin/settings",
+    "/admin/operations",
+    "/admin/subscriptions",
+])
+def test_admin_profile_dropdown_and_logout_render_intact_on_every_page(client, login_admin, path):
+    response = client.get(path)
+    assert response.status_code == 200
+    body = response.data.decode()
+    assert 'id="userDropdown"' in body
+    assert 'data-bs-toggle="dropdown"' in body
+    assert body.count('id="userDropdown"') == 1
+    assert "window.onclick" not in body
+    assert "toggleDropdown" not in body
+    assert '<a class="dropdown-item" href="/admin/logout"' in body
+
+
+def test_admin_profile_dropdown_and_logout_render_intact_for_non_superadmin(client, secondary_admin):
+    with client.session_transaction() as sess:
+        sess["admin_id"] = secondary_admin.id
+    for path in ("/admin/dashboard", "/admin/users", "/admin/projects"):
+        response = client.get(path)
+        assert response.status_code == 200
+        body = response.data.decode()
+        assert 'id="userDropdown"' in body
+        assert 'data-bs-toggle="dropdown"' in body
+        assert "window.onclick" not in body
+        assert '<a class="dropdown-item" href="/admin/logout"' in body
+
+
+def test_admin_logout_route_still_works_after_dead_js_removal(client, login_admin):
+    response = client.get("/admin/logout", follow_redirects=False)
+    assert response.status_code == 302
+    with client.session_transaction() as sess:
+        assert "admin_id" not in sess
 
 
 def test_success_page_contact_support_uses_contact_route(client, login_user, app_module, db_session):

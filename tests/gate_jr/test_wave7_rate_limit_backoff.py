@@ -201,7 +201,10 @@ def test_detect_init_no_match_logs_structured_stage_timings(client, project_with
     payload = records[-1].scanner_latency
     assert payload["event"] == "detect_init"
     assert payload["outcome"] == "no_match"
-    for stage in ("stage_read_ms", "stage_prep_ms", "stage_detect_ms", "stage_quick_score_ms", "stage_match_ms"):
+    # quick_score and match run as one combined call (_score_and_match) and are reported
+    # together as stage_quick_score_and_match_ms — splitting them would fabricate a fake
+    # always-~0ms "match" entry (see the code comment at their _log_scanner_latency call).
+    for stage in ("stage_read_ms", "stage_prep_ms", "stage_detect_ms", "stage_quick_score_and_match_ms"):
         assert stage in payload, f"missing {stage} in structured scanner_latency log"
         assert isinstance(payload[stage], (int, float))
         assert payload[stage] >= 0
@@ -261,7 +264,12 @@ def test_backend_detection_responses_include_safe_guidance_fields():
     ):
         assert field in source
     assert '"scanner_guidance": _scanner_guidance' in source
-    guidance_body = source[source.index("def _scanner_guidance"):source.index("orb = _orb_detect()")]
+    # Bounded to _scanner_guidance's own body (through its return), not the much larger
+    # span up to the next "orb = _orb_detect()" — that wider window sweeps in unrelated
+    # sibling-closure docstrings (e.g. _attempt_recovery's) whose ordinary prose can contain
+    # words like "path" without leaking anything.
+    guidance_start = source.index("def _scanner_guidance")
+    guidance_body = source[guidance_start:source.index("return payload", guidance_start)]
     assert "traceback" not in guidance_body.lower()
     assert "path" not in guidance_body.lower()
     assert "email" not in guidance_body.lower()

@@ -109,9 +109,19 @@ def test_runtime_quad_validation_rejects_bad_geometry():
     assert "isValidQuad" in runtime_source
 
 
-def test_project_upload_does_not_standardize_before_http_response(client, app_module, login_user, monkeypatch):
-    calls = []
-    monkeypatch.setattr(app_module, "standardize_uploaded_image", lambda *args, **kwargs: calls.append(args))
+def test_project_upload_does_not_extract_features_before_http_response(client, app_module, login_user, monkeypatch):
+    """The synchronous/background split this test actually protects: the
+    EXPENSIVE ORB feature-extraction step must stay deferred to the
+    background job, so the request returns fast. standardize_uploaded_image
+    is NOT part of that split - it is deliberately called synchronously,
+    once per target image, during upload itself: the canonical target
+    identity hash (duplicate-target detection) has to describe the FINAL
+    persisted bytes, so standardizing has to happen before that hash is
+    computed, which happens before the response (see the "standardize
+    FIRST, then hash" comment in _finalize_assemble_and_validate). This
+    assumption predated that duplicate-identity work and was stale."""
+    extract_calls = []
+    monkeypatch.setattr(app_module, "extract_features_multi", lambda *args, **kwargs: extract_calls.append(args))
     monkeypatch.setattr(app_module, "generate_custom_qr", lambda *args, **kwargs: False)
     monkeypatch.setattr(app_module, "generate_basic_qr", lambda *args, **kwargs: None)
     monkeypatch.setattr(app_module.threading, "Thread", NoopThread)
@@ -128,7 +138,7 @@ def test_project_upload_does_not_standardize_before_http_response(client, app_mo
     )
 
     assert response.status_code == 302
-    assert calls == []
+    assert extract_calls == []
     pair = app_module.ProjectPair.query.first()
     assert pair.processing_status == "uploaded"
 
@@ -275,9 +285,45 @@ def test_temporal_pose_rejection_prevents_overlay_state_mutation():
     assert "centerJump > 0.35" in html
     assert "maxCornerJump > 0.55" in html
     assert "tracking_pose_rejected" in html
-    assert "if (!poseQuality.ok && tracking && currCorners)" in html
+    # Master consolidated stabilization pass (TC-04 pair-resolution fix): gated on
+    # wasSameTarget - this geometric continuity check is only meaningful when the
+    # server just re-confirmed the SAME target. A server-confirmed DIFFERENT pair
+    # must never be rejected for looking geometrically unlike the OLD target (see
+    # the comment directly above this line in scanner.html for the full incident).
+    assert "if (wasSameTarget && !poseQuality.ok && tracking && currCorners)" in html
+    assert "if (wasSameTarget && !poseQuality.ok)" in html
     assert "clearTrackingGeometry('pose_rejected_' + poseQuality.reason)" in html
     assert html.index("const poseQuality = poseCompatibility(newCorners, currCorners, Math.max(Math.min(frameW, frameH), 1));") < html.index("overlay.src = newVideoUrl")
+
+
+def test_pose_compatibility_never_blocks_a_server_confirmed_different_pair():
+    """TC-04 (master consolidated stabilization pass): physical testing showed that
+    once the scanner locked onto Pair 2, pointing the camera back at Pair 1's target
+    never switched back - Pair 2's video stayed on screen indefinitely. Root cause:
+    poseCompatibility(newCorners, currCorners, ...) compared the NEWLY, server-
+    confirmed-different pair's geometry against the OLD pair's currCorners, which are
+    naturally "incompatible" (different physical marker, different position) - the
+    'tracking && currCorners' rejection branch fired and returned before the code ever
+    reached the wasSameTarget/MARKER SWITCH logic below it. Both poseQuality
+    enforcement branches must be gated on wasSameTarget: the geometric continuity
+    check is a jitter/false-positive guard for the SAME target, never a valid signal
+    for a target the server has already told the client is different. Verified live
+    against real Postgres + real ORB feature extraction: 5-request P1/P2/P1/P2/P1
+    alternation resolved matched_pair_id correctly every single time server-side; this
+    test locks in that the CLIENT no longer discards that correct server answer."""
+    html = _scanner_html()
+    accept_start = html.index("const wasSameTarget = (currentPairId === newPairId);")
+    reject_block_start = html.index("if (wasSameTarget && !poseQuality.ok && tracking && currCorners)")
+    switch_start = html.index("if (!wasSameTarget) {")
+    # wasSameTarget must be computed before either poseQuality-enforcement branch,
+    # and both branches must appear before the marker-switch block that acts on it.
+    assert accept_start < reject_block_start < switch_start
+    second_reject = html.index("if (wasSameTarget && !poseQuality.ok)", reject_block_start + 1)
+    assert reject_block_start < second_reject < switch_start
+    # Neither enforcement branch may exist unguarded anywhere in the file (would mean
+    # a partial/reverted fix let the old unconditional rejection back in).
+    assert "if (!poseQuality.ok && tracking && currCorners)" not in html
+    assert html.count("if (wasSameTarget && !poseQuality.ok)") == 1
 
 
 def test_detect_init_echoes_generation_frame_and_orientation_metadata(client, project_with_pair):
@@ -757,12 +803,15 @@ def test_temporary_pose_hold_does_not_restart_video_on_marker_loss():
 
 def test_reacquisition_same_video_preserves_playback_position():
     html = _scanner_html()
-    same_target_start = html.index("} else {\n          if (videoFinished)")
+    same_target_start = html.index("} else if (sequenceCompletionVisible || sequenceChooserVisible) {")
     same_target_block = html[same_target_start:html.index("const pts = (data.init_points", same_target_start)]
     assert "overlay.currentTime = 0" in same_target_block
     assert "if (videoFinished)" in same_target_block
     assert "} else {\n            playOverlay();" in same_target_block
-    assert "const wasSameTarget = (currentVideoUrl === newVideoUrl && currentPairId === newPairId)" in html
+    # Issue 3E-E: pair identity alone, not video URL - a multi-video target's
+    # currentVideoUrl legitimately diverges from the (always-default) newVideoUrl
+    # once the sequence advances past Video 1, without it being a different target.
+    assert "const wasSameTarget = (currentPairId === newPairId);" in html
 
 
 def test_scanner_debug_reports_coordinate_space_and_overlay_stability():

@@ -49,6 +49,10 @@ MAX_IMAGE_PIXELS = int(os.environ.get("MAX_IMAGE_PIXELS", 40_000_000))
 MAX_VIDEO_DURATION_SECONDS = int(os.environ.get("MAX_VIDEO_DURATION_SECONDS", "0") or "0") or None
 # Hard ceiling on pairs any plan may configure.
 MAX_PAIRS_PER_PROJECT_CEILING = int(os.environ.get("MAX_PAIRS_PER_PROJECT_CEILING", "10") or "10")
+# Issue 3E-A: hard ceiling on videos-per-target any plan may configure, same
+# pattern as the pairs ceiling above. This bounds the plan value only when
+# allow_multi_video_per_target is True - see plan_videos_per_target_limit().
+MAX_VIDEOS_PER_TARGET_CEILING = int(os.environ.get("MAX_VIDEOS_PER_TARGET_CEILING", "10") or "10")
 
 # Ledger source_type values, split by who paid for the entitlement. Purchased
 # and admin-granted entitlement must stay distinguishable and neither may
@@ -143,6 +147,30 @@ def plan_pairs_limit(plan):
     return cap(raw, MAX_PAIRS_PER_PROJECT_CEILING)
 
 
+def plan_videos_per_target_limit(plan):
+    """Effective videos-per-target ceiling, already capped by the server
+    ceiling - None means unbounded-by-plan (still an authoring-side number,
+    not "unlimited storage").
+
+    One video per target is the existing base capability regardless of any
+    plan, so this is only meaningful when allow_multi_video_per_target is
+    True; callers must check that flag first (see get_effective_entitlements),
+    not infer it from this return value alone.
+    """
+    if not plan or not bool(getattr(plan, "allow_multi_video_per_target", False)):
+        return None
+    raw = getattr(plan, "max_videos_per_target", None)
+    try:
+        raw = int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        raw = None
+    if raw is not None and raw <= 0:
+        raw = None
+    if raw is None:
+        return None
+    return cap(raw, MAX_VIDEOS_PER_TARGET_CEILING)
+
+
 def get_effective_entitlements(user, unlimited_override=False):
     """The one coherent effective view of an account's commercial allowances.
 
@@ -172,9 +200,20 @@ def get_effective_entitlements(user, unlimited_override=False):
     if unlimited_override:
         modes = set(PLAYBACK_MODE_ENTITLEMENT_FIELDS)
         pairs = None
+        allow_multi_video = True
+        videos_per_target = None
     else:
         modes = allowed_playback_modes(plan)
         pairs = plan_pairs_limit(plan)
+        allow_multi_video = bool(getattr(plan, "allow_multi_video_per_target", False)) if plan else False
+        videos_per_target = plan_videos_per_target_limit(plan) if allow_multi_video else None
+
+    # One video per target is the existing base capability regardless of
+    # plan - a disabled/unset feature must resolve to exactly 1, never to
+    # "no limit", or a caller that reads this number without also checking
+    # the flag would silently allow unlimited videos on a plan that never
+    # entitled the feature at all.
+    effective_videos_per_target = 1 if not allow_multi_video else (videos_per_target if videos_per_target is not None else None)
 
     # --- storage: three separate, auditable sources -----------------------
     # base (plan) + purchased (ACCOUNT_STORAGE add-ons) + admin grants. None
@@ -222,6 +261,14 @@ def get_effective_entitlements(user, unlimited_override=False):
 
         # --- pairs (server ceiling already applied) ---
         "max_pairs_per_project": pairs,
+
+        # --- multi-video-per-target (Issue 3E-A). Foundation only - nothing
+        # yet consumes this; PairMedia/add-video enforcement is a later phase.
+        # effective_max_videos_per_target is always 1 when the flag is False,
+        # never "unlimited" - see the note above where these are computed.
+        "allow_multi_video_per_target": allow_multi_video,
+        "max_videos_per_target": getattr(plan, "max_videos_per_target", None) if plan else None,
+        "effective_max_videos_per_target": effective_videos_per_target,
 
         # --- storage entitlement AND usage (Wave 3) ---
         "base_storage_bytes": base_storage,
@@ -304,6 +351,17 @@ def is_downgrade(current_plan, new_plan):
     # something the account currently has).
     if allowed_playback_modes(current_plan) - allowed_playback_modes(new_plan):
         return True
+
+    # Multi-video-per-target (Issue 3E-A): losing the feature entirely is a
+    # downgrade; keeping it but lowering the plan's max is a downgrade under
+    # the same None/0-is-unlimited convention as the numeric fields above.
+    old_multi_video = bool(getattr(current_plan, "allow_multi_video_per_target", False))
+    new_multi_video = bool(getattr(new_plan, "allow_multi_video_per_target", False))
+    if old_multi_video and not new_multi_video:
+        return True
+    if old_multi_video and new_multi_video:
+        if _rank(getattr(new_plan, "max_videos_per_target", None)) < _rank(getattr(current_plan, "max_videos_per_target", None)):
+            return True
 
     # Storage: None means "unspecified", which is not a claim of unlimited
     # storage - only compare when BOTH sides state a number.

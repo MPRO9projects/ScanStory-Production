@@ -508,16 +508,6 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="scan_type">Scan Type</label>
-                    <select id="scan_type" name="scan_type" class="form-control">
-                        <option value="all" {% if scan_type == 'all' %}selected{% endif %}>All Types</option>
-                        <option value="regular" {% if scan_type == 'regular' %}selected{% endif %}>Regular</option>
-                        <option value="quick" {% if scan_type == 'quick' %}selected{% endif %}>Quick</option>
-                        <option value="comprehensive" {% if scan_type == 'comprehensive' %}selected{% endif %}>Comprehensive</option>
-                    </select>
-                </div>
-
-                <div class="form-group">
                     <button type="submit" class="btn btn-primary" style="height: 42px;">Apply Filters</button>
                     <a href="{{ url_for('admin_user_scans', user_id=user.id) }}" class="btn btn-secondary" style="height: 42px;">Clear</a>
                 </div>
@@ -602,7 +592,7 @@
                         <tr>
                             <td colspan="6" style="text-align: center; padding: 40px;">
                                 No scan logs found for this user
-                                {% if search or status != 'all' or scan_type != 'all' or start_date or end_date %}
+                                {% if search or status != 'all' or start_date or end_date %}
                                 with current filters. <a href="{{ url_for('admin_user_scans', user_id=user.id) }}">Clear filters</a>
                                 {% endif %}
                             </td>
@@ -743,24 +733,7 @@
 
 {% block extra_js %}
 <script>
-function toggleDropdown() {
-            const dropdown = document.getElementById('userDropdown');
-            dropdown.classList.toggle('show');
-        }
-
-        // Close dropdown when clicking outside
-        window.onclick = function(event) {
-            if (!event.target.matches('.user-menu span')) {
-                const dropdowns = document.querySelectorAll('.dropdown-menu');
-                dropdowns.forEach(dropdown => {
-                    if (dropdown.classList.contains('show')) {
-                        dropdown.classList.remove('show');
-                    }
-                });
-            }
-        };
-
-        // Auto remove alerts after 5 seconds
+// Auto remove alerts after 5 seconds
         document.addEventListener('DOMContentLoaded', function() {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {

@@ -80,11 +80,25 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            justify-content: center;
+            /* Public QA fix (F/section 33): was justify-content: center, which clips
+               the START of any overflow in a scrollable flex container (scrollTop
+               can't go negative) - a register form taller than a short-ish desktop
+               viewport (1366x768 etc) pushed its top fields above y=0 with no way to
+               scroll up to them. flex-start + margin:auto on .form-section (desktop-
+               scoped, see its rule below) restores the same centered look when
+               content fits, and correctly falls back to top-aligned/fully-scrollable
+               when it doesn't. */
+            justify-content: flex-start;
             padding: 40px;
             position: relative;
             overflow-y: auto;
             scrollbar-width: none;
+        }
+
+        @media (min-width: 1025px) {
+            .form-section {
+                margin: auto 0;
+            }
         }
 
         .left-panel::-webkit-scrollbar {

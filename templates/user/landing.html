@@ -45,13 +45,13 @@
       "url": "https://myscanstory.com/",
       "logo": "https://myscanstory.com/static/assets/logos/logo1.png",
       "description": "ScanStory is a WebAR and augmented reality experience platform in India for creating image-to-video AR content using QR scan codes.",
-      "email": "contact@myscanstory.com",
+      "email": "connect@myscanstory.com",
       "telephone": "+91 73385 44142",
       "contactPoint": {
         "@type": "ContactPoint",
         "contactType": "customer support",
         "telephone": "+91 73385 44142",
-        "email": "contact@myscanstory.com",
+        "email": "connect@myscanstory.com",
         "url": "https://myscanstory.com/contact",
         "areaServed": "IN",
         "availableLanguage": ["English", "Hindi", "Kannada"]
@@ -445,6 +445,17 @@
             align-items: center;
             position: relative;
             margin-bottom: -60px;
+            /* #how-it-works is pulled up into this -60px zone by design (a
+               seamless section seam), and both sections stack at the same
+               default level - with no explicit z-index, DOM order alone
+               decides the winner in the overlap strip, so the later section
+               painted on top and silently ate pointer events meant for the
+               hero CTA row whenever it sat close to that zone (short desktop
+               viewport heights - 1366x768, 1440x900 - where the vertically
+               centered content has less room above the overlap than on a
+               tall phone in portrait). z-index here keeps hero content on
+               top of that seam without changing anything visually. */
+            z-index: 1;
         }
 
         #hero-section>div {
@@ -2318,12 +2329,12 @@
 
                     <!-- Animated Email Link -->
                     <div class="inline-block">
-                        <a href="mailto:contact@myscanstory.com"
+                        <a href="mailto:connect@myscanstory.com"
                             class="group relative inline-flex items-center gap-3 text-pink-400 hover:text-pink-300 text-base md:text-lg font-semibold py-2 transition-all duration-300 hover:scale-105">
                             <i
                                 class="fas fa-envelope text-sm group-hover:rotate-12 transition-transform duration-300 group-hover:scale-110"></i>
                             <span class="relative">
-                                contact@myscanstory.com
+                                connect@myscanstory.com
                                 <span
                                     class="absolute -bottom-1 left-0 w-0 h-0.5 bg-gradient-to-r from-pink-500 to-pink-300 group-hover:w-full transition-all duration-500 ease-out"></span>
                             </span>
@@ -2592,6 +2603,7 @@
                     Resources</h4>
                 <ul class="space-y-2 text-sm text-center md:text-left">
                     <li><a href="/contact" class="footer-link block">Contact Support</a></li>
+                    <li><a href="/faqs" class="footer-link block">FAQs</a></li>
                     <li><a href="/terms" class="footer-link block">Terms of Service</a></li>
                     <li><a href="/privacy" class="footer-link block">Privacy Policy</a></li>
 

@@ -5,7 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0, user-scalable=no" />
   <title>SCANSTORY | {{ project_name }}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/design-system.css', v=static_asset_version('css/design-system.css')) }}">
 
   <style>
     body {
@@ -145,6 +145,98 @@
       user-select: none;
     }
 
+    /* Issue 3E-E: sequential multi-video playback chrome. Kept deliberately compact
+       per the brief - a dot row, not a playlist panel; three small buttons, not a
+       transport bar. */
+    .sequence-indicator {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 56;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.45);
+      -webkit-backdrop-filter: blur(4px);
+      backdrop-filter: blur(4px);
+      pointer-events: none;
+    }
+
+    .sequence-indicator .sequence-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: rgba(255, 255, 255, 0.35);
+      transition: background-color 150ms ease, transform 150ms ease;
+    }
+
+    .sequence-indicator .sequence-dot.is-active {
+      background: #fff;
+      transform: scale(1.2);
+    }
+
+    .sequence-controls {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      bottom: 8px;
+      z-index: 55;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .sequence-ctrl-btn {
+      min-width: 44px;
+      min-height: 44px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      background: rgba(0, 0, 0, 0.55);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      -webkit-backdrop-filter: blur(4px);
+      backdrop-filter: blur(4px);
+      cursor: pointer;
+    }
+
+    .sequence-ctrl-btn-wide {
+      flex: 0 1 auto;
+      padding-left: 18px;
+      padding-right: 18px;
+    }
+
+    .sequence-panel-title {
+      color: #fff;
+      font-weight: 800;
+      font-size: 15px;
+      margin-bottom: 12px;
+    }
+
+    .sequence-chooser-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .sequence-chooser-list .sequence-chooser-btn {
+      min-height: 44px;
+      padding: 10px 16px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      background: rgba(255, 255, 255, 0.06);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      text-align: left;
+      cursor: pointer;
+    }
+
     .status {
       margin-top: 10px;
       padding: 10px 15px;
@@ -161,10 +253,41 @@
 
     /* One primary instruction, one quiet secondary chip. #scannerGuidance is the viewer's
        instruction AND the page's single ARIA live region, so it leads; #status is the
-       supporting state line and is visibly subordinate rather than a second equal headline. */
+       supporting state line and is visibly subordinate rather than a second equal headline.
+
+       In-lens overlay (physical QA fix): #scannerGuidance used to be a sibling of .wrap,
+       rendered in normal document flow below the camera - on a typical phone viewport that
+       put it ~250px under the fold, the same "recovery UI needs a scroll to reach" problem
+       .ss-lens-panel was already introduced to fix for #fallbackPanel/#recognitionHelpPanel
+       (see the comment above .ss-lens-panel). #scannerGuidance is now a child of .wrap,
+       pinned near the top of the camera viewport - JS (updateGuidanceDom) is untouched, it
+       still only sets textContent/dataset via getElementById and does not care where in the
+       DOM this element lives. Top-anchored (not bottom, like .ss-lens-panel) so it never
+       competes for space with the bottom-anchored recovery/sequence panels, and sits clear
+       of #recognitionQuad's corner brackets (inset 11%/9%). */
     #scannerGuidance {
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      top: max(8px, env(safe-area-inset-top, 0px));
+      z-index: 45;
+      margin: 0 auto;
+      width: fit-content;
+      max-width: calc(100% - 16px);
       font-weight: 800;
       letter-spacing: 0.01em;
+      /* Solid, not blurred: this sits over the LIVE camera feed continuously
+         during normal scanning (unlike .ss-lens-panel's 6px scrim, which only
+         ever shows once the camera has already stopped or recognition has
+         given up) - a moving blur layer permanently on screen costs mobile
+         GPU for no benefit here, and this app deliberately removed blurred
+         decorative layers from the live scanning view before (see
+         test_no_large_blurred_moving_layers_remain_over_the_camera_feed). A
+         high-opacity solid background already gives the contrast needed.
+      */
+      background: rgba(5, 5, 8, 0.82);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+      pointer-events: none;
     }
 
     #status {
@@ -254,6 +377,33 @@
       transition: background-color 150ms ease, border-color 150ms ease;
     }
     .back-btn:hover { background: rgba(255, 255, 255, 0.09); border-color: rgba(255, 255, 255, 0.22); }
+
+    /* Direct QR nav-stacking fix (universal-video-duplicate-rule pass,
+       2026-08-31). Root cause: Direct QR has no camera, so its entire
+       experience (start/#directQrVideo/#directQrCompletion) lives permanently
+       inside #experienceIntro, a position:fixed z-index:10000 full-screen
+       overlay that is NEVER dismissed the way Overlay/Detect Once dismiss
+       their pre-camera intro - .header (Back/SCANSTORY/Report) sat behind it
+       for the entire Direct QR session. Scoped to body[data-experience-type=
+       "direct_qr"] ONLY via the existing body data attribute (see <body> tag
+       above) - Tracked Overlay and Detect Once's .header is completely
+       untouched by this rule, so their already-correct appearance/behavior
+       (screenshot-verified) cannot regress. Height (44px back-btn +
+       ~12px vertical padding, ~68px total) is the exact basis for
+       #experienceIntro's own top-padding increase below - not an arbitrary
+       "giant padding" guess. */
+    body[data-experience-type="direct_qr"] .header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      z-index: 10001;
+      margin-bottom: 0;
+      padding: max(10px, env(safe-area-inset-top, 0px)) 14px 10px;
+      background: linear-gradient(to bottom, rgba(5,5,5,0.92), rgba(5,5,5,0.65));
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
 
     .info-badge {
       position: absolute;
@@ -622,8 +772,97 @@
       color: #fff;
     }
 
+    /* Direct QR landing polish (real-browser remediation pass, 2026-08-29):
+       #experienceIntroCard was only ever horizontally centered (margin:0 auto) -
+       nothing here vertically centered it, so on a tall phone viewport the intro
+       content rendered pinned to the top with a large dead-black area below it.
+       display:flex + justify-content:center centers the card group in the middle
+       of the viewport when it fits; overflow-y:auto (kept above) still lets it
+       scroll normally if content ever exceeds viewport height. Playback nav and
+       the completion screen live in separate containers and are untouched. */
     #experienceIntro.is-visible {
-      display: block;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    /* Companion to the fixed .header rule above - only Direct QR's .header
+       is taken out of document flow, so only Direct QR's intro needs extra
+       top clearance to avoid the fixed header overlapping its content.
+       ~68px header height + safe-area-inset-top + a small gap. */
+    body[data-experience-type="direct_qr"] #experienceIntro {
+      padding-top: calc(68px + env(safe-area-inset-top, 0px) + 12px);
+    }
+
+    /* Final pre-freeze defect audit (2026-09-01): title scroll flicker.
+       #experienceIntro.is-visible uses justify-content:center to vertically
+       center the card - fine for Tracked Overlay/Detect Once, whose intro is
+       dismissed within a second of camera start. Direct QR's intro is the
+       WHOLE experience and stays mounted/scrollable indefinitely, and this
+       element is position:fixed;inset:0 with no dvh/svh handling - on real
+       mobile browsers the on-screen URL bar shows/hides as the viewer
+       scrolls, changing the fixed element's effective height each time.
+       justify-content:center recalculates the card's vertical position
+       against that shifting height, so the title (the card's first visible
+       line) drifts in and out of view on every such recalculation - read
+       live as "disappears on one scroll, reappears on another." Anchoring
+       Direct QR's card to the top removes the height-dependent recentering
+       entirely: the title's position becomes a fixed offset from the
+       padding-top clearance above, stable regardless of toolbar state.
+       Scoped to Direct QR only - Tracked Overlay/Detect Once keep centering
+       unchanged since their intro is too short-lived for this to surface. */
+    body[data-experience-type="direct_qr"] #experienceIntro.is-visible {
+      justify-content: flex-start;
+    }
+
+    /* Direct QR PRE-PLAY landing redesign (human QA blocker pass, 2026-09-03).
+       Human QA: content packed high, huge dead black area below. The
+       2026-09-01 flicker fix (above) anchored the card to the top via
+       justify-content:flex-start specifically to stop it recentring every
+       time the mobile URL bar showed/hid under justify-content:center's
+       height-dependent recalculation - correct, and kept as-is. The fix
+       here does NOT reintroduce that recalculation: svh (small viewport
+       height) is deliberately the one CSS viewport unit that stays constant
+       across the browser-chrome show/hide that caused the original bug, so
+       an svh-based padding-top achieves real vertical balance without any
+       of the recalculating behavior. Scoped to .is-preplay only - removed
+       the instant Start story is pressed (startDirectQrPlayback()), so the
+       already-working playback layout is never touched. */
+    body[data-experience-type="direct_qr"] #experienceIntro.is-preplay {
+      padding-top: max(calc(68px + env(safe-area-inset-top, 0px) + 12px), 20svh);
+      padding-bottom: max(calc(24px + env(safe-area-inset-bottom, 0px)), 16svh);
+      position: relative;
+    }
+
+    @media (min-width: 600px) {
+      body[data-experience-type="direct_qr"] #experienceIntro.is-preplay {
+        padding-top: max(calc(68px + env(safe-area-inset-top, 0px) + 12px), 14svh);
+      }
+    }
+
+    /* Optional subtle depth (brief §26) - a faint glow behind the content
+       group, nothing heavier. Pre-play only; gone the instant playback
+       starts along with .is-preplay itself. */
+    body[data-experience-type="direct_qr"] #experienceIntro.is-preplay::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 55% 38% at 50% 38%, rgba(255, 255, 255, 0.05), transparent 70%);
+      pointer-events: none;
+    }
+
+    /* Direct QR top-area visual cleanup (2026-08-31): .intro-brand is a
+       second, faint "SCANSTORY" wordmark that the intro card renders above
+       its own title - harmless when the intro dismisses on camera start
+       (Tracked Overlay/Detect Once), but Direct QR's intro never dismisses,
+       so it sits permanently stacked just beneath the fixed header's own
+       "SCANSTORY" label, reading as a duplicated/overlapped title. The
+       header already carries the brand for Direct QR; the project title
+       (#experienceIntroTitle) is the text that still carries real story
+       meaning and stays. Scoped to Direct QR only - Tracked Overlay/Detect
+       Once keep their existing .intro-brand unchanged. */
+    body[data-experience-type="direct_qr"] #experienceIntro .intro-brand {
+      display: none;
     }
 
     #experienceIntroCard {
@@ -764,6 +1003,150 @@
 
     #directQrVideo.is-hidden {
       display: none;
+    }
+
+    #directQrCompletion {
+      margin: 0 0 18px;
+      text-align: center;
+    }
+
+    #directQrCompletion.is-hidden {
+      display: none;
+    }
+
+    /* Direct QR viewer UX upgrade, polished in the Creator Identity
+       remediation pass (2026-08-29): compact, normal-flow chrome around
+       #directQrVideo - this card has no camera behind it, so (unlike
+       .sequence-indicator/.sequence-controls, which are position:absolute
+       overlays on the live camera lens) these sit in document flow like
+       everything else in #experienceIntroCard. The separate dot-indicator +
+       icon-only Prev/Next pills this replaced were the brief's own named
+       complaint ("large dark blob-like controls feels unclear") - one
+       combined "‹  1  2  3  ›" row reads as a single, obvious control. */
+    .dqr-indicator {
+      text-align: center;
+      margin: 0 0 10px;
+      font-size: 12.5px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      color: rgba(255, 255, 255, 0.6);
+    }
+
+    .dqr-indicator.is-hidden {
+      display: none;
+    }
+
+    .dqr-controls {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      margin: 0 0 18px;
+    }
+
+    .dqr-controls.is-hidden {
+      display: none;
+    }
+
+    .dqr-nav-arrow {
+      min-width: 44px;
+      min-height: 44px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.06);
+      color: #fff;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      transition: background-color 150ms ease, opacity 150ms ease;
+    }
+
+    .dqr-nav-arrow:hover {
+      background: rgba(255, 255, 255, 0.14);
+    }
+
+    .dqr-nav-arrow:disabled {
+      opacity: 0.3;
+      cursor: default;
+      background: transparent;
+    }
+
+    .dqr-nav-numbers {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      margin: 0 6px;
+    }
+
+    .dqr-nav-numbers button {
+      min-width: 40px;
+      min-height: 40px;
+      border-radius: 999px;
+      border: none;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.5);
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background-color 150ms ease, color 150ms ease;
+    }
+
+    .dqr-nav-numbers button.is-active {
+      background: linear-gradient(135deg, #ff007a, #7000ff);
+      color: #fff;
+    }
+
+    .dqr-complete-check {
+      width: 52px;
+      height: 52px;
+      margin: 0 auto 14px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #ff007a, #7000ff);
+      color: #fff;
+      font-size: 26px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .dqr-completion-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .dqr-watch-again-label {
+      margin: 8px 0 2px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.45);
+    }
+
+    .dqr-watch-again-list {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .dqr-watch-again-list button {
+      min-width: 44px;
+      min-height: 44px;
+      padding: 0 14px;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      background: rgba(255, 255, 255, 0.06);
+      color: #fff;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .dqr-watch-again-list button:hover {
+      background: rgba(255, 255, 255, 0.14);
     }
 
     /* The single obvious action on the first screen. min-height is stated explicitly (not
@@ -929,18 +1312,61 @@
        Video neither the camera nor OpenCV is ever touched. This is a preview layer in
        front of detection, never a filter on it — whichever target the guide happens to
        highlight, the scanner still detects any valid pair in the project. -->
-  <div id="experienceIntro" role="dialog" aria-modal="true" aria-labelledby="experienceIntroTitle">
+  <div id="experienceIntro" role="dialog" aria-modal="true" aria-labelledby="experienceIntroTitle" {% if experience_type == 'direct_qr' %}class="is-preplay"{% endif %}>
     <div id="experienceIntroCard">
       <div class="intro-brand">SCANSTORY</div>
       <h2 id="experienceIntroTitle">{{ project_name }}</h2>
 
       {% if experience_type == 'direct_qr' %}
-      <p class="intro-lede">Your video is ready to play. No camera needed.</p>
-      {% if targets %}
-      <video id="directQrVideo" class="is-hidden" controls playsinline preload="metadata"
-             src="{{ targets[0].video_url }}"></video>
+      <p class="intro-lede" id="directQrLede">
+        {% if direct_qr_playlist | length > 1 %}
+        {{ direct_qr_playlist | length }} moments in this story. No camera needed.
+        {% else %}
+        Your story is ready. No camera needed.
+        {% endif %}
+      </p>
+      {% if direct_qr_playlist %}
+      <video id="directQrVideo" class="is-hidden" controls playsinline preload="metadata"></video>
+      {% if direct_qr_playlist | length > 1 %}
+      {# Direct QR visual polish (Creator Identity remediation pass,
+         2026-08-29): one combined "‹ 1 2 3 ›" row replaces the earlier
+         separate dot-indicator strip + icon-only Prev/Next pills - the
+         brief's own critique of those as unclear/blob-like. Same underlying
+         playDirectQrAtIndex() calls as before, only the chrome changed. #}
+      <div id="directQrIndicator" class="dqr-indicator is-hidden" aria-hidden="true">
+        <span id="directQrIndicatorText">Video 1 of {{ direct_qr_playlist | length }}</span>
+      </div>
+      <div id="directQrControls" class="dqr-controls is-hidden">
+        <button type="button" id="directQrPrevBtn" class="dqr-nav-arrow" aria-label="Previous video">‹</button>
+        <span id="directQrNavNumbers" class="dqr-nav-numbers"></span>
+        <button type="button" id="directQrNextBtn" class="dqr-nav-arrow" aria-label="Next video">›</button>
+      </div>
       {% endif %}
-      <button type="button" class="intro-btn" id="directQrPlayBtn">Play video</button>
+      {# Physical QA fix: the full ordered playlist (every video across every target,
+         pair_index order) - the old markup hardcoded targets[0].video_url only, so a
+         second/third video could never be reached regardless of how many existed. #}
+      <script type="application/json" id="directQrPlaylistData">{{ direct_qr_playlist | tojson }}</script>
+      <div id="directQrCompletion" class="is-hidden" role="status" aria-live="polite">
+        <div class="dqr-complete-check" aria-hidden="true">✓</div>
+        <p class="intro-lede">
+          {% if direct_qr_playlist | length > 1 %}
+          You watched all {{ direct_qr_playlist | length }} moments.
+          {% else %}
+          You watched the story.
+          {% endif %}
+        </p>
+        <div class="dqr-completion-actions">
+          <button type="button" class="intro-btn" id="directQrReplayBtn">Replay story</button>
+          {% if direct_qr_playlist | length > 1 %}
+          <p class="dqr-watch-again-label">Watch again</p>
+          <div id="directQrChooserList" class="dqr-watch-again-list"></div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+      <button type="button" class="intro-btn" id="directQrPlayBtn">
+        <i class="fa-solid fa-play" aria-hidden="true" style="margin-right:8px;"></i>Start story
+      </button>
       {% else %}
       <p class="intro-lede" id="targetGuideLede">
         {% if targets | length == 1 %}
@@ -1000,6 +1426,62 @@
       <video id="overlay" autoplay playsinline loop preload="metadata" disablePictureInPicture
         controlsList="nodownload nofullscreen noremoteplayback" aria-hidden="true"></video>
     </div>
+
+    {# In-lens guidance (physical QA fix): this used to be a sibling of .wrap, rendered
+       below the camera in normal document flow - on a typical phone that put it far under
+       the fold, so it could not be seen without scrolling while scanning. It is now pinned
+       to the top of the camera viewport instead (see the #scannerGuidance rule in the
+       stylesheet). updateGuidanceDom() still only does getElementById('scannerGuidance') and
+       sets textContent/dataset, so moving this element changes nothing about how or when
+       guidance text updates - only where it's visible. #}
+    <div id="scannerGuidance"
+         class="status scan"
+         role="status"
+         aria-live="polite"
+         aria-atomic="true"
+         style="font-size:clamp(13px,2.6vw,16px);opacity:.96;">
+      {% if experience_type == 'direct_qr' %}Getting ready…{% else %}Looking for image…{% endif %}
+    </div>
+
+    {% if experience_type != 'direct_qr' %}
+    {# Issue 3E-E: sequential multi-video playback chrome. Entirely absent in effect for a
+       single-video target - these elements exist in the DOM but JS never un-hides them
+       unless the matched target has 2+ PairMedia rows. Reuses the existing #overlay video
+       element; this is chrome around it, never a second player. Never rendered at all for
+       Direct QR, which stays single-video. #}
+    <div id="sequenceIndicator" class="sequence-indicator" aria-hidden="true" hidden></div>
+
+    <div id="sequenceControls" class="sequence-controls" hidden>
+      <button type="button" id="sequencePrevBtn" class="sequence-ctrl-btn" aria-label="Previous video">
+        <i class="fa-solid fa-backward-step" aria-hidden="true"></i>
+      </button>
+      <button type="button" id="sequenceAllVideosBtn" class="sequence-ctrl-btn sequence-ctrl-btn-wide" aria-label="Show all videos">
+        All Videos
+      </button>
+      <button type="button" id="sequenceNextBtn" class="sequence-ctrl-btn" aria-label="Next video">
+        <i class="fa-solid fa-forward-step" aria-hidden="true"></i>
+      </button>
+    </div>
+
+    <div id="sequenceCompletion" class="ss-lens-panel sequence-panel" role="region" aria-live="polite" hidden>
+      <div class="sequence-panel-title">Experience complete</div>
+      <div class="ss-scan-actions">
+        <button type="button" id="sequenceReplayAllBtn" class="ss-scan-btn ss-scan-btn-primary" aria-label="Replay all videos">
+          <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
+          Replay all
+        </button>
+        <button type="button" id="sequenceOpenChooserBtn" class="ss-scan-btn ss-scan-btn-secondary" aria-label="Choose a video">
+          Choose a video
+        </button>
+      </div>
+    </div>
+
+    <div id="sequenceChooser" class="ss-lens-panel sequence-panel" role="region" aria-live="polite" aria-label="Choose a video" hidden>
+      <div class="sequence-panel-title">Choose a video</div>
+      <div id="sequenceChooserList" class="sequence-chooser-list"></div>
+    </div>
+    {% endif %}
+
     <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" id="wm-logo" alt="ScanStory">
     {% if scanner_diagnostics_enabled %}
     <canvas id="poseDebugCanvas"></canvas>
@@ -1092,17 +1574,11 @@
   <canvas id="cap" hidden></canvas>
   <canvas id="captureCanvas" hidden></canvas>
 
-  {# #status is the quiet secondary state line; #scannerGuidance below is the primary
-     instruction AND the page's single ARIA live region. Neither may carry engine vocabulary. #}
+  {# #status is the quiet secondary state line. #scannerGuidance - the primary instruction
+     AND the page's single ARIA live region - now lives INSIDE .wrap (see it there, pinned
+     to the top of the camera viewport) so it is visible without scrolling. Neither may
+     carry engine vocabulary. #}
   <div id="status" class="status scan">Getting ready…</div>
-  <div id="scannerGuidance"
-       class="status scan"
-       role="status"
-       aria-live="polite"
-       aria-atomic="true"
-       style="margin-top:8px;font-size:clamp(14px,2.8vw,18px);opacity:.92;">
-    {% if experience_type == 'direct_qr' %}Getting ready…{% else %}Looking for image…{% endif %}
-  </div>
 
   <div id="fallbackVideoPanel" role="region" aria-live="polite" aria-labelledby="fallbackVideoTitle" style="display:none;margin:12px auto 0;max-width:520px;padding:16px;border-radius:16px;background:rgba(10,10,14,0.94);border:1px solid var(--ss-border-strong, rgba(255,255,255,0.18));text-align:center;">
     <div id="fallbackVideoTitle" style="color:#fff;font-weight:700;margin-bottom:12px;font-size:13px;text-transform:uppercase;letter-spacing:0.08em;">Watching the video</div>
@@ -1138,7 +1614,7 @@
   </div>
   {% endif %}
 
-  <script src="{{ url_for('static', filename='js/scanner-runtime.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/scanner-runtime.js', v=static_asset_version('js/scanner-runtime.js')) }}"></script>
   <script>
     // Global startup safety net (real-device regression fix): a top-level temporal-dead-
     // zone ReferenceError (diagState's object literal reading a const declared further
@@ -1221,9 +1697,17 @@
       checking_capabilities: 'Checking your device…',
       requesting_camera: 'Waiting for camera permission…',
       initializing_camera: 'Starting your camera…',
-      loading_opencv: 'Getting ready…',
-      loading_wasm: 'Getting ready…',
-      initializing_scanner: 'Almost ready…',
+      // These three are the image-recognition engine coming up (opencv.js + its
+      // .wasm download and runtime init), which on a cold start is by far the
+      // longest stage. They used to read 'Getting ready…' twice and then
+      // 'Almost ready…', which told the viewer nothing about WHAT was still
+      // pending and — worse — read identically to the shell-loading stage. The
+      // viewer now gets a named, sequential story: camera first, recognition
+      // second. Wording deliberately stays engine-free ("image recognition",
+      // never OpenCV/WASM/vision engine).
+      loading_opencv: 'Preparing image recognition…',
+      loading_wasm: 'Preparing image recognition…',
+      initializing_scanner: 'Preparing image recognition…',
       ready_to_scan: 'Ready — point at the image',
       detecting: 'Looking for the image…',
       tracking: 'Your video is playing',
@@ -1278,6 +1762,12 @@
       return true;
     }
     const SCANNER_GUIDANCE = Object.freeze({
+      // 'preparing' covers the cold-start window where the camera is already
+      // live but the recognition engine has not finished initializing, so
+      // nothing is actually looking for anything yet. Saying 'Looking for
+      // image…' there was simply untrue and made a normal engine load look like
+      // a failed detection.
+      preparing: 'Preparing image recognition…',
       looking: 'Looking for image…',
       closer: 'Move closer',
       farther: 'Move farther away',
@@ -1290,7 +1780,23 @@
       reacquiring: 'Reacquiring image',
       backoff: 'Pausing briefly before retrying…',
       camera_unavailable: 'Camera unavailable',
-      retry_camera: 'Tap to retry camera'
+      retry_camera: 'Tap to retry camera',
+      // Scanner resilience pass: additive guidance states. Existing keys/text above
+      // (looking/closer/farther/steady/lighting/glare/visible/found/tracking/
+      // reacquiring/backoff/camera_unavailable/retry_camera) are UNCHANGED - some
+      // tests assert their exact copy verbatim. These are new, more specific
+      // reasons alongside them, never a replacement.
+      overexposed: 'Too much direct light — tilt the phone slightly or move away from the light.',
+      underexposed: 'Too dark — move to better light.',
+      low_contrast: 'Move to better light for a clearer view.',
+      network_slow: 'Connection is slow — still trying…',
+      video_loading: 'Loading experience…',
+      // Physical QA fix: 'video_loading' showed the exact same text whether the video had
+      // been buffering for 1 second or 30 - on a real slow connection (3G, a loaded tunnel)
+      // that reads as stuck/broken with no way to tell it's still genuinely working. Same
+      // "this can take a moment" framing network_slow already uses for the detect-timeout
+      // case, applied here to prolonged video buffering specifically.
+      video_loading_slow: 'Still loading your video — this can take longer on a slow connection…'
     });
     const GUIDANCE_PRIORITY = Object.freeze({
       camera_unavailable: 100,
@@ -1299,12 +1805,25 @@
       found: 80,
       tracking: 75,
       reacquiring: 70,
+      video_loading: 65,
+      video_loading_slow: 65,
       visible: 62,
       lighting: 60,
       glare: 60,
+      // Severe blur (steady) outranks over/under-exposure, which outranks the
+      // generic closer/farther hints - matching the resilience pass's agreed
+      // priority order (glare > blur > exposure > contrast).
+      steady: 58,
       closer: 55,
       farther: 55,
-      steady: 50,
+      overexposed: 54,
+      underexposed: 54,
+      low_contrast: 45,
+      network_slow: 20,
+      // Same priority as 'looking' so the two can replace each other freely the
+      // moment the engine actually becomes ready (the debounce only suppresses a
+      // strictly LOWER-priority state).
+      preparing: 10,
       looking: 10
     });
     const GUIDANCE_DEBOUNCE_MS = 900;
@@ -1381,12 +1900,36 @@
       const guidance = data && data.scanner_guidance ? data.scanner_guidance : {};
       if (data && data.detected) return 'found';
       if (guidance.frame_visibility === 'partial') return 'visible';
-      if (guidance.likely_glare) return 'glare';
-      if (guidance.likely_dark || guidance.likely_glare_or_dark) return 'lighting';
+      // A localized bright hotspot (concentrated reflection/glare) is distinct from
+      // the whole frame being blown out (overexposed) or crushed (underexposed) -
+      // localized_glare / overexposed / underexposed are additive server signals
+      // (see _scanner_guidance in app.py); likely_glare/likely_dark/
+      // likely_glare_or_dark below remain the original, coarser signals for any
+      // caller still relying on them.
+      if (guidance.likely_localized_glare || guidance.likely_glare) return 'glare';
       if (guidance.likely_blurry) return 'steady';
+      if (guidance.likely_overexposed) return 'overexposed';
+      if (guidance.likely_underexposed || guidance.likely_dark) return 'underexposed';
+      if (guidance.likely_glare_or_dark) return 'lighting';
+      if (guidance.likely_low_contrast) return 'low_contrast';
       if (typeof guidance.raw_keypoints === 'number' && guidance.raw_keypoints < 80) return 'closer';
       if (typeof guidance.good_matches === 'number' && guidance.good_matches > 0) return 'steady';
       return tracking ? 'reacquiring' : 'looking';
+    }
+
+    // Network-vs-camera distinction: true only when the server told us this frame
+    // had none of the known quality problems. Used to decide whether a later
+    // request timeout should blame the connection ('network_slow') or leave the
+    // existing camera-guidance state alone (a poor frame never gets relabeled as
+    // a network problem).
+    function isFrameQualityClean(guidance) {
+      if (!guidance) return true;
+      return !(
+        guidance.likely_blurry || guidance.likely_glare || guidance.likely_dark ||
+        guidance.likely_glare_or_dark || guidance.likely_overexposed ||
+        guidance.likely_underexposed || guidance.likely_localized_glare ||
+        guidance.likely_low_contrast
+      );
     }
     scannerState.transition('loading_shell');
     scannerState.transition('checking_capabilities');
@@ -1434,7 +1977,7 @@
     function scannerFallbackReason() {
       if (scannerPriorFailure) return 'SCANNER_PRIOR_FAILURE';
       if (!runtimeCapabilities.secureContext) return 'SECURE_CONTEXT_REQUIRED';
-      if (!runtimeCapabilities.cameraApi) return 'CAMERA_UNAVAILABLE';
+      if (!runtimeCapabilities.cameraApi) return 'CAMERA_NOT_FOUND';
       if (!runtimeCapabilities.webassembly) return 'WASM_LOAD_FAILED';
       return 'UNSUPPORTED_DEVICE';
     }
@@ -1948,6 +2491,9 @@
       stopTrackingLoop();
       if (typeof clearTrackingGeometry === 'function') clearTrackingGeometry('session_end');
       if (typeof stopOverlayImmediate === 'function') stopOverlayImmediate();
+      // Issue 3E-E: leave no stale currentMediaIndex/target/chooser/completion state
+      // behind for whatever recognition happens next after an explicit close.
+      if (typeof resetSequencePlaybackState === 'function') resetSequencePlaybackState();
       // 7. stop the camera stream — Root-cause fix (Back button, Part E): this used to leave
       //    the camera stream and any playing overlay video running; Back/pagehide/
       //    beforeunload all funnel through here now, so this is the one place that must
@@ -2225,13 +2771,30 @@
             opencvLoadFailed = false;
             opencvLoadPromise = null;
             console.log('OpenCV initialized');
-            statusDiv.textContent = "Point at the ScanStory image";
-            statusDiv.className = "status scan";
-            setScannerGuidance('looking', 'opencv_ready');
+            // Root-cause fix: this used to write "Point at the ScanStory image" and the
+            // 'looking' guidance UNCONDITIONALLY, the instant WASM finished - including
+            // on a fast connection where that happens automatically on page load, before
+            // Start Camera has ever been pressed and no camera exists yet. Announcing
+            // readiness with no camera is exactly the untruthful state this whole pass
+            // exists to remove; only write it once isCameraHealthy() confirms there is a
+            // live camera for "point at the image" to actually mean something.
+            if (isCameraHealthy()) {
+              statusDiv.textContent = "Point at the ScanStory image";
+              statusDiv.className = "status scan";
+              setScannerGuidance('looking', 'opencv_ready');
+            }
             reportOpenCVTelemetry(isFirstAttempt ? 'first_attempt_success' : 'user_retry_success');
             startDetectLoop();
             startScannerStatusCycle();
             startTrackingLoop();
+            // The engine was the half that finished LAST (camera already live —
+            // the slow-connection cold start). Nothing else would ever leave
+            // initializing_scanner in that ordering, so the scanner would have
+            // stayed on "Preparing image recognition…" for the rest of the
+            // session while actually detecting normally. No-ops when the viewer
+            // has not pressed Start Camera yet: readiness is not claimed until
+            // there is a healthy camera to be ready with.
+            markScannerReadyIfPossible('opencv_ready');
             document.getElementById('loadingSpinner').style.display = 'none';
             resolve(true);
           },
@@ -2576,7 +3139,7 @@
       if (fallbackPanelEl.style.display !== 'none') {
         const code = diagState.fallbackReason;
         setScannerUiState(
-          code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' ? 'camera_unavailable' : 'fallback_available',
+          isCameraFailureCode(code) ? 'camera_unavailable' : 'fallback_available',
           'fallback_video_closed'
         );
       } else if (recognitionHelpPanelEl.style.display !== 'none') {
@@ -2602,6 +3165,13 @@
        permission denied / camera missing / insecure connection / not-ready are four different
        sentences, never one generic "camera error". */
     const VIEWER_ERROR_MESSAGES = Object.freeze({
+      // These three replace the single overloaded 'CAMERA_UNAVAILABLE' this pass removes:
+      // it read the same whether the device genuinely has no camera, getUserMedia failed
+      // for some other reason, or a previously-live stream stopped mid-session — three
+      // different situations that all showed the identical "Camera Unavailable" wording.
+      CAMERA_NOT_FOUND: 'No usable camera was found on this device.',
+      CAMERA_START_FAILED: 'We could not start the camera. Tap Retry Camera to try again.',
+      CAMERA_INTERRUPTED: 'Your camera stopped unexpectedly. Tap Retry Camera to try again.',
       OPENCV_LOAD_FAILED: 'ScanStory could not finish getting ready. Tap Retry Camera to try again, or watch the video instead.',
       WASM_LOAD_FAILED: 'This browser cannot run the ScanStory scanner. Try a different browser, or watch the video instead.',
       SCANNER_INIT_TIMEOUT: 'Setting up took too long. Tap Retry Camera to try again, or watch the video instead.',
@@ -2612,8 +3182,14 @@
       UNSUPPORTED_DEVICE: 'This device cannot follow the image live. You can still watch the video.'
     });
 
+    // Root-cause fix: 'CAMERA_UNAVAILABLE' used to be the one code covering every camera
+    // failure kind - no device, a start failure for some other reason, and a previously-
+    // healthy stream that stopped mid-session all read as the exact same "Camera
+    // Unavailable" wording. Split into the three distinct codes the ticket's readiness
+    // audit asked for; this is the SINGLE place that still has to know all of them.
     function isCameraFailureCode(code) {
-      return code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' || code === 'SECURE_CONTEXT_REQUIRED';
+      return code === 'CAMERA_PERMISSION_DENIED' || code === 'CAMERA_NOT_FOUND' ||
+        code === 'CAMERA_START_FAILED' || code === 'CAMERA_INTERRUPTED' || code === 'SECURE_CONTEXT_REQUIRED';
     }
 
     function viewerErrorMessage(code) {
@@ -2628,13 +3204,10 @@
       fallbackPanelEl.style.display = 'block';
       fallbackRetryBtn.disabled = false;
       fallbackRetryBtn.textContent = 'Retry Camera';
-      setScannerUiState(code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' ? 'camera_unavailable' : 'fallback_available', code);
-      setScannerGuidance(
-        code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' ? 'camera_unavailable' : 'retry_camera',
-        code
-      );
+      setScannerUiState(isCameraFailureCode(code) ? 'camera_unavailable' : 'fallback_available', code);
+      setScannerGuidance(isCameraFailureCode(code) ? 'camera_unavailable' : 'retry_camera', code);
       updateFallbackWatchControls(code);
-      if (code === 'CAMERA_UNAVAILABLE' || code === 'CAMERA_PERMISSION_DENIED' || code === 'SECURE_CONTEXT_REQUIRED') {
+      if (isCameraFailureCode(code)) {
         clearVerifiedFallbackPairContext(code);
         submitFallbackAnalytics('camera_unavailable', {}, `camera_unavailable:${scannerSessionId || 'no_session'}:${scannerGeneration}:${code}`);
       }
@@ -2835,13 +3408,89 @@
     overlay.addEventListener("ended", () => {
       videoFinished = true;
       console.log('📹 Video ended');
-      // Audit note (issue 3): the overlay <video> element has the native `loop` attribute
-      // (see its markup further down), which means 'ended' never fires during normal
-      // looping playback — the browser seeks back to 0 and keeps playing without emitting
-      // this event at all. This handler firing at all would itself be notable (it would
-      // mean playback reached the end WITHOUT looping — e.g. `loop` got cleared somewhere,
-      // or the browser doesn't support/ignored it for this source).
       logVideoCheckpoint('[OVERLAY VIDEO ENDED]', 'video_ended');
+      // Detect Once: this is the natural end of the locked pair's playlist (or its single
+      // video - overlay.loop is forced off for this mode in startSequenceForTarget, so
+      // 'ended' reliably fires even with one video). Advances through a multi-video
+      // playlist exactly like the tracked branch below; on the last item (or the only
+      // item) it completes the session and returns the scanner to READY automatically -
+      // no manual "Replay all" panel, no Back button, no reload (see
+      // completeDetectOnceSession). Checked first because tracked_overlay's own
+      // single-video branch below intentionally does nothing on 'ended' (native `loop`
+      // handles that mode's restart-in-place instead).
+      if (scannerPlaybackMode === 'detect_once' && detectOnceLocked) {
+        if (availableMedia && availableMedia.length > 1 && currentMediaIndex < availableMedia.length - 1) {
+          playSequenceMediaAtIndex(currentMediaIndex + 1);
+        } else {
+          completeDetectOnceSession('playlist_ended');
+        }
+        return;
+      }
+      // Audit note (issue 3, still true for a single-video target): #overlay has the
+      // native `loop` attribute, so 'ended' never fires during normal looping playback.
+      // Issue 3E-E turns `loop` OFF for a 2+-media target (see startSequenceForTarget),
+      // so for those targets this handler firing is the expected, designed signal that
+      // one video in the sequence just finished - not an anomaly.
+      if (!availableMedia || availableMedia.length <= 1) return;
+      if (playbackMode === 'manual') {
+        showSequenceChooser();
+        return;
+      }
+      if (currentMediaIndex < availableMedia.length - 1) {
+        playSequenceMediaAtIndex(currentMediaIndex + 1);
+      } else {
+        overlay.pause();
+        showSequenceCompletion();
+      }
+    });
+    // Video-loading guidance: only surfaced after a short delay (never from one
+    // momentary buffer blip) and only while playback is genuinely stalled. Cleared
+    // the moment playback actually resumes. This is presentation-only - it never
+    // touches the sequence/tracking state machine above.
+    let overlayWaitingTimer = null;
+    let overlaySlowLoadingTimer = null;
+    const VIDEO_LOADING_GUIDANCE_DELAY_MS = 400;
+    // Physical QA fix: a real slow connection (3G, a loaded free tunnel) can leave the
+    // overlay genuinely still buffering for many seconds - 'video_loading' showed the exact
+    // same text the whole time, indistinguishable from actually stuck. This escalates to a
+    // slow-connection-specific message if buffering is still going after a while, so the
+    // viewer knows it is still working rather than assuming it broke.
+    const VIDEO_LOADING_SLOW_DELAY_MS = 6000;
+    overlay.addEventListener("waiting", () => {
+      if (overlayWaitingTimer) return;
+      overlayWaitingTimer = setTimeout(() => {
+        overlayWaitingTimer = null;
+        if (overlay.paused || overlay.ended) return;
+        // Physical QA fix: a real-device trace showed this firing (and staying stuck)
+        // with currentPairId still -1 and no target ever matched - the element can
+        // report a buffering/waiting state even with no meaningful source assigned yet.
+        // Showing "loading your video" before any target has actually been detected is
+        // actively misleading (it looks like a stuck match instead of "still searching"),
+        // so this now only ever fires once a real match has set a real source.
+        if (currentPairId === -1 || !overlay.src) return;
+        setScannerGuidance('video_loading', 'overlay_buffering');
+        if (overlaySlowLoadingTimer) clearTimeout(overlaySlowLoadingTimer);
+        overlaySlowLoadingTimer = setTimeout(() => {
+          overlaySlowLoadingTimer = null;
+          if (overlay.paused || overlay.ended) return;
+          if (scannerGuidanceState === 'video_loading') {
+            setScannerGuidance('video_loading_slow', 'overlay_buffering_slow');
+          }
+        }, VIDEO_LOADING_SLOW_DELAY_MS);
+      }, VIDEO_LOADING_GUIDANCE_DELAY_MS);
+    });
+    overlay.addEventListener("playing", () => {
+      if (overlayWaitingTimer) {
+        clearTimeout(overlayWaitingTimer);
+        overlayWaitingTimer = null;
+      }
+      if (overlaySlowLoadingTimer) {
+        clearTimeout(overlaySlowLoadingTimer);
+        overlaySlowLoadingTimer = null;
+      }
+      if (scannerGuidanceState === 'video_loading' || scannerGuidanceState === 'video_loading_slow') {
+        setScannerGuidance(tracking ? 'tracking' : 'found', 'overlay_playing');
+      }
     });
     let lastKnownOverlayTime = 0;
     overlay.addEventListener("timeupdate", () => {
@@ -2855,6 +3504,208 @@
       }
       lastKnownOverlayTime = overlay.currentTime;
     });
+
+    // ================================================
+    // Issue 3E-E: SEQUENTIAL MULTI-VIDEO PLAYBACK
+    // ================================================
+    const sequenceIndicatorEl = document.getElementById('sequenceIndicator');
+    const sequenceControlsEl = document.getElementById('sequenceControls');
+    const sequenceCompletionEl = document.getElementById('sequenceCompletion');
+    const sequenceChooserEl = document.getElementById('sequenceChooser');
+    const sequenceChooserListEl = document.getElementById('sequenceChooserList');
+    const sequencePrevBtn = document.getElementById('sequencePrevBtn');
+    const sequenceNextBtn = document.getElementById('sequenceNextBtn');
+    const sequenceAllVideosBtn = document.getElementById('sequenceAllVideosBtn');
+    const sequenceReplayAllBtn = document.getElementById('sequenceReplayAllBtn');
+    const sequenceOpenChooserBtn = document.getElementById('sequenceOpenChooserBtn');
+
+    function isMultiVideoTarget() {
+      return !!(availableMedia && availableMedia.length > 1);
+    }
+
+    function renderSequenceIndicator() {
+      if (!sequenceIndicatorEl) return;
+      if (!isMultiVideoTarget()) {
+        sequenceIndicatorEl.hidden = true;
+        sequenceIndicatorEl.innerHTML = '';
+        return;
+      }
+      sequenceIndicatorEl.hidden = false;
+      sequenceIndicatorEl.setAttribute(
+        'aria-label', `Video ${currentMediaIndex + 1} of ${availableMedia.length}`
+      );
+      sequenceIndicatorEl.innerHTML = availableMedia
+        .map((_, i) => `<span class="sequence-dot${i === currentMediaIndex ? ' is-active' : ''}"></span>`)
+        .join('');
+    }
+
+    function updateSequenceControlsState() {
+      if (!sequencePrevBtn || !sequenceNextBtn) return;
+      sequencePrevBtn.disabled = currentMediaIndex <= 0;
+      sequenceNextBtn.disabled = !availableMedia || currentMediaIndex >= availableMedia.length - 1;
+    }
+
+    function showSequenceControls() {
+      if (!isMultiVideoTarget()) return;
+      if (sequenceControlsEl) sequenceControlsEl.hidden = false;
+      updateSequenceControlsState();
+    }
+
+    function hideSequenceUiChrome() {
+      if (sequenceIndicatorEl) { sequenceIndicatorEl.hidden = true; sequenceIndicatorEl.innerHTML = ''; }
+      if (sequenceControlsEl) sequenceControlsEl.hidden = true;
+    }
+
+    function hideSequenceCompletion() {
+      sequenceCompletionVisible = false;
+      if (sequenceCompletionEl) sequenceCompletionEl.hidden = true;
+    }
+
+    function showSequenceCompletion() {
+      if (!isMultiVideoTarget()) return;
+      sequenceCompletionVisible = true;
+      hideSequenceChooser();
+      if (sequenceCompletionEl) sequenceCompletionEl.hidden = false;
+    }
+
+    function hideSequenceChooser() {
+      sequenceChooserVisible = false;
+      if (sequenceChooserEl) sequenceChooserEl.hidden = true;
+    }
+
+    function videoLabelForIndex(i) {
+      return `Video ${i + 1}`;
+    }
+
+    function showSequenceChooser() {
+      if (!isMultiVideoTarget() || !sequenceChooserListEl) return;
+      hideSequenceCompletion();
+      sequenceChooserVisible = true;
+      sequenceChooserListEl.innerHTML = availableMedia
+        .map((media, i) => (
+          `<button type="button" class="sequence-chooser-btn" data-media-index="${i}" aria-label="Play ${videoLabelForIndex(i)}">${videoLabelForIndex(i)}</button>`
+        ))
+        .join('');
+      sequenceChooserListEl.querySelectorAll('[data-media-index]').forEach(btn => {
+        btn.addEventListener('click', () => selectSequenceMediaManually(Number(btn.dataset.mediaIndex)));
+      });
+      if (sequenceChooserEl) sequenceChooserEl.hidden = false;
+    }
+
+    function playSequenceMediaAtIndex(index) {
+      if (!availableMedia || index < 0 || index >= availableMedia.length) return;
+      const switchEpoch = ++sequenceSwitchEpoch;
+      currentMediaIndex = index;
+      const media = availableMedia[index];
+      logVideoCheckpoint('[OVERLAY VIDEO SOURCE CHANGE]', 'sequence_advance', { toVideoUrl: media.video_url, index });
+      overlay.src = media.video_url;
+      // Physical QA fix: an explicit load() after changing src is cheap
+      // insurance against a stale decoded frame (or stale videoWidth/
+      // videoHeight, read for diagnostics elsewhere) surviving from the
+      // PREVIOUS source into the next video's first paint on WebKit -
+      // setting .src alone starts the browser's resource-selection
+      // algorithm, but does not guarantee prior decoder state is flushed
+      // before playOverlay() below asks it to play. Presentation-only:
+      // does not touch #overlayWrap's transform/homography geometry.
+      overlay.load();
+      currentVideoUrl = media.video_url;
+      overlay.currentTime = 0;
+      videoFinished = false;
+      playOverlay();
+      // Physical QA fix (final stabilization pass, section 12): the UI's
+      // index/dots used to move to the new video the instant this function
+      // was CALLED, not once the player actually presented its first frame -
+      // on a slow phone/network that read as the label advancing while the
+      // old video's last frame (or a black frame) was still visibly on
+      // screen. requestVideoFrameCallback (where supported) is the only
+      // reliable "a real decoded frame is on screen now" signal; 'loadeddata'
+      // is the widest-support fallback, and a bounded timeout is a last
+      // resort so a stalled load can never leave the indicator stuck
+      // silently (see section 19 - the scanner must never appear dead).
+      // switchEpoch guards every path: a rapid next/next/prev or a target
+      // switch mid-load must never let a stale confirmation move the UI.
+      const markSwitched = () => {
+        if (switchEpoch !== sequenceSwitchEpoch) return;
+        renderSequenceIndicator();
+        updateSequenceControlsState();
+      };
+      if (typeof overlay.requestVideoFrameCallback === 'function') {
+        overlay.requestVideoFrameCallback(() => markSwitched());
+        setTimeout(markSwitched, 1500);
+      } else {
+        overlay.addEventListener('loadeddata', markSwitched, { once: true });
+        setTimeout(markSwitched, 800);
+      }
+    }
+
+    function selectSequenceMediaManually(index) {
+      playbackMode = 'manual';
+      hideSequenceChooser();
+      hideSequenceCompletion();
+      playSequenceMediaAtIndex(index);
+    }
+
+    function goToPreviousSequenceMedia() {
+      if (!availableMedia || currentMediaIndex <= 0) return;
+      playSequenceMediaAtIndex(currentMediaIndex - 1);
+    }
+
+    function goToNextSequenceMedia() {
+      if (!availableMedia || !availableMedia.length || currentMediaIndex >= availableMedia.length - 1) return;
+      playSequenceMediaAtIndex(currentMediaIndex + 1);
+    }
+
+    function replaySequenceFromStart() {
+      playbackMode = 'sequence';
+      hideSequenceCompletion();
+      hideSequenceChooser();
+      playSequenceMediaAtIndex(0);
+    }
+
+    // Called on every accepted new-target match (marker switch). Resets the whole
+    // sequence experience for the newly recognized ProjectPair - never mixes media
+    // between targets. `media` is the additive detect_init "media" field (already
+    // ordered sort_order ASC, id ASC by the backend); null/absent for a legacy pair
+    // with no PairMedia rows, in which case this target behaves exactly as a
+    // single-video target always has.
+    function startSequenceForTarget(media) {
+      hideSequenceCompletion();
+      hideSequenceChooser();
+      availableMedia = (Array.isArray(media) && media.length > 1) ? media.slice() : null;
+      currentMediaIndex = 0;
+      playbackMode = 'sequence';
+      // Physical QA fix: Detect Once needs 'ended' to fire even for a single-video target
+      // so completeDetectOnceSession() can detect playlist completion - a looping video
+      // never fires 'ended' at all, which was the root cause of "V1 plays forever, P2
+      // can never be detected." Tracked Overlay's own single-video loop behavior (the
+      // video restarting while the target is still held in frame) is unaffected - this
+      // only overrides the loop decision for detect_once.
+      overlay.loop = scannerPlaybackMode === 'detect_once' ? false : !isMultiVideoTarget();
+      if (isMultiVideoTarget()) {
+        showSequenceControls();
+        renderSequenceIndicator();
+      } else {
+        hideSequenceUiChrome();
+      }
+    }
+
+    // Called on every full scanner reset (endScannerSession / explicit close). Leaves
+    // no stale currentMediaIndex/target state behind for the next recognition.
+    function resetSequencePlaybackState() {
+      availableMedia = null;
+      currentMediaIndex = 0;
+      playbackMode = 'sequence';
+      overlay.loop = true;
+      hideSequenceCompletion();
+      hideSequenceChooser();
+      hideSequenceUiChrome();
+    }
+
+    if (sequencePrevBtn) sequencePrevBtn.addEventListener('click', goToPreviousSequenceMedia);
+    if (sequenceNextBtn) sequenceNextBtn.addEventListener('click', goToNextSequenceMedia);
+    if (sequenceAllVideosBtn) sequenceAllVideosBtn.addEventListener('click', showSequenceChooser);
+    if (sequenceReplayAllBtn) sequenceReplayAllBtn.addEventListener('click', replaySequenceFromStart);
+    if (sequenceOpenChooserBtn) sequenceOpenChooserBtn.addEventListener('click', showSequenceChooser);
 
     // ================================================
     // SCANNER STATUS OVERLAY MANAGEMENT
@@ -2880,9 +3731,14 @@
     const STATE_STATUS_TEXT = {
       requesting_camera: ["Allow Camera Access", "Waiting for your permission…"],
       initializing_camera: ["Preparing Camera", "Starting your camera…"],
-      loading_opencv: ["Preparing Camera", "Getting ready…"],
-      loading_wasm: ["Preparing Camera", "Getting ready…"],
-      initializing_scanner: ["Preparing Camera", "Almost ready…"],
+      // Not "Preparing Camera" any more: by the time the FSM is in any of these
+      // three the camera is already live and previewing, and the only thing the
+      // viewer is actually waiting on is the recognition engine finishing its
+      // init. Saying "Preparing Camera" over a working camera feed is what made
+      // the cold-start wait unreadable.
+      loading_opencv: ["Preparing Recognition", "Preparing image recognition…"],
+      loading_wasm: ["Preparing Recognition", "Preparing image recognition…"],
+      initializing_scanner: ["Preparing Recognition", "Preparing image recognition…"],
       ready_to_scan: ["Point At The Image", "Point at the ScanStory image"],
       detecting: ["Point At The Image", "Point at the ScanStory image"],
       tracking: ["Tracking Surface", "Your video is playing"],
@@ -2962,7 +3818,22 @@
     let trackingBadFrames = 0;   // consecutive frames with insufficient optical flow points
     let currentVideoUrl = null;
     let currentPairId = -1;
+    // Issue 3E-E: sequential multi-video playback. null/length<=1 availableMedia means
+    // "this target has one video" - the entire feature stays structurally absent, same
+    // discipline as 3E-D's entitlement gating (no UI, no mode, no extra state churn).
+    let availableMedia = null;
+    let currentMediaIndex = 0;
+    let playbackMode = 'sequence'; // 'sequence' | 'manual'
+    let sequenceCompletionVisible = false;
+    let sequenceChooserVisible = false;
     let detectionFailCount = 0;
+    // Network-vs-camera distinction (scanner resilience pass): reflects whether the
+    // MOST RECENT accepted /detect_init response looked like a usable frame. A
+    // request that times out with no response at all tells us nothing about frame
+    // quality - only when the last frame we actually heard back about was clean do
+    // we blame the network instead of the camera. Starts true so a first-ever
+    // timeout (no server data yet) doesn't wrongly show camera guidance.
+    let lastFrameQualityClean = true;
     let cameraStream = null;
     let scannerGeneration = 1;
     window.__scannerUiGeneration = scannerGeneration;
@@ -2983,6 +3854,7 @@
     let trackingEpoch = 0;
     let prevGrayEpoch = -1;
     let activePairEpoch = 0; // bumped only when the displayed pair actually changes (marker A/B guard)
+    let sequenceSwitchEpoch = 0; // bumped on every playSequenceMediaAtIndex call - same stale-callback guard idiom as activePairEpoch/requestPairEpoch, so a late first-frame confirmation from an ABANDONED switch (rapid manual next/prev, or a target switch mid-load) can never move the UI's index/dots
     let rawOverlayCorners = null;
     let orderedOverlayCorners = null;
     let lastSmoothTs = 0;
@@ -3159,6 +4031,25 @@
       scannerTransitionHistory.push(record);
       if (scannerTransitionHistory.length > TRANSITION_HISTORY_LIMIT) scannerTransitionHistory.shift();
       scannerDiagnostics.push('[SCAN STATE]', record);
+      // Physical QA fix: multiple independent call sites can each land the FSM on
+      // 'ready_to_scan' (the opencv-ready walk, a camera-restart recovery, Detect Once
+      // completion) and each one used to be individually responsible for also calling
+      // startDetectLoop()/startTrackingLoop() afterward - a real-device trace showed a
+      // resize event mid-startup cancelling the one loop that WAS running
+      // (loop_cancelled) via a recovery attempt whose OWN final transition then lost a
+      // race and got rejected, so it correctly avoided restarting the loop "behind the
+      // FSM's back" - except by then NOTHING else did either, even though a moment
+      // later the state machine (via the concurrent opencv-ready path) legitimately
+      // reached 'ready_to_scan' anyway. Net result: camera visibly live, scanner
+      // reporting ready, zero detect_init calls ever again for the rest of the session.
+      // Both loop-starters are already idempotent (a single "has one ever been started"
+      // guard each), so asserting "the loop is running" every time the FSM itself
+      // confirms 'ready_to_scan' - regardless of which call site got it there - is a
+      // free no-op on the normal path and a real self-heal on this race.
+      if (nextState === 'ready_to_scan') {
+        startDetectLoop();
+        startTrackingLoop();
+      }
       return true;
     }
 
@@ -4144,7 +5035,12 @@
 
       if (!recovered) {
         scannerDiagnostics.push('automatic_recovery_failed', { reason, attempts: CAMERA_RECOVERY_MAX_ATTEMPTS, generation: scannerGeneration });
-        enterFallback('CAMERA_UNAVAILABLE');
+        // Root-cause fix: this only fires after a stream that WAS live enough to reach
+        // recoverScannerInner (track 'ended', a dead stream found on visibility/bfcache
+        // resume) failed to come back within the bounded retry budget — a previously
+        // healthy camera that stopped, never "no camera was ever found here" (that is
+        // CAMERA_NOT_FOUND, from setupCameraInner's own first-attempt getUserMedia catch).
+        enterFallback('CAMERA_INTERRUPTED');
         return;
       }
 
@@ -4154,10 +5050,16 @@
       // anyway would run camera work behind the state machine's back.
       const readyForScan = safeTransition('ready_to_scan', reason, { site: 'recoverScannerInner_success' });
       if (!readyForScan) {
+        // Root-cause fix: this used to call enterFallback('CAMERA_UNAVAILABLE') here — but
+        // `recovered` is only true once isStreamDead() just confirmed the camera IS alive,
+        // so a rejected transition (some OTHER concurrent state change, e.g. a real
+        // fallback already entered for a different reason) is never evidence the camera
+        // itself failed. Claiming a camera failure over a confirmed-live stream is exactly
+        // the false failure this pass exists to remove — log the race and leave whichever
+        // state actually won alone, without starting the loops behind its back.
         scannerDiagnostics.push('automatic_recovery_transition_rejected', {
           reason, state: scannerState.state, generation: scannerGeneration, site: 'recoverScannerInner_success'
         });
-        enterFallback('CAMERA_UNAVAILABLE');
         return;
       }
       startDetectLoop();
@@ -4205,6 +5107,39 @@
     // getUserMedia() — Phase 4's "getUserMedia cannot run concurrently" requirement.
     let cameraStartPromise = null;
 
+    /* A cold start has two independent halves: the camera becoming live
+       (getUserMedia + loadedmetadata) and the recognition engine finishing its
+       init (opencv.js download + wasm runtime). They complete in either order —
+       on a fast connection the engine is usually ready before the viewer even
+       presses Start Camera; on a slow one it is still loading long after the
+       preview appears. Whichever finishes LAST is the moment the scanner is
+       genuinely ready, so both paths call this and it advances only when both
+       are actually true. One place decides "are we really scanning now?"
+       instead of each half asserting it independently.
+
+       Idempotent by construction: safeTransition() no-ops on a same-state
+       request and swallows an out-of-order one, and setScannerUiState() no-ops
+       on an unchanged state. */
+    const SCANNING_FSM_STATES = ['ready_to_scan', 'detecting', 'tracking'];
+
+    function markScannerReadyIfPossible(reason) {
+      if (!cvReady || !isCameraHealthy()) return false;
+      safeTransition('loading_opencv', reason);
+      safeTransition('loading_wasm', reason);
+      safeTransition('initializing_scanner', reason);
+      safeTransition('ready_to_scan', reason);
+      // Only claim "scanning" if the walk actually LANDED on a scanning state.
+      // scanner-runtime.js's TRANSITIONS refuse the walk from 'fallback' and
+      // 'paused', and announcing "scanning"/"Looking for image…" over a visible
+      // fallback panel would be the same class of untrue state report this
+      // function exists to remove. Reachable when the engine finishes loading
+      // after a fallback was already entered with the camera still live.
+      if (SCANNING_FSM_STATES.indexOf(scannerState.state) === -1) return false;
+      setScannerUiState('scanning', reason);
+      setScannerGuidance('looking', reason);
+      return true;
+    }
+
     function setupCamera() {
       if (cameraStartPromise) return cameraStartPromise;
       setScannerUiState('camera_starting', 'setup_camera');
@@ -4227,7 +5162,9 @@
         // ✅ HTTPS / camera API safety check
         if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           progressInfo.textContent = "Camera unavailable";
-          enterFallback(!window.isSecureContext ? 'SECURE_CONTEXT_REQUIRED' : 'CAMERA_UNAVAILABLE');
+          // A browser that doesn't even expose the camera API is "no usable camera",
+          // same user-facing meaning as a genuine NotFoundError below.
+          enterFallback(!window.isSecureContext ? 'SECURE_CONTEXT_REQUIRED' : 'CAMERA_NOT_FOUND');
           return;
         }
 
@@ -4260,7 +5197,7 @@
           // genuinely settled, without depending on the user doing anything.
           setTimeout(resizeScannerSurfaces, 300);
           tryAutoEnableAudio();
-          statusDiv.textContent = cvReady ? "Point at the ScanStory image" : "Getting ready…";
+          statusDiv.textContent = cvReady ? "Point at the ScanStory image" : "Preparing image recognition…";
           // Root-cause fix: this never used to transition the state machine at all, so it
           // stayed at 'initializing_camera' — showing "Preparing Camera" — for the entire
           // rest of the session, even while the camera was live and detect/tracking loops
@@ -4268,17 +5205,49 @@
           // from initializing_camera to ready_to_scan (see scanner-runtime.js); the
           // intermediate states have no real async work of their own tied to them, so they
           // are walked through immediately here rather than left permanently unreachable.
+          //
+          // Cold-start correction: the walk used to run all the way to
+          // ready_to_scan unconditionally, so the very first scan of a session
+          // announced "Ready — point at the image" / "Looking for image…" while
+          // opencv.js and its .wasm were still downloading and initializing —
+          // startDetectLoop() does not even exist yet at that point (it is
+          // started from onRuntimeInitialized). The viewer held a live camera on
+          // the target and nothing happened, with the UI insisting it was
+          // scanning. The walk now STOPS at initializing_scanner, whose copy
+          // names the real remaining work, and readiness is claimed by
+          // markScannerReadyIfPossible() only once both halves are genuinely
+          // done. This cannot hang: loadOpenCV()'s own 15s timer routes a
+          // genuinely stuck engine load to enterFallback('OPENCV_LOAD_FAILED'),
+          // and 'fallback' is a legal transition out of every state in the walk.
           safeTransition('loading_opencv', 'camera_ready');
           safeTransition('loading_wasm', 'camera_ready');
           safeTransition('initializing_scanner', 'camera_ready');
-          safeTransition('ready_to_scan', 'camera_ready');
-          setScannerUiState('scanning', 'camera_ready');
-          setScannerGuidance('looking', 'camera_ready');
+          // Makes the existing status overlay visible during the wait instead of
+          // leaving the viewer with no state channel at all: #arLoadingOverlay is
+          // already hidden by the intro screen by this point, so STATE_STATUS_TEXT
+          // was being written to a hidden element.
+          startScannerStatusCycle();
+          if (!markScannerReadyIfPossible('camera_ready')) {
+            setScannerGuidance('preparing', 'camera_ready');
+          }
         };
       } catch (err) {
         console.error('Camera error:', err);
-        const denied = err && (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError');
-        enterFallback(denied ? 'CAMERA_PERMISSION_DENIED' : 'CAMERA_UNAVAILABLE');
+        // Root-cause fix: every getUserMedia() failure that was not a permission denial
+        // used to collapse into the SAME 'CAMERA_UNAVAILABLE' code/message as "this device
+        // has no camera at all" — indistinguishable from a genuine NotFoundError. The
+        // DOMException name the browser itself reports is the real, evidence-based signal
+        // for which of those actually happened; classify on it instead of guessing.
+        const errName = err && err.name;
+        let cameraFailureCode;
+        if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
+          cameraFailureCode = 'CAMERA_PERMISSION_DENIED';
+        } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
+          cameraFailureCode = 'CAMERA_NOT_FOUND';
+        } else {
+          cameraFailureCode = 'CAMERA_START_FAILED';
+        }
+        enterFallback(cameraFailureCode);
       }
     }
 
@@ -4343,21 +5312,180 @@
       setupCamera();
     }
 
-    /* Direct QR Video: play the project's video in its own player on the intro screen.
-       This branch deliberately never touches the AR overlay element, the camera, or the
-       detection loop — no getUserMedia call, no opencv.js, no scanner runtime work. The
-       source is server-rendered onto the element, so there is no client-side media
-       plumbing here either. */
-    function startDirectQrPlayback() {
+    /* Direct QR Video: play the project's full ordered video list in its own player on the
+       intro screen. This branch deliberately never touches the AR overlay element, the
+       camera, or the detection loop — no getUserMedia call, no opencv.js, no scanner
+       runtime work. Playlist state is intentionally separate from the tracked-overlay/
+       detect-once sequence machinery (availableMedia/currentMediaIndex/overlay) below -
+       Direct QR has its own player element and never runs those code paths at all.
+
+       Physical QA fix: this used to hardcode a single server-rendered <video src>, so a
+       second/third video in the project was computed server-side and then never reached
+       the page in any form. Now reads the full flattened playlist (see direct_qr_playlist
+       in app.py's _render_scanner_project) and advances through it on each video's
+       'ended' event; the last video's completion shows a "Replay all" control per the
+       product spec (QR-04) rather than looping or silently stopping. */
+    let directQrPlaylist = [];
+    let directQrIndex = 0;
+    (function loadDirectQrPlaylist() {
+      const dataEl = document.getElementById('directQrPlaylistData');
+      if (!dataEl) return;
+      try {
+        const parsed = JSON.parse(dataEl.textContent || '[]');
+        if (Array.isArray(parsed)) directQrPlaylist = parsed;
+      } catch (_err) {
+        directQrPlaylist = [];
+      }
+    })();
+
+    function playDirectQrAtIndex(index) {
       const player = document.getElementById('directQrVideo');
-      if (!player) {
+      if (!player || !directQrPlaylist[index]) return;
+      directQrIndex = index;
+      player.src = directQrPlaylist[index].url;
+      player.load();
+      player.play().catch(() => { /* autoplay blocked: the player's own controls are visible */ });
+      updateDirectQrIndicator();
+    }
+
+    // Direct QR viewer UX upgrade (local Creator Integrity pass): purely a UI
+    // refresh, added as a one-line call at the end of playDirectQrAtIndex
+    // above - the function's own selection/playback logic is untouched.
+    // Hidden entirely for a single-video playlist, where there is nothing to
+    // indicate.
+    function updateDirectQrIndicator() {
+      if (directQrPlaylist.length < 2) return;
+      const indicator = document.getElementById('directQrIndicator');
+      const text = document.getElementById('directQrIndicatorText');
+      if (text) text.textContent = `Video ${directQrIndex + 1} of ${directQrPlaylist.length}`;
+      // Polished nav (remediation pass): one combined row - the numbered
+      // segments are rebuilt each call (cheap, playlists are short) so the
+      // active one can be re-marked; Prev/Next are enabled/disabled instead
+      // of hidden, so the row never reflows.
+      const numbers = document.getElementById('directQrNavNumbers');
+      if (numbers) {
+        numbers.innerHTML = directQrPlaylist
+          .map((_item, i) => `<button type="button" class="${i === directQrIndex ? 'is-active' : ''}" data-dqr-index="${i}" aria-label="Play video ${i + 1}" aria-current="${i === directQrIndex ? 'true' : 'false'}">${i + 1}</button>`)
+          .join('');
+      }
+      const prevBtn = document.getElementById('directQrPrevBtn');
+      const nextBtn = document.getElementById('directQrNextBtn');
+      if (prevBtn) prevBtn.disabled = directQrIndex === 0;
+      if (nextBtn) nextBtn.disabled = directQrIndex === directQrPlaylist.length - 1;
+      if (indicator) indicator.classList.remove('is-hidden');
+      const controls = document.getElementById('directQrControls');
+      if (controls) controls.classList.remove('is-hidden');
+    }
+
+    function hideDirectQrPlaybackChrome() {
+      const indicator = document.getElementById('directQrIndicator');
+      const controls = document.getElementById('directQrControls');
+      if (indicator) indicator.classList.add('is-hidden');
+      if (controls) controls.classList.add('is-hidden');
+    }
+
+    function startDirectQrPlayback() {
+      // Pre-play landing redesign (2026-09-03): the layout/spacing tweaks
+      // below only ever apply while .is-preplay is present. Removed here,
+      // at the exact moment playback starts, so the existing playback
+      // container/positioning is untouched - this never rewrites the
+      // playlist FSM, it only stops one CSS class from applying.
+      if (experienceIntro) experienceIntro.classList.remove('is-preplay');
+      const player = document.getElementById('directQrVideo');
+      if (!player || !directQrPlaylist.length) {
         const lede = experienceIntro && experienceIntro.querySelector('.intro-lede');
         if (lede) lede.textContent = 'This ScanStory has no video to play yet.';
         return;
       }
+      const completion = document.getElementById('directQrCompletion');
+      if (completion) completion.classList.add('is-hidden');
       player.classList.remove('is-hidden');
       if (directQrPlayBtn) directQrPlayBtn.style.display = 'none';
-      player.play().catch(() => { /* autoplay blocked: the player's own controls are visible */ });
+      const readyNote = document.getElementById('directQrReadyNote');
+      if (readyNote) readyNote.style.display = 'none';
+      playDirectQrAtIndex(0);
+    }
+
+    (function wireDirectQrEnded() {
+      const player = document.getElementById('directQrVideo');
+      if (!player) return;
+      player.addEventListener('ended', () => {
+        if (directQrIndex < directQrPlaylist.length - 1) {
+          playDirectQrAtIndex(directQrIndex + 1);
+          return;
+        }
+        // Last video finished: stop, do not loop, show completion (QR-03/QR-04).
+        player.classList.add('is-hidden');
+        hideDirectQrPlaybackChrome();
+        const completion = document.getElementById('directQrCompletion');
+        if (completion) completion.classList.remove('is-hidden');
+        renderDirectQrWatchAgainList();
+      });
+    })();
+
+    // Completion screen's "Watch again" row (polished in the remediation
+    // pass): inline from the moment completion shows, not behind an extra
+    // "Choose a video" tap - one fewer click for the common case.
+    function renderDirectQrWatchAgainList() {
+      const list = document.getElementById('directQrChooserList');
+      if (!list || directQrPlaylist.length < 2) return;
+      list.innerHTML = directQrPlaylist
+        .map((_item, i) => `<button type="button" data-dqr-index="${i}" aria-label="Play video ${i + 1}">${i + 1}</button>`)
+        .join('');
+    }
+
+    const directQrReplayBtn = document.getElementById('directQrReplayBtn');
+    if (directQrReplayBtn) {
+      directQrReplayBtn.addEventListener('click', () => {
+        const player = document.getElementById('directQrVideo');
+        const completion = document.getElementById('directQrCompletion');
+        if (completion) completion.classList.add('is-hidden');
+        if (player) player.classList.remove('is-hidden');
+        playDirectQrAtIndex(0);
+      });
+    }
+
+    // Manual Previous/Next (Direct QR viewer UX upgrade). Selecting a video
+    // directly does not require watching from V1 first (product contract:
+    // manual selection continues sequentially from there, same as Prev/Next -
+    // there is no selected-video-only mode).
+    const directQrPrevBtn = document.getElementById('directQrPrevBtn');
+    if (directQrPrevBtn) {
+      directQrPrevBtn.addEventListener('click', () => {
+        if (directQrIndex > 0) playDirectQrAtIndex(directQrIndex - 1);
+      });
+    }
+    const directQrNextBtn = document.getElementById('directQrNextBtn');
+    if (directQrNextBtn) {
+      directQrNextBtn.addEventListener('click', () => {
+        if (directQrIndex < directQrPlaylist.length - 1) playDirectQrAtIndex(directQrIndex + 1);
+      });
+    }
+    // Event delegation: the numbered row's innerHTML is rebuilt on every
+    // index change (updateDirectQrIndicator), so listeners are bound once
+    // on the stable parent rather than re-attached per rebuild.
+    const directQrNavNumbers = document.getElementById('directQrNavNumbers');
+    if (directQrNavNumbers) {
+      directQrNavNumbers.addEventListener('click', (event) => {
+        const btn = event.target.closest('[data-dqr-index]');
+        if (!btn) return;
+        playDirectQrAtIndex(parseInt(btn.dataset.dqrIndex, 10));
+      });
+    }
+
+    // Direct video selection from the completion screen's inline "Watch again" row.
+    const directQrChooserList = document.getElementById('directQrChooserList');
+    if (directQrChooserList) {
+      directQrChooserList.addEventListener('click', (event) => {
+        const btn = event.target.closest('[data-dqr-index]');
+        if (!btn) return;
+        const index = parseInt(btn.dataset.dqrIndex, 10);
+        const player = document.getElementById('directQrVideo');
+        const completion = document.getElementById('directQrCompletion');
+        if (completion) completion.classList.add('is-hidden');
+        if (player) player.classList.remove('is-hidden');
+        playDirectQrAtIndex(index);
+      });
     }
 
     if (startCameraBtn) startCameraBtn.addEventListener('click', startCameraFromIntro);
@@ -4507,6 +5635,47 @@
       // path that called this; there is nothing further to announce.
     }
 
+    /* Physical QA fix: the missing other half of lockDetectOnceExperience. Locking stops
+       the camera/detect/tracking/watchdog loops and neutralises stopOverlayImmediate/
+       requestPoseHold so playback survives the target going out of view — correct, and
+       unchanged here. But nothing ever undid any of that: detectOnceLocked had no path
+       back to false, so once locked, a session stayed locked for the rest of the page's
+       life — no second target could ever be detected without Back/reload. Called once the
+       locked pair's playlist has genuinely finished (see the 'ended' handler above, and
+       the overlay.loop override in startSequenceForTarget that lets a single-video target
+       reach 'ended' at all instead of looping forever). Reuses the same camera/loop
+       recovery machinery (recoverScanner) normal reconnect-after-interruption already
+       uses, rather than re-implementing camera reacquisition here. */
+    function completeDetectOnceSession(reason) {
+      if (!detectOnceLocked) return;
+      scannerDiagnostics.push('detect_once_session_complete', { reason, generation: scannerGeneration });
+      overlayWrap.classList.remove('locked-fullscreen');
+      detectOnceLocked = false;
+      // Clears availableMedia/currentMediaIndex/playbackMode/overlay.loop and hides any
+      // sequence indicator/controls/completion-panel chrome left over from this session.
+      resetSequencePlaybackState();
+      // stopOverlayImmediate is a no-op while detectOnceLocked is true (by design, so the
+      // locked video survives target loss) - detectOnceLocked is already false above, so
+      // this now actually runs and hides/pauses the player cleanly.
+      stopOverlayImmediate();
+      // No stale "currently matched pair" carried into the next detection - matches the
+      // -1 sentinel currentPairId is initialized to, so the next accepted match (even the
+      // SAME pair again) is correctly treated as a fresh marker switch, not a same-target
+      // reconfirmation of a session that no longer exists.
+      currentPairId = -1;
+      // Bumping the generation here (recoverScanner does this too, but only once the
+      // camera restart actually proceeds) invalidates any detection response already in
+      // flight from before completion, so a stale late arrival cannot immediately re-lock
+      // onto the just-finished target ahead of a genuine new detection.
+      scannerGeneration++;
+      window.__scannerUiGeneration = scannerGeneration;
+      // Restarts the camera stream and re-arms the detect/tracking loops - the exact
+      // camera-reacquisition path visibility/orientation/stream-interruption recovery
+      // already uses, so "ready for a new detection" here is the same real FSM state
+      // those paths produce, not a bespoke parallel one.
+      recoverScanner(reason, true);
+    }
+
     function stopOverlayImmediate() {
       if (detectOnceLocked) return;
       if (poseHoldTimer) { clearTimeout(poseHoldTimer); poseHoldTimer = null; }
@@ -4549,7 +5718,19 @@
       overlayState = 'tracking';
       if (overlay.paused && overlay.src) {
         logVideoCheckpoint('[OVERLAY VIDEO PLAY]', 'play_overlay');
-        overlay.play().catch(e => console.log('Play failed:', e));
+        // Physical QA fix: an unmuted .play() call this far from any direct user gesture
+        // (this runs from an async detect_init response handler, not a click) is exactly
+        // the case mobile browsers' autoplay policy silently blocks - the promise just
+        // rejects with NotAllowedError. The old code only logged that rejection to the
+        // console (invisible on a phone) and never retried, so the overlay stayed paused
+        // forever with no visible error - indistinguishable from "still loading" to the
+        // viewer. Same fallback tryAutoEnableAudio() already uses elsewhere: try with sound,
+        // and only mute if the browser actually refused to play at all.
+        overlay.play().catch(() => {
+          overlay.muted = true;
+          overlay.volume = 0;
+          overlay.play().catch(e => console.log('Play failed even muted:', e));
+        });
       }
     }
 
@@ -5733,6 +6914,13 @@
         recoveryAttempt,
         tracks: activeTrackCount()
       });
+      // Network-vs-camera distinction: a request that got no response at all can't
+      // tell us the frame was bad - only surface "connection is slow" when the last
+      // frame we DID hear back about looked clean, so a genuinely poor frame keeps
+      // showing its own camera guidance instead of a misleading network message.
+      if (lastFrameQualityClean) {
+        setScannerGuidance('network_slow', 'detect_timeout');
+      }
       if (detectionFailCount >= RECOVERY_RETRY_LIMIT) {
         // Root-cause fix (recognition vs. camera failure): this used to fall through to
         // the camera-failure fallback — the exact same "Camera Unavailable" + Retry Camera
@@ -6804,6 +7992,11 @@
           return;
         }
 
+        // Network-vs-camera distinction: record whether THIS accepted response's
+        // frame looked clean, before any guidance for it is set below - a later
+        // request timeout consults this to decide whether to blame the connection.
+        lastFrameQualityClean = isFrameQualityClean(data && data.scanner_guidance);
+
         // Update progress if available
         if (data.ready_pairs !== undefined && data.total_pairs !== undefined) {
           updateProgress(data.ready_pairs, data.total_pairs);
@@ -6844,8 +8037,14 @@
 
         const newVideoUrl = data.video_url;
         const newPairId = data.matched_pair_id || 0;
+        const newMedia = Array.isArray(data.media) && data.media.length ? data.media : null;
         const wasTracking = tracking;
-        const wasSameTarget = (currentVideoUrl === newVideoUrl && currentPairId === newPairId);
+        // Issue 3E-E: pair identity alone, not video URL - once a multi-video target has
+        // advanced past Video 1, currentVideoUrl no longer equals newVideoUrl (which is
+        // always the pair's DEFAULT video) even though it's still the same, still-tracked
+        // target. Comparing video URLs here would misread every later detect_init response
+        // for an in-progress sequence as a target switch and reset it back to Video 1.
+        const wasSameTarget = (currentPairId === newPairId);
 
         frameW = Number(data.frame_width);
         frameH = Number(data.frame_height);
@@ -6879,14 +8078,26 @@
           backend: data.homography_quality || null,
           temporal: poseQuality
         });
-        if (!poseQuality.ok && tracking && currCorners) {
+        // Physical QA fix (TC-04 pair-resolution): poseCompatibility measures geometric
+        // continuity against currCorners, the LAST TRACKED pose - a meaningful jitter/
+        // false-positive guard only when the server just re-confirmed the SAME target
+        // (wasSameTarget). It is never a valid signal when the server has already
+        // confirmed a DIFFERENT pair (matched_pair_id differs) - a genuinely different
+        // target's corners are expected to look nothing like the old target's, and
+        // rejecting that as "incompatible" kept the OLD target's video on screen forever
+        // (`tracking && currCorners` stayed true, so every subsequent scan of the FIRST
+        // target kept losing to this check with `keptTracking: true`). Target-identity
+        // is already the server's job (real ORB/homography match) and is protected
+        // client-side by requestPairEpoch below - this geometric check must defer to it,
+        // never override it.
+        if (wasSameTarget && !poseQuality.ok && tracking && currCorners) {
           recordRejection(poseQuality.reason);
           scannerDiagnostics.push('[SCAN MATCH REJECT]', { requestId, pairId: newPairId, reason: poseQuality.reason, keptTracking: true });
           statusDiv.textContent = "Following the image";
           statusDiv.className = "status track";
           return;
         }
-        if (!poseQuality.ok) {
+        if (wasSameTarget && !poseQuality.ok) {
           recordRejection(poseQuality.reason);
           scannerDiagnostics.push('[SCAN MATCH REJECT]', { requestId, pairId: newPairId, reason: poseQuality.reason, keptTracking: false });
           clearTrackingGeometry('pose_rejected_' + poseQuality.reason);
@@ -6906,13 +8117,21 @@
           activePairEpoch++;
           scannerDiagnostics.push('[MARKER SWITCH]', { fromPairId: currentPairId, toPairId: newPairId, epoch: activePairEpoch });
           logVideoCheckpoint('[OVERLAY VIDEO SOURCE CHANGE]', 'marker_switch', { fromVideoUrl: currentVideoUrl, toVideoUrl: newVideoUrl });
+          // Issue 3E-E: a genuinely different target - reset the whole sequence
+          // experience before loading its Video 1. Never mixes media between pairs.
+          startSequenceForTarget(newMedia);
           overlay.src = newVideoUrl;
+          overlay.load();  // see playSequenceMediaAtIndex's comment on why
           overlay.currentTime = 0;
           videoFinished = false;
           currentVideoUrl = newVideoUrl;
           currentPairId = newPairId;
           showMatchIndicator(newPairId);
           tryAutoEnableAudio();
+        } else if (sequenceCompletionVisible || sequenceChooserVisible) {
+          // Issue 3E-E: reconfirming the same target while the completion/chooser UI is
+          // showing must not silently touch the loaded video - only Replay all or
+          // choosing a video from the chooser does that.
         } else {
           if (videoFinished) {
             overlay.currentTime = 0;
@@ -7387,7 +8606,24 @@
       try {
         if (sessionEnding) { skipTick('session_ending'); return; }
         if (token !== scanLoopToken) { skipTick('stale_loop_token', { token, currentToken: scanLoopToken }); return; }
-        if (isHealthyLocalTracking()) {
+        // Blocker audit (2026-08-27), TC-04 Android-only P2-never-detected: this early
+        // return used to fire unconditionally whenever isHealthyLocalTracking() was true
+        // (pure local state flags - tracking/currCorners/prevGray/prevPts - never whether
+        // those points still correspond to the target actually in view). That made the
+        // FORCE_REDETECT_MS "bounded server re-anchor" below (line ~8047) provably
+        // unreachable: lastLockTs refreshes on every successful LOCAL optical-flow frame
+        // (see the tracker's TRACKING-mode update), not just real server detections, so
+        // optical flow that keeps "successfully" following SOMETHING while the camera pans
+        // from one physical target to another - plausible motion, no target-aware check -
+        // could suppress every future detect request forever. No server confirmation was
+        // ever possible again until tracking explicitly broke. Device variance (iPhone
+        // pass, Android fail) is consistent with different camera pipelines making optical
+        // flow lose/keep the old points at different rates during that pan. Gating this
+        // early return on the SAME sinceLastDetect budget the (previously dead) code below
+        // already existed to enforce restores the documented intent one line above
+        // (FORCE_REDETECT_MS's own comment: "bounded server re-anchor") without changing
+        // any recognition/geometry threshold - this is a scan-loop scheduling fix only.
+        if (isHealthyLocalTracking() && (performance.now() - lastDetectTs) <= FORCE_REDETECT_MS) {
           allowScanReschedule = false;
           skipTick('healthy_tracking_no_capture', {
             scannerWorkMode,
@@ -7552,6 +8788,41 @@
         renderDiagPanel();
       });
 
+      // Master stabilization pass (section 3 / TC-09-TC-11): named latency
+      // breakdown derived ENTIRELY from the existing scannerDiagnostics
+      // history - no new hot-path work, no new per-frame logging. Each field
+      // is the timestamp (ms since page/script start, same clock
+      // scannerDiagnostics already uses) of the first matching existing
+      // event, so camera/recognition/network/media delay can be told apart
+      // after the fact instead of everything reading as one vague "it was
+      // slow". QA/debug-mode only - never shown to normal users (section 4).
+      function computeLatencyReport() {
+        const events = scannerDiagnostics.snapshot ? scannerDiagnostics.snapshot() : [];
+        const firstMatch = (pred) => events.find(pred) || null;
+        const lastMatch = (pred) => { for (let i = events.length - 1; i >= 0; i--) { if (pred(events[i])) return events[i]; } return null; };
+        const cameraReady = firstMatch((e) => e.event === '[SCAN STATE]' && e.reason === 'camera_ready');
+        const lastCandidate = lastMatch((e) => e.event === '[SCAN CANDIDATE]');
+        const lastAccept = lastMatch((e) => e.event === '[SCAN MATCH ACCEPT]');
+        const lastMarkerSwitch = lastMatch((e) => e.event === '[MARKER SWITCH]');
+        const lastSourceChange = lastMatch((e) => e.event === '[OVERLAY VIDEO SOURCE CHANGE]');
+        const lastPlay = lastMatch((e) => e.event === '[OVERLAY VIDEO PLAY]');
+        return {
+          camera_ready_ms: cameraReady ? cameraReady.at : null,
+          detect_request_start_ms: diagState.lastRequestStartAt || null,
+          detect_request_end_ms: diagState.lastRequestFinishAt || null,
+          network_request_ms: (diagState.lastRequestStartAt && diagState.lastRequestFinishAt)
+            ? (diagState.lastRequestFinishAt - diagState.lastRequestStartAt) : null,
+          server_match_ms: lastCandidate ? lastCandidate.at : null,
+          matched_pair_id: lastAccept ? lastAccept.pairId : (lastMarkerSwitch ? lastMarkerSwitch.toPairId : (currentPairId ?? null)),
+          target_locked_ms: (lastAccept || lastMarkerSwitch) ? (lastAccept || lastMarkerSwitch).at : null,
+          video_source_change_ms: lastSourceChange ? lastSourceChange.at : null,
+          playback_started_ms: lastPlay ? lastPlay.at : null,
+          target_to_playback_ms: (lastAccept && lastPlay && lastPlay.at >= lastAccept.at) ? (lastPlay.at - lastAccept.at) : null,
+          last_latency_ms: diagState.lastDurationMs,
+          avg_latency_ms: diagState.avgDurationMs
+        };
+      }
+
       document.getElementById('diagExportBtn').addEventListener('click', function () {
         // Privacy: no frame pixels, no marker image data, no camera hardware identifiers,
         // no auth/session cookies, no email/name — just states, counts, ids (random
@@ -7570,7 +8841,8 @@
             devicePixelRatio: window.devicePixelRatio || 1,
             orientation: (screen.orientation && screen.orientation.type) || null,
             visibilityState: document.visibilityState,
-            connectionType: (navigator.connection && navigator.connection.effectiveType) || null
+            connectionType: (navigator.connection && navigator.connection.effectiveType) || null,
+            online: navigator.onLine
           },
           camera: {
             videoWidth: cam.videoWidth, videoHeight: cam.videoHeight,
@@ -7597,6 +8869,14 @@
             lastGoodMatches: diagState.lastGoodMatches, lastKeypoints: diagState.lastKeypoints,
             lastHomography: diagState.lastHomography
           },
+          media: {
+            currentPairId: currentPairId ?? null,
+            playlistLength: availableMedia ? availableMedia.length : (currentPairId != null ? 1 : 0),
+            activeMediaIndex: currentMediaIndex,
+            currentSrc: overlay.currentSrc || overlay.src || null,
+            playbackMode: playbackMode
+          },
+          latency: computeLatencyReport(),
           history: scannerDiagnostics.snapshot()
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });

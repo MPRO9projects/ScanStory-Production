@@ -2,14 +2,15 @@ import os
 import re
 import uuid
 from datetime import timedelta
+from datetime import timezone as dt_timezone
 
 from sqlalchemy.exc import IntegrityError
 
 from public_keys import generate_unique_public_key
-from models import Admin, ProcessingJob, Project, ProjectPair, User, db, get_utc_now
+from models import Admin, PairMedia, ProcessingJob, Project, ProjectPair, User, db, get_utc_now
 
 
-QUEUE_JOB_TYPES = {"process_project_pairs"}
+QUEUE_JOB_TYPES = {"process_project_pairs", "optimize_pair_media"}
 ACTIVE_STATUSES = {"queued", "processing", "retrying", "ready", "claimed", "running", "retry_scheduled"}
 TERMINAL_STATUSES = {"completed", "failed", "cancelled", "superseded", "succeeded", "failed_terminal"}
 SAFE_ERROR_LIMIT = 500
@@ -133,16 +134,31 @@ def _owner_fields(project):
     }
 
 
-def active_project_job(project_id, job_type="process_project_pairs"):
-    return ProcessingJob.query.filter(
+def active_project_job(project_id, job_type="process_project_pairs", pair_media_id=None):
+    query = ProcessingJob.query.filter(
         ProcessingJob.project_id == project_id,
         ProcessingJob.job_type == job_type,
         ProcessingJob.status.in_(ACTIVE_STATUSES),
-    ).order_by(ProcessingJob.created_at.desc()).first()
+    )
+    if pair_media_id is not None:
+        # Fast Video: several PairMedia rows can share one project, each with
+        # its own independent optimize_pair_media job - scoping by
+        # project_id+job_type alone would make one PairMedia's active job
+        # falsely dedupe a different PairMedia's job away.
+        query = query.filter(ProcessingJob.pair_media_id == pair_media_id)
+    return query.order_by(ProcessingJob.created_at.desc()).first()
 
 
-def _project_job_idempotency_key(job_type, project_id=None, pair_id=None, attempt_scope="initial"):
+def _project_job_idempotency_key(job_type, project_id=None, pair_id=None, pair_media_id=None, attempt_scope="initial"):
+    # process_project_pairs (and any other existing/future job type that
+    # never sets pair_media_id) keeps the EXACT legacy key shape - an
+    # established compatibility contract other code and tests already pin.
+    # Only a job type that actually identifies a PairMedia (optimize_pair_media)
+    # gets the extra ":media:<id>" segment, so it can dedupe/retry per
+    # PairMedia without colliding with a sibling PairMedia under the same pair.
     base = f"{job_type}:project:{project_id or '-'}:pair:{pair_id or '-'}"
+    if pair_media_id is not None:
+        base = f"{base}:media:{pair_media_id}"
     if attempt_scope == "reprocess":
         return f"{base}:attempt:{uuid.uuid4().hex}"
     return base
@@ -158,6 +174,7 @@ def create_processing_job(
     job_type,
     project_id=None,
     pair_id=None,
+    pair_media_id=None,
     owner_user_id=None,
     owner_admin_id=None,
     max_attempts=None,
@@ -167,10 +184,10 @@ def create_processing_job(
         raise InvalidJobType("unknown processing job type")
     if project_id:
         _lock_project_for_job(project_id)
-        existing = active_project_job(project_id, job_type)
+        existing = active_project_job(project_id, job_type, pair_media_id=pair_media_id)
         if existing:
             return existing, False
-    idempotency_key = _project_job_idempotency_key(job_type, project_id, pair_id, attempt_scope)
+    idempotency_key = _project_job_idempotency_key(job_type, project_id, pair_id, pair_media_id, attempt_scope)
     job = ProcessingJob(
         public_key=generate_unique_public_key(db.session, ProcessingJob, "job"),
         workspace_id=None,
@@ -178,6 +195,7 @@ def create_processing_job(
         status="queued",
         project_id=project_id,
         pair_id=pair_id,
+        pair_media_id=pair_media_id,
         owner_user_id=owner_user_id,
         owner_admin_id=owner_admin_id,
         idempotency_key=idempotency_key,
@@ -244,6 +262,7 @@ def enqueue_processing_job(
     job_type,
     project_id=None,
     pair_id=None,
+    pair_media_id=None,
     owner_user_id=None,
     owner_admin_id=None,
     attempt_scope="initial",
@@ -252,6 +271,7 @@ def enqueue_processing_job(
         job_type,
         project_id=project_id,
         pair_id=pair_id,
+        pair_media_id=pair_media_id,
         owner_user_id=owner_user_id,
         owner_admin_id=owner_admin_id,
         attempt_scope=attempt_scope,
@@ -292,6 +312,31 @@ def enqueue_project_pair_processing(project_id, attempt_scope="initial"):
     if not project:
         raise ValueError("project not found")
     return enqueue_processing_job("process_project_pairs", project_id=project.id, attempt_scope=attempt_scope, **_owner_fields(project))
+
+
+def enqueue_pair_media_optimization(pair_media_id, attempt_scope="initial"):
+    """Fast Video Phase 1: enqueue an optimize_pair_media job for one
+    PairMedia row. Job identity is pair_media_id (a real FK), never a
+    filesystem path. NOT wired into the upload/finalize paths automatically
+    yet (see Fast Video Phase 1 report) - callable directly, and reused by
+    Phase 2 once that wiring is added."""
+    media = PairMedia.query.get(pair_media_id)
+    if not media:
+        raise ValueError("pair media not found")
+    pair = ProjectPair.query.get(media.pair_id)
+    if not pair:
+        raise ValueError("pair not found for pair media")
+    project = Project.query.get(pair.project_id)
+    if not project:
+        raise ValueError("project not found for pair media")
+    return enqueue_processing_job(
+        "optimize_pair_media",
+        project_id=project.id,
+        pair_id=pair.id,
+        pair_media_id=media.id,
+        attempt_scope=attempt_scope,
+        **_owner_fields(project),
+    )
 
 
 def mark_job_processing(job):
@@ -493,6 +538,16 @@ def queue_worker_state():
         if getattr(worker, "death_date", None):
             continue
         heartbeat = getattr(worker, "last_heartbeat", None)
+        # Pre-production gate (2026-08-31): RQ's own Worker.last_heartbeat is
+        # timezone-aware in the RQ version this app pins, while every other
+        # timestamp in this codebase (get_utc_now(), cutoff above) is naive
+        # UTC by convention - comparing them raised TypeError and crashed
+        # /ready with a misleading "database unavailable" response (the
+        # exception was actually here, not in the DB probe). Normalize to
+        # naive UTC to match the rest of the codebase rather than making
+        # cutoff aware, since naive UTC is this app's established idiom.
+        if heartbeat is not None and heartbeat.tzinfo is not None:
+            heartbeat = heartbeat.astimezone(dt_timezone.utc).replace(tzinfo=None)
         if heartbeat is not None and heartbeat < cutoff:
             continue
         usable += 1

@@ -335,13 +335,18 @@
 {% endblock %}
 
 {% block content %}
+        <nav aria-label="Breadcrumb" style="margin-bottom: 10px; color: rgba(255,255,255,0.5); font-size: 13px;">
+            Customer Operations &rsaquo; <span style="color: rgba(255,255,255,0.8);">Scans</span>
+        </nav>
         <div class="page-header">
-            <h1 class="page-title">Scan Usage Monitoring</h1>
+            <h1 class="page-title">Scans</h1>
             <div style="display: flex; gap: 15px; align-items: center;">
                 <span class="stats-badge success">
-                    <span>{{ scan_logs|length }} scans</span>
+                    <span>{{ total_scans }} scans</span>
                     <span>•</span>
-                    <span>{{ success_count }} successful</span>
+                    <span>{{ successful_scans }} successful</span>
+                    <span>•</span>
+                    <span>{{ failed_scans }} failed</span>
                 </span>
             </div>
         </div>
@@ -356,148 +361,98 @@
             {% endif %}
         {% endwith %}
 
-        <!-- Status Tabs -->
-        <div class="status-tabs">
-            <a href="/admin/scans" class="status-tab {% if status == 'all' %}active{% endif %}">All Scans</a>
-            <a href="/admin/scans?status=success" class="status-tab {% if status == 'success' %}active{% endif %}">Successful</a>
-            <a href="/admin/scans?status=failed" class="status-tab {% if status == 'failed' %}active{% endif %}">Failed</a>
-            <a href="/admin/scans?status=partial" class="status-tab {% if status == 'partial' %}active{% endif %}">Partial</a>
-        </div>
-
-        <!-- Filters -->
+        <!-- Filters: only fields the backend actually reads. The old
+             free-text "search" box and "Scan Type" dropdown were never wired
+             to admin_scans() at all - removed rather than left as dead
+             controls (Scans fix, 2026-09-02). -->
         <div class="card filter-card">
-            <form method="GET" action="/admin/scans" class="filter-form">
+            <form method="GET" action="{{ url_for('admin_scans') }}" class="filter-form">
                 <div class="form-group">
-                    <label for="search">Search</label>
-                    <input type="text" id="search" name="search" class="form-control" placeholder="Project name or user email" value="{{ search }}">
-                </div>
-
-                <div class="form-row" style="grid-column: span 2; display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                    <div class="form-group">
-                        <label for="start_date">Start Date</label>
-                        <input type="date" id="start_date" name="start_date" class="form-control" value="{{ start_date }}">
-                    </div>
-
-                    <div class="form-group">
-                        <label for="end_date">End Date</label>
-                        <input type="date" id="end_date" name="end_date" class="form-control" value="{{ end_date }}">
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="scan_type">Scan Type</label>
-                    <select id="scan_type" name="scan_type" class="form-control">
-                        <option value="all" {% if scan_type == 'all' %}selected{% endif %}>All Types</option>
-                        <option value="regular" {% if scan_type == 'regular' %}selected{% endif %}>Regular</option>
-                        <option value="quick" {% if scan_type == 'quick' %}selected{% endif %}>Quick</option>
-                        <option value="comprehensive" {% if scan_type == 'comprehensive' %}selected{% endif %}>Comprehensive</option>
+                    <label for="user_id">Customer</label>
+                    <select id="user_id" name="user_id" class="form-control">
+                        <option value="">All customers</option>
+                        {% for u in users %}
+                        <option value="{{ u.id }}" {% if selected_user_id == u.id %}selected{% endif %}>{{ u.email }}</option>
+                        {% endfor %}
                     </select>
                 </div>
-
+                <div class="form-group">
+                    <label for="start_date">Start Date</label>
+                    <input type="date" id="start_date" name="start_date" class="form-control" value="{{ start_date }}">
+                </div>
+                <div class="form-group">
+                    <label for="end_date">End Date</label>
+                    <input type="date" id="end_date" name="end_date" class="form-control" value="{{ end_date }}">
+                </div>
                 <div class="form-group">
                     <button type="submit" class="btn btn-primary" style="height: 42px;">Apply Filters</button>
-                    <a href="/admin/scans" class="btn btn-secondary" style="height: 42px;">Clear</a>
+                    <a href="{{ url_for('admin_scans') }}" class="btn btn-secondary" style="height: 42px;">Clear</a>
                 </div>
             </form>
         </div>
 
-        <!-- Scan Logs Table -->
+        <!-- Summary -->
         <div class="card">
+            <h3 style="margin-bottom: 15px;">Summary</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 20px;">
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #ff007a;">{{ total_scans }}</div>
+                    <div style="color: rgba(255,255,255,0.6);">Total Scans</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #10b981;">{{ successful_scans }}</div>
+                    <div style="color: rgba(255,255,255,0.6);">Successful</div>
+                </div>
+                <div style="text-align: center;">
+                    <div style="font-size: 32px; font-weight: bold; color: #f87171;">{{ failed_scans }}</div>
+                    <div style="color: rgba(255,255,255,0.6);">Failed</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- User Usage -->
+        <div class="card">
+            <h3 style="margin-bottom: 15px;">Customer Usage</h3>
             <div class="table-container">
                 <table class="table">
                     <thead>
                         <tr>
-                            <th>Scan Details</th>
-                            <th>Project</th>
-                            <th>User</th>
-                            <th>Metrics</th>
-                            <th>Status</th>
-                            <th>Actions</th>
+                            <th>Customer</th>
+                            <th>Plan</th>
+                            <th>Used / Limit</th>
+                            <th>Remaining</th>
+                            <th>Scanner Status</th>
+                            <th>Last Scan</th>
+                            <th></th>
                         </tr>
                     </thead>
                     <tbody>
-                        {% for scan in scan_logs %}
+                        {% for row in scan_stats %}
+                        {% set u = usage_users.get(row.id) %}
                         <tr>
                             <td>
-                                <div style="display: flex; align-items: center; gap: 10px;">
-                                    <div class="scan-icon">
-                                        🔍
-                                    </div>
-                                    <div>
-                                        <strong>{{ scan.scan_type|title }} Scan</strong><br>
-                                        <div class="scan-duration">
-                                            {{ scan.created_at.strftime('%d %b %Y, %I:%M %p') }}
-                                        </div>
-                                    </div>
-                                </div>
+                                <strong>{{ row.first_name or '' }} {{ row.last_name or '' }}</strong><br>
+                                <small style="color: rgba(255,255,255,0.6);">{{ row.email }}</small>
                             </td>
+                            <td>{{ u.active_subscription.plan.plan_name if u and u.active_subscription and u.active_subscription.plan else 'No active plan' }}</td>
+                            <td>{{ u.scans_used if u else 0 }} / {{ u.subscribed_scan_limit if u and u.subscribed_scan_limit not in (none, 0) else 'Unlimited' }}</td>
+                            <td>{{ u.remaining_scans if u else '-' }}</td>
                             <td>
-                                {% if scan.project %}
-                                <strong>{{ scan.project.name }}</strong><br>
-                                <small style="color: rgba(255,255,255,0.6);">{{ scan.project.pairs|length }} pairs</small>
+                                {% if u and u.subscription_status == 'limit_reached' %}
+                                <span class="badge badge-danger">Locked</span>
                                 {% else %}
-                                <span style="color: rgba(255,255,255,0.6);">Project Deleted</span>
+                                <span class="badge badge-success">Active</span>
                                 {% endif %}
                             </td>
-                            <td>
-                                {% if scan.user %}
-                                <div style="display: flex; align-items: center; gap: 10px;">
-                                    <div class="user-avatar-small">
-                                        {{ scan.user.first_name[0] if scan.user.first_name else scan.user.email[0]|upper }}
-                                    </div>
-                                    <div>
-                                        <strong>{{ scan.user.full_name }}</strong><br>
-                                        <small style="color: rgba(255,255,255,0.6);">{{ scan.user.email }}</small>
-                                    </div>
-                                </div>
-                                {% else %}
-                                <span style="color: rgba(255,255,255,0.6);">User Deleted</span>
-                                {% endif %}
-                            </td>
-                            <td>
-                                <div>
-                                    Scanned: {{ scan.scanned_pairs_count }} of {{ scan.total_pairs_count }} pairs
-                                    <div class="progress-bar">
-                                        <div class="progress-fill" style="width: {{ (scan.scanned_pairs_count / scan.total_pairs_count * 100) if scan.total_pairs_count > 0 else 0 }}%"></div>
-                                    </div>
-                                </div>
-
-                                <div class="usage-indicator">
-                                    <div>Detections: <strong>{{ scan.detections_count }}</strong></div>
-                                    {% if scan.matched_pairs_count %}
-                                    <div>Matches: <strong>{{ scan.matched_pairs_count }}</strong></div>
-                                    {% endif %}
-                                </div>
-                            </td>
-                            <td>
-                                {% if scan.status == 'success' %}
-                                <span class="badge badge-success">Success</span>
-                                {% elif scan.status == 'failed' %}
-                                <span class="badge badge-danger">Failed</span>
-                                {% elif scan.status == 'partial' %}
-                                <span class="badge badge-warning">Partial</span>
-                                {% else %}
-                                <span class="badge badge-secondary">{{ scan.status|title }}</span>
-                                {% endif %}
-                                <div class="scan-duration">
-                                    Duration: {{ scan.duration_minutes|round(1) }} min
-                                </div>
-                            </td>
-                            <td>
-                                <div class="action-buttons">
-                                    {% if scan.status == 'success' and scan.results_url %}
-                                    <a href="{{ scan.results_url }}" target="_blank" class="btn btn-primary btn-sm">View Results</a>
-                                    {% endif %}
-                                    <button type="button" class="btn btn-secondary btn-sm" disabled title="Scan-log deletion is not available in this admin package.">Delete unavailable</button>
-                                </div>
-                            </td>
+                            <td>{{ row.last_scan_date.strftime('%d %b %Y, %I:%M %p') if row.last_scan_date else '-' }}</td>
+                            <td><a href="{{ url_for('admin_user_scans', user_id=row.id) }}" class="btn btn-secondary btn-sm">View Activity</a></td>
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="6" style="text-align: center; padding: 40px;">
-                                No scan logs found
-                                {% if search or status != 'all' or scan_type != 'all' or start_date or end_date %}
-                                with current filters. <a href="/admin/scans">Clear filters</a>
+                            <td colspan="7" style="text-align: center; padding: 40px;">
+                                No scan activity found
+                                {% if selected_user_id or start_date or end_date %}
+                                with current filters. <a href="{{ url_for('admin_scans') }}">Clear filters</a>
                                 {% endif %}
                             </td>
                         </tr>
@@ -507,84 +462,47 @@
             </div>
         </div>
 
-        <!-- Scan Statistics -->
+        <!-- Recent Activity: last 20 real scans, real columns only (no
+             fabricated per-scan progress/duration - ScanLog never tracked
+             those; see admin_scans()'s own docstring). -->
         <div class="card">
-            <h3 style="margin-bottom: 15px;">Scan Statistics</h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
-                <div style="text-align: center;">
-                    <div style="font-size: 32px; font-weight: bold; color: #ff007a;">{{ scan_logs|length }}</div>
-                    <div style="color: rgba(255,255,255,0.6);">Total Scans</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 32px; font-weight: bold; color: #10b981;">{{ success_count }}</div>
-                    <div style="color: rgba(255,255,255,0.6);">Successful</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 32px; font-weight: bold; color: #f59e0b;">
-                        {% set total_scanned = 0 %}
-                        {% for scan in scan_logs %}
-                            {% set total_scanned = total_scanned + scan.scanned_pairs_count %}
-                        {% endfor %}
-                        {{ total_scanned }}
-                    </div>
-                    <div style="color: rgba(255,255,255,0.6);">Pairs Scanned</div>
-                </div>
-                <div style="text-align: center;">
-                    <div style="font-size: 32px; font-weight: bold; color: #8b5cf6;">
-                        {% set total_detections = 0 %}
-                        {% for scan in scan_logs %}
-                            {% set total_detections = total_detections + scan.detections_count %}
-                        {% endfor %}
-                        {{ total_detections }}
-                    </div>
-                    <div style="color: rgba(255,255,255,0.6);">Total Detections</div>
-                </div>
-            </div>
-
-            <!-- Type Distribution -->
-            <div style="margin-top: 25px;">
-                <h4 style="margin-bottom: 15px;">Scan Type Distribution</h4>
-                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
-                    {% set types = {'regular': 0, 'quick': 0, 'comprehensive': 0, 'other': 0} %}
-                    {% for scan in scan_logs %}
-                        {% if scan.scan_type in types %}
-                            {% set _ = types.update({scan.scan_type: types[scan.scan_type] + 1}) %}
+            <h3 style="margin-bottom: 15px;">Recent Activity</h3>
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Customer</th>
+                            <th>Project</th>
+                            <th>Result</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for scan in recent_activity %}
+                        <tr>
+                            <td>{{ scan.created_at.strftime('%d %b %Y, %I:%M %p') if scan.created_at else '-' }}</td>
+                            <td>{{ scan.user.email if scan.user else 'User deleted' }}</td>
+                            <td>{{ scan.project.name if scan.project else 'Project deleted' }}</td>
+                            <td>
+                                {% if scan.is_successful %}
+                                <span class="badge badge-success">Success</span>
+                                {% else %}
+                                <span class="badge badge-danger">Failed</span>
+                                {% endif %}
+                            </td>
+                        </tr>
                         {% else %}
-                            {% set _ = types.update({'other': types['other'] + 1}) %}
-                        {% endif %}
-                    {% endfor %}
-
-                    {% for type_name, count in types.items() if count > 0 %}
-                    <div style="background: rgba(255,255,255,0.04); padding: 15px; border-radius: 8px; text-align: center;">
-                        <div style="font-size: 20px; font-weight: bold; color: #ff007a;">{{ count }}</div>
-                        <div style="color: rgba(255,255,255,0.6); text-transform: capitalize;">{{ type_name }}</div>
-                    </div>
-                    {% endfor %}
-                </div>
+                        <tr><td colspan="4" style="text-align: center; padding: 40px;">No recent scans found.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
-function toggleDropdown() {
-            const dropdown = document.getElementById('userDropdown');
-            dropdown.classList.toggle('show');
-        }
-
-        // Close dropdown when clicking outside
-        window.onclick = function(event) {
-            if (!event.target.matches('.user-menu span')) {
-                const dropdowns = document.querySelectorAll('.dropdown-menu');
-                dropdowns.forEach(dropdown => {
-                    if (dropdown.classList.contains('show')) {
-                        dropdown.classList.remove('show');
-                    }
-                });
-            }
-        };
-
-        // Auto remove alerts after 5 seconds
+// Auto remove alerts after 5 seconds
         document.addEventListener('DOMContentLoaded', function() {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {

@@ -301,11 +301,12 @@
             </div>
             <div class="alert alert-warning" data-testid="v11-plan-editor-contract">
                 <strong>Plan policy status:</strong>
-                This form edits price, validity, project capacity, scan allowance and content sets per story.
-                Plan family ({{ plan_family_label(plan.plan_family) }}), base storage allowance, media policy,
-                experience entitlements and lifecycle/revision status ({{ plan.lifecycle_status }} / rev {{ plan.plan_revision }})
-                are live SubscriptionPlan fields shown read-only here — no admin form writes them yet, so editing this
-                plan leaves them unchanged. Supported experience labels are Direct QR, Detect Once and Tracked Overlay.
+                This form edits price, validity, project capacity, scan allowance and content sets per story -
+                plan family (currently {{ plan_family_label(plan.plan_family) }}), base storage allowance, media
+                policy, experience entitlements and lifecycle status (currently
+                {{ PLAN_LIFECYCLE_LABELS.get(plan.lifecycle_status, plan.lifecycle_status) }}, revision {{ plan.plan_revision }})
+                are all live fields this form writes directly - saving below updates them for real. Supported
+                experience labels are Direct QR, Detect Once and Tracked Overlay.
             </div>
             <form method="POST" action="/admin/plans/{{ plan.id }}/edit">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -322,10 +323,15 @@
                         <label for="currency" class="optional">Currency</label>
                         <select id="currency" name="currency" class="form-control">
                             <option value="INR" {% if plan.currency=='INR' %}selected{% endif %}>INR (₹)</option>
-                            <option value="USD" {% if plan.currency=='USD' %}selected{% endif %}>USD ($)</option>
-                            <option value="EUR" {% if plan.currency=='EUR' %}selected{% endif %}>EUR (€)</option>
+                            {% if plan.currency and plan.currency != 'INR' %}
+                            <option value="{{ plan.currency }}" selected>{{ plan.currency }} (checkout blocked - see note below)</option>
+                            {% endif %}
                         </select>
-                        <div class="help-text">Default: INR (Optional)</div>
+                        <div class="help-text">Checkout only processes INR today - USD/EUR were removed from the
+                            choices here (Lane F) so a new plan can no longer be saved in a currency that would
+                            block every customer's checkout. {% if plan.currency and plan.currency != 'INR' %}This
+                            plan is still set to {{ plan.currency }} from before that fix; switch it to INR unless
+                            it is deliberately kept non-purchasable.{% endif %}</div>
                     </div>
                 </div>
 
@@ -340,8 +346,8 @@
                     <div class="form-group">
                         <label for="plan_amount">Original Price</label>
                         <input type="number" id="plan_amount" name="plan_amount" class="form-control"
-                            value="{{ plan.plan_amount if plan.plan_amount > 0 else '' }}" min="0" step="0.01">
-                        <div class="help-text">Regular price before discount (Optional)</div>
+                            value="{{ plan.plan_amount if plan.plan_amount is not none else '' }}" min="0" step="0.01" required>
+                        <div class="help-text">Required - use 0 for a free plan (e.g. Free Trial)</div>
                     </div>
 
                     <div class="form-group">
@@ -356,14 +362,16 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label for="duration_type">Duration Type</label>
-                        <select id="duration_type" name="duration_type" class="form-control">
-                            <option value="" {% if not plan.duration_type %}selected{% endif %}>Select duration type (Optional)</option>
-                            <option value="time" {% if plan.duration_type=='time' %}selected{% endif %}>Time-based
+                        <select id="duration_type" name="duration_type" class="form-control" required>
+                            <option value="time" {% if not plan.duration_type or plan.duration_type=='time' %}selected{% endif %}>Time-based
                                 (months/years)</option>
                             <option value="count" {% if plan.duration_type=='count' %}selected{% endif %}>Project-based
                             </option>
                         </select>
-                        <div class="help-text">Default: time-based (Optional)</div>
+                        <div class="help-text">Required - SubscriptionPlan.duration_type only ever stores "time" or
+                            "count" (see models.py); the previous blank "(Optional)" placeholder was not a real,
+                            supported third state and always failed on submit ("Unsupported duration type.") - live
+                            reproduced and root-caused this pass.</div>
                     </div>
 
                     <div class="form-group">
@@ -447,7 +455,7 @@ Email support" rows="5">{% if plan.features_list %}{% for feature in plan.featur
                         <select id="lifecycle_status" name="lifecycle_status" class="form-control">
                             {% for status in plan_lifecycle_statuses %}
                             <option value="{{ status }}" {% if plan.lifecycle_status==status %}selected{% endif %}>{{
-                                status }}</option>
+                                PLAN_LIFECYCLE_LABELS.get(status, status) }}</option>
                             {% endfor %}
                         </select>
                         <div class="help-text">Currently revision {{ plan.plan_revision }}. Only ACTIVE plans can be
@@ -513,6 +521,24 @@ Email support" rows="5">{% if plan.features_list %}{% for feature in plan.featur
                     <label for="allow_direct_qr" class="form-check-label">Allow Direct QR</label>
                 </div>
 
+                <input type="hidden" name="plan_media_form" value="1">
+                <div class="form-check">
+                    <input type="checkbox" id="allow_multi_video_per_target" name="allow_multi_video_per_target"
+                        class="form-check-input" onchange="toggleMultiVideoMax()" {% if
+                        plan.allow_multi_video_per_target %}checked{% endif %}>
+                    <label for="allow_multi_video_per_target" class="form-check-label">Allow multiple videos per
+                        target</label>
+                </div>
+                <div class="form-group">
+                    <label for="max_videos_per_target" class="optional">Maximum videos per target</label>
+                    <input type="number" id="max_videos_per_target" name="max_videos_per_target" class="form-control"
+                        min="2" placeholder="Required when enabled"
+                        value="{{ plan.max_videos_per_target if plan.max_videos_per_target is not none else '' }}"
+                        {% if not plan.allow_multi_video_per_target %}disabled{% endif %}>
+                    <div class="help-text">Only used when "Allow multiple videos per target" is checked. Must be at
+                        least 2.</div>
+                </div>
+
                 <input type="hidden" name="plan_flags_form" value="1">
                 <div class="form-check">
                     <input type="checkbox" id="is_popular" name="is_popular" class="form-check-input" {% if
@@ -536,24 +562,7 @@ Email support" rows="5">{% if plan.features_list %}{% for feature in plan.featur
 
 {% block extra_js %}
 <script>
-function toggleDropdown() {
-            const dropdown = document.getElementById('userDropdown');
-            dropdown.classList.toggle('show');
-        }
-
-        // Close dropdown when clicking outside
-        window.onclick = function (event) {
-            if (!event.target.matches('.user-menu span')) {
-                const dropdowns = document.querySelectorAll('.dropdown-menu');
-                dropdowns.forEach(dropdown => {
-                    if (dropdown.classList.contains('show')) {
-                        dropdown.classList.remove('show');
-                    }
-                });
-            }
-        };
-
-        // Auto remove alerts after 5 seconds
+// Auto remove alerts after 5 seconds
         document.addEventListener('DOMContentLoaded', function () {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {
@@ -581,6 +590,16 @@ function toggleDropdown() {
             // Set focus on first input
             document.getElementById('plan_name').focus();
         });
+
+        // Toggle max-videos-per-target field with the feature checkbox
+        function toggleMultiVideoMax() {
+            const enabled = document.getElementById('allow_multi_video_per_target').checked;
+            const maxInput = document.getElementById('max_videos_per_target');
+            maxInput.disabled = !enabled;
+            if (!enabled) {
+                maxInput.value = '';
+            }
+        }
 
         // Toggle unlimited scans
         function toggleUnlimited() {

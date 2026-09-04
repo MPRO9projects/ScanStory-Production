@@ -162,6 +162,23 @@ body.ss-admin-scope {
     max-width: 100%;
 }
 
+/* Desktop alignment: one shared reading-width cap for every admin page's
+   content-wrapper (main-content is a Bootstrap col-lg-10 of a fluid
+   container, so its available width keeps growing as the viewport grows -
+   uncapped, forms/cards that are fine at 1366px look sparse and adrift in
+   whitespace at 1920px, while other pages (e.g. addons.html) had grown
+   their own one-off local cap instead. Centering everything at one shared
+   width keeps every admin page visually consistent from 1440px up; below
+   that the natural column width is already under this cap, so nothing
+   changes there. Tables keep scrolling inside .table-container as before -
+   this only bounds the page column, not table content width. */
+@media (min-width: 1200px) {
+    .ss-admin-scope .content-wrapper {
+        max-width: 1400px;
+        margin-inline: auto;
+    }
+}
+
 .ss-admin-scope .page-header,
 .ss-admin-scope .filter-form,
 .ss-admin-scope .form-row,
@@ -349,6 +366,36 @@ body.ss-admin-scope {
     align-items: center;
 }
 
+/* My Projects action grouping (primary/secondary/state/danger) is a
+   desktop-only visual: below 769px .action-group stays `display:contents`
+   so every button is still a direct flex child of .action-buttons, leaving
+   the already-QA'd mobile wrap/column behavior byte-for-byte unchanged. */
+.ss-admin-scope .action-group {
+    display: contents;
+}
+
+@media (min-width: 769px) {
+    .ss-admin-scope .action-group {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding-left: 0.6rem;
+        margin-left: 0.2rem;
+        /* Live screenshot QA (1366x768/1920x1080) found the original
+           --admin-shell-border value (rgba(255,255,255,0.08)) reads as
+           invisible against this theme's near-black background - grouping
+           silently did nothing. Stronger, dedicated value instead of reusing
+           the ambient border token. */
+        border-left: 1px solid rgba(255, 255, 255, 0.22);
+    }
+
+    .ss-admin-scope .action-group:first-child {
+        padding-left: 0;
+        margin-left: 0;
+        border-left: 0;
+    }
+}
+
 .ss-admin-scope .filter-form {
     grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
 }
@@ -365,6 +412,57 @@ body.ss-admin-scope {
     background-color: rgba(255, 255, 255, 0.03);
     color: var(--admin-shell-text);
     border-color: var(--admin-shell-border-strong);
+}
+
+/* Real screenshot QA (project detail page's Suspend/Restore reason field)
+   found every admin text input's placeholder reading as near-invisible - no
+   ::placeholder rule existed anywhere in this stylesheet, so every input
+   fell back to the browser's light-background-tuned default gray against
+   this theme's near-black fields. One shared rule fixes every form input in
+   the portal at once. */
+.ss-admin-scope input::placeholder,
+.ss-admin-scope textarea::placeholder {
+    color: rgba(230, 230, 233, 0.45);
+    opacity: 1;
+}
+
+/* Real screenshot QA (Payments > Refunds) found Bootstrap's default
+   .alert-* classes rendering with their light, print-tuned backgrounds -
+   51 occurrences across 25 admin templates, every one of them a jarring
+   light box in an otherwise fully dark-themed console. .alert-admin
+   (base.html) only ever touched border-radius/border, never background or
+   text color, so it never actually fixed this. One shared override instead
+   of hunting down and re-classing every instance individually. */
+.ss-admin-scope .alert {
+    color: var(--admin-shell-text);
+    border-width: 1px;
+    border-style: solid;
+}
+
+.ss-admin-scope .alert-info {
+    background-color: rgba(0, 212, 255, 0.08);
+    border-color: rgba(0, 212, 255, 0.28);
+}
+
+.ss-admin-scope .alert-success {
+    background-color: rgba(74, 222, 128, 0.08);
+    border-color: rgba(74, 222, 128, 0.28);
+}
+
+.ss-admin-scope .alert-warning {
+    background-color: rgba(251, 191, 36, 0.1);
+    border-color: rgba(251, 191, 36, 0.3);
+}
+
+.ss-admin-scope .alert-danger {
+    background-color: rgba(248, 113, 113, 0.1);
+    border-color: rgba(248, 113, 113, 0.3);
+}
+
+.ss-admin-scope .alert a,
+.ss-admin-scope .alert .alert-link {
+    color: #fff;
+    text-decoration: underline;
 }
 
 .ss-admin-scope label {
@@ -436,7 +534,10 @@ body.ss-admin-scope {
     color: var(--admin-shell-text);
 }
 
-@media (max-width: 992px) and (min-width: 769px) {
+/* Bootstrap's md range, exactly: 768px - 991.98px. The old 769px lower bound left
+   768px itself matching neither this block nor the off-canvas block below it, so a
+   768px-wide viewport got no sidebar treatment from either. */
+@media (max-width: 991.98px) and (min-width: 768px) {
     .ss-admin-scope .sidebar {
         width: 82px;
     }
@@ -446,7 +547,13 @@ body.ss-admin-scope {
     }
 }
 
-@media (max-width: 768px) {
+/* Below Bootstrap's md breakpoint. This MUST be 767.98px, not 768px: the drawer
+   trigger (.sidebar-toggle) and Bootstrap's own col-md-* grid switch at 767.98px,
+   so a 768px boundary here left a one-pixel-wide dead zone at exactly 768px CSS
+   width - iPad portrait, and 768px-wide Android tablets - where this block pushed
+   the sidebar off-canvas while the toggle button was still display:none and the
+   backdrop was display:none. Nav was then unreachable by any means. */
+@media (max-width: 767.98px) {
     :root {
         --admin-topbar-height: 60px;
     }
@@ -475,7 +582,16 @@ body.ss-admin-scope {
         overflow-y: auto;
         transform: translateX(-100%);
         transition: transform 180ms ease;
-        z-index: 1002;
+        /* Must stay ABOVE .sidebar-backdrop (z-index 1029, admin/base.html).
+           This selector carries an id, so it beats base.html's `.sidebar
+           { z-index: 1030 }` on specificity no matter the source order - the
+           old 1002 therefore won and painted the full-screen backdrop OVER the
+           open drawer. Every tap on a sidebar destination hit the backdrop
+           instead of the link, and the backdrop's click handler just closed the
+           drawer, so admins and superadmins could never leave Dashboard on
+           mobile. Keep these two values adjacent in meaning: backdrop 1029,
+           drawer 1030. */
+        z-index: 1030;
     }
 
     .ss-admin-scope #adminSidebar.sidebar.is-open {
@@ -575,6 +691,28 @@ body.ss-admin-scope {
     .ss-admin-scope .detail-row,
     .ss-admin-scope .summary-row {
         display: grid;
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Narrow phone refinement (Admin mobile responsiveness pass, 2026-09-03,
+   brief's explicit <=600px/<=390px targets). The 767.98px block above
+   already handles the drawer/tables/forms/page-header; this block only
+   tightens the row-action grid so it lands on a predictable, deliberate
+   2-per-row layout (e.g. My Projects' Preview/Test/QR/Copy Link/Edit/
+   Fix/Delete) instead of an unpredictable wrap count from a bare min-width. */
+@media (max-width: 480px) {
+    .ss-admin-scope .content-wrapper {
+        padding: 0.75rem;
+    }
+
+    .ss-admin-scope .action-buttons .btn,
+    .ss-admin-scope .actions .btn,
+    .ss-admin-scope .row-actions .btn {
+        flex: 1 1 calc(50% - 0.2rem);
+    }
+
+    .ss-admin-scope .filter-form {
         grid-template-columns: 1fr;
     }
 }

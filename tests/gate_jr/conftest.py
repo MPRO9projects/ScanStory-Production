@@ -186,3 +186,48 @@ def motion_blurred_image_bytes():
     kernel = np.zeros((kernel_size, kernel_size))
     kernel[kernel_size // 2, :] = 1.0 / kernel_size
     return _encode_jpeg(cv2.filter2D(img, -1, kernel))
+
+
+# --- Scanner resilience pass: frame-quality diagnostic fixtures ---------------------------
+# Same "real /detect_init HTTP path, no stored marker matches" convention as the four
+# fixtures above - these exist to prove the NEW diagnostic fields (likely_overexposed/
+# likely_underexposed/likely_localized_glare/likely_low_contrast) fire correctly AND that
+# none of them ever flip `detected` to True (frame-quality signals are diagnostic-only,
+# never a matching shortcut).
+
+@pytest.fixture
+def bright_overexposed_image_bytes():
+    """Near-white across the whole frame — global overexposure, not a hotspot."""
+    rng = np.random.default_rng(11)
+    base = np.full((480, 360, 3), 250, dtype=np.uint8)
+    noise = rng.integers(0, 5, (480, 360, 3), dtype=np.uint8)
+    return _encode_jpeg(np.clip(base.astype(np.int16) + noise, 0, 255).astype(np.uint8))
+
+
+@pytest.fixture
+def dark_underexposed_image_bytes():
+    """Near-black across the whole frame — global underexposure."""
+    rng = np.random.default_rng(12)
+    base = np.full((480, 360, 3), 8, dtype=np.uint8)
+    noise = rng.integers(0, 5, (480, 360, 3), dtype=np.uint8)
+    return _encode_jpeg(np.clip(base.astype(np.int16) + noise, 0, 255).astype(np.uint8))
+
+
+@pytest.fixture
+def localized_glare_image_bytes():
+    """Mid-brightness textured frame with ONE small blown-out hotspot in a corner - a
+    concentrated reflection, not the whole frame overexposed. Overall mean brightness
+    stays well under the global-overexposure threshold."""
+    rng = np.random.default_rng(13)
+    img = rng.integers(60, 140, (480, 360, 3), dtype=np.uint8)
+    img[20:100, 20:100] = 255  # a small, fully blown-out hotspot in one corner only
+    return _encode_jpeg(img)
+
+
+@pytest.fixture
+def low_contrast_image_bytes():
+    """Everything squeezed into a narrow mid-grey band - flat, low-information frame that
+    is neither over- nor under-exposed."""
+    rng = np.random.default_rng(14)
+    img = rng.integers(118, 138, (480, 360, 3), dtype=np.uint8)
+    return _encode_jpeg(img)

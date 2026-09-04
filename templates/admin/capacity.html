@@ -1,9 +1,14 @@
 {% extends "admin/base.html" %}
-{% block title %}Capacity{% endblock %}
+{% block title %}Signup Capacity{% endblock %}
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h1 class="h3 mb-0">Paid-Account Capacity</h1>
+<nav aria-label="Breadcrumb" style="margin-bottom: 10px; color: rgba(255,255,255,0.5); font-size: 13px;">
+    Platform &rsaquo; <span style="color: rgba(255,255,255,0.8);">Signup Capacity</span>
+</nav>
+<div class="d-flex justify-content-between align-items-center mb-2">
+    <h1 class="h3 mb-0">Signup Capacity</h1>
 </div>
+<p class="text-muted mb-4">Controls how many paid customer accounts can be admitted during the current access phase.
+    This is an early-access admission gate, not server/storage/compute capacity.</p>
 
 <div class="row g-3 mb-4">
     <div class="col-md-3 col-6">

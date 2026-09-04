@@ -160,8 +160,11 @@ def test_request_policy_never_forms_a_continuous_429_loop():
 
 
 def test_scanner_template_loads_runtime_and_preserves_legacy_contract(client, project_with_pair):
+    # /scanner/<id> no longer renders directly — it 302s to the canonical /s/<public_key>
+    # (see app.py's _canonical_public_scanner_path). "Preserves legacy contract" means the
+    # old URL still resolves to the real runtime end-to-end, so follow the redirect.
     project, _pair = project_with_pair
-    html = client.get(f"/scanner/{project.id}").get_data(as_text=True)
+    html = client.get(f"/scanner/{project.id}", follow_redirects=True).get_data(as_text=True)
     assert "scanner-runtime.js" in html
     assert "ScanStoryScannerRuntime" in html
     assert "/detect_init" in html

@@ -131,6 +131,19 @@ class SubscriptionPlan(db.Model):
     allow_detect_once = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
     allow_tracked_overlay = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
 
+    # Issue 3E-A: multi-video-per-target commercial entitlement foundation.
+    # Unlike the flags above, this is a BRAND NEW capability (today every
+    # target has exactly one video, unconditionally) - not something already
+    # unrestricted that this column merely codifies. Defaulting to False
+    # means no existing plan silently gains it the moment this migration
+    # runs; a superadmin must explicitly enable it per plan. max_videos_per_target
+    # follows max_pairs_per_project's convention (nullable, admin-configured,
+    # still bounded by the immutable MAX_VIDEOS_PER_TARGET_CEILING in
+    # entitlements.py) but is only consulted when the flag above is True -
+    # see plan_videos_per_target_limit() in entitlements.py.
+    allow_multi_video_per_target = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+    max_videos_per_target = db.Column(db.Integer, nullable=True)
+
 
     # Additional plan metadata
     features_json = db.Column(db.Text, default="[]")
@@ -260,6 +273,8 @@ class SubscriptionPlan(db.Model):
             "allow_direct_qr": bool(self.allow_direct_qr),
             "allow_detect_once": bool(self.allow_detect_once),
             "allow_tracked_overlay": bool(self.allow_tracked_overlay),
+            "allow_multi_video_per_target": bool(self.allow_multi_video_per_target),
+            "max_videos_per_target": self.max_videos_per_target,
         }
 
     def __repr__(self):
@@ -1082,6 +1097,18 @@ class Project(db.Model):
     manager_vendor_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     beneficiary_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
 
+    # Local stabilization pass: the client already mints a fresh upload_id
+    # (crypto.randomUUID()) on every "Create ScanStory" submission and sends
+    # it as-is (see handle_upload's upload_id parsing). Persisting it here
+    # with a unique constraint turns that existing per-submission token into
+    # real server-side idempotency for the legacy (non-resumable) creation
+    # path: two requests carrying the same upload_id can never both create a
+    # project - the second hits this constraint and is handed the first
+    # request's project back instead. NULL for every project created through
+    # the resumable path, which is already race-safe via UploadSession's own
+    # atomic status transition (see finalize_upload_session/_project).
+    creation_idempotency_key = db.Column(db.String(80), nullable=True, unique=True, index=True)
+
     user_project_index = db.Column(db.Integer, nullable=True)  # Per-user project numbering
     experience_type = db.Column(db.String(30), nullable=False, default="image_video", server_default="image_video")
     playback_mode = db.Column(db.String(30), nullable=False, default="tracked_overlay", server_default="tracked_overlay")
@@ -1267,7 +1294,12 @@ class ProjectPair(db.Model):
     image_filename = db.Column(db.String(255), nullable=True)
     video_filename = db.Column(db.String(255), nullable=False)
     image_path = db.Column(db.String(500), nullable=True)
-    # image_hash = db.Column(db.String(64), nullable=True, index=True)
+    # sha256 of the validated upload bytes as received (post client-side crop,
+    # pre server-side standardize_uploaded_image resize) - the canonical
+    # target identity used for exact-duplicate-target detection. NULL for
+    # legacy rows created before this column existed or for direct_qr pairs
+    # with no target image; a unique index tolerates any number of NULLs.
+    image_hash = db.Column(db.String(64), nullable=True, index=True)
     original_image_name = db.Column(db.String(255), nullable=True)
     original_video_name = db.Column(db.String(255), nullable=True)
     image_size = db.Column(db.Integer, nullable=True)
@@ -1315,6 +1347,12 @@ class ProjectPair(db.Model):
         db.Index("ix_project_pairs_processed", "project_id", "is_processed"),
         db.Index("ix_project_pairs_status", "project_id", "processing_status"),  # ✅ ADD THIS
         db.Index("ix_project_pairs_video_status", "video_processing_status"),  # ✅ ADD THIS
+        # DB-enforced duplicate-target race guard (local stabilization pass):
+        # the same exact target image cannot belong to two pairs in the same
+        # project. Scoped to project_id so the same target across DIFFERENT
+        # projects stays allowed. NULL image_hash rows (legacy/direct_qr) never
+        # collide with each other under a standard unique index.
+        db.Index("uq_project_pair_image_hash", "project_id", "image_hash", unique=True),
     )
 
     def __repr__(self):
@@ -1429,6 +1467,112 @@ class ProjectPair(db.Model):
         
         # Fall back to original
         return url_for("serve_video", project_id=self.project_id, image_id=self.pair_index)
+
+    # Issue 3E-B: ordered child videos. This IS the canonical current media
+    # state - View/Edit/Preview/Scanner all resolve through media_items /
+    # default_media (see resolve_pair_media_filename /
+    # resolve_pair_default_video_filename in app.py). ProjectPair.video_filename
+    # stays in sync as a legacy/default compatibility mirror only, kept for
+    # code paths and callers that predate PairMedia.
+    media_items = db.relationship(
+        "PairMedia",
+        backref="pair",
+        lazy=True,
+        cascade="all, delete-orphan",
+        order_by="PairMedia.sort_order, PairMedia.id",
+        foreign_keys="PairMedia.pair_id",
+    )
+
+    @property
+    def default_media(self):
+        """The PairMedia row flagged is_default, if any. A plain Python
+        property over the already-loaded media_items relationship rather
+        than a second SQL relationship - "default" is a data attribute
+        (is_default), not a distinct foreign-key path, so a second
+        relationship would just be two ways to ask the same question and a
+        second place for them to disagree."""
+        for media in self.media_items:
+            if media.is_default:
+                return media
+        return None
+
+# ---------------------------------------------------------------------
+# Per-pair video catalog (Issue 3E-B foundation)
+# ---------------------------------------------------------------------
+# ProjectPair remains the canonical recognition target AND the compatibility
+# container: video_filename/original_video_name/video_size/processing status
+# stay put and stay authoritative for the current runtime. PairMedia is
+# introduced ALONGSIDE it, purely as a catalog of "which videos belong to
+# this pair" - metadata rows pointing at already-stored files, never a
+# second copy of them (see the migration's backfill, which copies zero
+# bytes on disk).
+#
+# Per-video processing fields (status/error/started_at/completed_at) are
+# deliberately NOT included yet. Nothing reads PairMedia at runtime in this
+# phase - the entire processing pipeline still runs against ProjectPair - so
+# adding them now would be dead columns with no writer and no reader until
+# the actual multi-video upload/processing phase (3E-C) exists to use them.
+PAIR_MEDIA_OPTIMIZATION_STATUSES = {"pending", "processing", "ready", "failed"}
+
+
+class PairMedia(db.Model):
+    __tablename__ = "pair_media"
+    __table_args__ = (
+        # DEFAULT-MEDIA ENFORCEMENT: at most one is_default=True row per pair,
+        # enforced at the DB level rather than only in application code - the
+        # exact same partial-unique-index pattern MediaObject already uses
+        # for "at most one ACTIVE row per storage_key" above. Both
+        # PostgreSQL and SQLite support a WHERE-qualified unique index
+        # natively, so this needs no cross-database special-casing: declared
+        # once, enforced identically by both the migration and this model's
+        # own db.create_all() (what the test suite builds).
+        db.Index(
+            "uq_pair_media_one_default_per_pair",
+            "pair_id",
+            unique=True,
+            postgresql_where=db.text("is_default = true"),
+            sqlite_where=db.text("is_default = 1"),
+        ),
+        # DB-enforced duplicate-video race guard, same idiom as
+        # ProjectPair.image_hash: the same exact video cannot be added twice
+        # to the same target, scoped to pair_id so the same video content
+        # under a DIFFERENT target stays allowed. NULL rows never collide.
+        db.Index("uq_pair_media_video_hash", "pair_id", "video_hash", unique=True),
+    )
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    pair_id = db.Column(db.Integer, db.ForeignKey("project_pairs.id"), nullable=False, index=True)
+
+    video_filename = db.Column(db.String(255), nullable=False)
+    original_video_name = db.Column(db.String(255), nullable=True)
+    video_size = db.Column(db.Integer, nullable=True)
+    video_hash = db.Column(db.String(64), nullable=True, index=True)
+
+    sort_order = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    is_default = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+
+    # Fast Video Phase 1: optional optimized MP4 derivative of video_filename.
+    # video_filename above is NEVER overwritten or replaced by these - it stays
+    # the source of truth and fallback for every phase, including once a
+    # derivative exists. Nullable throughout: a row with no derivative attempt
+    # yet (or one whose attempt didn't produce a keeper - see the size-reduction
+    # policy in media_optimization.py) simply has these at their defaults.
+    optimized_video_filename = db.Column(db.String(255), nullable=True)
+    optimization_status = db.Column(db.String(20), nullable=False, default="pending", server_default="pending")
+    optimization_error = db.Column(db.String(500), nullable=True)
+    optimized_video_size = db.Column(db.Integer, nullable=True)
+    optimized_at = db.Column(db.DateTime, nullable=True)
+
+    created_at = db.Column(db.DateTime, server_default=func.now(), nullable=False)
+    updated_at = db.Column(db.DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    @validates("optimization_status")
+    def validate_optimization_status(self, key, value):
+        return _validate_value(value, PAIR_MEDIA_OPTIMIZATION_STATUSES, key)
+
+    def __repr__(self):
+        return f"<PairMedia pair_id={self.pair_id} {self.video_filename} default={self.is_default}>"
+
 
 # ---------------------------------------------------------------------
 # Authoritative media storage ledger (V1.1 Wave 3)
@@ -2116,6 +2260,11 @@ class ProcessingJob(db.Model):
     trigger_id = db.Column(db.Integer, db.ForeignKey("triggers.id"), nullable=True, index=True)
     project_id = db.Column(db.Integer, db.ForeignKey("projects.id"), nullable=True, index=True)
     pair_id = db.Column(db.Integer, db.ForeignKey("project_pairs.id"), nullable=True, index=True)
+    # Fast Video Phase 1: which specific PairMedia row an "optimize_pair_media"
+    # job targets - a real FK, not a filesystem path or an overload of pair_id
+    # (pair_id already means ProjectPair.id elsewhere and stays that for every
+    # job type, including this one - this is additive identity, not a reuse).
+    pair_media_id = db.Column(db.Integer, db.ForeignKey("pair_media.id"), nullable=True, index=True)
     owner_user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
     owner_admin_id = db.Column(db.Integer, db.ForeignKey("admins.id"), nullable=True, index=True)
     job_type = db.Column(db.String(80), nullable=False)
@@ -2148,6 +2297,7 @@ class ProcessingJob(db.Model):
     trigger = db.relationship("Trigger", back_populates="processing_jobs", lazy=True)
     project = db.relationship("Project", lazy=True)
     pair = db.relationship("ProjectPair", lazy=True)
+    pair_media = db.relationship("PairMedia", lazy=True)
     owner_user = db.relationship("User", lazy=True)
     owner_admin = db.relationship("Admin", lazy=True)
 
@@ -2156,6 +2306,7 @@ class ProcessingJob(db.Model):
         db.UniqueConstraint("project_id", "idempotency_key", name="uq_processing_job_project_idempotency"),
         db.Index("ix_processing_jobs_project_status", "project_id", "status"),
         db.Index("ix_processing_jobs_pair_status", "pair_id", "status"),
+        db.Index("ix_processing_jobs_pair_media_status", "pair_media_id", "status"),
         db.Index("ix_processing_jobs_type_status", "job_type", "status"),
         db.Index("ix_processing_jobs_owner_user_status", "owner_user_id", "status"),
         db.Index("ix_processing_jobs_owner_admin_status", "owner_admin_id", "status"),
@@ -2231,7 +2382,22 @@ class MigrationCheckpoint(db.Model):
 #                         String(30) `purpose` column - no schema change, and
 #                         no CHECK constraint covers `purpose`, so no
 #                         migration.
-UPLOAD_SESSION_PURPOSES = {"project_pair", "project_content_set"}
+# "pair_video"          - ONE ADDITIONAL video for an existing target (Issue
+#                         3E-D0). Never finalizes into its own ProjectPair -
+#                         it is grouped, at finalize time, under a sibling
+#                         "project_pair"/"project_content_set" session's
+#                         target and becomes a non-default PairMedia row on
+#                         that target's pair. image_size is always 0 for this
+#                         purpose (pure video byte stream, no marker image) -
+#                         the same image_size=0 shape Direct QR sessions
+#                         already use, generalized to a second purpose rather
+#                         than a second column. Keeping each physical video a
+#                         SEPARATE resumable session (rather than growing one
+#                         session's byte stream to carry N videos) is what
+#                         lets an interrupted third video resume on its own
+#                         without touching the image or sibling videos'
+#                         already-confirmed bytes.
+UPLOAD_SESSION_PURPOSES = {"project_pair", "project_content_set", "pair_video"}
 UPLOAD_SESSION_STATUSES = {
     "active",       # accepting chunks
     "finalizing",   # atomic transition target while finalize is assembling/validating

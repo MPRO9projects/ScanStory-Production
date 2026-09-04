@@ -1,0 +1,337 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Refunds{% endblock %}
+
+{% block content %}
+<nav aria-label="Breadcrumb" style="margin-bottom: 10px; color: rgba(255,255,255,0.5); font-size: 13px;">
+    Commercial &rsaquo; Payments &rsaquo; <span style="color: rgba(255,255,255,0.8);">Refunds</span>
+</nav>
+<div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+    <h1 class="h3 mb-0">Refunds</h1>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('admin_payments') }}" class="btn btn-sm btn-outline-secondary">Orders</a>
+        <a href="{{ url_for('admin_payments_refunds') }}" class="btn btn-sm btn-secondary" aria-current="page">Refunds</a>
+        <a href="{{ url_for('admin_webhook_events') }}" class="btn btn-sm btn-outline-secondary">Webhook Events</a>
+    </div>
+</div>
+<p class="text-muted mb-4">Relocated from Operations (World-Class Admin Restructure, 2026-09-02): every
+    money-moving action now lives under Payments. Operations keeps only a count and a link here.</p>
+
+{# ===== Moved verbatim from admin/operations.html: refund attention/recovery worklist ===== #}
+{% if admin_can('admin.payments.view') %}
+<div class="card mb-4" data-testid="refund-attention-worklist">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <span>Refunds Needing Attention</span>
+        <span class="badge bg-secondary" data-testid="refund-attention-count">{{ attention_refunds|length }} open</span>
+    </div>
+    <div class="card-body p-0">
+        <p class="text-muted small px-3 pt-3 mb-0">
+            A refund appears here until the provider outcome is confirmed <em>and</em> the local
+            entitlement reconciliation has been applied. Settled refunds are not listed.
+            Recovery always re-reads the provider before doing anything, never issues a second
+            refund, and never deletes a ScanStory, its media or its QR code.
+        </p>
+        <div class="table-responsive">
+            <table class="table table-dark table-hover align-middle mb-0">
+                <caption class="visually-hidden">Refunds that need operator attention</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">Refund</th>
+                        <th scope="col">Context</th>
+                        <th scope="col">Refund status</th>
+                        <th scope="col">Reconciliation</th>
+                        <th scope="col">Operator action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for refund in attention_refunds %}
+                    {% set manual_review = refund.reconciliation_status == 'MANUAL_REVIEW_REQUIRED' %}
+                    <tr data-testid="refund-attention-row" data-refund-id="{{ refund.id }}">
+                        <td>
+                            #{{ refund.id }}
+                            <div class="text-muted small">{{ refund.currency }} {{ "%.2f"|format(refund.amount) }} (full)</div>
+                            <div class="text-muted small">Reference {{ refund.provider_refund_id or 'not issued yet' }}</div>
+                            <div class="text-muted small">Requested {{ refund.requested_at.strftime('%d %b %Y %H:%M') if refund.requested_at else '-' }}</div>
+                        </td>
+                        <td class="small">
+                            <div>User #{{ refund.user_id }}</div>
+                            <div class="text-muted">ScanStory {{ refund.project_id or '-' }}</div>
+                            <div class="text-muted">
+                                {% if refund.payment_order_id %}Payment order #{{ refund.payment_order_id }}
+                                {% elif refund.addon_purchase_id %}Add-on purchase #{{ refund.addon_purchase_id }}
+                                {% else %}No linked purchase{% endif %}
+                            </div>
+                        </td>
+                        <td data-refund-status="{{ refund.status }}">
+                            <strong>{{ REFUND_STATUS_LABELS.get(refund.status, refund.status) }}</strong>
+                            {% if refund.failure_code %}
+                            <div class="text-warning small">{{ refund.failure_code }}</div>
+                            {% endif %}
+                            {% if refund.failure_message_safe %}
+                            <div class="text-muted small">{{ refund.failure_message_safe }}</div>
+                            {% endif %}
+                        </td>
+                        <td data-reconciliation-status="{{ refund.reconciliation_status }}">
+                            <strong>{{ REFUND_RECONCILIATION_LABELS.get(refund.reconciliation_status, refund.reconciliation_status) }}</strong>
+                            {% if refund.reconciliation_message_safe %}
+                            <div class="text-muted small">{{ refund.reconciliation_message_safe }}</div>
+                            {% endif %}
+                            {% if manual_review %}
+                            <div class="small text-warning mt-1" data-testid="refund-manual-review-note">
+                                <i class="fas fa-user-check me-1" aria-hidden="true"></i>
+                                Manual decision required. This is not automatically fixable: an admin has to
+                                reconcile the entitlement by hand. Retrying will not resolve it.
+                            </div>
+                            {% endif %}
+                        </td>
+                        <td style="min-width: 260px;">
+                            {% if not admin_can('admin.payments.refund') %}
+                            <span class="text-muted small">Read-only. Recovery needs the refund permission.</span>
+                            {% elif manual_review %}
+                            <span class="text-muted small" data-testid="refund-no-retry">No automatic action available.</span>
+                            {% else %}
+                            <button class="btn btn-sm btn-outline-warning refund-recover-btn" type="button"
+                                    data-testid="refund-recover-btn"
+                                    data-recover-url="{{ url_for('admin_recover_refund', refund_id=refund.id) }}"
+                                    data-refund-id="{{ refund.id }}">
+                                Recover / reconcile
+                            </button>
+                            <div class="text-muted small mt-1">
+                                Re-reads the provider on this same record. No second refund is issued.
+                            </div>
+                            <span class="small text-muted" role="status" aria-live="polite"
+                                  id="refundRecoverMsg{{ refund.id }}"></span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="text-center text-muted py-4" data-testid="refund-attention-empty">No refunds need attention.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="px-3 py-3 border-top border-secondary">
+            <h2 class="h6 mb-1">Provider-side refunds with no local record</h2>
+            <p class="text-muted small mb-2">
+                Refunded from the payment provider's own dashboard, so there is no local refund
+                record to recover. These always need a human: correlate the purchase and reconcile
+                the entitlement manually. No provider payload is shown here.
+            </p>
+            <div class="table-responsive">
+                <table class="table table-dark table-sm align-middle mb-0" data-testid="refund-out-of-band">
+                    <caption class="visually-hidden">Out-of-band provider refunds</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">Webhook event</th>
+                            <th scope="col">Event type</th>
+                            <th scope="col">Correlated purchase</th>
+                            <th scope="col">State</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for event in out_of_band_refunds %}
+                        <tr data-testid="refund-out-of-band-row">
+                            <td>#{{ event.id }}</td>
+                            <td class="small">{{ event.event_type or '-' }}</td>
+                            <td class="small">
+                                {% if event.payment_order_id %}Payment order #{{ event.payment_order_id }}
+                                {% elif event.addon_purchase_id %}Add-on purchase #{{ event.addon_purchase_id }}
+                                {% else %}Not correlated{% endif %}
+                            </td>
+                            <td class="small">
+                                <span class="badge bg-warning text-dark">Manual review required</span>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="text-center text-muted py-3">No out-of-band provider refunds outstanding.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{# ===== Moved verbatim from admin/operations.html: add-on purchase refunds ===== #}
+<div class="card mb-4">
+    <div class="card-header">Recent Add-on Purchases</div>
+    <div class="card-body p-0">
+        {% if admin_can('admin.payments.refund') %}
+        <div class="alert alert-info m-3" id="addonRefundNotice" style="white-space: pre-line;">{{ REFUND_CONFIRMATION_NOTICE }}</div>
+        {% endif %}
+        <div class="table-responsive">
+            <table class="table table-dark table-hover mb-0 align-middle">
+                <thead>
+                    <tr>
+                        <th scope="col">ID</th>
+                        <th scope="col">User</th>
+                        <th scope="col">Catalog</th>
+                        <th scope="col">Status</th>
+                        <th scope="col">Total</th>
+                        <th scope="col">Fulfilled</th>
+                        <th scope="col">Refund</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for purchase in addon_purchases %}
+                    {% set eligibility = addon_refund_eligibility.get(purchase.id) or {} %}
+                    {% set purchase_refund = addon_refunds.get(purchase.id) %}
+                    <tr>
+                        <td>{{ purchase.id }}</td>
+                        <td>#{{ purchase.user_id }}</td>
+                        <td>{{ purchase.catalog_item.code if purchase.catalog_item else purchase.catalog_id }}</td>
+                        <td>{{ purchase.status }}</td>
+                        <td>{{ purchase.currency }} {{ purchase.total_amount }}</td>
+                        <td>{{ purchase.fulfilled_at.strftime('%d %b %Y %H:%M') if purchase.fulfilled_at else "-" }}</td>
+                        <td style="min-width: 320px;">
+                            {% if purchase_refund %}
+                            <div data-refund-status="{{ purchase_refund.status }}">
+                                <strong>{{ REFUND_STATUS_LABELS.get(purchase_refund.status, purchase_refund.status) }}</strong>
+                                &middot; {{ purchase_refund.currency }} {{ "%.2f"|format(purchase_refund.amount) }} (full)
+                            </div>
+                            <div class="text-muted small" data-reconciliation-status="{{ purchase_refund.reconciliation_status }}">
+                                {{ REFUND_RECONCILIATION_LABELS.get(purchase_refund.reconciliation_status, purchase_refund.reconciliation_status) }}
+                            </div>
+                            {% if purchase_refund.reconciliation_message_safe %}
+                            <div class="text-muted small">{{ purchase_refund.reconciliation_message_safe }}</div>
+                            {% endif %}
+                            <div class="text-muted small">
+                                Reference {{ purchase_refund.provider_refund_id or 'not issued yet' }} &middot;
+                                by {{ purchase_refund.requested_by_admin.name if purchase_refund.requested_by_admin else 'Admin #' ~ purchase_refund.requested_by_admin_id }}
+                                {% if purchase_refund.requested_at %} on {{ purchase_refund.requested_at.strftime('%d %b %Y %H:%M') }}{% endif %}
+                            </div>
+                            {% if purchase_refund.failure_message_safe %}
+                            <div class="text-danger small">{{ purchase_refund.failure_message_safe }}</div>
+                            {% endif %}
+                            {% endif %}
+
+                            {% if admin_can('admin.payments.refund') %}
+                            {% if eligibility.get('eligible') %}
+                            {% set effect_note = REFUND_ENTITLEMENT_EFFECT_NOTES.get(eligibility.get('entitlement_effects', {}).get('entitlement_type')) %}
+                            {% if effect_note %}
+                            <div class="text-muted small mb-2">{{ effect_note }}</div>
+                            {% endif %}
+                            <label class="visually-hidden" for="addonRefundReason{{ purchase.id }}">Refund reason for purchase {{ purchase.id }} (required)</label>
+                            <input class="form-control form-control-sm mb-2" type="text" required aria-required="true"
+                                   id="addonRefundReason{{ purchase.id }}" placeholder="Refund reason (required)">
+                            <button class="btn btn-sm btn-danger addon-refund-btn" type="button"
+                                    data-refund-url="{{ url_for('admin_refund_addon_purchase', purchase_id=purchase.id) }}"
+                                    data-reason-id="addonRefundReason{{ purchase.id }}">
+                                Refund Purchase
+                            </button>
+                            <span class="small text-muted ms-2" role="status" aria-live="polite" id="addonRefundMsg{{ purchase.id }}"></span>
+                            {% elif not purchase_refund %}
+                            <div class="text-muted small addon-refund-ineligible">
+                                Refund not available: {{ eligibility.get('reason_text') or 'Not eligible for refund.' }}
+                            </div>
+                            <button class="btn btn-sm btn-secondary" type="button" disabled
+                                    title="{{ eligibility.get('reason_text') or 'Not eligible for refund.' }}">
+                                Refund Purchase
+                            </button>
+                            {% else %}
+                            <div class="text-muted small addon-refund-ineligible">
+                                Refund not available: {{ eligibility.get('reason_text') or 'Not eligible for refund.' }}
+                            </div>
+                            {% endif %}
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="7" class="text-center text-muted py-4">No add-on purchases found.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% if admin_can('admin.payments.refund') %}
+{% include "admin/_admin_fetch_helper.html" %}
+<script>
+  // Full refund only; no amount is sent because the endpoint accepts none.
+  // The POST response is never rendered as the final state - reconciliation can
+  // settle later via webhook - so the page is reloaded and the server re-renders
+  // the authoritative refund and reconciliation status.
+  (function () {
+    const NOTICE = {{ REFUND_CONFIRMATION_NOTICE|tojson }};
+    const CSRF = "{{ csrf_token() }}";
+    document.querySelectorAll('.addon-refund-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        const reasonEl = document.getElementById(btn.dataset.reasonId);
+        const msgEl = document.getElementById(btn.dataset.reasonId.replace('addonRefundReason', 'addonRefundMsg'));
+        const reason = (reasonEl.value || '').trim();
+        if (!reason) {
+          msgEl.textContent = 'A refund reason is required.';
+          reasonEl.focus();
+          return;
+        }
+        if (!window.confirm(NOTICE + '\n\nRefund the full amount now?')) { return; }
+        btn.disabled = true;
+        msgEl.textContent = 'Sending refund request…';
+        fetch(btn.dataset.refundUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF },
+          body: JSON.stringify({ reason: reason })
+        }).then(async function (response) {
+          const result = await window.parseAdminJsonResponse(response);
+          const payload = result.payload;
+          if (!result.ok || !payload || !payload.success) {
+            msgEl.textContent = 'Refund could not be started'
+              + (payload && payload.code ? ' (' + payload.code + ').' : '.')
+              + ' ' + (result.message || 'Reloading current status.');
+          } else {
+            msgEl.textContent = 'Refund submitted. Reloading authoritative status…';
+          }
+          window.location.reload();
+        }).catch(function () {
+          msgEl.textContent = 'Network error. Reload the page to see the current refund status.';
+          btn.disabled = false;
+        });
+      });
+    });
+
+    // PAY-2 recovery action. Posts to the existing recovery route with apply=true;
+    // the route decides everything. A 409 with outcome "manual_review" is NOT a
+    // failure - it means a human has to reconcile - so it is worded that way
+    // instead of "could not recover".
+    const RECOVER_NOTICE =
+      'Re-drive this refund on its existing record?\n\n'
+      + 'The provider is read first, so no second refund is issued.\n'
+      + 'Entitlements are only reversed once the provider confirms the refund.\n'
+      + 'ScanStorys, media and QR codes are never deleted.';
+    document.querySelectorAll('.refund-recover-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        const msgEl = document.getElementById('refundRecoverMsg' + btn.dataset.refundId);
+        if (!window.confirm(RECOVER_NOTICE)) { return; }
+        btn.disabled = true;
+        msgEl.textContent = 'Re-reading the provider…';
+        fetch(btn.dataset.recoverUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': CSRF },
+          body: JSON.stringify({ apply: true })
+        }).then(async function (response) {
+          const result = await window.parseAdminJsonResponse(response);
+          const recovery = result.payload && result.payload.recovery;
+          if (recovery && recovery.outcome === 'manual_review') {
+            msgEl.textContent = 'A human has to reconcile this one: ' + (recovery.message || '');
+            btn.disabled = false;
+            return;
+          }
+          if (recovery) {
+            msgEl.textContent = recovery.message || 'Recovery finished. Reloading authoritative status…';
+          } else {
+            msgEl.textContent = result.message || 'Recovery could not be started. Reloading current status.';
+          }
+          window.location.reload();
+        }).catch(function () {
+          msgEl.textContent = 'Network error. Reload the page to see the current refund status.';
+          btn.disabled = false;
+        });
+      });
+    });
+  })();
+</script>
+{% endif %}
+{% endblock %}

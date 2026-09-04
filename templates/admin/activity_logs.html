@@ -14,7 +14,7 @@
                     <select class="form-control" id="activity_type" name="activity_type">
                         <option value="all" {% if selected_activity_type == 'all' %}selected{% endif %}>All types</option>
                         {% for type_name in activity_types %}
-                        <option value="{{ type_name }}" {% if selected_activity_type == type_name %}selected{% endif %}>{{ type_name }}</option>
+                        <option value="{{ type_name }}" {% if selected_activity_type == type_name %}selected{% endif %}>{{ type_name|humanize_snake }}</option>
                         {% endfor %}
                     </select>
                 </div>
@@ -53,7 +53,7 @@
                     <tr>
                         <td>{{ activity.activity_at.strftime('%d %b %Y, %I:%M %p') if activity.activity_at else '-' }}</td>
                         <td>{{ activity.admin.name if activity.admin else 'Unknown admin' }}<br><small>#{{ activity.admin_id }}</small></td>
-                        <td><span class="badge">{{ activity.activity_type }}</span></td>
+                        <td><span class="badge">{{ activity.activity_type|humanize_snake }}</span></td>
                         <td>{{ activity.description }}</td>
                     </tr>
                     {% else %}

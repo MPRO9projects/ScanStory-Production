@@ -488,9 +488,27 @@ def test_11_triple_project_finalize_produces_one_project_and_one_job(client, app
         resp = _finalize_project(client, ids)
         codes.append(resp.status_code)
     assert codes == [200, 200, 200]
-    assert app_module.Project.query.count() == 1
+    project = app_module.Project.query.one()
     assert app_module.ProjectPair.query.count() == 3
-    assert app_module.ProcessingJob.query.count() <= 1
+
+    # Fast Video Phase 2: every PairMedia created by this finalize gets its
+    # own optimize_pair_media job, additive to (not instead of) the one
+    # project-level feature-extraction job - a raw total ProcessingJob count
+    # is no longer "how many times did finalize enqueue processing".
+    feature_jobs = app_module.ProcessingJob.query.filter_by(
+        project_id=project.id, job_type="process_project_pairs"
+    ).all()
+    assert len(feature_jobs) == 1  # one enqueue attempt, never duplicated across the 3 replays
+
+    media_count = app_module.PairMedia.query.join(app_module.ProjectPair).filter(
+        app_module.ProjectPair.project_id == project.id
+    ).count()
+    optimization_jobs = app_module.ProcessingJob.query.filter_by(
+        project_id=project.id, job_type="optimize_pair_media"
+    ).all()
+    assert len(optimization_jobs) == media_count  # exactly one per PairMedia
+    assert len({j.pair_media_id for j in optimization_jobs}) == len(optimization_jobs)  # no duplicate per PairMedia
+
     app_module.db.session.refresh(login_user)
     assert (login_user.projects_used or 0) == 1
 
@@ -719,8 +737,14 @@ def test_19_no_orphan_media_rows_on_success_or_failure(client, app_module, login
     assert app_module.MediaObject.query.count() == 0
 
     # Success: exactly one image row and one video row per pair, each bound to
-    # its own pair, none dangling.
-    replacement = _make_sets(1)[0]
+    # its own pair, none dangling. Deliberately a DIFFERENT shade from `good`
+    # above (not another _make_sets(1), which always regenerates shade=100 for
+    # its single set) - this is genuinely a second, distinct target, and the
+    # new exact-duplicate-target guard correctly rejects two targets sharing
+    # byte-identical image content within one project.
+    replacement_image = _jpeg_bytes(shade=170)
+    replacement_video = _mp4_bytes(frames=6)
+    replacement = (replacement_image, replacement_video, replacement_image + replacement_video)
     second = _create_set(client, *replacement[:2])
     _upload_all(client, second, replacement[2])
     assert _finalize_project(client, ids + [second]).status_code == 200
@@ -754,7 +778,25 @@ def test_20_no_duplicate_processing_jobs_for_a_multi_set_project(client, app_mod
     # ONE enqueue attempt for three content sets, and no second job however
     # many times finalize is replayed.
     assert len(calls) == 1
-    assert app_module.ProcessingJob.query.count() <= 1
+    project = app_module.Project.query.one()
+
+    # Fast Video Phase 2: one optimize_pair_media job per PairMedia is
+    # additive to this project-level feature-extraction job, not a sign the
+    # dedupe broke - assert each job_type's own no-duplicate invariant
+    # instead of a raw total.
+    feature_jobs = app_module.ProcessingJob.query.filter_by(
+        project_id=project.id, job_type="process_project_pairs"
+    ).all()
+    assert len(feature_jobs) == 1  # no duplicate across the 4 finalize calls above
+
+    media_count = app_module.PairMedia.query.join(app_module.ProjectPair).filter(
+        app_module.ProjectPair.project_id == project.id
+    ).count()
+    optimization_jobs = app_module.ProcessingJob.query.filter_by(
+        project_id=project.id, job_type="optimize_pair_media"
+    ).all()
+    assert len(optimization_jobs) == media_count
+    assert len({j.pair_media_id for j in optimization_jobs}) == len(optimization_jobs)
 
 
 def test_20b_enqueue_failure_parks_every_set_and_retries_only_the_enqueue(client, app_module, login_user, monkeypatch):
@@ -931,8 +973,25 @@ def test_24_direct_qr_multi_set_is_unaffected(client, app_module, login_user, mo
     assert all(p.image_filename is None for p in pairs)
     assert all(p.is_processed for p in pairs)
     assert all(p.feature_extraction_status == "not_required" for p in pairs)
-    # Direct QR needs no feature extraction, so it enqueues nothing.
-    assert app_module.ProcessingJob.query.count() == 0
+
+    # Direct QR needs no image-feature-extraction processing, so it must
+    # enqueue ZERO process_project_pairs jobs - that invariant still holds.
+    # It legitimately DOES still get one optimize_pair_media job per
+    # PairMedia (Fast Video optimizes the served video regardless of
+    # recognition mode), which a raw total-count assertion couldn't tell
+    # apart from a real regression.
+    assert app_module.ProcessingJob.query.filter_by(
+        project_id=project.id, job_type="process_project_pairs"
+    ).count() == 0
+
+    media_count = app_module.PairMedia.query.join(app_module.ProjectPair).filter(
+        app_module.ProjectPair.project_id == project.id
+    ).count()
+    optimization_jobs = app_module.ProcessingJob.query.filter_by(
+        project_id=project.id, job_type="optimize_pair_media"
+    ).all()
+    assert len(optimization_jobs) == media_count
+    assert len({j.pair_media_id for j in optimization_jobs}) == len(optimization_jobs)
 
 
 def test_24b_mixed_experience_types_cannot_be_finalized_as_one_project(client, app_module, login_user):

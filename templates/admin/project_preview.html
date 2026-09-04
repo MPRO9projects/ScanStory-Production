@@ -178,26 +178,52 @@
                 </div>
                 
                 <!-- Video Preview with Download -->
+                {# Final pre-freeze defect audit (2026-09-01), Defect A: the hero
+                   player below always showed pair.video_filename only (the
+                   default video) - videos 2+ on a multi-video target were never
+                   rendered as playable <video> elements anywhere on this page,
+                   only listed as download links (see the prior 2026-08-29 pass's
+                   own comment, now removed, which explicitly said "this does not
+                   replace the hero player" - that was the gap). This mirrors the
+                   already-correct pattern in admin/view_project.html: loop every
+                   PairMedia row as its own playable video, legacy fallback for a
+                   pair with zero PairMedia rows preserved. #}
+                {% if pair.media_items %}
+                {% for media in pair.media_items %}
+                <div class="aspect-video bg-black/50 rounded-xl overflow-hidden relative group{% if not loop.first %} mt-2{% endif %}">
+                    <video src="{{ url_for('serve_admin_pair_media_video', project_id=project.id, image_id=pair.pair_index, media_id=media.id) }}"
+                           class="w-full h-full object-cover"
+                           preload="metadata"
+                           controls></video>
+                    <div class="absolute top-2 left-2 text-xs text-white/70 bg-black/50 rounded-full px-2 py-0.5">
+                        V{{ loop.index }}{{ ' (default)' if media.is_default else '' }}
+                    </div>
+                    <div class="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition">
+                        <a href="{{ url_for('serve_admin_pair_media_video', project_id=project.id, image_id=pair.pair_index, media_id=media.id) }}" download
+                           class="download-btn inline-flex items-center gap-2 bg-black/50">
+                            <i class="fas fa-download"></i> Download Video
+                        </a>
+                    </div>
+                </div>
+                {% endfor %}
+                {% elif pair.video_filename %}
                 <div class="aspect-video bg-black/50 rounded-xl overflow-hidden relative group">
-                    {% if pair.video_filename %}
-                    <!-- CHANGE 4: Video URL - Admin route -->
-                    <video src="{{ url_for('serve_admin_video', project_id=project.id, image_id=pair.pair_index) }}" 
+                    <video src="{{ url_for('serve_admin_video', project_id=project.id, image_id=pair.pair_index) }}"
                            class="w-full h-full object-cover"
                            preload="metadata"
                            controls></video>
                     <div class="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100 transition">
-                        <!-- CHANGE 5: Download Video - Admin route -->
                         <a href="{{ url_for('serve_admin_video', project_id=project.id, image_id=pair.pair_index) }}" download
                            class="download-btn inline-flex items-center gap-2 bg-black/50">
                             <i class="fas fa-download"></i> Download Video
                         </a>
                     </div>
-                    {% else %}
-                    <div class="w-full h-full flex items-center justify-center text-white/30">
-                        <i class="fas fa-video text-4xl"></i>
-                    </div>
-                    {% endif %}
                 </div>
+                {% else %}
+                <div class="aspect-video bg-black/50 rounded-xl overflow-hidden relative group flex items-center justify-center text-white/30">
+                    <i class="fas fa-video text-4xl"></i>
+                </div>
+                {% endif %}
 
                 <!-- V1 Wave 6: project fallback controls -->
                 <div class="mt-3 pt-3 border-t border-white/10" data-pair-card data-pair-index="{{ pair.pair_index }}">

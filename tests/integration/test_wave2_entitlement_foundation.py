@@ -707,3 +707,108 @@ def test_resolver_reports_no_project_service_coverage(app_module, db_session, no
     still paid for. They must never be conflated."""
     e = _ents(app_module, normal_user)
     assert not any("coverage" in key.lower() for key in e)
+
+
+# ===========================================================================
+# Final Product Completeness Pass, Lane A: admin_increase_subscription_limits
+# and admin_add_user_scans must go through the entitlement ledger, not a bare
+# `+=` on the materialized column that the next renewal/upgrade/downgrade
+# recompute (materialize_plan_entitlements) silently erases.
+# ===========================================================================
+def test_admin_increase_limits_survives_plan_recompute(app_module, db_session, normal_user, admin, client):
+    plan = _new_plan(app_module, db_session, "Recompute Base", total_project_limit=5, total_scan_limit=500)
+    normal_user.subscribed_project_limit = 5
+    normal_user.subscribed_scan_limit = 500
+    db_session.commit()
+    order = _pending_order(app_module, db_session, normal_user, plan, "ORD_LANE_A_1")
+
+    with client.session_transaction() as sess:
+        sess["admin_id"] = admin.id
+    resp = client.post(
+        f"/admin/subscriptions/{order.id}/increase-limits",
+        data={"additional_projects": "3", "additional_scans": "50", "reason": "customer upgrade goodwill"},
+    )
+    assert resp.status_code in (302, 303)
+
+    user = app_module.User.query.get(normal_user.id)
+    assert user.subscribed_project_limit == 8
+    assert user.subscribed_scan_limit == 550
+    tx_types = {tx.entitlement_type for tx in app_module.EntitlementTransaction.query.filter_by(user_id=user.id).all()}
+    assert tx_types == {"PROJECT_CAPACITY", "EXTRA_SCANS"}
+
+    # Simulate what a renewal/upgrade/downgrade does: recompute the
+    # materialized columns from plan + ledger only. The admin bump must
+    # still be there afterward - that's the entire point of the ledger.
+    app_module.materialize_plan_entitlements(user, plan_project_limit=5, plan_scan_limit=500)
+    db_session.commit()
+    assert user.subscribed_project_limit == 8
+    assert user.subscribed_scan_limit == 550
+
+
+def test_admin_increase_limits_requires_reason(app_module, db_session, normal_user, admin, client):
+    plan = _new_plan(app_module, db_session, "No Reason Base", total_project_limit=5, total_scan_limit=500)
+    order = _pending_order(app_module, db_session, normal_user, plan, "ORD_LANE_A_2")
+    with client.session_transaction() as sess:
+        sess["admin_id"] = admin.id
+    resp = client.post(
+        f"/admin/subscriptions/{order.id}/increase-limits",
+        data={"additional_projects": "3", "additional_scans": "0", "reason": ""},
+    )
+    assert resp.status_code in (302, 303)
+    assert app_module.EntitlementTransaction.query.filter_by(user_id=normal_user.id).count() == 0
+
+
+def test_admin_increase_limits_denied_for_regular_admin(app_module, db_session, normal_user, client):
+    from werkzeug.security import generate_password_hash
+    plan = _new_plan(app_module, db_session, "RBAC Base", total_project_limit=5, total_scan_limit=500)
+    order = _pending_order(app_module, db_session, normal_user, plan, "ORD_LANE_A_3")
+    limited = app_module.Admin(
+        email="limited-limits@example.com",
+        password_hash=generate_password_hash("AdminPass123"),
+        role="admin",
+        is_active=True,
+    )
+    db_session.add(limited)
+    db_session.commit()
+    with client.session_transaction() as sess:
+        sess["admin_id"] = limited.id
+    resp = client.post(
+        f"/admin/subscriptions/{order.id}/increase-limits",
+        data={"additional_projects": "3", "additional_scans": "0", "reason": "should be denied"},
+    )
+    assert resp.status_code != 200
+    assert app_module.EntitlementTransaction.query.filter_by(user_id=normal_user.id).count() == 0
+
+
+def test_admin_add_user_scans_survives_plan_recompute(app_module, db_session, normal_user, admin, client):
+    plan = _new_plan(app_module, db_session, "Add Scans Base", total_project_limit=5, total_scan_limit=200)
+    normal_user.subscribed_scan_limit = 200
+    db_session.commit()
+
+    with client.session_transaction() as sess:
+        sess["admin_id"] = admin.id
+    resp = client.post(
+        f"/admin/users/{normal_user.id}/add-scans",
+        data={"additional_scans": "75", "reason": "support goodwill credit"},
+    )
+    assert resp.status_code in (302, 303)
+
+    user = app_module.User.query.get(normal_user.id)
+    assert user.subscribed_scan_limit == 275
+    tx = app_module.EntitlementTransaction.query.filter_by(user_id=user.id, entitlement_type="EXTRA_SCANS").first()
+    assert tx is not None and tx.delta_value == 75
+
+    app_module.materialize_plan_entitlements(user, plan_scan_limit=200)
+    db_session.commit()
+    assert user.subscribed_scan_limit == 275
+
+
+def test_admin_add_user_scans_requires_reason(app_module, db_session, normal_user, admin, client):
+    with client.session_transaction() as sess:
+        sess["admin_id"] = admin.id
+    resp = client.post(
+        f"/admin/users/{normal_user.id}/add-scans",
+        data={"additional_scans": "75", "reason": ""},
+    )
+    assert resp.status_code in (302, 303)
+    assert app_module.EntitlementTransaction.query.filter_by(user_id=normal_user.id).count() == 0

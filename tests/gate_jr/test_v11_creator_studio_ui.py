@@ -223,9 +223,17 @@ def test_creator_uses_the_shared_toast_and_confirm_not_native_dialogs():
 
 
 def test_creator_copy_never_exposes_the_internal_pipeline():
+    """Copy hygiene is about what a USER can actually see rendered on the
+    page - a developer-only // line comment inside <script> (e.g. explaining
+    why a validation rule mirrors the same "exact + ORB/homography" check
+    Edit uses) is never rendered by any browser and reaches no user. Strip
+    JS line comments before scanning so this test can't false-positive on
+    engineering commentary while still catching real user-facing strings."""
+    import re
     html = creator_html()
+    html_without_js_comments = re.sub(r"^\s*//.*$", "", html, flags=re.MULTILINE)
     for term in ("Redis", " RQ ", "queued", "Queue", "worker", "enqueue", "ORB", "homography", "feature extraction"):
-        assert term not in html, term
+        assert term not in html_without_js_comments, term
     # The truthful state vocabulary instead.
     assert "setUploadProgress('Preparing your ScanStory'" in html
 
@@ -260,6 +268,59 @@ def test_studio_is_responsive_and_respects_reduced_motion():
     assert "overflow-x: hidden;\n      overflow-x: clip;" in html
 
 
+# --- Progressive disclosure ------------------------------------------------
+
+
+def test_optional_explanations_are_collapsed_by_default():
+    """Every block here is a second explanation of something already stated, or an
+    output rather than a control. Open by default they cost roughly half a 900px
+    desktop viewport before the creator types anything."""
+    html = creator_html()
+    # <details> with no `open`: native disclosure semantics, keyboard focusable
+    # summary, real aria-expanded, and no JS that could force it open on a step
+    # change.
+    # ss-disclosure added (Creator UI consistency pass): gives these two the same
+    # chevron affordance every other disclosure on the page already has, instead
+    # of relying on the browser's inconsistent default <summary> marker.
+    assert '<details class="ss-explainer ss-disclosure" id="scanStoryExplainer">' in html
+    assert '<details class="recognition-flow ss-disclosure" id="recognitionFlow">' in html
+    assert "<summary>What&rsquo;s the difference?</summary>" in html
+    assert "<summary>Learn about playback modes</summary>" in html
+    assert '<details class="qr-preview-section ss-disclosure">' in html
+    assert '<details class="marker-disclosure" id="marker-disclosure-${pairId}">' in html
+    # None of them may carry `open`.
+    for opened in (
+        'id="scanStoryExplainer" open',
+        'id="recognitionFlow" open',
+        'class="marker-disclosure" id="marker-disclosure-${pairId}" open',
+    ):
+        assert opened not in html, opened
+    # Hiding the marker CONTROLS must not change what gets submitted: crop stays
+    # the default marker mode.
+    assert "markerMode: 'crop'" in html
+    # Direct QR has no marker step at all, so the wrapper is hidden with the rest.
+    assert 'body[data-experience-type="direct_qr"] .marker-disclosure' in html
+    assert ".pair-item.is-collapsed .marker-disclosure," in html
+    # Visible focus on every new disclosure trigger.
+    assert ".marker-disclosure > summary:focus-visible {" in html
+    assert ".ss-disclosure > summary:focus-visible" in html
+
+
+def test_runtime_injected_content_set_fragment_is_balanced():
+    """addPair() builds its markup as a template literal, so the server-rendered
+    page's TagBalance check never sees it. Nesting the marker controls inside a
+    <details> is exactly the kind of edit that can leave it unbalanced."""
+    html = creator_html()
+    start = html.index("const pairHTML = `")
+    fragment = html[start + len("const pairHTML = `"):html.index("`;", start)]
+    fragment = fragment.replace("${pairId}", "1")
+
+    parser = TagBalance()
+    parser.feed(fragment)
+    assert not parser.errors, parser.errors[:5]
+    assert not parser.stack, parser.stack[:5]
+
+
 # --- Manage media (edit_project.html) ------------------------------------
 
 
@@ -272,7 +333,13 @@ def test_edit_project_keeps_the_truthful_replacement_consequences():
     assert "<strong>Replacing only the video</strong> takes effect straight away" in html
     assert "nothing is re-analysed" in html
     assert "Either way your QR code and share link never change." in html
-    assert "JPG or PNG. Goes back to Processing while we analyse it." in html
+    # Master stabilization pass (section 1/2): the image slot's copy now leads
+    # with the explicit Take a photo / Choose from device + marker-preparation
+    # flow rather than a bare file-format hint - the "goes back to Processing"
+    # consequence this test exists to pin is still there, just later in the
+    # sentence.
+    assert "Take a photo or choose one from your device, then crop the marker area." in html
+    assert "Goes back to" in html and "Processing while we analyse it." in html
     assert "MP4. Live as soon as it is saved" in html
 
 

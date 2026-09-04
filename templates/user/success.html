@@ -329,23 +329,22 @@
                     </a>
                     {% endif %}
 
-                    {% if not is_admin %}
+                    {# Admin Create completion-flow fix (2026-09-03): this was
+                       {% if not is_admin %}-only, so an Admin session never
+                       got an Edit link on their own success/QR page at all -
+                       only "All projects". user_edit_project_page already
+                       handles Admin sessions correctly (shared
+                       @user_or_admin_required route), so there is no reason
+                       to withhold it here. #}
                     <a href="{{ url_for('user_edit_project_page', project_id=project.id) }}"
                         class="ss-btn ss-btn-secondary">
-                        <i class="fas fa-pen" aria-hidden="true"></i> Manage this ScanStory
+                        <i class="fas fa-pen" aria-hidden="true"></i> {{ 'Edit project' if is_admin else 'Manage this ScanStory' }}
                     </a>
-                    {% else %}
-                    <a href="{{ projects_url }}" class="ss-btn ss-btn-secondary">
-                        <i class="fas fa-folder-open" aria-hidden="true"></i> All projects
-                    </a>
-                    {% endif %}
                 </div>
 
-                {% if not is_admin %}
                 <a href="{{ projects_url }}" class="ss-btn ss-btn-tertiary">
-                    <i class="fas fa-folder-open" aria-hidden="true"></i> View all my stories
+                    <i class="fas fa-folder-open" aria-hidden="true"></i> {{ 'Back to My Projects' if is_admin else 'View all my stories' }}
                 </a>
-                {% endif %}
             </div>
 
             <div class="ready-footnote">

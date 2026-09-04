@@ -1,6 +1,6 @@
 {% extends "admin/base.html" %}
 
-{% block title %}Projects{% endblock %}
+{% block title %}{{ scope_meta.page_title }}{% endblock %}
 
 {% block extra_css %}
 <style>
@@ -321,10 +321,13 @@
                 gap: 15px;
             }
             
-            .action-buttons {
-                flex-direction: column;
-            }
-            
+            /* Admin mobile responsiveness pass (2026-09-03): this used to force
+               every row action into one full-width vertical stack (7 buttons
+               on My Projects = 7 rows tall), fighting the shared
+               admin-console.css .action-buttons rule (flex-wrap + flex:1 1
+               11rem per button), which already produces a clean wrapping
+               ~2-per-row grid. Removed so that shared rule applies. */
+
             .table td {
                 min-width: 120px;
             }
@@ -333,9 +336,24 @@
 {% endblock %}
 
 {% block content %}
+        <nav aria-label="Breadcrumb" style="margin-bottom: 10px; color: rgba(255,255,255,0.5); font-size: 13px;">
+            {{ scope_meta.breadcrumb[0] }} &rsaquo; <span style="color: rgba(255,255,255,0.8);">{{ scope_meta.breadcrumb[1] }}</span>
+        </nav>
+        {% if scope_meta.workspace_label %}
+        <div class="card" style="margin-bottom: 16px; padding: 12px 20px; display: flex; align-items: center; gap: 12px;">
+            <span class="badge badge-info">{{ scope_meta.workspace_label[0] }}</span>
+            {% if scope_meta.workspace_label[1] %}<span style="color: rgba(255,255,255,0.7); font-size: 13px;">{{ scope_meta.workspace_label[1] }}</span>{% endif %}
+            {% if scope == 'mine' %}<span style="color: rgba(255,255,255,0.5); font-size: 13px;">&mdash; Your ScanStory projects</span>{% endif %}
+        </div>
+        {% endif %}
         <div class="page-header">
-            <h1 class="page-title">Projects</h1>
-            <div>Total Projects: {{ pagination.total }}</div>
+            <h1 class="page-title">{{ scope_meta.page_title }}</h1>
+            <div style="display:flex; align-items:center; gap:15px;">
+                <div>Total: {{ pagination.total }}</div>
+                {% if scope == 'mine' %}
+                <a href="{{ url_for('admin_create_project_page') }}" class="btn btn-primary">+ Create Project</a>
+                {% endif %}
+            </div>
         </div>
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -345,11 +363,12 @@
             {% endif %}
         {% endwith %}
         <div class="card filter-card">
-            <form method="GET" action="/admin/projects" class="filter-form">
+            <form method="GET" action="{{ url_for(scope_meta.endpoint) }}" class="filter-form">
                 <div class="form-group">
                     <label for="search">Search Projects</label>
                     <input type="text" id="search" name="search" class="form-control" placeholder="Project ID, project name, owner ID, owner name, owner email..." value="{{ search }}">
                 </div>
+                {% if scope_meta.show_owner_filter %}
                 <div class="form-group">
                     <label for="owner_type">Owner</label>
                     <select id="owner_type" name="owner_type" class="form-control">
@@ -358,6 +377,7 @@
                         <option value="admin" {% if owner_type == 'admin' %}selected{% endif %}>Admin-owned projects</option>
                     </select>
                 </div>
+                {% endif %}
                 <div class="form-group">
                     <label for="readiness">Readiness</label>
                     <select id="readiness" name="readiness" class="form-control">
@@ -370,7 +390,7 @@
                 </div>
                 <div class="form-group">
                     <button type="submit" class="btn btn-primary" style="height: 42px;">Apply Filters</button>
-                    <a href="/admin/projects" class="btn btn-secondary" style="height: 42px;">Clear</a>
+                    <a href="{{ url_for(scope_meta.endpoint) }}" class="btn btn-secondary" style="height: 42px;">Clear</a>
                 </div>
             </form>
         </div>
@@ -398,6 +418,9 @@
                                 <small style="color: rgba(255,255,255,0.6);">{{ 'Active' if row.project.is_active else 'Suspended' }}</small>
                             </td>
                             <td>
+                                {% if row.ownership_state != 'valid' %}
+                                <span class="badge badge-danger">Ownership Error</span><br>
+                                {% endif %}
                                 {{ row.owner.type }} #{{ row.owner.id or '-' }}<br>
                                 <strong>{{ row.owner.name }}</strong><br>
                                 <small style="color: rgba(255,255,255,0.6);">{{ row.owner.email }}</small>
@@ -416,7 +439,56 @@
                                 <small style="color: rgba(255,255,255,0.6);">{{ row.successful_scan_count }} successful / {{ row.failed_scan_count }} failed</small>
                             </td>
                             <td>
-                                <a href="/admin/projects/{{ row.project.id }}" class="btn btn-primary btn-sm">View Details</a>
+                                <div class="action-buttons">
+                                {% if scope == 'mine' %}
+                                    <span class="action-group action-group-primary">
+                                    <a href="{{ url_for('admin_project_preview', project_id=row.project.id) }}" class="btn btn-secondary btn-sm">Preview</a>
+                                    {% if row.ownership_state == 'valid' %}
+                                    <a href="{{ url_for('user_edit_project_page', project_id=row.project.id) }}" class="btn btn-primary btn-sm">Edit</a>
+                                    {% endif %}
+                                    </span>
+                                    <span class="action-group action-group-secondary">
+                                    {% if row.story_state == 'ready' %}
+                                    <a href="{{ url_for('admin_scanner_test_entry', project_id=row.project.id) }}" target="_blank" rel="noopener" class="btn btn-secondary btn-sm">Test</a>
+                                    {% endif %}
+                                    <a href="{{ url_for('admin_download_project_qr', project_id=row.project.id) }}" class="btn btn-secondary btn-sm">QR</a>
+                                    {% if row.project.public_share_url %}
+                                    <button type="button" class="btn btn-secondary btn-sm" data-copy-link data-share-url="{{ row.project.public_share_url }}" aria-label="Copy the share link for {{ row.project.name }}">Copy Link</button>
+                                    {% endif %}
+                                    </span>
+                                    {# Fix/Try again: image modes only - Direct QR has no target to
+                                       reprocess (Admin My Projects parity pass, 2026-09-03; mirrors
+                                       the same experience_type guard added to user/projects.html). #}
+                                    {% if row.project.experience_type != 'direct_qr' and row.story_state != 'suspended' %}
+                                    <span class="action-group action-group-state">
+                                    {% if row.story_state == 'processing' %}
+                                    <span class="btn btn-secondary btn-sm" aria-disabled="true">Repair in progress</span>
+                                    {% else %}
+                                    <form method="POST" action="{{ url_for('user_reprocess_project', project_id=row.project.id) }}" onsubmit="return confirm('Reprocess this project?');" style="display:inline;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-sm {{ 'btn-danger' if row.story_state == 'failed' else 'btn-secondary' }}">{{ 'Try again' if row.story_state == 'failed' else 'Fix' }}</button>
+                                    </form>
+                                    {% endif %}
+                                    </span>
+                                    {% endif %}
+                                    <span class="action-group action-group-danger">
+                                    <form method="POST" action="{{ url_for('admin_delete_own_project', project_id=row.project.id) }}" onsubmit="return confirm('Delete this project? This cannot be undone.');" style="display:inline;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                        <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                                    </form>
+                                    </span>
+                                {% elif scope == 'admin_all' %}
+                                    <a href="/admin/projects/{{ row.project.id }}" class="btn btn-secondary btn-sm">View</a>
+                                    {% if row.is_own_project %}
+                                    <a href="{{ url_for('admin_project_preview', project_id=row.project.id) }}" class="btn btn-secondary btn-sm">Preview</a>
+                                    {% if row.ownership_state == 'valid' %}
+                                    <a href="{{ url_for('user_edit_project_page', project_id=row.project.id) }}" class="btn btn-primary btn-sm">Edit</a>
+                                    {% endif %}
+                                    {% endif %}
+                                {% else %}
+                                    <a href="/admin/projects/{{ row.project.id }}" class="btn btn-primary btn-sm">View Details</a>
+                                {% endif %}
+                                </div>
                             </td>
                         </tr>
                         {% else %}
@@ -424,7 +496,10 @@
                             <td colspan="8" style="text-align: center; padding: 40px;">
                                 <div style="font-size: 48px; margin-bottom: 20px; opacity: 0.3;">&#128193;</div>
                                 <h3 style="color: rgba(255,255,255,0.6); margin-bottom: 10px;">No Projects Found</h3>
-                                <p style="color: rgba(255,255,255,0.4);">No projects match your current filters.</p>
+                                <p style="color: rgba(255,255,255,0.4);">{{ scope_meta.empty_message }}</p>
+                                {% if scope == 'mine' %}
+                                <a href="{{ url_for('admin_create_project_page') }}" class="btn btn-primary" style="margin-top: 15px;">+ Create Project</a>
+                                {% endif %}
                             </td>
                         </tr>
                         {% endfor %}
@@ -437,10 +512,10 @@
                 <div style="color: rgba(255,255,255,0.6);">Page {{ pagination.page }} of {{ pagination.pages or 1 }} ? {{ pagination.total }} matching projects</div>
                 <div class="action-buttons">
                     {% if pagination.has_prev %}
-                    <a class="btn btn-secondary" href="{{ url_for('admin_projects', page=pagination.prev_num, search=search, owner_type=owner_type, readiness=readiness, per_page=per_page) }}">Previous</a>
+                    <a class="btn btn-secondary" href="{{ url_for(scope_meta.endpoint, page=pagination.prev_num, search=search, owner_type=owner_type, readiness=readiness, per_page=per_page) }}">Previous</a>
                     {% endif %}
                     {% if pagination.has_next %}
-                    <a class="btn btn-secondary" href="{{ url_for('admin_projects', page=pagination.next_num, search=search, owner_type=owner_type, readiness=readiness, per_page=per_page) }}">Next</a>
+                    <a class="btn btn-secondary" href="{{ url_for(scope_meta.endpoint, page=pagination.next_num, search=search, owner_type=owner_type, readiness=readiness, per_page=per_page) }}">Next</a>
                     {% endif %}
                 </div>
             </div>
@@ -448,22 +523,11 @@
 {% endblock %}
 
 {% block extra_js %}
+{% if scope == 'mine' %}
+<script src="{{ url_for('static', filename='js/ss-ui.js') }}"></script>
+{% endif %}
 <script>
-function toggleDropdown() {
-            const dropdown = document.getElementById('userDropdown');
-            dropdown.classList.toggle('show');
-        }
-        window.onclick = function(event) {
-            if (!event.target.matches('.user-menu span')) {
-                const dropdowns = document.querySelectorAll('.dropdown-menu');
-                dropdowns.forEach(dropdown => {
-                    if (dropdown.classList.contains('show')) {
-                        dropdown.classList.remove('show');
-                    }
-                });
-            }
-        };
-        document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function() {
             const alerts = document.querySelectorAll('.alert');
             alerts.forEach(alert => {
                 setTimeout(() => {
@@ -471,6 +535,16 @@ function toggleDropdown() {
                     alert.style.opacity = '0';
                     setTimeout(() => alert.remove(), 500);
                 }, 5000);
+            });
+            // Copy Link (My Projects only) - same window.ssCopy helper and
+            // data-copy-link/data-share-url contract user/projects.html
+            // already uses, no second implementation.
+            document.querySelectorAll('[data-copy-link]').forEach(function (button) {
+                button.addEventListener('click', function () {
+                    if (window.ssCopy) {
+                        window.ssCopy(button.getAttribute('data-share-url'), 'Share link copied.');
+                    }
+                });
             });
         });
 </script>

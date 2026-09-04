@@ -44,77 +44,11 @@
         }
 
         /* Navbar */
-        .navbar {
-            height: 70px;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 2rem;
-            position: fixed;
-            top: 0;
-            width: 100%;
-            z-index: 100;
-            background: rgba(5,5,5,0.7);
-            backdrop-filter: blur(30px);
-            -webkit-backdrop-filter: blur(30px);
-            border-bottom: 1px solid var(--glass-border);
-        }
-
-        .nav-logo {
-            height: 52px;
-            width: auto;
-            object-fit: contain;
-        }
-
-        .nav-actions {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .nav-btn {
-            padding: 8px 20px;
-            border-radius: 50px;
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            font-size: 13px;
-            font-weight: 600;
-            text-decoration: none;
-            cursor: pointer;
-            border: none;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 7px;
-        }
-
-        .nav-btn-ghost {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            color: rgba(255,255,255,0.7);
-        }
-
-        .nav-btn-ghost:hover {
-            background: rgba(255,255,255,0.06);
-            border-color: rgba(255,255,255,0.15);
-            color: #fff;
-        }
-
-        .nav-btn-danger {
-            background: rgba(255,60,60,0.08);
-            border: 1px solid rgba(255,60,60,0.2);
-            color: #ff4444;
-        }
-
-        .nav-btn-danger:hover {
-            background: rgba(255,60,60,0.18);
-            border-color: rgba(255,60,60,0.4);
-        }
-
         /* Page wrapper */
         .page {
             max-width: 1200px;
             margin: 0 auto;
-            padding: 100px 24px 60px;
+            padding: 40px 24px 60px;
         }
 
         /* Page header */
@@ -573,15 +507,16 @@
 
         /* Mobile responsive */
         @media (max-width: 640px) {
-            .page { padding: 88px 16px 48px; }
-            .navbar { padding: 0 1rem; }
-            .nav-actions { gap: 6px; }
-            .nav-btn { min-width: 44px; min-height: 44px; padding: 0; justify-content: center; }
-            .nav-btn span { display: none; }
             .projects-grid { grid-template-columns: 1fr; }
             .stories-toolbar { flex-direction: column; align-items: stretch; padding: 16px; }
             .stories-toolbar-actions { flex-direction: column; }
             .stories-toolbar-actions .ss-btn { width: 100%; }
+            /* Persistent Create CTA (remediation pass): full-width, own row,
+               below the title/count - .page-header-top's flex-wrap already
+               handles the wrap, this just makes the wrapped button read as a
+               primary action rather than an oddly-narrow inline pill. */
+            .page-header-top { gap: 12px; }
+            .page-header-top a.ss-btn-primary { margin-left: 0; width: 100%; justify-content: center; }
         }
     </style>
 </head>
@@ -592,38 +527,8 @@
     <div class="blob w-96 h-96 bg-purple-600" style="width:380px;height:380px;background:#7000ff;top:-8%;left:-5%;"></div>
     <div class="blob" style="width:420px;height:420px;background:#ff007a;bottom:-10%;right:-5%;"></div>
 
-    <!-- Navbar -->
-    <nav class="navbar">
-        <a href="{{ url_for('landing') }}">
-            <img src="{{ url_for('static', filename='assets/logos/logo1.png') }}" class="nav-logo" alt="ScanStory">
-        </a>
-        <div class="nav-actions" role="navigation" aria-label="Primary">
-            <a href="{{ url_for('dashboard') }}" class="nav-btn nav-btn-ghost">
-                <i class="fas fa-gauge-high" aria-hidden="true"></i>
-                <span>Dashboard</span>
-            </a>
-            <a href="{{ url_for('projects_page') }}" class="nav-btn nav-btn-ghost" aria-current="page" style="background:rgba(255,0,122,0.12);border-color:rgba(255,0,122,0.3);color:#fff;">
-                <i class="fas fa-folder-open" aria-hidden="true"></i>
-                <span>My Stories</span>
-            </a>
-            <a href="{{ url_for('ownership_center') }}" class="nav-btn nav-btn-ghost">
-                <i class="fas fa-right-left" aria-hidden="true"></i>
-                <span>Ownership</span>
-            </a>
-            <a href="{{ url_for('subscribe_page') }}" class="nav-btn nav-btn-ghost">
-                <i class="fas fa-crown" aria-hidden="true"></i>
-                <span>Plans</span>
-            </a>
-            <a href="{{ url_for('user_profile') }}" class="nav-btn nav-btn-ghost">
-                <i class="fas fa-user" aria-hidden="true"></i>
-                <span>Profile</span>
-            </a>
-            <a href="{{ url_for('logout') }}" class="nav-btn nav-btn-danger">
-                <i class="fas fa-right-from-bracket" aria-hidden="true"></i>
-                <span>Logout</span>
-            </a>
-        </div>
-    </nav>
+    {% set nav_active = 'my_stories' %}
+    {% include "user/_creator_nav.html" %}
 
     <!-- Main Content -->
     <main class="page" id="main-content" tabindex="-1">
@@ -660,6 +565,17 @@
                     {{ projects|length }} {{ 'stories' if projects|length != 1 else 'story' }}
                 </span>
                 {% endif %}
+                {# Persistent Create CTA (Creator Identity / Edit Flow remediation
+                   pass, 2026-08-29): the only prior "Create ScanStory" link on this
+                   page lived inside the zero-projects empty state and disappeared
+                   entirely once a user had even one story. Same route as the
+                   Dashboard's own CTA - no new creation route. Reuses
+                   .page-header-top's existing flex-wrap so it wraps naturally on
+                   mobile with no new breakpoint needed. #}
+                <a href="{{ url_for('user_create_project_page') }}" class="ss-btn ss-btn-primary" style="margin-left:auto;">
+                    <i class="fas fa-plus-circle" aria-hidden="true"></i>
+                    <span>Create ScanStory</span>
+                </a>
             </div>
             <p class="page-subtitle">Each story is a live AR experience tied to a unique QR code.</p>
         </div>
@@ -750,13 +666,13 @@
                     </span>
 
                     {% if story_state == 'processing' %}
-                    <span class="card-progress-note">{{ _ready }} of {{ _total }} content sets ready. This usually takes a minute.</span>
+                    <span class="card-progress-note" title="{{ _ready }} of {{ _total }} content sets ready. This usually takes a minute.">{{ _ready }}/{{ _total }} ready &middot; usually a minute</span>
                     {% elif story_state == 'failed' %}
-                    <span class="card-progress-note">Some content sets could not be prepared. Use Try again below - your QR code will not change.</span>
+                    <span class="card-progress-note" title="Some content sets could not be prepared. Use Try again below - your QR code will not change.">Some sets failed &middot; try again below</span>
                     {% elif story_state == 'queued' %}
-                    <span class="card-progress-note">Waiting for background processing to pick this up.</span>
+                    <span class="card-progress-note" title="Waiting for background processing to pick this up.">Waiting to process</span>
                     {% elif story_state == 'attention' %}
-                    <span class="card-progress-note">This story has no image + video sets yet. Add content to make it scannable.</span>
+                    <span class="card-progress-note" title="This story has no image + video sets yet. Add content to make it scannable.">No content sets yet</span>
                     {% endif %}
 
                     <div class="card-meta">
@@ -840,21 +756,19 @@
                        each: a suspended ScanStory is not brought back by buying
                        coverage, and saying so would waste someone's money. #}
                     {% if coverage and coverage.coverage_state != 'active' %}
-                    <p class="coverage-warning coverage-warning-{{ coverage.coverage_state }}" data-coverage-warning="{{ coverage.coverage_state }}">
+                    {% if coverage.coverage_state == 'suspended' %}
+                    {% set _cov_title = "This ScanStory is suspended by the ScanStory team, so scanning its QR code does not play the video. Your media and QR code are kept. Contact support - buying coverage will not lift a suspension." %}
+                    {% set _cov_short = "Suspended - QR won't play video. Contact support." %}
+                    {% elif coverage.coverage_state == 'expired' %}
+                    {% set _cov_title = "Coverage for this ScanStory has run out, so scanning its QR code does not play the video right now. Your media and QR code are kept - renew coverage and the same QR code works again." %}
+                    {% set _cov_short = "Coverage expired - QR won't play video until renewed." %}
+                    {% else %}
+                    {% set _cov_title = "This ScanStory has no active coverage, so scanning its QR code does not play the video. Your media and QR code are kept - add coverage and the same QR code starts working." %}
+                    {% set _cov_short = "No coverage - QR won't play video until added." %}
+                    {% endif %}
+                    <p class="coverage-warning coverage-warning-{{ coverage.coverage_state }}" data-coverage-warning="{{ coverage.coverage_state }}" title="{{ _cov_title }}">
                         <i class="fas fa-triangle-exclamation" aria-hidden="true"></i>
-                        {% if coverage.coverage_state == 'suspended' %}
-                        This ScanStory is suspended by the ScanStory team, so scanning its QR code
-                        does not play the video. Your media and QR code are kept. Contact support -
-                        buying coverage will not lift a suspension.
-                        {% elif coverage.coverage_state == 'expired' %}
-                        Coverage for this ScanStory has run out, so scanning its QR code does not
-                        play the video right now. Your media and QR code are kept - renew coverage
-                        and the same QR code works again.
-                        {% else %}
-                        This ScanStory has no active coverage, so scanning its QR code does not play
-                        the video. Your media and QR code are kept - add coverage and the same QR
-                        code starts working.
-                        {% endif %}
+                        {{ _cov_short }}
                     </p>
                     {% endif %}
 
@@ -895,7 +809,13 @@
                            rather than a button that would queue a second attempt.
                            Suspended stories never offer it - reprocessing does not
                            lift a suspension and offering it would waste time. #}
-                        {% if story_state == 'processing' %}
+                        {# Direct QR has no recognition target to reprocess - showing
+                           this control here was a real bug (audit,
+                           SCANSTORY_DIRECT_QR_LANDING_AND_ADMIN_PARITY_AUDIT,
+                           2026-09-03): clicking it could flip an already-healthy
+                           Direct QR content set to "failed". Image modes only. #}
+                        {% if project.experience_type == 'direct_qr' %}
+                        {% elif story_state == 'processing' %}
                         <span class="action-btn btn-reprocess" aria-disabled="true" style="flex:1; min-width:60px;">
                             <i class="fas fa-rotate ss-spin" aria-hidden="true"></i> Repair in progress
                         </span>
@@ -958,6 +878,7 @@
 
     <script src="https://unpkg.com/aos@2.3.1/dist/aos.js"></script>
     <script src="{{ url_for('static', filename='js/ss-ui.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/nav.js') }}"></script>
     <script>
         AOS.init({ duration: 600, easing: 'ease-out-cubic', once: true });
 

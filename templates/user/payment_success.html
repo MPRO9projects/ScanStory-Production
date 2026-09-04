@@ -382,10 +382,16 @@
                         <span class="text-white font-bold text-lg">{{ plan.plan_name }}</span>
                     </div>
                     
-                    {# Float column: printed raw this read "₹1999.0". #}
+                    {# Float column: printed raw this read "₹1999.0". Symbol only
+                       for INR (the actual checkout flow's only settlement
+                       currency today - FX_BASE_CURRENCY in app.py); an
+                       admin-configured Plan/Addon can carry a different
+                       currency code (see admin/add_plan.html's currency
+                       field), so anything else prints the ISO code instead of
+                       silently mislabeling it as rupees (Lane B). #}
                     <div class="flex items-center justify-between">
                         <span class="text-white/70">Amount paid</span>
-                        <span class="text-white font-bold text-lg">₹{{ '%.2f'|format(order.total_amount or 0) }}</span>
+                        <span class="text-white font-bold text-lg">{% if (order.currency or 'INR') == 'INR' %}₹{{ '%.2f'|format(order.total_amount or 0) }}{% else %}{{ '%.2f'|format(order.total_amount or 0) }} {{ order.currency }}{% endif %}</span>
                     </div>
 
                     {# subscription_start / subscription_end / payment_at are all
@@ -512,7 +518,7 @@
                         </div>
                         <div>
                             <span class="text-white/50 text-xs uppercase tracking-widest block mb-2">Currency</span>
-                            <span class="text-white font-bold">INR (₹)</span>
+                            <span class="text-white font-bold">{% if (order.currency or 'INR') == 'INR' %}INR (₹){% else %}{{ order.currency }}{% endif %}</span>
                         </div>
                     </div>
 
@@ -530,14 +536,17 @@
                     </div>
                 </div>
                 
-                <!-- Receipt Note -->
+                <!-- Confirmation Note: send_payment_success_email() sends a payment
+                     confirmation (plan, amount, order ID, date) - not a formal tax
+                     invoice/receipt document, so the copy here says exactly that
+                     (Final Pre-Freeze Closure Pass, Lane B). -->
                 <div class="glass bg-blue-500/5 border border-blue-500/20 rounded-2xl p-5">
                     <div class="flex items-start">
                         <i class="fas fa-info-circle text-blue-400 text-xl mt-1 mr-4"></i>
                         <div>
-                            <h4 class="text-blue-300 font-bold mb-2">Receipt on its way</h4>
+                            <h4 class="text-blue-300 font-bold mb-2">Confirmation on its way</h4>
                             <p class="text-white/70 text-sm">
-                                We're emailing your receipt to
+                                We've emailed your payment confirmation to
                                 <span class="font-bold text-white ss-wrap-anywhere">{{ user.email }}</span>.
                             </p>
                             <p class="text-white/50 text-xs mt-2">
